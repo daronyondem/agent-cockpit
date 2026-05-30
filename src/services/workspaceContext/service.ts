@@ -31,6 +31,19 @@ import {
   WORKSPACE_CONTEXT_MANAGED_BLOCK_END,
   WORKSPACE_CONTEXT_MANAGED_BLOCK_START,
 } from './defaults';
+import {
+  deleteAssetFile,
+  deleteReferenceFile,
+  listAssetFiles,
+  listContextMarkdownFiles,
+  listReferenceFiles,
+  readContextMarkdownFile,
+  readReferenceFile,
+  type WorkspaceContextAssetFile,
+  type WorkspaceContextTextFile,
+  writeAssetFile,
+  writeReferenceFile,
+} from './materials';
 
 const log = logger.child({ module: 'workspace-context-service' });
 
@@ -96,6 +109,9 @@ interface WorkspaceContextProcessorAdapter {
 interface SourcePlan {
   paths: string[];
   sourceWindowLabel: string;
+  referencePaths?: string[];
+  assetPaths?: string[];
+  assets?: WorkspaceContextAssetFile[];
   memoryEntries?: MemorySourcePlanEntry[];
 }
 
@@ -193,6 +209,14 @@ export class WorkspaceContextService {
     return path.join(this.getWorkspaceContextDir(hash), 'context');
   }
 
+  getReferenceFilesDir(hash: string): string {
+    return path.join(this.getWorkspaceContextDir(hash), 'references');
+  }
+
+  getAssetsDir(hash: string): string {
+    return path.join(this.getWorkspaceContextDir(hash), 'assets');
+  }
+
   async ensureWorkspace(hash: string): Promise<WorkspaceContextState | null> {
     const workspacePath = await this.chatService.getWorkspacePath(hash);
     if (!workspacePath) return null;
@@ -214,25 +238,40 @@ export class WorkspaceContextService {
     }
   }
 
-  async listFiles(hash: string): Promise<Array<{ path: string; name: string; size: number; updatedAt: string }>> {
-    const root = this.getContextFilesDir(hash);
-    const files: Array<{ path: string; name: string; size: number; updatedAt: string }> = [];
-    await walkMarkdown(root, root, files);
-    return files.sort((a, b) => a.path.localeCompare(b.path));
+  async listFiles(hash: string): Promise<WorkspaceContextTextFile[]> {
+    return listContextMarkdownFiles(this.getContextFilesDir(hash));
   }
 
   async readFile(hash: string, relPath: string): Promise<{ path: string; content: string } | null> {
-    const safeRel = normalizeRelativeMarkdownPath(relPath);
-    if (!safeRel) return null;
-    const root = this.getContextFilesDir(hash);
-    const abs = path.resolve(root, safeRel);
-    if (!abs.startsWith(path.resolve(root) + path.sep) && abs !== path.resolve(root)) return null;
-    try {
-      return { path: safeRel, content: await fsp.readFile(abs, 'utf8') };
-    } catch (err: unknown) {
-      if ((err as NodeJS.ErrnoException).code === 'ENOENT') return null;
-      throw err;
-    }
+    return readContextMarkdownFile(this.getContextFilesDir(hash), relPath);
+  }
+
+  async listReferences(hash: string): Promise<WorkspaceContextTextFile[]> {
+    return listReferenceFiles(this.getReferenceFilesDir(hash));
+  }
+
+  async readReference(hash: string, relPath: string): Promise<{ path: string; content: string } | null> {
+    return readReferenceFile(this.getReferenceFilesDir(hash), relPath);
+  }
+
+  async writeReference(hash: string, relPath: string, content: string): Promise<WorkspaceContextTextFile> {
+    return writeReferenceFile(this.getReferenceFilesDir(hash), relPath, content);
+  }
+
+  async deleteReference(hash: string, relPath: string): Promise<boolean> {
+    return deleteReferenceFile(this.getReferenceFilesDir(hash), relPath);
+  }
+
+  async listAssets(hash: string): Promise<WorkspaceContextAssetFile[]> {
+    return listAssetFiles(this.getAssetsDir(hash));
+  }
+
+  async writeAsset(hash: string, relPath: string, content: Buffer): Promise<WorkspaceContextAssetFile> {
+    return writeAssetFile(this.getAssetsDir(hash), relPath, content);
+  }
+
+  async deleteAsset(hash: string, relPath: string): Promise<boolean> {
+    return deleteAssetFile(this.getAssetsDir(hash), relPath);
   }
 
   async clearWorkspace(hash: string): Promise<void> {
@@ -394,7 +433,7 @@ export class WorkspaceContextService {
       ...runningRun,
       filesConsidered,
       summary: filesConsidered > 0
-        ? `Processing ${filesConsidered} source file${filesConsidered === 1 ? '' : 's'} for Workspace Context updates.`
+        ? `Processing ${filesConsidered} source item${filesConsidered === 1 ? '' : 's'} for Workspace Context updates.`
         : 'No source changes found; completing this scan.',
     };
     await this.updateActiveRun(hash, active, runningRun, await this.getState(hash));
@@ -490,13 +529,19 @@ export class WorkspaceContextService {
   private async ensureContextFiles(hash: string, workspacePath: string): Promise<void> {
     const root = this.getWorkspaceContextDir(hash);
     const contextDir = this.getContextFilesDir(hash);
+    const referencesDir = this.getReferenceFilesDir(hash);
+    const assetsDir = this.getAssetsDir(hash);
     await fsp.mkdir(contextDir, { recursive: true });
+    await fsp.mkdir(referencesDir, { recursive: true });
+    await fsp.mkdir(assetsDir, { recursive: true });
     await fsp.mkdir(path.join(root, 'runs'), { recursive: true });
     const instructionPath = this.getInstructionPath(hash);
     await fsp.writeFile(instructionPath, buildWorkspaceContextInstruction({
       workspacePath,
       instructionPath,
       contextDir,
+      referencesDir,
+      assetsDir,
       now: this.now().toISOString(),
     }), 'utf8');
     const overviewPath = path.join(contextDir, 'overview.md');
@@ -521,6 +566,8 @@ export class WorkspaceContextService {
   private async installWorkspaceInstructions(hash: string, workspacePath: string): Promise<void> {
     const instructionPath = this.getInstructionPath(hash);
     const contextDir = this.getContextFilesDir(hash);
+    const referencesDir = this.getReferenceFilesDir(hash);
+    const assetsDir = this.getAssetsDir(hash);
     const agentsPath = path.join(workspacePath, 'AGENTS.md');
     const block = [
       WORKSPACE_CONTEXT_MANAGED_BLOCK_START,
@@ -529,8 +576,10 @@ export class WorkspaceContextService {
       'This workspace uses Agent Cockpit Workspace Context.',
       `Read and follow: \`${instructionPath}\``,
       `Durable context markdown lives in: \`${contextDir}\``,
+      `Reusable reference documents live in: \`${referencesDir}\``,
+      `Durable reference assets live in: \`${assetsDir}\``,
       '',
-      'Use those instructions and markdown files as the workspace operating memory. Create, reorganize, and update the context markdown files directly when durable context changes.',
+      'Use those instructions and Workspace Context files as the workspace operating memory. Create, reorganize, and update context, reusable guidance, or future-use assets directly when durable material changes.',
       WORKSPACE_CONTEXT_MANAGED_BLOCK_END,
     ].join('\n');
     let current = '';
@@ -552,14 +601,27 @@ export class WorkspaceContextService {
   ): Promise<SourcePlan> {
     if (source === 'maintenance') {
       const contextDir = this.getContextFilesDir(hash);
+      const referencesDir = this.getReferenceFilesDir(hash);
       const files = await this.listFiles(hash);
+      const references = await this.listReferences(hash);
+      const assets = await this.listAssets(hash);
+      const plannedAssets = assets.slice(0, MAX_SOURCE_PATHS);
       const memoryEntries = await this.planMemorySourceEntries(hash);
+      const hasReferences = references.length > 0;
+      const hasAssets = assets.length > 0;
+      const hasMemory = memoryEntries.length > 0;
       return {
         paths: files.map((file) => path.join(contextDir, file.path)).slice(0, MAX_SOURCE_PATHS),
+        referencePaths: references.map((file) => path.join(referencesDir, file.path)).slice(0, MAX_SOURCE_PATHS),
+        assetPaths: plannedAssets.map((file) => path.join(this.getAssetsDir(hash), file.path)),
+        assets: plannedAssets,
         memoryEntries,
-        sourceWindowLabel: memoryEntries.length > 0
-          ? 'current Workspace Context markdown files and active Memory inbox entries'
-          : 'current Workspace Context markdown files',
+        sourceWindowLabel: [
+          'current Workspace Context markdown files',
+          hasReferences ? 'reference files' : null,
+          hasAssets ? 'asset inventory' : null,
+          hasMemory ? 'active Memory inbox entries' : null,
+        ].filter(Boolean).join(', '),
       };
     }
 
@@ -670,6 +732,8 @@ export class WorkspaceContextService {
   private buildCatchupPrompt(hash: string, workspacePath: string, source: WorkspaceContextRunSource, plan: SourcePlan): string {
     const instructionPath = this.getInstructionPath(hash);
     const contextDir = this.getContextFilesDir(hash);
+    const referencesDir = this.getReferenceFilesDir(hash);
+    const assetsDir = this.getAssetsDir(hash);
     return [
       '# Workspace Context Catch-Up',
       '',
@@ -677,16 +741,20 @@ export class WorkspaceContextService {
       `Workspace path: ${workspacePath}`,
       `Workspace Context instructions: ${instructionPath}`,
       `Workspace Context markdown folder: ${contextDir}`,
+      `Workspace Context references folder: ${referencesDir}`,
+      `Workspace Context assets folder: ${assetsDir}`,
       `Run source: ${source}`,
       `Source window: ${plan.sourceWindowLabel}`,
       '',
       '## Task',
-      'Read the Workspace Context instructions first. Then review the source files listed below and create, reorganize, or update the context markdown files in the Workspace Context folder directly.',
+      'Read the Workspace Context instructions first. Then review the source files listed below and create, reorganize, or update Workspace Context files directly.',
       'If a source file is a conversation/session export, inspect its messages for uploaded-file paths or other user-mentioned local file paths. Read those referenced files too when they are relevant to durable context.',
       '',
       'This is autonomous learning. Do not ask for approval. Do not produce JSON. Do not hide, filter, or refuse user-provided workspace material. Preserve temporal perspective: respect source dates, the current date, recency, status changes, and superseded information. Use "as of YYYY-MM-DD" for status-like claims, retain exact event dates/times when timing matters, distinguish source time from ingestion time when useful, and update older notes when newer information supersedes them.',
       '',
-      'At the end, reply with a concise markdown summary of what context files you created, reorganized, or updated, or why no update was needed.',
+      'Use `context/` for synthesized operating memory. Use `references/` for exact reusable prompts, templates, style guidance, procedures, and future instructions. Use `assets/` for durable non-executable future-use files, and link to assets from context or reference markdown when useful.',
+      '',
+      'At the end, reply with a concise markdown summary of what context, reference, or asset files you created, reorganized, or updated, or why no update was needed.',
       '',
       '## Source Files',
       ...plan.paths.map((sourcePath) => `- ${sourcePath}`),
@@ -697,7 +765,11 @@ export class WorkspaceContextService {
   private buildMaintenancePrompt(hash: string, workspacePath: string, plan: SourcePlan): string {
     const instructionPath = this.getInstructionPath(hash);
     const contextDir = this.getContextFilesDir(hash);
+    const referencesDir = this.getReferenceFilesDir(hash);
+    const assetsDir = this.getAssetsDir(hash);
     const memoryEntries = plan.memoryEntries || [];
+    const referencePaths = plan.referencePaths || [];
+    const assets = plan.assets || [];
     return [
       '# Workspace Context Maintenance',
       '',
@@ -705,13 +777,15 @@ export class WorkspaceContextService {
       `Workspace path: ${workspacePath}`,
       `Workspace Context instructions: ${instructionPath}`,
       `Workspace Context markdown folder: ${contextDir}`,
+      `Workspace Context references folder: ${referencesDir}`,
+      `Workspace Context assets folder: ${assetsDir}`,
       'Run source: maintenance',
       `Source window: ${plan.sourceWindowLabel}`,
       '',
       '## Task',
-      'Read the Workspace Context instructions first. Then review the context markdown files listed below and improve the context set itself.',
+      'Read the Workspace Context instructions first. Then review the context markdown files listed below and improve the context set itself. Use reference files as stable supporting material and asset inventory as link targets/evidence.',
       '',
-      'This is a maintenance pass, not a conversation source-ingestion pass. Do not scan conversations, external source files, or workspace files unless they are explicitly listed below. Context files and Memory inbox files listed in this prompt are explicit sources for this run. Focus on making the existing Workspace Context markdown easier for future CLI sessions to use.',
+      'This is a maintenance pass, not a conversation source-ingestion pass. Do not scan conversations, external source files, or workspace files unless they are explicitly listed below. Context files, reference files, asset inventory, and Memory inbox files listed in this prompt are explicit sources for this run. Focus on making the existing Workspace Context markdown easier for future CLI sessions to use.',
       '',
       'Create, reorganize, or update the context markdown files directly where useful:',
       '- Merge duplicate notes.',
@@ -719,6 +793,8 @@ export class WorkspaceContextService {
       '- Add useful headings, cross-references, current reads, strategic reads, how-to-engage notes, open threads, decisions, projects, people, and temporal status where the existing context supports them.',
       '- Remove or rewrite stale duplication instead of keeping conflicting claims side by side.',
       '- Preserve source dates, as-of dates, superseded status, and exact event dates/times already present in the markdown.',
+      '- Add links to reference files and assets when they help future agents find exact guidance or source material.',
+      '- Do not rewrite exact reference documents or binary assets merely to tidy the workspace. Only update a reference when it is clearly superseded or the user has asked for reusable guidance to change.',
       '- Keep concise human-readable markdown that another CLI can scan quickly.',
       '',
       ...(memoryEntries.length > 0 ? [
@@ -734,12 +810,22 @@ export class WorkspaceContextService {
         'Use only relative filenames from the Memory Inbox Files list, such as `notes/example.md` or `claude/example.md`.',
         '',
       ] : []),
-      'Do not ask for approval. Do not produce JSON except the Workspace Context memory action block when Memory inbox files are listed. Do not hide, filter, or refuse user-provided workspace material already present in the listed context or Memory files.',
+      'Do not ask for approval. Do not produce JSON except the Workspace Context memory action block when Memory inbox files are listed. Do not hide, filter, or refuse user-provided workspace material already present in the listed context, reference, asset, or Memory inputs.',
       '',
       'At the end, reply with a concise markdown summary of what context files you created, reorganized, or updated, or why no maintenance was needed.',
       '',
       '## Context Files',
       ...plan.paths.map((sourcePath) => `- ${sourcePath}`),
+      ...(referencePaths.length > 0 ? [
+        '',
+        '## Reference Files',
+        ...referencePaths.map((sourcePath) => `- ${sourcePath}`),
+      ] : []),
+      ...(assets.length > 0 ? [
+        '',
+        '## Asset Inventory',
+        ...assets.map((asset) => `- ${asset.path} (${asset.mimeType}, ${asset.size} bytes)`),
+      ] : []),
       ...(memoryEntries.length > 0 ? [
         '',
         '## Memory Inbox Files',
@@ -1048,28 +1134,35 @@ function buildWorkspaceContextInstruction(opts: {
   workspacePath: string;
   instructionPath: string;
   contextDir: string;
+  referencesDir: string;
+  assetsDir: string;
   now: string;
 }): string {
   return [
     '# Workspace Context',
     '',
-    'Workspace Context is this workspace\'s durable operating memory. The canonical data is the markdown in the `context/` folder next to this file.',
+    'Workspace Context is this workspace\'s durable operating memory and reusable reference material.',
     '',
     `Workspace path: ${opts.workspacePath}`,
     `Instruction file: ${opts.instructionPath}`,
     `Context folder: ${opts.contextDir}`,
+    `References folder: ${opts.referencesDir}`,
+    `Assets folder: ${opts.assetsDir}`,
     `Last generated: ${opts.now}`,
     '',
     '## Operating Directive',
     '',
-    '- Before answering on a topic that may depend on prior workspace knowledge, inspect the relevant markdown files in the context folder.',
+    '- Before answering on a topic that may depend on prior workspace knowledge or exact saved guidance, inspect the relevant files in the context and references folders.',
     '- When durable information appears in chat, attached files, transcripts, emails, Slack exports, project documents, or workspace files, create, reorganize, or update the relevant context markdown file directly.',
-    '- Create a new focused markdown file when no existing file is the right home.',
+    '- When the user asks to preserve exact reusable instructions, prompts, templates, style rules, checklists, or procedures, create or update a markdown/text file in the references folder instead of distilling it into normal context.',
+    '- When the user asks to preserve a durable future-use file, keep or place the non-executable file in the assets folder and add a context or reference markdown pointer that explains when to use it.',
+    '- Create a new focused markdown file when no existing context or reference file is the right home.',
     '- Prefer useful human-readable structure over rigid schemas. Sections like current read, strategic read, how to engage, open threads, decisions, people, projects, and cross-references are encouraged when they make the context more useful.',
     '- Connect the dots across people, projects, decisions, commitments, themes, and source material.',
     '- Keep temporal perspective. Use "as of YYYY-MM-DD" for status-like claims. Use exact event dates/times when the source provides them and timing matters. Distinguish source time from ingestion time when useful. When newer information changes older information, update the older note instead of leaving conflicting claims side by side. Prefer phrases like "formerly", "superseded by", "current as of", "awaiting response since", and "closed on" where appropriate.',
     '- Do not ask the user to review or approve learning before updating context. The user can correct context later by saying so in chat.',
     '- Do not hide, filter, or refuse user-provided workspace material. The user provided the data and is the person accessing it.',
+    '- Preserve exact reference materials unless the user asks you to revise them or they are clearly superseded by newer saved guidance.',
     '- Do not store source transcripts verbatim unless the user explicitly asks for raw transcript retention. Extract and maintain durable operating context.',
     '',
     '## File Practices',
@@ -1088,31 +1181,6 @@ function removeManagedBlock(content: string): string {
   const end = content.indexOf(WORKSPACE_CONTEXT_MANAGED_BLOCK_END);
   if (start === -1 || end === -1 || end < start) return content;
   return `${content.slice(0, start)}${content.slice(end + WORKSPACE_CONTEXT_MANAGED_BLOCK_END.length)}`;
-}
-
-async function walkMarkdown(
-  root: string,
-  current: string,
-  files: Array<{ path: string; name: string; size: number; updatedAt: string }>,
-): Promise<void> {
-  let entries: fs.Dirent[];
-  try {
-    entries = await fsp.readdir(current, { withFileTypes: true });
-  } catch (err: unknown) {
-    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return;
-    throw err;
-  }
-  for (const entry of entries) {
-    if (entry.name.startsWith('.')) continue;
-    const abs = path.join(current, entry.name);
-    if (entry.isDirectory()) {
-      await walkMarkdown(root, abs, files);
-    } else if (entry.isFile() && entry.name.toLowerCase().endsWith('.md')) {
-      const stat = await fsp.stat(abs);
-      const rel = path.relative(root, abs).split(path.sep).join('/');
-      files.push({ path: rel, name: entry.name, size: stat.size, updatedAt: stat.mtime.toISOString() });
-    }
-  }
 }
 
 function normalizeRelativeMarkdownPath(value: string): string | null {
@@ -1249,12 +1317,17 @@ function skippedRunSummary(reason: WorkspaceContextRunSkippedReason): string {
 }
 
 function sourcePlanCount(plan: SourcePlan): number {
-  return plan.paths.length + (plan.memoryEntries?.length || 0);
+  return plan.paths.length
+    + (plan.referencePaths?.length || 0)
+    + (plan.assetPaths?.length || 0)
+    + (plan.memoryEntries?.length || 0);
 }
 
 function sourcePlanPaths(plan: SourcePlan): string[] {
   return [
     ...plan.paths,
+    ...(plan.referencePaths || []),
+    ...(plan.assetPaths || []),
     ...(plan.memoryEntries || []).map((entry) => entry.path),
   ];
 }

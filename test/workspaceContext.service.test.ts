@@ -50,21 +50,45 @@ describe('WorkspaceContextService', () => {
 
     expect(state).not.toBeNull();
     const contextDir = workspaceContextService.getContextFilesDir(hash);
+    const referencesDir = workspaceContextService.getReferenceFilesDir(hash);
+    const assetsDir = workspaceContextService.getAssetsDir(hash);
     const instructionPath = workspaceContextService.getInstructionPath(hash);
     expect(fs.existsSync(instructionPath)).toBe(true);
     expect(fs.existsSync(path.join(contextDir, 'overview.md'))).toBe(true);
+    expect(fs.existsSync(referencesDir)).toBe(true);
+    expect(fs.existsSync(assetsDir)).toBe(true);
     const agents = await fsp.readFile(path.join(workspacePath, 'AGENTS.md'), 'utf8');
     expect(agents).toContain('Agent Cockpit Workspace Context');
     expect(agents).toContain(instructionPath);
     expect(agents).toContain(contextDir);
+    expect(agents).toContain(referencesDir);
+    expect(agents).toContain(assetsDir);
     const instructions = await fsp.readFile(instructionPath, 'utf8');
     expect(instructions).toContain('Use "as of YYYY-MM-DD" for status-like claims');
     expect(instructions).toContain('Distinguish source time from ingestion time when useful');
+    expect(instructions).toContain('References folder:');
+    expect(instructions).toContain('Assets folder:');
 
     const files = await workspaceContextService.listFiles(hash);
     expect(files.map((file) => file.path)).toEqual(['overview.md']);
     expect((await workspaceContextService.readFile(hash, 'overview.md'))?.content).toContain('# Workspace Overview');
     expect(await workspaceContextService.readFile(hash, '../state.json')).toBeNull();
+
+    await workspaceContextService.writeReference(hash, 'prompts/style.md', '# Style\n');
+    expect((await workspaceContextService.listReferences(hash)).map((file) => file.path)).toEqual(['prompts/style.md']);
+    expect((await workspaceContextService.readReference(hash, 'prompts/style.md'))?.content).toBe('# Style\n');
+    await workspaceContextService.writeAsset(hash, 'images/reference.png', Buffer.from([0x89, 0x50, 0x4e, 0x47]));
+    expect((await workspaceContextService.listAssets(hash)).map((file) => ({
+      path: file.path,
+      mimeType: file.mimeType,
+      previewable: file.previewable,
+      kind: file.kind,
+    }))).toEqual([{
+      path: 'images/reference.png',
+      mimeType: 'image/png',
+      previewable: true,
+      kind: 'image',
+    }]);
   });
 
   test('runs scans through the configured CLI and records markdown run state', async () => {
@@ -305,12 +329,18 @@ describe('WorkspaceContextService', () => {
       '# People\n\n- Ada owns Atlas.\n- Ada owns Atlas.\n',
       'utf8',
     );
+    await workspaceContextService.writeReference(hash, 'prompts/style.md', '# Style\n\nKeep exact wording.\n');
+    await workspaceContextService.writeAsset(hash, 'images/reference.png', Buffer.from([0x89, 0x50, 0x4e, 0x47]));
 
     mockBackend.setOneShotImpl(async (prompt, opts) => {
       expect(prompt).toContain('Workspace Context Maintenance');
       expect(prompt).toContain('This is a maintenance pass, not a conversation source-ingestion pass.');
+      expect(prompt).toContain('## Reference Files');
+      expect(prompt).toContain('## Asset Inventory');
       expect(prompt).toContain(path.join(contextDir, 'overview.md'));
       expect(prompt).toContain(path.join(contextDir, 'people.md'));
+      expect(prompt).toContain(path.join(workspaceContextService.getReferenceFilesDir(hash), 'prompts/style.md'));
+      expect(prompt).toContain('images/reference.png (image/png, 4 bytes)');
       expect(prompt).not.toContain('Workspace Context Catch-Up');
       expect(prompt).not.toContain('## Source Files');
       expect(opts?.workingDir).toBe(workspacePath);
@@ -326,7 +356,7 @@ describe('WorkspaceContextService', () => {
 
     expect(result.skippedReason).toBeUndefined();
     expect(result.source).toBe('maintenance');
-    expect(result.filesConsidered).toBe(2);
+    expect(result.filesConsidered).toBe(4);
     expect((await workspaceContextService.readFile(hash, 'people.md'))?.content).toContain('Current as of 2026-05-19');
     const state = await workspaceContextService.getState(hash);
     expect(state.lastRun?.source).toBe('maintenance');
@@ -334,6 +364,8 @@ describe('WorkspaceContextService', () => {
     const runReport = await fsp.readFile(path.join(workspaceContextService.getWorkspaceContextDir(hash), 'runs', 'latest.md'), 'utf8');
     expect(runReport).toContain('- Source: maintenance');
     expect(runReport).toContain(path.join(contextDir, 'people.md'));
+    expect(runReport).toContain(path.join(workspaceContextService.getReferenceFilesDir(hash), 'prompts/style.md'));
+    expect(runReport).toContain(path.join(workspaceContextService.getAssetsDir(hash), 'images/reference.png'));
   });
 
   test('maintenance consumes accepted Memory inbox entries and deletes them', async () => {

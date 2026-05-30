@@ -229,6 +229,8 @@ describe('frontend routes', () => {
     expect(fileViewerSrc).toContain('isMarkdownPreview(state.language, filename)');
     expect(fileViewerSrc).toContain('dangerouslySetInnerHTML={{ __html: html }}');
     expect(mobileChatScreenSrc).toContain('makeConversationWorkspaceContextFileReference');
+    const mobileModelSrc = fs.readFileSync(path.join(ROOT, 'mobile/AgentCockpitPWA/src/appModel.ts'), 'utf8');
+    expect(mobileModelSrc).toContain("pathname = pathname.split('#')[0].split('?')[0];");
     expect(mobileFileModalsSrc).toContain('function MarkdownPreview');
     expect(mobileFileModalsSrc).toContain("language === 'markdown'");
   });
@@ -751,6 +753,14 @@ describe('frontend routes', () => {
     expect(apiSrc).toContain('repairWorkspaceContextInstructions: (hash) =>');
     expect(apiSrc).toContain('getWorkspaceContextFiles: (hash) =>');
     expect(apiSrc).toContain('getWorkspaceContextFile: (hash, relPath) =>');
+    expect(apiSrc).toContain('getWorkspaceContextReferences: (hash) =>');
+    expect(apiSrc).toContain('getWorkspaceContextReference: (hash, relPath) =>');
+    expect(apiSrc).toContain('saveWorkspaceContextReference: (hash, relPath, content) =>');
+    expect(apiSrc).toContain('deleteWorkspaceContextReference: (hash, relPath) =>');
+    expect(apiSrc).toContain('getWorkspaceContextAssets: (hash) =>');
+    expect(apiSrc).toContain('uploadWorkspaceContextAsset: (hash, relPath, file) =>');
+    expect(apiSrc).toContain('workspaceContextAssetUrl: (hash, relPath, mode) =>');
+    expect(apiSrc).toContain('deleteWorkspaceContextAsset: (hash, relPath) =>');
     expect(apiSrc).not.toContain('getWorkspaceContextReview');
     expect(apiSrc).not.toContain('getWorkspaceContextGraph');
     expect(apiSrc).not.toContain('getWorkspaceContextEntity');
@@ -767,8 +777,9 @@ describe('frontend routes', () => {
     expect(settingsSrc).not.toContain('synthesisConcurrency');
 
     expect(workspaceSettingsSrc).toContain("{ id: 'workspaceContext',   label: 'Workspace Context' }");
-    expect(workspaceSettingsSrc).toContain("const WORKSPACE_CONTEXT_SECTIONS = ['overview', 'processor', 'files', 'runs', 'danger']");
+    expect(workspaceSettingsSrc).toContain("const WORKSPACE_CONTEXT_SECTIONS = ['overview', 'processor', 'context', 'references', 'assets', 'runs', 'danger']");
     expect(workspaceSettingsSrc).toContain('function normalizeWorkspaceContextSection');
+    expect(workspaceSettingsSrc).toContain("if (section === 'files') return 'context'");
     expect(workspaceSettingsSrc).toContain('function WorkspaceSettingsPage');
     expect(workspaceSettingsSrc).toContain('export function WorkspaceSettingsPage');
     expect(workspaceSettingsSrc).toContain('initialWorkspaceContextSection');
@@ -784,14 +795,20 @@ describe('frontend routes', () => {
     expect(workspaceSettingsSrc).toContain('function resolveWorkspaceContextRunFileLink');
     expect(workspaceSettingsSrc).toContain('function WorkspaceContextRunSummary');
     expect(workspaceSettingsSrc).toContain('dangerouslySetInnerHTML={{ __html: html }}');
-    expect(workspaceSettingsSrc).toContain("selectSection('files')");
+    expect(workspaceSettingsSrc).toContain("selectSection('context')");
+    expect(workspaceSettingsSrc).toContain("selectSection('references')");
+    expect(workspaceSettingsSrc).toContain("selectSection('assets')");
     expect(workspaceSettingsSrc).toContain('function workspaceContextRunFromStatus');
     expect(workspaceSettingsSrc).toContain('const intervalMs = 1000');
     expect(workspaceSettingsSrc).toContain('err.status === 409');
     expect(workspaceSettingsSrc).toContain("toast.warn('Workspace Context run already running')");
     expect(workspaceSettingsSrc).toContain('Workspace Context settings sections');
-    expect(workspaceSettingsSrc).toContain('Markdown Files');
-    expect(workspaceSettingsSrc).toContain('Read-only preview of the Workspace Context markdown folder.');
+    expect(workspaceSettingsSrc).toContain('References folder');
+    expect(workspaceSettingsSrc).toContain('Assets folder');
+    expect(workspaceSettingsSrc).toContain('Read-only preview of synthesized Workspace Context markdown.');
+    expect(workspaceSettingsSrc).toContain('Save reference');
+    expect(workspaceSettingsSrc).toContain('Upload asset');
+    expect(workspaceSettingsSrc).toContain("workspaceContextAssetUrl(hash, selectedAsset, 'download')");
     expect(workspaceSettingsSrc).toContain('Run scan');
     expect(workspaceSettingsSrc).toContain('Run maintenance');
     expect(workspaceSettingsSrc).toContain('Last scan');

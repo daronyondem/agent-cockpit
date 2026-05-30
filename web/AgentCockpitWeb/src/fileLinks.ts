@@ -12,6 +12,7 @@ export interface ResolvedWorkspaceContextHref extends ResolvedLocalFileHref {
   filename: string;
   relativePath: string;
   workspaceKey: string;
+  section: 'context' | 'references' | 'assets';
 }
 
 interface SplitLineSuffix {
@@ -131,21 +132,24 @@ export function resolveWorkspaceContextHref(rawHref: unknown): ResolvedWorkspace
   if (markerIndex < 0) return null;
 
   const rest = parsed.filePath.slice(markerIndex + marker.length);
-  const contextMarker = '/workspace-context/context/';
-  const contextIndex = rest.indexOf(contextMarker);
-  if (contextIndex <= 0) return null;
+  const markerMatch = rest.match(/^([^/]+)\/workspace-context\/(context|references|assets)\/(.+)$/);
+  if (!markerMatch) return null;
 
-  const workspaceKey = rest.slice(0, contextIndex);
-  const relativePath = rest.slice(contextIndex + contextMarker.length);
+  const workspaceKey = markerMatch[1];
+  const section = markerMatch[2] as ResolvedWorkspaceContextHref['section'];
+  const relativePath = markerMatch[3];
   if (!workspaceKey || workspaceKey.includes('/') || workspaceKey.includes('\\')) return null;
   if (!relativePath || relativePath.includes('\\') || relativePath.split('/').some(part => !part || part === '..')) return null;
-  if (!relativePath.toLowerCase().endsWith('.md')) return null;
+  if (section === 'context' && !relativePath.toLowerCase().endsWith('.md')) return null;
+  if (section === 'references' && !/\.(md|markdown|txt)$/i.test(relativePath)) return null;
+  if (section === 'assets' && !/\.(md|markdown|txt|json|csv|tsv|ya?ml|png|jpe?g|gif|webp|bmp|pdf)$/i.test(relativePath)) return null;
 
   return {
     filePath: parsed.filePath,
     filename: relativePath.split('/').pop() || relativePath,
     relativePath,
     workspaceKey,
+    section,
     line: parsed.line,
     column: parsed.column,
   };

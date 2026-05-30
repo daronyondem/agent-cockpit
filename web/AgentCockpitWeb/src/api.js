@@ -843,6 +843,55 @@
       'workspaces/' + encodeURIComponent(hash) + '/workspace-context/files/' + encodeURIComponent(relPath || ''),
       { cache: 'no-store' },
     ).then(r => r.json()),
+    getWorkspaceContextReferences: (hash) => chatFetch(
+      'workspaces/' + encodeURIComponent(hash) + '/workspace-context/references',
+      { cache: 'no-store' },
+    ).then(r => r.json()),
+    getWorkspaceContextReference: (hash, relPath) => chatFetch(
+      'workspaces/' + encodeURIComponent(hash) + '/workspace-context/references/' + encodeURIComponent(relPath || ''),
+      { cache: 'no-store' },
+    ).then(r => r.json()),
+    saveWorkspaceContextReference: (hash, relPath, content) => chatFetch(
+      'workspaces/' + encodeURIComponent(hash) + '/workspace-context/references/' + encodeURIComponent(relPath || ''),
+      { method: 'PUT', body: { content: String(content || '') } },
+    ).then(r => r.json()),
+    deleteWorkspaceContextReference: (hash, relPath) => chatFetch(
+      'workspaces/' + encodeURIComponent(hash) + '/workspace-context/references/' + encodeURIComponent(relPath || ''),
+      { method: 'DELETE' },
+    ).then(r => r.json()),
+    getWorkspaceContextAssets: (hash) => chatFetch(
+      'workspaces/' + encodeURIComponent(hash) + '/workspace-context/assets',
+      { cache: 'no-store' },
+    ).then(r => r.json()),
+    uploadWorkspaceContextAsset: (hash, relPath, file) => {
+      const body = new FormData();
+      body.append('file', file);
+      return chatFetch(
+        'workspaces/' + encodeURIComponent(hash) + '/workspace-context/assets/' + encodeURIComponent(relPath || (file && file.name) || ''),
+        { method: 'POST', body },
+      ).then(r => r.json());
+    },
+    getWorkspaceContextAsset: (hash, relPath, mode) => chatFetch(
+      'workspaces/' + encodeURIComponent(hash) + '/workspace-context/assets/' + encodeURIComponent(relPath || '') + '?' + new URLSearchParams({ mode: mode || 'view' }).toString(),
+      { cache: 'no-store' },
+    ).then(async r => {
+      const contentType = r.headers.get('Content-Type') || '';
+      if (contentType.startsWith('image/')) {
+        return {
+          imageUrl: chatUrl(
+            'workspaces/' + encodeURIComponent(hash) + '/workspace-context/assets/' + encodeURIComponent(relPath || '') + '?' + new URLSearchParams({ mode: mode || 'view' }).toString()
+          ),
+        };
+      }
+      return r.json();
+    }),
+    workspaceContextAssetUrl: (hash, relPath, mode) => chatUrl(
+      'workspaces/' + encodeURIComponent(hash) + '/workspace-context/assets/' + encodeURIComponent(relPath || '') + '?' + new URLSearchParams({ mode: mode || 'view' }).toString()
+    ),
+    deleteWorkspaceContextAsset: (hash, relPath) => chatFetch(
+      'workspaces/' + encodeURIComponent(hash) + '/workspace-context/assets/' + encodeURIComponent(relPath || ''),
+      { method: 'DELETE' },
+    ).then(r => r.json()),
     getKb: (hash) => chatFetch(
       'workspaces/' + encodeURIComponent(hash) + '/kb'
     ).then(r => r.json()),

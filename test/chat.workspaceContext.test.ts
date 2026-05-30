@@ -99,6 +99,82 @@ describe('Workspace Context routes', () => {
     expect(traversal.status).toBe(400);
   });
 
+  test('manages references and assets through Workspace Context routes', async () => {
+    const workspacePath = path.join(env.tmpDir, 'workspace-context-materials');
+    await fsp.mkdir(workspacePath, { recursive: true });
+    const conv = await env.chatService.createConversation('Workspace Context Materials', workspacePath);
+    const hash = workspaceHash(workspacePath);
+    await env.chatService.setWorkspaceContextEnabled(hash, true);
+    await env.workspaceContextService.ensureWorkspace(hash);
+
+    const savedReference = await env.request(
+      'PUT',
+      `/api/chat/workspaces/${hash}/workspace-context/references/${encodeURIComponent('prompts/style.md')}`,
+      { content: '# Style\n\nUse exact wording.\n' },
+    );
+    expect(savedReference.status).toBe(200);
+    expect(savedReference.body.file.path).toBe('prompts/style.md');
+
+    const references = await env.request('GET', `/api/chat/workspaces/${hash}/workspace-context/references`);
+    expect(references.status).toBe(200);
+    expect(references.body.references.map((file: { path: string }) => file.path)).toEqual(['prompts/style.md']);
+
+    const referencePreview = await env.request(
+      'GET',
+      `/api/chat/conversations/${conv.id}/workspace-context-file?path=${encodeURIComponent(`references/prompts/style.md`)}&mode=view`,
+    );
+    expect(referencePreview.status).toBe(200);
+    expect(referencePreview.body).toMatchObject({
+      content: '# Style\n\nUse exact wording.\n',
+      filename: 'style.md',
+      language: 'markdown',
+    });
+
+    const pngBytes = Buffer.from([0x89, 0x50, 0x4e, 0x47]);
+    const uploadedAsset = await env.multipartRequest(
+      'POST',
+      `/api/chat/workspaces/${hash}/workspace-context/assets/${encodeURIComponent('images/reference.png')}`,
+      'file',
+      'reference.png',
+      'image/png',
+      pngBytes,
+    );
+    expect(uploadedAsset.status).toBe(200);
+    expect(uploadedAsset.body.asset).toMatchObject({
+      path: 'images/reference.png',
+      mimeType: 'image/png',
+      previewable: true,
+      kind: 'image',
+    });
+
+    const assets = await env.request('GET', `/api/chat/workspaces/${hash}/workspace-context/assets`);
+    expect(assets.status).toBe(200);
+    expect(assets.body.assets.map((file: { path: string }) => file.path)).toEqual(['images/reference.png']);
+
+    const assetPreview = await env.request(
+      'GET',
+      `/api/chat/conversations/${conv.id}/workspace-context-file?path=${encodeURIComponent(`assets/images/reference.png`)}&mode=view`,
+    );
+    expect(assetPreview.status).toBe(200);
+    expect(assetPreview.headers['content-type']).toBe('image/png');
+    expect(Buffer.from(assetPreview.body, 'binary').length).toBeGreaterThan(0);
+
+    const unsupportedAsset = await env.multipartRequest(
+      'POST',
+      `/api/chat/workspaces/${hash}/workspace-context/assets/${encodeURIComponent('scripts/install.sh')}`,
+      'file',
+      'install.sh',
+      'text/x-shellscript',
+      Buffer.from('#!/bin/sh\n'),
+    );
+    expect(unsupportedAsset.status).toBe(400);
+
+    const deletedReference = await env.request('DELETE', `/api/chat/workspaces/${hash}/workspace-context/references/${encodeURIComponent('prompts/style.md')}`);
+    expect(deletedReference.status).toBe(200);
+    const deletedAsset = await env.request('DELETE', `/api/chat/workspaces/${hash}/workspace-context/assets/${encodeURIComponent('images/reference.png')}`);
+    expect(deletedAsset.status).toBe(200);
+  });
+
   test('starts and stops manual scans through route controls', async () => {
     const workspacePath = path.join(env.tmpDir, 'workspace-context-stop');
     await fsp.mkdir(workspacePath, { recursive: true });
