@@ -207,7 +207,11 @@ tool is unavailable.
   workspace overrides. Workspace overrides should store only the override, not
   copied global values.
 - Workspace Context has its own processor category rather than implicitly
-  reusing Memory Review or KB digestion settings.
+  reusing Memory or KB digestion settings.
+- Workspace Context maintenance consumes accepted active Memory inbox entries
+  and deletes those entries after folding them into context markdown. Do not
+  reintroduce the old Memory Review scheduler/UI/MCP review workflow without a
+  superseding ADR.
 - Workspace Context public issue/PR content must avoid private context leakage.
 - Workspace Context run logs are short-term operational records. Maintenance
   should prune `workspace-context/runs/*.md` and `state.json.runs` entries older

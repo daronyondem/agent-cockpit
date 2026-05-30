@@ -1,10 +1,10 @@
 ---
 id: 0043
 title: Start Memory Reviews asynchronously
-status: Proposed
+status: Superseded
 date: 2026-05-07
 supersedes: []
-superseded-by: null
+superseded-by: 0081
 tags: [memory, api, frontend]
 affects:
   - src/routes/chat.ts

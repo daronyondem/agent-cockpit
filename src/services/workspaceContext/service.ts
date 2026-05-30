@@ -9,6 +9,8 @@ import type {
   Conversation,
   ConversationListItem,
   EffortLevel,
+  MemorySnapshot,
+  MemoryUpdateEvent,
   Message,
   SessionFile,
   Settings,
@@ -34,6 +36,7 @@ const log = logger.child({ module: 'workspace-context-service' });
 
 const STATE_VERSION = 1;
 const MAX_SOURCE_PATHS = 80;
+const MAX_MEMORY_SOURCE_PATHS = 80;
 const DEFAULT_RUN_TIMEOUT_MS = 10 * 60 * 1000;
 const MAINTENANCE_CHECK_INTERVAL_MS = 60 * 60 * 1000;
 const DEFAULT_MIN_VISIBLE_NO_SOURCE_RUN_MS = 1500;
@@ -52,6 +55,10 @@ export interface WorkspaceContextChatService {
   getWorkspaceContextDir(hash: string): string;
   getWorkspaceContextSettings(hash: string): Promise<WorkspaceContextWorkspaceSettings | null>;
   getWorkspaceContextEnabled(hash: string): Promise<boolean>;
+  getWorkspaceMemory?(hash: string): Promise<MemorySnapshot | null>;
+  getWorkspaceMemoryEnabled?(hash: string): Promise<boolean>;
+  getWorkspaceMemoryFilesDir?(hash: string): string;
+  deleteMemoryEntry?(hash: string, relPath: string): Promise<boolean>;
   listConversations(opts?: { archived?: boolean }): Promise<ConversationListItem[]>;
   getConversation(id: string): Promise<Conversation | null>;
   getSessionMessages?(id: string, sessionNumber: number): Promise<Message[] | null>;
@@ -89,6 +96,12 @@ interface WorkspaceContextProcessorAdapter {
 interface SourcePlan {
   paths: string[];
   sourceWindowLabel: string;
+  memoryEntries?: MemorySourcePlanEntry[];
+}
+
+interface MemorySourcePlanEntry {
+  filename: string;
+  path: string;
 }
 
 export interface WorkspaceContextServiceOptions {
@@ -96,6 +109,7 @@ export interface WorkspaceContextServiceOptions {
   backendRegistry?: BackendRegistry | null;
   now?: () => Date;
   emitUpdate?: (hash: string) => void | Promise<void>;
+  emitMemoryUpdate?: (hash: string, frame: MemoryUpdateEvent) => void | Promise<void>;
   minVisibleNoSourceRunMs?: number;
 }
 
@@ -104,6 +118,7 @@ export class WorkspaceContextService {
   private readonly backendRegistry: BackendRegistry | null;
   private readonly now: () => Date;
   private readonly emitUpdate?: (hash: string) => void | Promise<void>;
+  private readonly emitMemoryUpdate?: (hash: string, frame: MemoryUpdateEvent) => void | Promise<void>;
   private readonly minVisibleNoSourceRunMs: number;
   private readonly running = new Map<string, ActiveWorkspaceContextRun>();
   private readonly runningAliases = new Map<string, string>();
@@ -113,6 +128,7 @@ export class WorkspaceContextService {
     this.backendRegistry = opts.backendRegistry ?? null;
     this.now = opts.now ?? (() => new Date());
     this.emitUpdate = opts.emitUpdate;
+    this.emitMemoryUpdate = opts.emitMemoryUpdate;
     this.minVisibleNoSourceRunMs = Math.max(0, opts.minVisibleNoSourceRunMs ?? DEFAULT_MIN_VISIBLE_NO_SOURCE_RUN_MS);
   }
 
@@ -373,15 +389,16 @@ export class WorkspaceContextService {
     }
 
     const plan = await this.planSources(hash, source, state, opts);
+    const filesConsidered = sourcePlanCount(plan);
     runningRun = {
       ...runningRun,
-      filesConsidered: plan.paths.length,
-      summary: plan.paths.length > 0
-        ? `Processing ${plan.paths.length} source file${plan.paths.length === 1 ? '' : 's'} for Workspace Context updates.`
+      filesConsidered,
+      summary: filesConsidered > 0
+        ? `Processing ${filesConsidered} source file${filesConsidered === 1 ? '' : 's'} for Workspace Context updates.`
         : 'No source changes found; completing this scan.',
     };
     await this.updateActiveRun(hash, active, runningRun, await this.getState(hash));
-    if (plan.paths.length === 0) {
+    if (filesConsidered === 0) {
       await this.waitForMinimumVisibleRun(active);
       return this.recordNoSourceRun(hash, source, active, await this.getState(hash));
     }
@@ -424,20 +441,25 @@ export class WorkspaceContextService {
       });
       throwIfStopped(active.abortController.signal);
       const completedAt = this.now().toISOString();
-      const summary = summarizeProcessorOutput(output);
+      const acceptedMemoryFiles = parseAcceptedMemoryFiles(output, plan.memoryEntries || []);
+      const deletedMemoryFiles = await this.deleteAcceptedMemoryEntries(hash, acceptedMemoryFiles);
+      const summary = appendConsumedMemorySummary(
+        summarizeProcessorOutput(stripMemoryActionBlocks(output)),
+        deletedMemoryFiles.length,
+      );
       const completedRun: WorkspaceContextRunRecord = {
         ...runningRun,
         status: 'completed',
         completedAt,
         summary,
       };
-      await this.writeRunReport(hash, completedRun, output, plan.paths);
+      await this.writeRunReport(hash, completedRun, output, sourcePlanPaths(plan));
       await this.recordRun(hash, completedRun, await this.getState(hash));
       return {
         workspaceHash: hash,
         source,
         runId: active.runId,
-        filesConsidered: plan.paths.length,
+        filesConsidered,
         summary,
       };
     } catch (err: unknown) {
@@ -456,7 +478,7 @@ export class WorkspaceContextService {
           workspaceHash: hash,
           source,
           runId: active.runId,
-          filesConsidered: plan.paths.length,
+          filesConsidered,
           summary: failedRun.summary,
           stopped: true,
         };
@@ -531,9 +553,13 @@ export class WorkspaceContextService {
     if (source === 'maintenance') {
       const contextDir = this.getContextFilesDir(hash);
       const files = await this.listFiles(hash);
+      const memoryEntries = await this.planMemorySourceEntries(hash);
       return {
         paths: files.map((file) => path.join(contextDir, file.path)).slice(0, MAX_SOURCE_PATHS),
-        sourceWindowLabel: 'current Workspace Context markdown files',
+        memoryEntries,
+        sourceWindowLabel: memoryEntries.length > 0
+          ? 'current Workspace Context markdown files and active Memory inbox entries'
+          : 'current Workspace Context markdown files',
       };
     }
 
@@ -567,6 +593,41 @@ export class WorkspaceContextService {
       paths: Array.from(new Set(paths)).slice(0, MAX_SOURCE_PATHS),
       sourceWindowLabel: since > 0 ? `sources changed after ${new Date(since).toISOString()}` : 'all active workspace conversation sources',
     };
+  }
+
+  private async planMemorySourceEntries(hash: string): Promise<MemorySourcePlanEntry[]> {
+    if (
+      !this.chatService.getWorkspaceMemory
+      || !this.chatService.getWorkspaceMemoryFilesDir
+      || !this.chatService.deleteMemoryEntry
+    ) {
+      return [];
+    }
+    if (this.chatService.getWorkspaceMemoryEnabled && !(await this.chatService.getWorkspaceMemoryEnabled(hash))) return [];
+
+    const snapshot = await this.chatService.getWorkspaceMemory(hash);
+    const files = snapshot?.files || [];
+    if (files.length === 0) return [];
+
+    const filesDir = this.chatService.getWorkspaceMemoryFilesDir(hash);
+    const root = path.resolve(filesDir);
+    const entries = files
+      .map((file) => {
+        const filename = normalizeRelativeMarkdownPath(file.filename);
+        if (!filename || file.metadata?.status !== 'active') return null;
+        const resolved = path.resolve(root, filename);
+        if (!resolved.startsWith(root + path.sep)) return null;
+        return {
+          filename,
+          path: resolved,
+          updatedAtMs: memoryCandidateTimestamp(file.metadata?.updatedAt || file.metadata?.createdAt),
+        };
+      })
+      .filter((entry): entry is MemorySourcePlanEntry & { updatedAtMs: number } => !!entry)
+      .sort((a, b) => b.updatedAtMs - a.updatedAtMs || a.filename.localeCompare(b.filename))
+      .slice(0, MAX_MEMORY_SOURCE_PATHS);
+
+    return entries.map(({ updatedAtMs: _updatedAtMs, ...entry }) => entry);
   }
 
   private async expandSessionSourcePaths(sessionPath: string): Promise<string[]> {
@@ -636,6 +697,7 @@ export class WorkspaceContextService {
   private buildMaintenancePrompt(hash: string, workspacePath: string, plan: SourcePlan): string {
     const instructionPath = this.getInstructionPath(hash);
     const contextDir = this.getContextFilesDir(hash);
+    const memoryEntries = plan.memoryEntries || [];
     return [
       '# Workspace Context Maintenance',
       '',
@@ -649,7 +711,7 @@ export class WorkspaceContextService {
       '## Task',
       'Read the Workspace Context instructions first. Then review the context markdown files listed below and improve the context set itself.',
       '',
-      'This is a maintenance pass, not a new source-ingestion pass. Do not scan conversations, external source files, or workspace files unless they are explicitly listed below. Focus on making the existing Workspace Context markdown easier for future CLI sessions to use.',
+      'This is a maintenance pass, not a conversation source-ingestion pass. Do not scan conversations, external source files, or workspace files unless they are explicitly listed below. Context files and Memory inbox files listed in this prompt are explicit sources for this run. Focus on making the existing Workspace Context markdown easier for future CLI sessions to use.',
       '',
       'Create, reorganize, or update the context markdown files directly where useful:',
       '- Merge duplicate notes.',
@@ -659,14 +721,60 @@ export class WorkspaceContextService {
       '- Preserve source dates, as-of dates, superseded status, and exact event dates/times already present in the markdown.',
       '- Keep concise human-readable markdown that another CLI can scan quickly.',
       '',
-      'Do not ask for approval. Do not produce JSON. Do not hide, filter, or refuse user-provided workspace material already present in the context files.',
+      ...(memoryEntries.length > 0 ? [
+        '## Memory Inbox Handling',
+        'The Memory inbox files listed below are atomic captured notes. Workspace Context is the canonical visible durable workspace memory, so integrate useful durable Memory content into the Workspace Context markdown files.',
+        'If a Memory entry contains useful durable content that you add, merge, confirm is already represented, or use to correct Workspace Context, list that entry by its relative filename in the final action block. Agent Cockpit will delete only those accepted Memory files after this run completes. Do not delete Memory files yourself.',
+        'If a Memory entry is not useful, is too ambiguous, or should remain for a later pass, leave it out of the action block.',
+        '',
+        'At the end of your markdown summary, include exactly one fenced action block in this format:',
+        '```workspace-context-memory-actions',
+        '{"acceptedMemoryFiles":[]}',
+        '```',
+        'Use only relative filenames from the Memory Inbox Files list, such as `notes/example.md` or `claude/example.md`.',
+        '',
+      ] : []),
+      'Do not ask for approval. Do not produce JSON except the Workspace Context memory action block when Memory inbox files are listed. Do not hide, filter, or refuse user-provided workspace material already present in the listed context or Memory files.',
       '',
       'At the end, reply with a concise markdown summary of what context files you created, reorganized, or updated, or why no maintenance was needed.',
       '',
       '## Context Files',
       ...plan.paths.map((sourcePath) => `- ${sourcePath}`),
+      ...(memoryEntries.length > 0 ? [
+        '',
+        '## Memory Inbox Files',
+        ...memoryEntries.map((entry) => `- ${entry.filename}: ${entry.path}`),
+      ] : []),
       '',
     ].join('\n');
+  }
+
+  private async deleteAcceptedMemoryEntries(hash: string, filenames: string[]): Promise<string[]> {
+    if (filenames.length === 0 || !this.chatService.deleteMemoryEntry) return [];
+    const deleted: string[] = [];
+    for (const filename of filenames) {
+      const didDelete = await this.chatService.deleteMemoryEntry(hash, filename);
+      if (didDelete) deleted.push(filename);
+    }
+    if (deleted.length > 0) await this.emitAcceptedMemoryDeletion(hash, deleted);
+    return deleted;
+  }
+
+  private async emitAcceptedMemoryDeletion(hash: string, changedFiles: string[]): Promise<void> {
+    if (!this.emitMemoryUpdate) return;
+    try {
+      const snapshot = await this.chatService.getWorkspaceMemory?.(hash);
+      await this.emitMemoryUpdate(hash, {
+        type: 'memory_update',
+        capturedAt: snapshot?.capturedAt || this.now().toISOString(),
+        fileCount: snapshot?.files.length || 0,
+        changedFiles,
+        sourceConversationId: null,
+        displayInChat: false,
+      });
+    } catch (err: unknown) {
+      log.warn('Failed to emit Memory update after Workspace Context consumed entries', { workspaceHash: hash, error: err });
+    }
   }
 
   private statePath(hash: string): string {
@@ -922,8 +1030,8 @@ export class WorkspaceContextScheduler {
       const state = await this.processor.getState(hash);
       const workspaceSettings = await this.chatService.getWorkspaceContextSettings(hash);
       const interval = normalizedMaintenanceInterval(workspaceSettings?.maintenanceIntervalHours ?? globalInterval);
-      const last = Date.parse(state.lastMaintenanceCompletedAt || state.lastScanCompletedAt || state.lastCompletedAt || '');
-      if (!Number.isFinite(last) || this.now().getTime() - last < interval * 60 * 60_000) continue;
+      const last = Date.parse(state.lastMaintenanceCompletedAt || '');
+      if (Number.isFinite(last) && this.now().getTime() - last < interval * 60 * 60_000) continue;
       if (this.processor.isRunning(hash)) {
         await this.processor.recordSkippedRun(hash, 'maintenance', runningSourceToSkippedReason(this.processor.getRunningSource(hash)));
         continue;
@@ -1138,6 +1246,74 @@ function skippedRunSummary(reason: WorkspaceContextRunSkippedReason): string {
   if (reason === 'maintenance-running') return 'Skipped because maintenance was already running for this workspace.';
   if (reason === 'scan-running') return 'Skipped because a scan was already running for this workspace.';
   return 'Skipped because another Workspace Context run was already running for this workspace.';
+}
+
+function sourcePlanCount(plan: SourcePlan): number {
+  return plan.paths.length + (plan.memoryEntries?.length || 0);
+}
+
+function sourcePlanPaths(plan: SourcePlan): string[] {
+  return [
+    ...plan.paths,
+    ...(plan.memoryEntries || []).map((entry) => entry.path),
+  ];
+}
+
+function memoryCandidateTimestamp(value: unknown): number {
+  const timestamp = typeof value === 'string' ? Date.parse(value) : NaN;
+  return Number.isFinite(timestamp) ? timestamp : 0;
+}
+
+function parseAcceptedMemoryFiles(output: string, entries: MemorySourcePlanEntry[]): string[] {
+  if (entries.length === 0) return [];
+  const allowed = new Set(entries.map((entry) => entry.filename));
+  const regex = /```(?:json\s+)?workspace[-_]context[-_]memory[-_]actions\s*\n([\s\S]*?)```/gi;
+  const matches: RegExpExecArray[] = [];
+  let match: RegExpExecArray | null;
+  while ((match = regex.exec(output))) {
+    matches.push(match);
+  }
+  if (matches.length === 0) {
+    throw new Error('Workspace Context memory action block is required when Memory inbox files are listed');
+  }
+  if (matches.length > 1) {
+    throw new Error('Workspace Context memory action block must appear exactly once');
+  }
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(matches[0][1].trim());
+  } catch (err: unknown) {
+    throw new Error(`Workspace Context memory action block is not valid JSON: ${(err as Error).message}`);
+  }
+  const files = parsed && typeof parsed === 'object'
+    ? (parsed as { acceptedMemoryFiles?: unknown }).acceptedMemoryFiles
+    : undefined;
+  if (!Array.isArray(files)) {
+    throw new Error('Workspace Context memory action block must contain acceptedMemoryFiles array');
+  }
+
+  const accepted: string[] = [];
+  for (const value of files) {
+    if (typeof value !== 'string') {
+      throw new Error('Workspace Context memory action block contains a non-string Memory filename');
+    }
+    const filename = normalizeRelativeMarkdownPath(value);
+    if (!filename || !allowed.has(filename)) {
+      throw new Error(`Workspace Context memory action block contains unknown Memory filename: ${value}`);
+    }
+    if (!accepted.includes(filename)) accepted.push(filename);
+  }
+  return accepted;
+}
+
+function stripMemoryActionBlocks(output: string): string {
+  return output.replace(/```(?:json\s+)?workspace[-_]context[-_]memory[-_]actions\s*\n[\s\S]*?```/gi, '').trim();
+}
+
+function appendConsumedMemorySummary(summary: string, count: number): string {
+  if (count <= 0) return summary;
+  return `${summary}\n\nConsumed ${count} Memory ${count === 1 ? 'entry' : 'entries'} into Workspace Context.`;
 }
 
 function summarizeProcessorOutput(output: string): string {

@@ -14,7 +14,6 @@ import { WelcomeScreen } from './welcomeScreen.jsx';
 const KbBrowser = React.lazy(() => import('./screens/kbBrowser.jsx').then(mod => ({ default: mod.KbBrowser })));
 const FilesBrowser = React.lazy(() => import('./screens/filesBrowser.jsx').then(mod => ({ default: mod.FilesBrowser })));
 const SettingsScreen = React.lazy(() => import('./screens/settingsScreen.jsx').then(mod => ({ default: mod.SettingsScreen })));
-const MemoryReviewPage = React.lazy(() => import('./screens/memoryReview.jsx').then(mod => ({ default: mod.MemoryReviewPage })));
 const WorkspaceSettingsPage = React.lazy(() => import('./workspaceSettings.jsx').then(mod => ({ default: mod.WorkspaceSettingsPage })));
 const MemoryUpdateModal = React.lazy(() => import('./workspaceSettings.jsx').then(mod => ({ default: mod.MemoryUpdateModal })));
 
@@ -31,7 +30,6 @@ export function App(){
   const [restarting, setRestarting] = React.useState(false);
   const [workspaceSettings, setWorkspaceSettings] = React.useState(null); // { hash, label, initialTab, initialWorkspaceContextSection } | null
   const [memoryUpdateView, setMemoryUpdateView] = React.useState(null); // { hash, label, update } | null
-  const [memoryReviewView, setMemoryReviewView] = React.useState(null); // { hash, label, runId } | null
   const [welcomeOpen, setWelcomeOpen] = React.useState(() => {
     try { return new URLSearchParams(window.location.search).get('welcome') === '1'; }
     catch { return false; }
@@ -173,7 +171,6 @@ export function App(){
     setSettingsView(null);
     setWorkspaceSettings(null);
     setMemoryUpdateView(null);
-    setMemoryReviewView(null);
     /* Push the active id into StreamStore synchronously *before* markRead
        so any `done` frame that fires between this call and the React-effect
        sync below already sees the new active id and doesn't re-flag the
@@ -195,7 +192,6 @@ export function App(){
     setWelcomeOpen(false);
     setWorkspaceSettings(null);
     setMemoryUpdateView(null);
-    setMemoryReviewView(null);
     setFilesView(null);
     setSettingsView(null);
     setKbView({ hash, label });
@@ -206,7 +202,6 @@ export function App(){
     setWelcomeOpen(false);
     setWorkspaceSettings(null);
     setMemoryUpdateView(null);
-    setMemoryReviewView(null);
     setKbView(null);
     setSettingsView(null);
     setFilesView({ hash, label });
@@ -217,7 +212,6 @@ export function App(){
     setWelcomeOpen(false);
     setWorkspaceSettings(null);
     setMemoryUpdateView(null);
-    setMemoryReviewView(null);
     setKbView(null);
     setFilesView(null);
     setSettingsView({ initialTab: initialTab || null });
@@ -243,7 +237,6 @@ export function App(){
         setSettingsView(null);
         setWorkspaceSettings(null);
         setMemoryUpdateView(null);
-        setMemoryReviewView(null);
       }
       return next;
     });
@@ -288,7 +281,6 @@ export function App(){
     setFilesView(null);
     setSettingsView(null);
     setMemoryUpdateView(null);
-    setMemoryReviewView(null);
     setWorkspaceSettings({
       hash,
       label,
@@ -301,16 +293,7 @@ export function App(){
   const onOpenMemoryUpdate = React.useCallback((hash, label, update) => {
     setWelcomeOpen(false);
     setWorkspaceSettings(null);
-    setMemoryReviewView(null);
     setMemoryUpdateView({ hash, label, update: update || null });
-    setSbOpen(false);
-  }, []);
-
-  const onOpenMemoryReview = React.useCallback((hash, label, runId) => {
-    setWelcomeOpen(false);
-    setWorkspaceSettings(null);
-    setMemoryUpdateView(null);
-    setMemoryReviewView({ hash, label, runId: runId || null });
     setSbOpen(false);
   }, []);
 
@@ -321,7 +304,6 @@ export function App(){
     setSettingsView(null);
     setWorkspaceSettings(null);
     setMemoryUpdateView(null);
-    setMemoryReviewView(null);
     setViewingArchive(false);
     setSbOpen(false);
     try {
@@ -373,7 +355,6 @@ export function App(){
       setFilesView(null);
       setSettingsView(null);
       setWorkspaceSettings(null);
-      setMemoryReviewView(null);
       setViewingArchive(false);
       setActiveConvId(conv.id);
     } catch (err) {
@@ -474,7 +455,6 @@ export function App(){
               label={workspaceSettings.label}
               initialTab={workspaceSettings.initialTab}
               initialWorkspaceContextSection={workspaceSettings.initialWorkspaceContextSection}
-              onOpenMemoryReview={onOpenMemoryReview}
               onClose={onCloseWorkspaceSettings}
             />
           </React.Suspense>
@@ -501,15 +481,6 @@ export function App(){
             <KbBrowser hash={kbView.hash} label={kbView.label} onClose={() => setKbView(null)}/>
           </React.Suspense>
         </section>
-      ) : memoryReviewView ? (
-        <React.Suspense fallback={<section className="main"><ScreenLoading label="Loading memory review..."/></section>}>
-          <MemoryReviewPage
-            hash={memoryReviewView.hash}
-            label={memoryReviewView.label}
-            runId={memoryReviewView.runId}
-            onClose={() => setMemoryReviewView(null)}
-          />
-        </React.Suspense>
       ) : activeConvId
         ? <ChatErrorBoundary key={activeConvId}>
             <ChatLive
@@ -518,7 +489,6 @@ export function App(){
               onDeleted={onDeleted}
               onRenamed={onRenamed}
               onOpenMemoryUpdate={onOpenMemoryUpdate}
-              onOpenMemoryReview={onOpenMemoryReview}
               onOpenWorkspaceSettings={onOpenWorkspaceSettings}
               onOpenSettings={onOpenSettings}
             />

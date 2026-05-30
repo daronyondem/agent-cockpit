@@ -128,6 +128,11 @@ describe('WorkspaceContextService', () => {
     expect(state.lastRun?.status).toBe('completed');
     expect(state.lastRun?.filesConsidered).toBe(0);
     expect(state.lastScanCompletedAt).toBe('2026-05-18T00:00:00.000Z');
+    const statePath = path.join(workspaceContextService.getWorkspaceContextDir(hash), 'state.json');
+    await fsp.writeFile(statePath, JSON.stringify({
+      ...state,
+      lastMaintenanceCompletedAt: '2026-05-18T00:00:00.000Z',
+    }, null, 2), 'utf8');
 
     now = new Date('2026-05-18T00:06:00.000Z');
     const scheduler = new WorkspaceContextScheduler({
@@ -138,7 +143,11 @@ describe('WorkspaceContextService', () => {
     await scheduler.tick();
     for (let i = 0; i < 20; i += 1) {
       state = await workspaceContextService.getState(hash);
-      if (state.lastRun?.source === 'scheduled' && state.lastRun.startedAt === '2026-05-18T00:06:00.000Z') break;
+      if (
+        state.lastRun?.source === 'scheduled'
+        && state.lastRun.startedAt === '2026-05-18T00:06:00.000Z'
+        && state.lastRun.status === 'completed'
+      ) break;
       await new Promise((resolve) => setTimeout(resolve, 10));
     }
 
@@ -299,7 +308,7 @@ describe('WorkspaceContextService', () => {
 
     mockBackend.setOneShotImpl(async (prompt, opts) => {
       expect(prompt).toContain('Workspace Context Maintenance');
-      expect(prompt).toContain('This is a maintenance pass, not a new source-ingestion pass.');
+      expect(prompt).toContain('This is a maintenance pass, not a conversation source-ingestion pass.');
       expect(prompt).toContain(path.join(contextDir, 'overview.md'));
       expect(prompt).toContain(path.join(contextDir, 'people.md'));
       expect(prompt).not.toContain('Workspace Context Catch-Up');
@@ -325,6 +334,116 @@ describe('WorkspaceContextService', () => {
     const runReport = await fsp.readFile(path.join(workspaceContextService.getWorkspaceContextDir(hash), 'runs', 'latest.md'), 'utf8');
     expect(runReport).toContain('- Source: maintenance');
     expect(runReport).toContain(path.join(contextDir, 'people.md'));
+  });
+
+  test('maintenance consumes accepted Memory inbox entries and deletes them', async () => {
+    const memoryUpdates: any[] = [];
+    workspaceContextService = new WorkspaceContextService({
+      chatService,
+      backendRegistry,
+      emitMemoryUpdate: (_hash, frame) => {
+        memoryUpdates.push(frame);
+      },
+    });
+    await chatService.createConversation('Workspace Context consumes Memory', workspacePath);
+    const hash = workspaceHash(workspacePath);
+    await chatService.setWorkspaceContextEnabled(hash, true);
+    await chatService.setWorkspaceMemoryEnabled(hash, true);
+    await workspaceContextService.ensureWorkspace(hash);
+    const contextDir = workspaceContextService.getContextFilesDir(hash);
+    const relPath = await chatService.addMemoryNoteEntry(hash, {
+      content: '---\nname: Project Atlas owner\ndescription: Ada owns Project Atlas\ntype: project\n---\n\nAda owns Project Atlas.',
+      source: 'memory-note',
+      filenameHint: 'project-atlas-owner',
+    });
+    const memoryFilePath = path.join(chatService.getWorkspaceMemoryFilesDir(hash), relPath);
+
+    mockBackend.setOneShotImpl(async (prompt) => {
+      expect(prompt).toContain('## Memory Inbox Handling');
+      expect(prompt).toContain('## Memory Inbox Files');
+      expect(prompt).toContain(`${relPath}: ${memoryFilePath}`);
+      expect(prompt).toContain('workspace-context-memory-actions');
+      await fsp.writeFile(
+        path.join(contextDir, 'projects.md'),
+        '# Projects\n\n- Ada owns Project Atlas.\n',
+        'utf8',
+      );
+      return [
+        'Updated projects.md with Project Atlas ownership.',
+        '',
+        '```workspace-context-memory-actions',
+        JSON.stringify({ acceptedMemoryFiles: [relPath] }),
+        '```',
+      ].join('\n');
+    });
+
+    const result = await workspaceContextService.processWorkspace(hash, { source: 'maintenance', forceAll: true });
+
+    expect(result.filesConsidered).toBe(2);
+    expect(result.summary).toContain('Consumed 1 Memory entry');
+    expect(fs.existsSync(memoryFilePath)).toBe(false);
+    const snapshot = await chatService.getWorkspaceMemory(hash);
+    expect((snapshot?.files || []).some((file) => file.filename === relPath)).toBe(false);
+    expect((await workspaceContextService.readFile(hash, 'projects.md'))?.content).toContain('Project Atlas');
+    expect(memoryUpdates).toEqual([
+      expect.objectContaining({
+        type: 'memory_update',
+        changedFiles: [relPath],
+        displayInChat: false,
+      }),
+    ]);
+  });
+
+  test('maintenance fails visibly when Memory inbox actions are missing', async () => {
+    await chatService.createConversation('Workspace Context missing Memory actions', workspacePath);
+    const hash = workspaceHash(workspacePath);
+    await chatService.setWorkspaceContextEnabled(hash, true);
+    await chatService.setWorkspaceMemoryEnabled(hash, true);
+    await workspaceContextService.ensureWorkspace(hash);
+    const relPath = await chatService.addMemoryNoteEntry(hash, {
+      content: '---\nname: Project Atlas owner\ndescription: Ada owns Project Atlas\ntype: project\n---\n\nAda owns Project Atlas.',
+      source: 'memory-note',
+      filenameHint: 'project-atlas-owner',
+    });
+
+    mockBackend.setOneShotImpl(async () => 'Updated projects.md but omitted the required action block.');
+
+    await expect(workspaceContextService.processWorkspace(hash, { source: 'maintenance', forceAll: true }))
+      .rejects.toThrow('memory action block is required');
+    const snapshot = await chatService.getWorkspaceMemory(hash);
+    expect((snapshot?.files || []).some((file) => file.filename === relPath)).toBe(true);
+    const state = await workspaceContextService.getState(hash);
+    expect(state.lastRun?.status).toBe('failed');
+  });
+
+  test('maintenance fails visibly when Memory inbox actions are duplicated', async () => {
+    await chatService.createConversation('Workspace Context duplicate Memory actions', workspacePath);
+    const hash = workspaceHash(workspacePath);
+    await chatService.setWorkspaceContextEnabled(hash, true);
+    await chatService.setWorkspaceMemoryEnabled(hash, true);
+    await workspaceContextService.ensureWorkspace(hash);
+    const relPath = await chatService.addMemoryNoteEntry(hash, {
+      content: '---\nname: Project Atlas owner\ndescription: Ada owns Project Atlas\ntype: project\n---\n\nAda owns Project Atlas.',
+      source: 'memory-note',
+      filenameHint: 'project-atlas-owner',
+    });
+
+    mockBackend.setOneShotImpl(async () => [
+      'Updated projects.md.',
+      '',
+      '```workspace-context-memory-actions',
+      JSON.stringify({ acceptedMemoryFiles: [relPath] }),
+      '```',
+      '',
+      '```workspace-context-memory-actions',
+      JSON.stringify({ acceptedMemoryFiles: [] }),
+      '```',
+    ].join('\n'));
+
+    await expect(workspaceContextService.processWorkspace(hash, { source: 'maintenance', forceAll: true }))
+      .rejects.toThrow('memory action block must appear exactly once');
+    const snapshot = await chatService.getWorkspaceMemory(hash);
+    expect((snapshot?.files || []).some((file) => file.filename === relPath)).toBe(true);
   });
 
   test('maintenance prunes run logs older than one week', async () => {
@@ -457,5 +576,58 @@ describe('WorkspaceContextService', () => {
     expect(completedState.lastRun?.source).toBe('maintenance');
     expect(completedState.lastRun?.status).toBe('completed');
     expect(completedState.lastMaintenanceCompletedAt).toBeTruthy();
+  });
+
+  test('scheduler starts maintenance when frequent scans updated last scan but no maintenance has completed', async () => {
+    let now = new Date('2026-05-18T00:00:00.000Z');
+    workspaceContextService = new WorkspaceContextService({ chatService, backendRegistry, now: () => now });
+    await chatService.saveSettings({
+      ...(await chatService.getSettings()),
+      workspaceContext: {
+        scanIntervalMinutes: 5,
+        cliConcurrency: 1,
+        maintenanceIntervalHours: 24,
+        maintenanceCliConcurrency: 1,
+      },
+    });
+    const conv = await chatService.createConversation('Workspace Context maintenance bootstrap', workspacePath);
+    await chatService.addMessage(conv.id, 'user', 'Learn that Ada owns Project Atlas.', 'claude-code');
+    const hash = workspaceHash(workspacePath);
+    await chatService.setWorkspaceContextEnabled(hash, true);
+
+    mockBackend.setOneShotImpl(async () => 'Initial scan complete.');
+    await workspaceContextService.processWorkspace(hash, { source: 'manual_catchup', forceAll: true });
+    const statePath = path.join(workspaceContextService.getWorkspaceContextDir(hash), 'state.json');
+    const state = JSON.parse(await fsp.readFile(statePath, 'utf8'));
+    state.lastScanCompletedAt = '2026-05-18T23:59:00.000Z';
+    delete state.lastMaintenanceCompletedAt;
+    await fsp.writeFile(statePath, JSON.stringify(state, null, 2), 'utf8');
+
+    now = new Date('2026-05-19T00:00:00.000Z');
+    const releaseMaintenance: { current?: () => void } = {};
+    mockBackend.setOneShotImpl((prompt) => new Promise((resolve) => {
+      expect(prompt).toContain('Workspace Context Maintenance');
+      releaseMaintenance.current = () => resolve('Maintenance complete.');
+    }));
+    const scheduler = new WorkspaceContextScheduler({
+      chatService: chatService as any,
+      processor: workspaceContextService,
+      now: () => now,
+    });
+
+    await scheduler.tick();
+    for (let i = 0; i < 20 && !releaseMaintenance.current; i += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    if (!releaseMaintenance.current) throw new Error('Workspace Context maintenance did not start');
+
+    releaseMaintenance.current();
+    for (let i = 0; i < 20 && workspaceContextService.isRunning(hash); i += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    const completedState = await workspaceContextService.getState(hash);
+    expect(completedState.lastRun?.source).toBe('maintenance');
+    expect(completedState.lastRun?.status).toBe('completed');
+    expect(completedState.lastMaintenanceCompletedAt).toBe('2026-05-19T00:00:00.000Z');
   });
 });

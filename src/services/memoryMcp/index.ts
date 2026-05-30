@@ -58,10 +58,6 @@ import type {
   MemoryConsolidationDraftOperation,
   MemoryConsolidationDraftOperationType,
   MemoryConsolidationProposal,
-  MemoryReviewDraftItem,
-  MemoryReviewRun,
-  MemoryReviewRunSource,
-  MemoryReviewUpdateEvent,
   MemoryUpdateEvent,
   MemoryWriteAction,
   MemoryWriteOutcome,
@@ -840,33 +836,6 @@ function memorySearchStatusScope(value: unknown): MemoryStatus[] | undefined {
   throw new Error('status must be active or all');
 }
 
-function draftWithEditedContent(
-  base: MemoryConsolidationDraft,
-  edited?: MemoryConsolidationDraft,
-): MemoryConsolidationDraft {
-  if (!edited) return base;
-  if (!Array.isArray(edited.operations)) {
-    throw new Error('draft.operations must be an array');
-  }
-  if (edited.operations.length !== base.operations.length) {
-    throw new Error('draft.operations must match generated operations');
-  }
-
-  return {
-    ...base,
-    operations: base.operations.map((operation, index) => {
-      const editedOperation = edited.operations[index];
-      if (!editedOperation || typeof editedOperation.content !== 'string') {
-        throw new Error('draft.operations[].content must be strings');
-      }
-      return {
-        ...operation,
-        content: editedOperation.content,
-      };
-    }),
-  };
-}
-
 function parseMemoryCliOutcome(cleaned: string): ParsedMemoryCliOutcome | null {
   const raw = parseJsonObject(cleaned);
   if (!raw) return null;
@@ -1129,18 +1098,15 @@ interface CreateMemoryMcpDeps {
   chatService: ChatService;
   backendRegistry: BackendRegistry;
   emitMemoryUpdate?: (workspaceHash: string, frame: MemoryUpdateEvent) => void;
-  emitMemoryReviewUpdate?: (workspaceHash: string, frame: MemoryReviewUpdateEvent) => void;
 }
 
 export function createMemoryMcpServer({
   chatService,
   backendRegistry,
   emitMemoryUpdate,
-  emitMemoryReviewUpdate,
 }: CreateMemoryMcpDeps) {
   const sessions = new Map<string, MemoryMcpSession>(); // token → session
   const byConversation = new Map<string, string>(); // convId → token
-  const runningReviewRuns = new Set<string>();
 
   async function emitFreshMemoryUpdate(
     hash: string,
@@ -1158,16 +1124,6 @@ export function createMemoryMcpServer({
       sourceConversationId,
       displayInChat: !!sourceConversationId,
       ...(writeOutcomes && writeOutcomes.length ? { writeOutcomes } : {}),
-    });
-  }
-
-  async function emitFreshMemoryReviewUpdate(hash: string): Promise<void> {
-    if (!emitMemoryReviewUpdate) return;
-    const review = await chatService.getMemoryReviewStatus(hash);
-    emitMemoryReviewUpdate(hash, {
-      type: 'memory_review_update',
-      updatedAt: new Date().toISOString(),
-      review,
     });
   }
 
@@ -1226,60 +1182,6 @@ export function createMemoryMcpServer({
       statusLabel: processorStatusLabel(status),
       memoryProcessor: snapshot,
     });
-  }
-
-  function reviewItemId(prefix: 'action' | 'draft'): string {
-    return `memreview_${prefix}_${crypto.randomBytes(8).toString('hex')}`;
-  }
-
-  function hasOpenReviewItems(run: MemoryReviewRun): boolean {
-    return run.safeActions.some((item) => item.status === 'pending' || item.status === 'stale' || item.status === 'failed')
-      || run.drafts.some((item) => item.status === 'pending' || item.status === 'stale' || item.status === 'failed');
-  }
-
-  function deriveMemoryReviewRunStatus(run: MemoryReviewRun): MemoryReviewRun['status'] {
-    if (run.status === 'running') return 'running';
-    const items = [...run.safeActions, ...run.drafts];
-    if (hasOpenReviewItems(run)) return 'pending_review';
-    if (items.length === 0) return run.failures.length ? 'failed' : 'completed';
-    const applied = items.filter((item) => item.status === 'applied').length;
-    const discarded = items.filter((item) => item.status === 'discarded').length;
-    if (applied > 0 && discarded > 0) return 'partially_applied';
-    if (applied > 0) return 'completed';
-    if (discarded === items.length) return 'dismissed';
-    return run.failures.length ? 'failed' : 'completed';
-  }
-
-  function finalizeMemoryReviewRun(run: MemoryReviewRun): MemoryReviewRun {
-    const status = deriveMemoryReviewRunStatus(run);
-    const now = new Date().toISOString();
-    const terminal = status !== 'running' && status !== 'pending_review';
-    return {
-      ...run,
-      status,
-      updatedAt: now,
-      ...(terminal ? { completedAt: run.completedAt || now } : { completedAt: undefined }),
-    };
-  }
-
-  async function memoryReviewActionFingerprints(
-    hash: string,
-    action: MemoryConsolidationAction,
-  ): Promise<Record<string, string>> {
-    return chatService.getMemoryReviewSourceFingerprints(hash, consolidationActionFilenames(action));
-  }
-
-  async function memoryReviewItemIsStale(hash: string, expected: Record<string, string>): Promise<boolean> {
-    const filenames = Object.keys(expected);
-    if (filenames.length === 0) return false;
-    const current = await chatService.getMemoryReviewSourceFingerprints(hash, filenames);
-    return filenames.some((filename) => current[filename] !== expected[filename]);
-  }
-
-  async function saveMemoryReviewRunAndEmit(hash: string, run: MemoryReviewRun): Promise<MemoryReviewRun> {
-    const saved = await chatService.saveMemoryReviewRun(hash, run);
-    await emitFreshMemoryReviewUpdate(hash);
-    return saved;
   }
 
   /**
@@ -2266,290 +2168,6 @@ export function createMemoryMcpServer({
     };
   }
 
-  async function generateMemoryReviewRun(hash: string, initialRun: MemoryReviewRun): Promise<MemoryReviewRun> {
-    let run = initialRun;
-    try {
-      const proposal = await proposeMemoryConsolidation(hash);
-      run = {
-        ...run,
-        proposal,
-        summary: proposal.summary,
-        updatedAt: new Date().toISOString(),
-      };
-
-      for (const action of proposal.actions) {
-        if (action.action === 'mark_superseded') {
-          const itemNow = new Date().toISOString();
-          run.safeActions.push({
-            id: reviewItemId('action'),
-            status: 'pending',
-            action,
-            sourceFingerprints: await memoryReviewActionFingerprints(hash, action),
-            createdAt: itemNow,
-            updatedAt: itemNow,
-          });
-          continue;
-        }
-
-        if (
-          action.action === 'merge_candidates'
-          || action.action === 'split_candidate'
-          || action.action === 'normalize_candidate'
-        ) {
-          const itemNow = new Date().toISOString();
-          const item: MemoryReviewDraftItem = {
-            id: reviewItemId('draft'),
-            status: 'pending',
-            action,
-            sourceFingerprints: await memoryReviewActionFingerprints(hash, action),
-            createdAt: itemNow,
-            updatedAt: itemNow,
-          };
-          try {
-            item.draft = await draftMemoryConsolidation(hash, { action });
-          } catch (err: unknown) {
-            item.status = 'failed';
-            item.failure = (err as Error).message || 'Draft generation failed';
-          }
-          run.drafts.push(item);
-        }
-      }
-
-      run.status = 'pending_review';
-      return await saveMemoryReviewRunAndEmit(hash, finalizeMemoryReviewRun(run));
-    } catch (err: unknown) {
-      run.status = 'failed';
-      run.summary = 'Memory Review failed.';
-      run.failures.push({ message: (err as Error).message || 'Memory Review failed' });
-      return saveMemoryReviewRunAndEmit(hash, finalizeMemoryReviewRun(run));
-    } finally {
-      runningReviewRuns.delete(hash);
-    }
-  }
-
-  async function startMemoryReviewRunInternal(
-    hash: string,
-    args: { source: MemoryReviewRunSource; replaceExisting?: boolean },
-  ): Promise<{ run: MemoryReviewRun; completion?: Promise<MemoryReviewRun> }> {
-    const enabled = await chatService.getWorkspaceMemoryEnabled(hash);
-    if (!enabled) throw new Error('Memory is disabled for this workspace');
-
-    const existingRuns = await chatService.listMemoryReviewRuns(hash);
-    const actionableRuns = existingRuns
-      .filter((run) => run.status === 'running' || run.status === 'pending_review' || run.status === 'failed');
-    const existing = actionableRuns[0];
-    if (existing && !args.replaceExisting) return { run: existing };
-
-    if (runningReviewRuns.has(hash)) {
-      throw new Error('Cannot start a new Memory Review while another review is still generating.');
-    }
-
-    if (args.replaceExisting && actionableRuns.length > 0) {
-      const retiredAt = new Date().toISOString();
-      for (const prior of actionableRuns) {
-        prior.status = 'dismissed';
-        prior.updatedAt = retiredAt;
-        prior.completedAt = prior.completedAt || retiredAt;
-        prior.summary = prior.summary || 'Memory Review dismissed before a new review was started.';
-        for (const item of [...prior.safeActions, ...prior.drafts]) {
-          if (item.status === 'applied' || item.status === 'discarded') continue;
-          item.status = 'discarded';
-          item.discardedAt = retiredAt;
-          item.updatedAt = retiredAt;
-        }
-        await saveMemoryReviewRunAndEmit(hash, prior);
-      }
-    }
-
-    const running = (await chatService.listMemoryReviewRuns(hash))
-      .find((run) => run.status === 'running' || run.status === 'pending_review' || run.status === 'failed');
-    if (running) return { run: running };
-
-    runningReviewRuns.add(hash);
-    const now = new Date().toISOString();
-    const run: MemoryReviewRun = {
-      version: 1,
-      id: `memreview_${crypto.randomBytes(8).toString('hex')}`,
-      workspaceHash: hash,
-      status: 'running',
-      source: args.source,
-      createdAt: now,
-      updatedAt: now,
-      summary: 'Memory Review is generating drafts.',
-      sourceSnapshotFingerprint: await chatService.getMemorySnapshotFingerprint(hash),
-      safeActions: [],
-      drafts: [],
-      failures: [],
-    };
-
-    await saveMemoryReviewRunAndEmit(hash, run);
-    const completion = generateMemoryReviewRun(hash, run);
-    completion.catch(() => {});
-    return { run, completion };
-  }
-
-  async function startMemoryReviewRun(
-    hash: string,
-    args: { source: MemoryReviewRunSource; replaceExisting?: boolean },
-  ): Promise<MemoryReviewRun> {
-    const started = await startMemoryReviewRunInternal(hash, args);
-    return started.run;
-  }
-
-  async function createMemoryReviewRun(
-    hash: string,
-    args: { source: MemoryReviewRunSource; replaceExisting?: boolean },
-  ): Promise<MemoryReviewRun> {
-    const started = await startMemoryReviewRunInternal(hash, args);
-    return started.completion ? started.completion : started.run;
-  }
-
-  async function getMemoryReviewRunOrThrow(hash: string, runId: string): Promise<MemoryReviewRun> {
-    const run = await chatService.getMemoryReviewRun(hash, runId);
-    if (!run) throw new Error('Memory Review not found');
-    return run;
-  }
-
-  async function applyMemoryReviewSafeAction(
-    hash: string,
-    runId: string,
-    itemId: string,
-  ): Promise<MemoryReviewRun> {
-    const run = await getMemoryReviewRunOrThrow(hash, runId);
-    const item = run.safeActions.find((candidate) => candidate.id === itemId);
-    if (!item) throw new Error('Memory Review action not found');
-    if (item.status === 'applied' || item.status === 'discarded') return run;
-
-    const now = new Date().toISOString();
-    if (await memoryReviewItemIsStale(hash, item.sourceFingerprints)) {
-      item.status = 'stale';
-      item.failure = 'Source memory changed after this review was generated.';
-      item.updatedAt = now;
-      run.status = 'pending_review';
-      return saveMemoryReviewRunAndEmit(hash, finalizeMemoryReviewRun(run));
-    }
-
-    const result = await applyMemoryConsolidation(hash, {
-      summary: run.summary,
-      actions: [item.action],
-    });
-    item.result = result;
-    item.updatedAt = new Date().toISOString();
-    if (result.applied.length > 0) {
-      item.status = 'applied';
-      item.appliedAt = item.updatedAt;
-      item.failure = undefined;
-    } else {
-      item.status = 'failed';
-      item.failure = result.skipped[0]?.reason || 'No changes were applied.';
-    }
-    return saveMemoryReviewRunAndEmit(hash, finalizeMemoryReviewRun(run));
-  }
-
-  async function applyMemoryReviewDraft(
-    hash: string,
-    runId: string,
-    draftId: string,
-    args?: { draft?: MemoryConsolidationDraft },
-  ): Promise<MemoryReviewRun> {
-    const run = await getMemoryReviewRunOrThrow(hash, runId);
-    const item = run.drafts.find((candidate) => candidate.id === draftId);
-    if (!item) throw new Error('Memory Review draft not found');
-    if (item.status === 'applied' || item.status === 'discarded') return run;
-    if (!item.draft) {
-      item.status = 'failed';
-      item.failure = item.failure || 'Draft was not generated.';
-      item.updatedAt = new Date().toISOString();
-      return saveMemoryReviewRunAndEmit(hash, finalizeMemoryReviewRun(run));
-    }
-
-    const now = new Date().toISOString();
-    if (await memoryReviewItemIsStale(hash, item.sourceFingerprints)) {
-      item.status = 'stale';
-      item.failure = 'Source memory changed after this review was generated.';
-      item.updatedAt = now;
-      run.status = 'pending_review';
-      return saveMemoryReviewRunAndEmit(hash, finalizeMemoryReviewRun(run));
-    }
-
-    const reviewedDraft = draftWithEditedContent(item.draft, args?.draft);
-    const result = await applyMemoryConsolidationDraft(hash, {
-      summary: run.summary,
-      draft: reviewedDraft,
-    });
-    item.result = result;
-    item.updatedAt = new Date().toISOString();
-    if (result.applied.length > 0) {
-      item.status = 'applied';
-      item.appliedAt = item.updatedAt;
-      item.failure = undefined;
-    } else {
-      item.status = 'failed';
-      item.failure = result.skipped[0]?.reason || 'No draft changes were applied.';
-    }
-    return saveMemoryReviewRunAndEmit(hash, finalizeMemoryReviewRun(run));
-  }
-
-  async function discardMemoryReviewItem(
-    hash: string,
-    runId: string,
-    itemId: string,
-  ): Promise<MemoryReviewRun> {
-    const run = await getMemoryReviewRunOrThrow(hash, runId);
-    const item = run.safeActions.find((candidate) => candidate.id === itemId)
-      || run.drafts.find((candidate) => candidate.id === itemId);
-    if (!item) throw new Error('Memory Review item not found');
-    if (item.status !== 'applied' && item.status !== 'discarded') {
-      const now = new Date().toISOString();
-      item.status = 'discarded';
-      item.discardedAt = now;
-      item.updatedAt = now;
-    }
-    return saveMemoryReviewRunAndEmit(hash, finalizeMemoryReviewRun(run));
-  }
-
-  async function regenerateMemoryReviewDraft(
-    hash: string,
-    runId: string,
-    draftId: string,
-  ): Promise<MemoryReviewRun> {
-    const run = await getMemoryReviewRunOrThrow(hash, runId);
-    const item = run.drafts.find((candidate) => candidate.id === draftId);
-    if (!item) throw new Error('Memory Review draft not found');
-    if (item.status === 'applied') return run;
-
-    const now = new Date().toISOString();
-    try {
-      item.sourceFingerprints = await memoryReviewActionFingerprints(hash, item.action);
-      item.draft = await draftMemoryConsolidation(hash, { action: item.action });
-      item.status = 'pending';
-      item.failure = undefined;
-      item.discardedAt = undefined;
-      item.regeneratedAt = now;
-      item.updatedAt = now;
-    } catch (err: unknown) {
-      item.status = 'failed';
-      item.discardedAt = undefined;
-      item.failure = (err as Error).message || 'Draft regeneration failed';
-      item.updatedAt = now;
-    }
-
-    run.status = 'pending_review';
-    return saveMemoryReviewRunAndEmit(hash, finalizeMemoryReviewRun(run));
-  }
-
-  function isMemoryReviewRunning(hash: string): boolean {
-    return runningReviewRuns.has(hash);
-  }
-
-  async function hasPendingMemoryReview(hash: string): Promise<boolean> {
-    return (await chatService.getMemoryReviewStatus(hash)).pending;
-  }
-
-  async function hasMemoryChangedSinceLastScheduledReview(hash: string, since?: string): Promise<boolean> {
-    return chatService.hasMemoryChangedSinceLastScheduledReview(hash, since);
-  }
-
   return {
     router,
     issueMemoryMcpSession,
@@ -2559,15 +2177,6 @@ export function createMemoryMcpServer({
     draftMemoryConsolidation,
     applyMemoryConsolidation,
     applyMemoryConsolidationDraft,
-    startMemoryReviewRun,
-    createMemoryReviewRun,
-    applyMemoryReviewSafeAction,
-    applyMemoryReviewDraft,
-    discardMemoryReviewItem,
-    regenerateMemoryReviewDraft,
-    isMemoryReviewRunning,
-    hasPendingMemoryReview,
-    hasMemoryChangedSinceLastScheduledReview,
   };
 }
 

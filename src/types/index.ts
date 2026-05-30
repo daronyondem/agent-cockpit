@@ -361,10 +361,6 @@ export interface WorkspaceIndex {
    * no MCP memory_note exposure, no post-session extraction.
    */
   memoryEnabled?: boolean;
-  /** Per-workspace Memory Review schedule. Default/off when absent. */
-  memoryReviewSchedule?: MemoryReviewScheduleConfig;
-  /** Timestamp of the last Memory Review schedule change. Resets scheduled-run guards. */
-  memoryReviewScheduleUpdatedAt?: string;
   /**
    * Whether per-workspace Knowledge Base is enabled. When false/undefined,
    * the workspace behaves exactly as before the KB feature: no KB pointer
@@ -458,8 +454,6 @@ export interface Conversation {
   archived?: boolean;
   /** KB status snapshot, populated when workspace has KB enabled. */
   kb?: ConversationKbStatus;
-  /** Pending Memory Review snapshot for composer notifications. */
-  memoryReview?: ConversationMemoryReviewStatus;
   /** Workspace Context run snapshot for composer notifications. */
   workspaceContext?: ConversationWorkspaceContextStatus;
 }
@@ -475,25 +469,6 @@ export interface ConversationKbStatus {
   autoDigest: boolean;
   dreamingStatus: 'idle' | 'running' | 'failed';
   failedItems: number;
-}
-
-export interface ConversationMemoryReviewStatus {
-  enabled: boolean;
-  pending: boolean;
-  pendingRuns: number;
-  pendingDrafts: number;
-  pendingSafeActions: number;
-  failedItems: number;
-  latestRunId?: string;
-  latestRunStatus?: MemoryReviewRunStatus;
-  latestRunCreatedAt?: string;
-  latestRunUpdatedAt?: string;
-  latestRunSource?: MemoryReviewRunSource;
-  lastRunId?: string;
-  lastRunStatus?: MemoryReviewRunStatus;
-  lastRunCreatedAt?: string;
-  lastRunUpdatedAt?: string;
-  lastRunSource?: MemoryReviewRunSource;
 }
 
 export type ConversationWorkspaceContextRunStatus = 'running' | 'completed' | 'failed' | 'stopped' | 'skipped';
@@ -1066,12 +1041,6 @@ export interface MemoryUpdateEvent {
   writeOutcomes?: MemoryWriteOutcome[];
 }
 
-export interface MemoryReviewUpdateEvent {
-  type: 'memory_review_update';
-  updatedAt: string;
-  review: ConversationMemoryReviewStatus;
-}
-
 export interface WorkspaceContextUpdateEvent {
   type: 'workspace_context_update';
   updatedAt: string;
@@ -1095,7 +1064,6 @@ export type StreamEvent =
   | ExternalSessionEvent
   | BackendRuntimeEvent
   | MemoryUpdateEvent
-  | MemoryReviewUpdateEvent
   | WorkspaceContextUpdateEvent
   | KbStateUpdateEvent;
 
@@ -1282,81 +1250,6 @@ export interface MemoryConsolidationAudit {
   skipped: MemoryConsolidationSkippedAction[];
   appliedDraftOperations?: MemoryConsolidationDraftOperation[];
   skippedDraftOperations?: MemoryConsolidationSkippedDraftOperation[];
-}
-
-export type MemoryReviewScheduleDays = 'daily' | 'weekdays' | 'custom';
-
-export type MemoryReviewScheduleConfig =
-  | { mode: 'off' }
-  | {
-      mode: 'window';
-      days: MemoryReviewScheduleDays;
-      customDays?: number[];
-      windowStart: string;
-      windowEnd: string;
-      timezone?: string;
-    };
-
-export type MemoryReviewRunStatus =
-  | 'running'
-  | 'pending_review'
-  | 'completed'
-  | 'partially_applied'
-  | 'dismissed'
-  | 'failed';
-
-export type MemoryReviewRunSource = 'manual' | 'scheduled';
-
-export type MemoryReviewItemStatus = 'pending' | 'applied' | 'discarded' | 'stale' | 'failed';
-
-export interface MemoryReviewSafeActionItem {
-  id: string;
-  status: MemoryReviewItemStatus;
-  action: MemoryConsolidationAction;
-  sourceFingerprints: Record<string, string>;
-  createdAt: string;
-  updatedAt: string;
-  appliedAt?: string;
-  discardedAt?: string;
-  failure?: string;
-  result?: MemoryConsolidationApplyResult;
-}
-
-export interface MemoryReviewDraftItem {
-  id: string;
-  status: MemoryReviewItemStatus;
-  action: MemoryConsolidationAction;
-  sourceFingerprints: Record<string, string>;
-  createdAt: string;
-  updatedAt: string;
-  draft?: MemoryConsolidationDraft;
-  appliedAt?: string;
-  discardedAt?: string;
-  regeneratedAt?: string;
-  failure?: string;
-  result?: MemoryConsolidationDraftApplyResult;
-}
-
-export interface MemoryReviewRunFailure {
-  action?: MemoryConsolidationAction;
-  message: string;
-}
-
-export interface MemoryReviewRun {
-  version: 1;
-  id: string;
-  workspaceHash: string;
-  status: MemoryReviewRunStatus;
-  source: MemoryReviewRunSource;
-  createdAt: string;
-  updatedAt: string;
-  completedAt?: string;
-  summary: string;
-  sourceSnapshotFingerprint: string;
-  proposal?: MemoryConsolidationProposal;
-  safeActions: MemoryReviewSafeActionItem[];
-  drafts: MemoryReviewDraftItem[];
-  failures: MemoryReviewRunFailure[];
 }
 
 export interface MemoryEntryMetadata {

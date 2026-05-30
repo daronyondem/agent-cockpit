@@ -1,16 +1,15 @@
 ---
 id: 0042
 title: Schedule memory review runs
-status: Proposed
+status: Superseded
 date: 2026-05-07
 supersedes: []
-superseded-by: null
+superseded-by: 0081
 tags: [memory, scheduling, governance]
 affects:
   - src/types/index.ts
   - src/services/chatService.ts
   - src/services/memoryMcp/index.ts
-  - src/services/memoryReview.ts
   - src/routes/chat.ts
   - server.ts
   - public/v2/src/api.js
@@ -26,7 +25,6 @@ affects:
   - docs/spec-testing.md
   - test/chat.memory.test.ts
   - test/frontendRoutes.test.ts
-  - test/memoryReview.test.ts
   - test/streamStore.test.ts
 ---
 

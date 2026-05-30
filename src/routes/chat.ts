@@ -19,14 +19,11 @@ import { KbIngestionService } from '../services/knowledgeBase/ingestion';
 import { KbDigestionService } from '../services/knowledgeBase/digest';
 import { KbDreamService } from '../services/knowledgeBase/dream';
 import { KbDreamScheduler } from '../services/knowledgeBase/autoDream';
-import {
-  MemoryReviewScheduler,
-} from '../services/memoryReview';
 import { WorkspaceContextScheduler, WorkspaceContextService } from '../services/workspaceContext/service';
 import { WorkspaceTaskQueueRegistry } from '../services/knowledgeBase/workspaceTaskQueue';
 import { createKbSearchMcpServer } from '../services/kbSearchMcp';
 import { SessionFinalizerQueue, type SessionFinalizerJob } from '../services/sessionFinalizerQueue';
-import type { Request, Response, ActiveStreamEntry, ContentBlock, ToolActivity, StreamEvent, WsServerFrame, EffortLevel, ServiceTier, StreamErrorSource, MemoryUpdateEvent, MemoryReviewUpdateEvent, WorkspaceContextUpdateEvent, StreamJobRuntimeInfo, SendMessageResult, ThreadGoal, GoalEvent } from '../types';
+import type { Request, Response, ActiveStreamEntry, ContentBlock, ToolActivity, StreamEvent, WsServerFrame, EffortLevel, ServiceTier, StreamErrorSource, MemoryUpdateEvent, WorkspaceContextUpdateEvent, StreamJobRuntimeInfo, SendMessageResult, ThreadGoal, GoalEvent } from '../types';
 import { logger } from '../utils/logger';
 import type { WsFunctions } from '../ws';
 import { createChatStatusRouter } from './chat/statusRoutes';
@@ -866,18 +863,6 @@ export function createChatRouter({ chatService, backendRegistry, updateService, 
     });
   }
 
-  function broadcastMemoryReviewUpdate(hash: string, frame: MemoryReviewUpdateEvent): void {
-    if (!wsFns) return;
-    const sent = new Set<string>();
-    const workspaceId = chatService.getWorkspaceIdForRef(hash) || hash;
-    wsFns.forEachConnected((convId) => {
-      if (chatService.getWorkspaceIdForConv(convId) !== workspaceId) return;
-      if (sent.has(convId)) return;
-      sent.add(convId);
-      wsFns!.send(convId, frame);
-    });
-  }
-
   function broadcastWorkspaceContextUpdate(hash: string, frame: WorkspaceContextUpdateEvent): void {
     if (!wsFns) return;
     const sent = new Set<string>();
@@ -955,17 +940,15 @@ export function createChatRouter({ chatService, backendRegistry, updateService, 
     chatService,
     backendRegistry,
     emitMemoryUpdate: broadcastMemoryUpdate,
-    emitMemoryReviewUpdate: broadcastMemoryReviewUpdate,
   });
   router.use('/mcp', memoryMcp.router);
-  const memoryReviewScheduler = new MemoryReviewScheduler({ chatService, runner: memoryMcp });
-
   // Workspace Context runner. It asks the configured CLI to update
   // workspace-owned markdown files directly.
   const workspaceContextService = new WorkspaceContextService({
     chatService,
     backendRegistry,
     emitUpdate: emitFreshWorkspaceContextUpdate,
+    emitMemoryUpdate: broadcastMemoryUpdate,
   });
   const workspaceContextScheduler = new WorkspaceContextScheduler({
     chatService,
@@ -1540,7 +1523,6 @@ export function createChatRouter({ chatService, backendRegistry, updateService, 
     }
     streamSupervisor.abortAndDetachAllRuntime();
     kbDreamScheduler.stop();
-    memoryReviewScheduler.stop();
     workspaceContextScheduler.stop();
     sessionFinalizers.stop();
     memoryWatcher.unwatchAll();
@@ -1554,5 +1536,5 @@ export function createChatRouter({ chatService, backendRegistry, updateService, 
     wsFns = fns;
   }
 
-  return { router, shutdown, activeStreams, streamJobs, setWsFunctions, abortActiveStream, reconcileInterruptedJobs, memoryMcp, kbDreamScheduler, memoryReviewScheduler, workspaceContextService, workspaceContextScheduler, sessionFinalizers };
+  return { router, shutdown, activeStreams, streamJobs, setWsFunctions, abortActiveStream, reconcileInterruptedJobs, memoryMcp, kbDreamScheduler, workspaceContextService, workspaceContextScheduler, sessionFinalizers };
 }

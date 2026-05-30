@@ -20,9 +20,11 @@ Examples:
 ## How It Works
 
 Agent Cockpit stores memory files under the workspace data directory. Supported
-backends can read relevant memory through the local context mechanisms Agent
-Cockpit provides, and memory review workflows help keep persistent notes useful
-instead of letting them grow unchecked.
+backends can search relevant notes through the Memory MCP tool and read the
+workspace memory folder when the conversation context points them there.
+Workspace Context maintenance periodically treats active Memory notes as an
+inbox: accepted facts are folded into Workspace Context markdown and then
+removed from Memory so the note list stays small.
 
 ## Relationship To Knowledge Base And Workspace Context
 

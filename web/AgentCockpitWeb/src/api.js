@@ -771,63 +771,6 @@
       const qs = params.toString() ? '?' + params.toString() : '';
       return chatFetch('workspaces/' + encodeURIComponent(hash) + '/memory/search' + qs).then(r => r.json());
     },
-    proposeMemoryConsolidation: (hash) => chatFetch(
-      'workspaces/' + encodeURIComponent(hash) + '/memory/consolidate/propose',
-      { method: 'POST', body: {} },
-    ).then(r => r.json()),
-    draftMemoryConsolidation: (hash, action) => chatFetch(
-      'workspaces/' + encodeURIComponent(hash) + '/memory/consolidate/draft',
-      { method: 'POST', body: { action } },
-    ).then(r => r.json()),
-    applyMemoryConsolidation: (hash, payload) => chatFetch(
-      'workspaces/' + encodeURIComponent(hash) + '/memory/consolidate/apply',
-      { method: 'POST', body: payload || { actions: [] } },
-    ).then(r => r.json()),
-    applyMemoryConsolidationDraft: (hash, payload) => chatFetch(
-      'workspaces/' + encodeURIComponent(hash) + '/memory/consolidate/drafts/apply',
-      { method: 'POST', body: payload || {} },
-    ).then(r => r.json()),
-    getMemoryReviewSchedule: (hash) => chatFetch(
-      'workspaces/' + encodeURIComponent(hash) + '/memory/review-schedule'
-    ).then(r => r.json()),
-    setMemoryReviewSchedule: (hash, schedule) => chatFetch(
-      'workspaces/' + encodeURIComponent(hash) + '/memory/review-schedule',
-      { method: 'PUT', body: { schedule: schedule || { mode: 'off' } } },
-    ).then(r => r.json()),
-    startMemoryReview: (hash) => chatFetch(
-      'workspaces/' + encodeURIComponent(hash) + '/memory/reviews',
-      { method: 'POST', body: {} },
-    ).then(r => r.json()),
-    listMemoryReviews: (hash, pending) => {
-      const qs = pending ? '?pending=true' : '';
-      return chatFetch('workspaces/' + encodeURIComponent(hash) + '/memory/reviews' + qs).then(r => r.json());
-    },
-    getPendingMemoryReviews: (hash) => chatFetch(
-      'workspaces/' + encodeURIComponent(hash) + '/memory/reviews/pending'
-    ).then(r => r.json()),
-    getMemoryReview: (hash, runId) => chatFetch(
-      'workspaces/' + encodeURIComponent(hash) + '/memory/reviews/' + encodeURIComponent(runId)
-    ).then(r => r.json()),
-    applyMemoryReviewAction: (hash, runId, itemId) => chatFetch(
-      'workspaces/' + encodeURIComponent(hash) + '/memory/reviews/' + encodeURIComponent(runId) + '/actions/' + encodeURIComponent(itemId) + '/apply',
-      { method: 'POST', body: {} },
-    ).then(r => r.json()),
-    discardMemoryReviewAction: (hash, runId, itemId) => chatFetch(
-      'workspaces/' + encodeURIComponent(hash) + '/memory/reviews/' + encodeURIComponent(runId) + '/actions/' + encodeURIComponent(itemId) + '/discard',
-      { method: 'POST', body: {} },
-    ).then(r => r.json()),
-    applyMemoryReviewDraft: (hash, runId, draftId, payload) => chatFetch(
-      'workspaces/' + encodeURIComponent(hash) + '/memory/reviews/' + encodeURIComponent(runId) + '/drafts/' + encodeURIComponent(draftId) + '/apply',
-      { method: 'POST', body: payload || {} },
-    ).then(r => r.json()),
-    discardMemoryReviewDraft: (hash, runId, draftId) => chatFetch(
-      'workspaces/' + encodeURIComponent(hash) + '/memory/reviews/' + encodeURIComponent(runId) + '/drafts/' + encodeURIComponent(draftId) + '/discard',
-      { method: 'POST', body: {} },
-    ).then(r => r.json()),
-    regenerateMemoryReviewDraft: (hash, runId, draftId) => chatFetch(
-      'workspaces/' + encodeURIComponent(hash) + '/memory/reviews/' + encodeURIComponent(runId) + '/drafts/' + encodeURIComponent(draftId) + '/regenerate',
-      { method: 'POST', body: {} },
-    ).then(r => r.json()),
     setMemoryEnabled: (hash, enabled) => {
       /** @type {MemoryEnabledRequest} */
       const body = { enabled: !!enabled };

@@ -1133,8 +1133,6 @@ import { reduceStreamFrame } from './stream/streamFrameReducer.ts';
         }
       } else if (effect.type === 'dispatchMemoryUpdate') {
         dispatchWindowEvent('ac:memory-update', effect.detail);
-      } else if (effect.type === 'dispatchMemoryReviewUpdate') {
-        dispatchWindowEvent('ac:memory-review-update', effect.detail);
       } else if (effect.type === 'dispatchWorkspaceContextUpdate') {
         dispatchWindowEvent('ac:workspace-context-update', effect.detail);
       } else if (effect.type === 'dispatchKbStateUpdate') {

@@ -693,12 +693,12 @@ describe('frontend routes', () => {
     const cssSrc = readDesktopCss();
 
     expect(apiSrc).toContain('searchMemory: (hash, opts) =>');
-    expect(apiSrc).toContain('proposeMemoryConsolidation: (hash) =>');
-    expect(apiSrc).toContain('draftMemoryConsolidation: (hash, action) =>');
-    expect(apiSrc).toContain('applyMemoryConsolidation: (hash, payload) =>');
-    expect(apiSrc).toContain('applyMemoryConsolidationDraft: (hash, payload) =>');
-    expect(apiSrc).toContain('getMemoryReviewSchedule: (hash) =>');
-    expect(apiSrc).toContain('startMemoryReview: (hash) =>');
+    expect(apiSrc).not.toContain('proposeMemoryConsolidation: (hash) =>');
+    expect(apiSrc).not.toContain('draftMemoryConsolidation: (hash, action) =>');
+    expect(apiSrc).not.toContain('applyMemoryConsolidation: (hash, payload) =>');
+    expect(apiSrc).not.toContain('applyMemoryConsolidationDraft: (hash, payload) =>');
+    expect(apiSrc).not.toContain('getMemoryReviewSchedule: (hash) =>');
+    expect(apiSrc).not.toContain('startMemoryReview: (hash) =>');
     expect(apiSrc).toContain('restoreMemoryEntry: (hash, relPath) =>');
     expect(apiSrc).toContain("'/memory/search' + qs");
     expect(settingsSrc).toContain('Memory processor');
@@ -706,26 +706,25 @@ describe('frontend routes', () => {
     expect(settingsSrc).toContain('Authentication failed');
     expect(settingsSrc).toContain('Used only to process and dedupe Memory notes');
     expect(workspaceSettingsSrc).toContain("placeholder=\"Search memory\"");
-    expect(workspaceSettingsSrc).toContain('Start new review');
-    expect(workspaceSettingsSrc).toContain('Review running...');
-    expect(workspaceSettingsSrc).toContain('Audit Current Review');
-    expect(workspaceSettingsSrc).toContain('MemoryReviewSettingsProgress');
-    expect(workspaceSettingsSrc).toContain('Last run');
-    expect(workspaceSettingsSrc).toContain('formatSettingsMemoryReviewSource');
+    expect(workspaceSettingsSrc).not.toContain('Start new review');
+    expect(workspaceSettingsSrc).not.toContain('Review running...');
+    expect(workspaceSettingsSrc).not.toContain('Audit Current Review');
+    expect(workspaceSettingsSrc).not.toContain('MemoryReviewSettingsProgress');
+    expect(workspaceSettingsSrc).not.toContain('formatSettingsMemoryReviewSource');
     expect(workspaceSettingsSrc).not.toContain('Minimum gap');
-    expect(workspaceSettingsSrc).toContain('function MemoryReviewScheduleEditor');
-    expect(workspaceSettingsSrc).toContain('function MemoryConsolidationReview');
-    expect(workspaceSettingsSrc).toContain('function MemoryConsolidationDraftReview');
-    expect(workspaceSettingsSrc).toContain('Apply draft');
+    expect(workspaceSettingsSrc).not.toContain('function MemoryReviewScheduleEditor');
+    expect(workspaceSettingsSrc).not.toContain('function MemoryConsolidationReview');
+    expect(workspaceSettingsSrc).not.toContain('function MemoryConsolidationDraftReview');
+    expect(workspaceSettingsSrc).not.toContain('Apply draft');
     expect(workspaceSettingsSrc).toContain('Restore entry');
-    expect(workspaceSettingsSrc).toContain('ws-mem-draft-compare');
+    expect(workspaceSettingsSrc).not.toContain('ws-mem-draft-compare');
     expect(workspaceSettingsSrc).toContain('MEMORY_STATUS_LABELS');
     expect(workspaceSettingsSrc).toContain('MEMORY_ALL_STATUSES');
     expect(workspaceSettingsSrc).toContain('Filter memory state');
     expect(cssSrc).toContain('.ws-mem-controls');
-    expect(cssSrc).toContain('.ws-mem-schedule');
-    expect(cssSrc).toContain('.ws-mem-review-last');
-    expect(cssSrc).toContain('.ws-mem-review-progress');
+    expect(cssSrc).not.toContain('.ws-mem-schedule');
+    expect(cssSrc).not.toContain('.ws-mem-review-last');
+    expect(cssSrc).not.toContain('.ws-mem-review-progress');
     expect(cssSrc).toContain('.ws-mem-status');
     expect(cssSrc).toContain('.memory-processor-status');
   });
@@ -872,45 +871,25 @@ describe('frontend routes', () => {
     expect(cssSrc).toContain('.ws-archive-form');
   });
 
-  test('Memory Review has a dedicated page and composer notification action', () => {
+  test('Memory Review page and composer notification are removed', () => {
     const appShellSrc = fs.readFileSync(path.join(ROOT, 'web/AgentCockpitWeb/src/appShell.jsx'), 'utf8');
     const composerSrc = fs.readFileSync(path.join(ROOT, 'web/AgentCockpitWeb/src/chat/composer.jsx'), 'utf8');
     const composerNotificationsSrc = fs.readFileSync(path.join(ROOT, 'web/AgentCockpitWeb/src/chat/composerNotifications.jsx'), 'utf8');
-    const reviewSrc = fs.readFileSync(path.join(ROOT, 'web/AgentCockpitWeb/src/screens/memoryReview.jsx'), 'utf8');
     const cssSrc = readDesktopCss();
 
-    expect(appShellSrc).toContain("./screens/memoryReview.jsx");
-    expect(appShellSrc).toContain('MemoryReviewPage');
-    expect(composerSrc).toContain('ComposerMemoryReviewIcon');
-    expect(composerNotificationsSrc).toContain('onOpenMemoryReview(workspaceRef');
+    expect(fs.existsSync(path.join(ROOT, 'web/AgentCockpitWeb/src/screens/memoryReview.jsx'))).toBe(false);
+    expect(appShellSrc).not.toContain("./screens/memoryReview.jsx");
+    expect(appShellSrc).not.toContain('MemoryReviewPage');
+    expect(composerSrc).not.toContain('ComposerMemoryReviewIcon');
+    expect(composerNotificationsSrc).not.toContain('onOpenMemoryReview(workspaceRef');
     expect(`${appShellSrc}\n${composerSrc}\n${composerNotificationsSrc}`).not.toContain('Run now');
-    expect(reviewSrc).toContain('export function MemoryReviewPage');
-    expect(reviewSrc).toContain('MemoryReviewInlineProgress');
-    expect(reviewSrc).toContain('MemoryReviewButtonProgress');
-    expect(reviewSrc).toContain('buildMemoryReviewLineDiff');
-    expect(reviewSrc).toContain('MemoryReviewDiffPane');
-    expect(reviewSrc).toContain('Edit markdown');
-    expect(reviewSrc).toContain('mr-edit-textarea');
-    expect(reviewSrc).toContain('buildReviewedDraft');
-    expect(reviewSrc).toContain('Generating draft review...');
-    expect(reviewSrc).toContain('No open review items.');
-    expect(reviewSrc).toContain('MemoryReviewButtonProgress label="Applying..."');
-    expect(reviewSrc).toContain('Applied');
-    expect(reviewSrc).toContain('applyDone={!!applyDone[item.id]}');
-    expect(reviewSrc).toContain("busy && !applyBusy");
-    expect(reviewSrc).toContain('!applyBusy && !regenerateBusy');
-    expect(reviewSrc).toContain('Regenerating draft...');
-    expect(reviewSrc).toContain('Regenerated');
-    expect(reviewSrc).toContain('Dismissed from this review');
-    expect(reviewSrc).toContain('applyMemoryReviewDraft');
-    expect(reviewSrc).toContain('discardMemoryReviewAction');
-    expect(cssSrc).toContain('.main-memory-review');
-    expect(cssSrc).toContain('.mr-progress');
-    expect(cssSrc).toContain('.mr-btn-success');
-    expect(cssSrc).toContain('.mr-item-note');
-    expect(cssSrc).toContain('.mr-code-line.is-changed');
-    expect(cssSrc).toContain('.mr-edit-textarea');
-    expect(cssSrc).toContain('.state-memory-review');
+    expect(cssSrc).not.toContain('.main-memory-review');
+    expect(cssSrc).not.toContain('.mr-progress');
+    expect(cssSrc).not.toContain('.mr-btn-success');
+    expect(cssSrc).not.toContain('.mr-item-note');
+    expect(cssSrc).not.toContain('.mr-code-line.is-changed');
+    expect(cssSrc).not.toContain('.mr-edit-textarea');
+    expect(cssSrc).not.toContain('.state-memory-review');
   });
 
   test('Settings exposes data migration export/import controls', () => {
@@ -979,7 +958,7 @@ describe('frontend routes', () => {
     const files = fs.readdirSync(srcRoot, { recursive: true })
       .filter((entry) => /\.(js|jsx|ts|tsx)$/.test(String(entry)))
       .map((entry) => path.join(srcRoot, String(entry)));
-    const appGlobalAssignment = /window\.(React|ReactDOM|AgentApi|StreamStore|PlanUsageStore|KiroPlanUsageStore|CodexPlanUsageStore|CliUpdateStore|UsageProjection|SynthesisAtlas|getChipRenderer|Ico|Sidebar|KbBrowser|FilesBrowser|SettingsScreen|MemoryReviewPage|WorkspaceSettingsPage|MemoryUpdateModal|FolderPicker|SessionsModal|UpdateModal|RestartOverlay|Dialog|DialogProvider|useDialog|ToastProvider|useToasts|Tip|useTip|FileLinkUtils|TabIndicator|marked|DOMPurify|hljs)\s*=/;
+    const appGlobalAssignment = /window\.(React|ReactDOM|AgentApi|StreamStore|PlanUsageStore|KiroPlanUsageStore|CodexPlanUsageStore|CliUpdateStore|UsageProjection|SynthesisAtlas|getChipRenderer|Ico|Sidebar|KbBrowser|FilesBrowser|SettingsScreen|WorkspaceSettingsPage|MemoryUpdateModal|FolderPicker|SessionsModal|UpdateModal|RestartOverlay|Dialog|DialogProvider|useDialog|ToastProvider|useToasts|Tip|useTip|FileLinkUtils|TabIndicator|marked|DOMPurify|hljs)\s*=/;
 
     for (const file of files) {
       expect(fs.readFileSync(file, 'utf8')).not.toMatch(appGlobalAssignment);

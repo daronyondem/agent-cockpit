@@ -2,14 +2,12 @@ import express from 'express';
 import { csrfGuard } from '../../middleware/csrf';
 import type { ChatService } from '../../services/chatService';
 import type { MemoryMcpServer } from '../../services/memoryMcp';
-import { validateMemoryReviewScheduleConfig } from '../../services/memoryReview';
 import {
   validateMemoryConsolidationApplyRequest,
   validateMemoryConsolidationDraftApplyRequest,
   validateMemoryConsolidationDraftRequest,
   validateMemoryEnabledRequest,
   validateMemoryEntryRestoreRequest,
-  validateMemoryReviewDraftApplyRequest,
 } from '../../contracts/memory';
 import { isContractValidationError } from '../../contracts/validation';
 import type {
@@ -181,150 +179,15 @@ export function createMemoryRouter(opts: MemoryRoutesOptions): express.Router {
     }
   });
 
-  router.get('/workspaces/:workspaceId/memory/review-schedule', async (req: Request, res: Response) => {
-    try {
-      const hash = param(req, 'workspaceId');
-      const schedule = await chatService.getWorkspaceMemoryReviewSchedule(hash);
-      const scheduleUpdatedAt = await chatService.getWorkspaceMemoryReviewScheduleUpdatedAt(hash);
-      const status = await chatService.getMemoryReviewStatus(hash);
-      res.json({ schedule, scheduleUpdatedAt, status });
-    } catch (err: unknown) {
-      res.status(500).json({ error: (err as Error).message });
-    }
-  });
-
-  router.put('/workspaces/:workspaceId/memory/review-schedule', csrfGuard, async (req: Request, res: Response) => {
-    try {
-      const hash = param(req, 'workspaceId');
-      const body = (req.body || {}) as { schedule?: unknown };
-      const result = validateMemoryReviewScheduleConfig(body.schedule || req.body);
-      if (result.error || !result.config) return res.status(400).json({ error: result.error || 'Invalid schedule' });
-      const schedule = await chatService.setWorkspaceMemoryReviewSchedule(hash, result.config);
-      if (!schedule) return res.status(404).json({ error: 'Workspace not found' });
-      const scheduleUpdatedAt = await chatService.getWorkspaceMemoryReviewScheduleUpdatedAt(hash);
-      const status = await chatService.getMemoryReviewStatus(hash);
-      res.json({ schedule, scheduleUpdatedAt, status });
-    } catch (err: unknown) {
-      res.status(500).json({ error: (err as Error).message });
-    }
-  });
-
-  router.post('/workspaces/:workspaceId/memory/reviews', csrfGuard, async (req: Request, res: Response) => {
-    try {
-      const hash = param(req, 'workspaceId');
-      const run = await memoryMcp.startMemoryReviewRun(hash, { source: 'manual', replaceExisting: true });
-      const status = await chatService.getMemoryReviewStatus(hash);
-      res.status(run.status === 'running' ? 202 : 200).json({ ok: true, run, status });
-    } catch (err: unknown) {
-      return res.status(memoryConsolidationErrorStatus(err)).json({ error: (err as Error).message });
-    }
-  });
-
-  router.get('/workspaces/:workspaceId/memory/reviews', async (req: Request, res: Response) => {
-    try {
-      const hash = param(req, 'workspaceId');
-      const pendingOnly = req.query.pending === '1' || req.query.pending === 'true';
-      let runs = await chatService.listMemoryReviewRuns(hash);
-      if (pendingOnly) {
-        runs = runs.filter((run) => run.status === 'running' || run.status === 'pending_review' || run.status === 'failed');
-      }
-      const status = await chatService.getMemoryReviewStatus(hash);
-      res.json({ status, runs });
-    } catch (err: unknown) {
-      res.status(500).json({ error: (err as Error).message });
-    }
-  });
-
-  router.get('/workspaces/:workspaceId/memory/reviews/pending', async (req: Request, res: Response) => {
-    try {
-      const hash = param(req, 'workspaceId');
-      const runs = (await chatService.listMemoryReviewRuns(hash))
-        .filter((run) => run.status === 'running' || run.status === 'pending_review' || run.status === 'failed');
-      const status = await chatService.getMemoryReviewStatus(hash);
-      res.json({ status, runs });
-    } catch (err: unknown) {
-      res.status(500).json({ error: (err as Error).message });
-    }
-  });
-
-  router.get('/workspaces/:workspaceId/memory/reviews/:runId', async (req: Request, res: Response) => {
-    try {
-      const hash = param(req, 'workspaceId');
-      const run = await chatService.getMemoryReviewRun(hash, param(req, 'runId'));
-      if (!run) return res.status(404).json({ error: 'Memory Review not found' });
-      const status = await chatService.getMemoryReviewStatus(hash);
-      res.json({ status, run });
-    } catch (err: unknown) {
-      res.status(500).json({ error: (err as Error).message });
-    }
-  });
-
-  router.post('/workspaces/:workspaceId/memory/reviews/:runId/actions/:itemId/apply', csrfGuard, async (req: Request, res: Response) => {
-    try {
-      const hash = param(req, 'workspaceId');
-      const run = await memoryMcp.applyMemoryReviewSafeAction(hash, param(req, 'runId'), param(req, 'itemId'));
-      const status = await chatService.getMemoryReviewStatus(hash);
-      res.json({ ok: true, status, run });
-    } catch (err: unknown) {
-      const message = (err as Error).message;
-      res.status(/not found/i.test(message) ? 404 : memoryConsolidationErrorStatus(err)).json({ error: message });
-    }
-  });
-
-  router.post('/workspaces/:workspaceId/memory/reviews/:runId/actions/:itemId/discard', csrfGuard, async (req: Request, res: Response) => {
-    try {
-      const hash = param(req, 'workspaceId');
-      const run = await memoryMcp.discardMemoryReviewItem(hash, param(req, 'runId'), param(req, 'itemId'));
-      const status = await chatService.getMemoryReviewStatus(hash);
-      res.json({ ok: true, status, run });
-    } catch (err: unknown) {
-      const message = (err as Error).message;
-      res.status(/not found/i.test(message) ? 404 : memoryConsolidationErrorStatus(err)).json({ error: message });
-    }
-  });
-
-  router.post('/workspaces/:workspaceId/memory/reviews/:runId/drafts/:draftId/apply', csrfGuard, async (req: Request, res: Response) => {
-    try {
-      const hash = param(req, 'workspaceId');
-      const body = validateMemoryReviewDraftApplyRequest(req.body);
-      const run = await memoryMcp.applyMemoryReviewDraft(
-        hash,
-        param(req, 'runId'),
-        param(req, 'draftId'),
-        body.draft ? { draft: body.draft as unknown as MemoryConsolidationDraft } : undefined,
-      );
-      const status = await chatService.getMemoryReviewStatus(hash);
-      res.json({ ok: true, status, run });
-    } catch (err: unknown) {
-      if (isContractValidationError(err)) return res.status(400).json({ error: err.message });
-      const message = (err as Error).message;
-      res.status(/not found/i.test(message) ? 404 : memoryConsolidationErrorStatus(err)).json({ error: message });
-    }
-  });
-
-  router.post('/workspaces/:workspaceId/memory/reviews/:runId/drafts/:draftId/discard', csrfGuard, async (req: Request, res: Response) => {
-    try {
-      const hash = param(req, 'workspaceId');
-      const run = await memoryMcp.discardMemoryReviewItem(hash, param(req, 'runId'), param(req, 'draftId'));
-      const status = await chatService.getMemoryReviewStatus(hash);
-      res.json({ ok: true, status, run });
-    } catch (err: unknown) {
-      const message = (err as Error).message;
-      res.status(/not found/i.test(message) ? 404 : memoryConsolidationErrorStatus(err)).json({ error: message });
-    }
-  });
-
-  router.post('/workspaces/:workspaceId/memory/reviews/:runId/drafts/:draftId/regenerate', csrfGuard, async (req: Request, res: Response) => {
-    try {
-      const hash = param(req, 'workspaceId');
-      const run = await memoryMcp.regenerateMemoryReviewDraft(hash, param(req, 'runId'), param(req, 'draftId'));
-      const status = await chatService.getMemoryReviewStatus(hash);
-      res.json({ ok: true, status, run });
-    } catch (err: unknown) {
-      const message = (err as Error).message;
-      res.status(/not found/i.test(message) ? 404 : memoryConsolidationErrorStatus(err)).json({ error: message });
-    }
-  });
+  router.all('/workspaces/:workspaceId/memory/review-schedule', memoryReviewRemoved);
+  router.all('/workspaces/:workspaceId/memory/reviews', memoryReviewRemoved);
+  router.all('/workspaces/:workspaceId/memory/reviews/pending', memoryReviewRemoved);
+  router.all('/workspaces/:workspaceId/memory/reviews/:runId', memoryReviewRemoved);
+  router.all('/workspaces/:workspaceId/memory/reviews/:runId/actions/:itemId/apply', memoryReviewRemoved);
+  router.all('/workspaces/:workspaceId/memory/reviews/:runId/actions/:itemId/discard', memoryReviewRemoved);
+  router.all('/workspaces/:workspaceId/memory/reviews/:runId/drafts/:draftId/apply', memoryReviewRemoved);
+  router.all('/workspaces/:workspaceId/memory/reviews/:runId/drafts/:draftId/discard', memoryReviewRemoved);
+  router.all('/workspaces/:workspaceId/memory/reviews/:runId/drafts/:draftId/regenerate', memoryReviewRemoved);
 
   router.delete('/workspaces/:workspaceId/memory/entries/:relpath(*)', csrfGuard, async (req: Request, res: Response) => {
     try {
@@ -376,6 +239,12 @@ export function createMemoryRouter(opts: MemoryRoutesOptions): express.Router {
   });
 
   return router;
+}
+
+function memoryReviewRemoved(_req: Request, res: Response): void {
+  res.status(410).json({
+    error: 'Memory Review has been removed. Workspace Context maintenance now consumes accepted Memory entries automatically.',
+  });
 }
 
 function memoryConsolidationErrorStatus(err: unknown): number {

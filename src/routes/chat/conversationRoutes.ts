@@ -127,9 +127,6 @@ export function createConversationRouter(opts: ConversationRoutesOptions): expre
         };
       }
     }
-    if (await chatService.getWorkspaceMemoryEnabled(workspaceId)) {
-      (conv as unknown as Record<string, unknown>).memoryReview = await chatService.getMemoryReviewStatus(workspaceId);
-    }
     if (await chatService.getWorkspaceContextEnabled(workspaceId)) {
       (conv as unknown as Record<string, unknown>).workspaceContext = await chatService.getWorkspaceContextStatus(workspaceId);
     }

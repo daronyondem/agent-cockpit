@@ -35,12 +35,6 @@ export interface BrowserMemoryUpdateFrame {
   writeOutcomes?: Record<string, unknown>[];
 }
 
-export interface BrowserMemoryReviewUpdateFrame {
-  type: 'memory_review_update';
-  updatedAt?: string | null;
-  review?: Record<string, unknown> | null;
-}
-
 export interface BrowserWorkspaceContextUpdateFrame {
   type: 'workspace_context_update';
   updatedAt?: string | null;
@@ -78,6 +72,5 @@ export type BrowserStreamFrame =
   | { type: 'replay_end' }
   | { type: 'turn_complete' }
   | BrowserMemoryUpdateFrame
-  | BrowserMemoryReviewUpdateFrame
   | BrowserWorkspaceContextUpdateFrame
   | BrowserKbStateUpdateFrame;

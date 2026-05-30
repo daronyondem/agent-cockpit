@@ -2025,50 +2025,6 @@ describe('memory_update frames', () => {
   });
 });
 
-describe('memory_review_update frames', () => {
-  test('patches conversation Memory Review status and dispatches workspace event', async () => {
-    const Store = (window as any).StreamStore;
-    const api = (global as any).AgentApi;
-    api.fetch.mockResolvedValueOnce(makeResponse({
-      id: 'c1',
-      workspaceHash: 'hash-1',
-      messages: [],
-      messageQueue: [],
-      memoryReview: { enabled: true, pending: false, pendingRuns: 0, pendingDrafts: 0, pendingSafeActions: 0, failedItems: 0 },
-    }));
-    await Store.load('c1');
-    const ws = await openWs('c1');
-    const listener = jest.fn();
-    window.addEventListener('ac:memory-review-update', listener);
-    try {
-      const review = {
-        enabled: true,
-        pending: true,
-        pendingRuns: 1,
-        pendingDrafts: 2,
-        pendingSafeActions: 1,
-        failedItems: 0,
-        latestRunId: 'memreview_123',
-      };
-      ws.dispatch({
-        type: 'memory_review_update',
-        updatedAt: '2026-05-06T01:00:00.000Z',
-        review,
-      });
-
-      expect(Store.getState('c1').conv.memoryReview).toEqual(review);
-      expect(listener).toHaveBeenCalledTimes(1);
-      expect(listener.mock.calls[0][0].detail).toMatchObject({
-        hash: 'hash-1',
-        updatedAt: '2026-05-06T01:00:00.000Z',
-        review,
-      });
-    } finally {
-      window.removeEventListener('ac:memory-review-update', listener);
-    }
-  });
-});
-
 describe('workspace_context_update frames', () => {
   test('patches conversation Workspace Context status and dispatches workspace event', async () => {
     const Store = (window as any).StreamStore;
