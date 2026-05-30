@@ -274,7 +274,7 @@ function workspaceDefaultEffort(levels){
 }
 
 
-export function WorkspaceSettingsPage({ hash, label, initialTab, initialWorkspaceContextSection, onOpenMemoryReview, onClose }){
+export function WorkspaceSettingsPage({ hash, label, initialTab, initialWorkspaceContextSection, onClose }){
   const [tab, setTab] = React.useState(() => WS_SETTINGS_TABS.some(t => t.id === initialTab) ? initialTab : 'instructions');
   const [loading, setLoading] = React.useState(true);
   const [loadError, setLoadError] = React.useState(null);
@@ -297,9 +297,6 @@ export function WorkspaceSettingsPage({ hash, label, initialTab, initialWorkspac
   });
   const [memoryEnabled, setMemoryEnabled] = React.useState(false);
   const [memorySnapshot, setMemorySnapshot] = React.useState(null);
-  const [memoryReviewSchedule, setMemoryReviewSchedule] = React.useState({ mode: 'off' });
-  const [memoryReviewStatus, setMemoryReviewStatus] = React.useState(null);
-  const [reviewStarting, setReviewStarting] = React.useState(false);
   const [kbEnabled, setKbEnabled] = React.useState(false);
   const [workspaceContextEnabled, setWorkspaceContextEnabled] = React.useState(false);
   const [workspaceContextSettings, setWorkspaceContextSettings] = React.useState({ processorMode: 'global' });
@@ -362,13 +359,12 @@ export function WorkspaceSettingsPage({ hash, label, initialTab, initialWorkspac
       AgentApi.workspace.getArchive(hash).catch(() => null),
       AgentApi.workspace.getInstructions(hash).catch(() => ({})),
       AgentApi.workspace.getMemory(hash).catch(() => ({})),
-      AgentApi.workspace.getMemoryReviewSchedule(hash).catch(() => ({})),
       AgentApi.workspace.getKb(hash).catch(() => ({})),
       AgentApi.workspace.getWorkspaceContextSettings(hash).catch(() => ({})),
       AgentApi.workspace.getWorktreeIsolation(hash).catch((err) => ({ available: false, enabled: false, blockers: [{ code: 'load_failed', message: err.message || String(err) }] })),
       AgentApi.settings.get().catch(() => ({})),
       AgentApi.settings.backends().catch(() => ({ backends: [] })),
-    ]).then(([locationRes, archiveRes, instrRes, memRes, reviewScheduleRes, kbRes, workspaceContextRes, worktreeRes, settingsRes, backendsRes]) => {
+    ]).then(([locationRes, archiveRes, instrRes, memRes, kbRes, workspaceContextRes, worktreeRes, settingsRes, backendsRes]) => {
       if (cancelled) return;
       setWorkspaceLocation(locationRes || null);
       setWorkspaceLocationDraft((locationRes && locationRes.workspacePath) || '');
@@ -378,9 +374,6 @@ export function WorkspaceSettingsPage({ hash, label, initialTab, initialWorkspac
       setInstructions(instrRes.instructions || '');
       setMemoryEnabled(!!memRes.enabled);
       setMemorySnapshot(memRes.snapshot || null);
-      setMemoryReviewSchedule(reviewScheduleRes.schedule || { mode: 'off' });
-      setMemoryReviewStatus(reviewScheduleRes.status || null);
-      setReviewStarting(false);
       setKbEnabled(!!kbRes.enabled);
       applyWorkspaceContextResponse(workspaceContextRes);
       setWorktreeStatus(worktreeRes || null);
@@ -415,18 +408,6 @@ export function WorkspaceSettingsPage({ hash, label, initialTab, initialWorkspac
       cancelled = true;
       window.removeEventListener('ac:memory-update', onMemoryUpdate);
     };
-  }, [hash]);
-
-  React.useEffect(() => {
-    if (!hash) return;
-    const onReviewUpdate = (event) => {
-      if (!event || !event.detail || event.detail.hash !== hash) return;
-      const review = event.detail.review || null;
-      setMemoryReviewStatus(review);
-      if (!review || review.latestRunStatus !== 'running') setReviewStarting(false);
-    };
-    window.addEventListener('ac:memory-review-update', onReviewUpdate);
-    return () => window.removeEventListener('ac:memory-review-update', onReviewUpdate);
   }, [hash]);
 
   React.useEffect(() => {
@@ -475,25 +456,6 @@ export function WorkspaceSettingsPage({ hash, label, initialTab, initialWorkspac
       clearInterval(timer);
     };
   }, [hash, tab, workspaceContextRunPollKey, workspaceContextScanBusy, workspaceContextStopBusy]);
-
-  React.useEffect(() => {
-    if (!hash || tab !== 'memory') return undefined;
-    let cancelled = false;
-    const running = reviewStarting || (memoryReviewStatus && memoryReviewStatus.latestRunStatus === 'running');
-    const refresh = () => {
-      AgentApi.workspace.getMemoryReviewSchedule(hash).then((res) => {
-        if (cancelled) return;
-        setMemoryReviewSchedule(res.schedule || { mode: 'off' });
-        setMemoryReviewStatus(res.status || null);
-        if (!res.status || res.status.latestRunStatus !== 'running') setReviewStarting(false);
-      }).catch(() => {});
-    };
-    const timer = setInterval(refresh, running ? 2000 : 10000);
-    return () => {
-      cancelled = true;
-      clearInterval(timer);
-    };
-  }, [hash, tab, reviewStarting, memoryReviewStatus && memoryReviewStatus.latestRunStatus]);
 
   const loadProfileBackend = React.useCallback((profileId) => {
     if (!profileId || profileBackends[profileId]) return;
@@ -895,50 +857,6 @@ export function WorkspaceSettingsPage({ hash, label, initialTab, initialWorkspac
     setMemorySnapshot(memRes.snapshot || null);
   }
 
-  async function saveMemoryReviewSchedule(schedule){
-    const prev = memoryReviewSchedule || { mode: 'off' };
-    setMemoryReviewSchedule(schedule);
-    try {
-      const res = await AgentApi.workspace.setMemoryReviewSchedule(hash, schedule);
-      setMemoryReviewSchedule(res.schedule || schedule);
-      if (res.status) setMemoryReviewStatus(res.status);
-    } catch (err) {
-      setMemoryReviewSchedule(prev);
-      dialog.alert({ variant: 'error', title: 'Schedule update failed', body: err.message || String(err) });
-    }
-  }
-
-  async function startMemoryReview(anchor){
-    if (reviewStarting || (memoryReviewStatus && memoryReviewStatus.latestRunStatus === 'running')) return;
-    const now = new Date().toISOString();
-    setReviewStarting(true);
-    setMemoryReviewStatus(prev => ({
-      ...(prev || {}),
-      enabled: true,
-      pending: true,
-      pendingRuns: Math.max(1, (prev && prev.pendingRuns) || 0),
-      latestRunStatus: 'running',
-      latestRunCreatedAt: (prev && prev.latestRunCreatedAt) || now,
-      latestRunUpdatedAt: now,
-      latestRunSource: 'manual',
-    }));
-    try {
-      const res = await AgentApi.workspace.startMemoryReview(hash);
-      const run = res.run || null;
-      if (res.status) setMemoryReviewStatus(res.status);
-      if (onOpenMemoryReview) onOpenMemoryReview(hash, label || 'workspace', run ? run.id : null);
-    } catch (err) {
-      await dialog.alert({ anchor, variant: 'error', title: 'Memory Review failed', body: err.message || String(err) });
-    } finally {
-      setReviewStarting(false);
-    }
-  }
-
-  function auditMemoryReview(){
-    const runId = memoryReviewStatus && (memoryReviewStatus.latestRunId || memoryReviewStatus.lastRunId);
-    if (onOpenMemoryReview) onOpenMemoryReview(hash, label || 'workspace', runId || null);
-  }
-
   return (
     <div className="settings-shell workspace-settings-shell">
       <div className="settings-top">
@@ -994,12 +912,6 @@ export function WorkspaceSettingsPage({ hash, label, initialTab, initialWorkspac
             onDelete={deleteMemoryEntry}
             onClearAll={clearAllMemory}
             onRefresh={refreshMemory}
-            schedule={memoryReviewSchedule}
-            reviewStatus={memoryReviewStatus}
-            reviewStarting={reviewStarting}
-            onScheduleChange={saveMemoryReviewSchedule}
-            onReviewNow={startMemoryReview}
-            onAuditReview={auditMemoryReview}
           />
         ) : tab === 'kb' ? (
           <KbTab enabled={kbEnabled} onToggle={toggleKb}/>
@@ -1349,22 +1261,6 @@ function formatMemoryUpdateTime(value){
   });
 }
 
-function formatSettingsMemoryReviewSource(source){
-  return source === 'scheduled' ? 'Scheduled' : 'Manual';
-}
-
-function formatSettingsMemoryReviewStatus(status){
-  const labels = {
-    running: 'Running',
-    pending_review: 'Pending review',
-    completed: 'Completed',
-    partially_applied: 'Partially applied',
-    dismissed: 'Dismissed',
-    failed: 'Failed',
-  };
-  return labels[status] || 'Unknown';
-}
-
 /* ---------- Tabs ---------- */
 
 function LocationTab({ location, draft, dirty, saving, onDraftChange, onBrowse, onSave }){
@@ -1432,7 +1328,7 @@ function InstructionsTab({ instructions, setInstructions, dirty, saving, onSave 
   );
 }
 
-function MemoryTab({ hash, enabled, snapshot, onToggle, onDelete, onClearAll, onRefresh, schedule, reviewStatus, reviewStarting, onScheduleChange, onReviewNow, onAuditReview }){
+function MemoryTab({ hash, enabled, snapshot, onToggle, onDelete, onClearAll, onRefresh }){
   const [query, setQuery] = React.useState('');
   const [typeFilter, setTypeFilter] = React.useState('all');
   const [statusFilter, setStatusFilter] = React.useState('current');
@@ -1535,17 +1431,6 @@ function MemoryTab({ hash, enabled, snapshot, onToggle, onDelete, onClearAll, on
         <span className="tgl"/>
         <span>Enable Memory for this workspace</span>
       </label>
-      {enabled ? (
-        <MemoryReviewScheduleEditor
-          schedule={schedule || { mode: 'off' }}
-          reviewStatus={reviewStatus}
-          reviewStarting={reviewStarting}
-          onChange={onScheduleChange}
-          onReviewNow={onReviewNow}
-          onAuditReview={onAuditReview}
-        />
-      ) : null}
-
       {!enabled ? (
         <p className="ws-empty u-dim">Memory is disabled for this workspace.</p>
       ) : files.length === 0 ? (
@@ -1619,280 +1504,6 @@ function MemoryTab({ hash, enabled, snapshot, onToggle, onDelete, onClearAll, on
       )}
     </div>
   );
-}
-
-function MemoryReviewScheduleEditor({ schedule, reviewStatus, reviewStarting, onChange, onReviewNow, onAuditReview }){
-  const current = schedule && schedule.mode === 'window'
-    ? schedule
-    : {
-        mode: 'window',
-        days: 'daily',
-        windowStart: '01:00',
-        windowEnd: '04:00',
-        timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || '',
-      };
-  const enabled = schedule && schedule.mode === 'window';
-  const reviewRunning = !!reviewStarting || (reviewStatus && reviewStatus.latestRunStatus === 'running');
-  const auditRunId = reviewStatus && (reviewStatus.latestRunId || reviewStatus.lastRunId);
-  const showAudit = !!auditRunId && !reviewRunning;
-
-  function update(patch){
-    onChange({ ...current, ...patch, mode: 'window' });
-  }
-
-  function toggleCustomDay(day){
-    const existing = Array.isArray(current.customDays) ? current.customDays : [];
-    const next = existing.includes(day)
-      ? existing.filter(item => item !== day)
-      : [...existing, day].sort((a, b) => a - b);
-    update({ days: 'custom', customDays: next.length ? next : [day] });
-  }
-
-  return (
-    <div className="ws-mem-schedule">
-      <div className="ws-mem-schedule-head">
-        <div>
-          <div className="ws-mem-schedule-title">Memory Review</div>
-          <div className="ws-mem-schedule-desc u-dim">Generate review drafts during a quiet window.</div>
-        </div>
-        <div className="ws-mem-review-actions">
-          <button
-            type="button"
-            className="ws-mem-review-btn"
-            disabled={reviewRunning}
-            onClick={(e) => onReviewNow(e.currentTarget)}
-          >{reviewRunning ? 'Review running...' : 'Start new review'}</button>
-          {showAudit ? (
-            <button type="button" className="ws-mem-review-btn primary" onClick={onAuditReview}>Audit Current Review</button>
-          ) : null}
-        </div>
-      </div>
-      {reviewRunning ? <MemoryReviewSettingsProgress status={reviewStatus} starting={reviewStarting}/> : null}
-      <MemoryReviewLastRun status={reviewStatus}/>
-      <label className="toggle ws-toggle">
-        <input
-          type="checkbox"
-          checked={!!enabled}
-          onChange={(e) => onChange(e.target.checked ? current : { mode: 'off' })}
-        />
-        <span className="tgl"/>
-        <span>Scheduled review</span>
-      </label>
-      {enabled ? (
-        <div className="ws-mem-schedule-grid">
-          <label>
-            <span>Days</span>
-            <select value={current.days || 'daily'} onChange={(e) => update({ days: e.target.value })}>
-              <option value="daily">Every day</option>
-              <option value="weekdays">Weekdays</option>
-              <option value="custom">Custom</option>
-            </select>
-          </label>
-          <label>
-            <span>Start</span>
-            <input type="time" value={current.windowStart || '01:00'} onChange={(e) => update({ windowStart: e.target.value })}/>
-          </label>
-          <label>
-            <span>End</span>
-            <input type="time" value={current.windowEnd || '04:00'} onChange={(e) => update({ windowEnd: e.target.value })}/>
-          </label>
-          {current.days === 'custom' ? (
-            <div className="ws-mem-weekdays" role="group" aria-label="Custom review days">
-              {['S', 'M', 'T', 'W', 'T', 'F', 'S'].map((day, idx) => (
-                <button
-                  key={idx}
-                  type="button"
-                  className={Array.isArray(current.customDays) && current.customDays.includes(idx) ? 'active' : ''}
-                  onClick={() => toggleCustomDay(idx)}
-                >{day}</button>
-              ))}
-            </div>
-          ) : null}
-        </div>
-      ) : null}
-    </div>
-  );
-}
-
-function MemoryReviewSettingsProgress({ status, starting }){
-  const source = status && (status.latestRunSource || status.lastRunSource);
-  const createdAt = status && (status.latestRunCreatedAt || status.lastRunCreatedAt);
-  return (
-    <div className="ws-mem-review-progress" role="status" aria-live="polite">
-      <span className="typing-dots" aria-hidden="true">
-        <span className="typing-dot"/>
-        <span className="typing-dot"/>
-        <span className="typing-dot"/>
-      </span>
-      <div>
-        <div className="ws-mem-review-progress-title">Generating draft review</div>
-        <div className="ws-mem-review-progress-meta">
-          {source ? formatSettingsMemoryReviewSource(source) : starting ? 'Manual' : 'Review'}{createdAt ? ` - Started ${formatMemoryUpdateTime(createdAt)}` : ''}
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function MemoryReviewLastRun({ status }){
-  const createdAt = status && (status.lastRunCreatedAt || status.latestRunCreatedAt);
-  if (!createdAt) {
-    return <div className="ws-mem-review-last u-dim">Last run: None yet</div>;
-  }
-  const source = status.lastRunSource || status.latestRunSource || 'manual';
-  const runStatus = status.lastRunStatus || status.latestRunStatus;
-  return (
-    <div className="ws-mem-review-last">
-      <span>Last run</span>
-      <b>{formatSettingsMemoryReviewSource(source)}</b>
-      <span>{formatMemoryUpdateTime(createdAt)}</span>
-      {runStatus ? <span className="u-dim">{formatSettingsMemoryReviewStatus(runStatus)}</span> : null}
-    </div>
-  );
-}
-
-function MemoryConsolidationReview({ proposal, error, applying, draftingKey, safeCount, onDraft, onApply, onDismiss }){
-  const actions = proposal && Array.isArray(proposal.actions) ? proposal.actions : [];
-  const draftable = new Set(['merge_candidates', 'split_candidate', 'normalize_candidate']);
-  if (!proposal && error) {
-    return (
-      <div className="ws-mem-review">
-        <div className="u-err">{error}</div>
-      </div>
-    );
-  }
-  if (!proposal) return null;
-  return (
-    <div className="ws-mem-review">
-      <div className="ws-mem-review-head">
-        <div>
-          <div className="ws-mem-review-title">Memory review</div>
-          <div className="ws-mem-review-summary">{proposal.summary || 'Review completed.'}</div>
-        </div>
-        <div className="ws-mem-review-actions">
-          {safeCount > 0 ? (
-            <button
-              type="button"
-              className="ws-mem-review-apply"
-              onClick={(e) => onApply(e.currentTarget)}
-              disabled={applying}
-            >{applying ? 'Applying…' : `Apply ${safeCount}`}</button>
-          ) : null}
-          <button type="button" className="ws-mem-review-dismiss" onClick={onDismiss}>Dismiss</button>
-        </div>
-      </div>
-      {actions.length === 0 ? (
-        <div className="ws-empty u-dim">No consolidation changes proposed.</div>
-      ) : (
-        <ul className="ws-mem-review-list">
-          {actions.map((action, idx) => (
-            <li key={`${action.action}_${idx}`} className="ws-mem-review-item">
-              <div className="ws-mem-review-item-head">
-                <div className="ws-mem-review-action">{formatMemoryConsolidationAction(action.action)}</div>
-                {draftable.has(action.action) ? (
-                  <button
-                    type="button"
-                    className="ws-mem-review-draft"
-                    disabled={!!draftingKey}
-                    onClick={(e) => onDraft(action, idx, e.currentTarget)}
-                  >{draftingKey === `${action.action}_${action.filename || (Array.isArray(action.filenames) ? action.filenames.join('|') : '')}_${idx}` ? 'Drafting…' : 'Draft'}</button>
-                ) : null}
-              </div>
-              <div className="ws-mem-review-summary">{action.reason || 'No reason provided.'}</div>
-              {action.filename ? <div className="ws-mem-item-path">{action.filename}</div> : null}
-              {action.supersededBy ? <div className="ws-mem-item-path">Superseded by: {action.supersededBy}</div> : null}
-              {Array.isArray(action.filenames) && action.filenames.length ? (
-                <div className="ws-mem-item-path">{action.filenames.join(', ')}</div>
-              ) : null}
-              {action.title ? <div className="ws-mem-review-summary">{action.title}</div> : null}
-            </li>
-          ))}
-        </ul>
-      )}
-    </div>
-  );
-}
-
-function MemoryConsolidationDraftReview({ draft, error, applying, files, onApply, onDismiss }){
-  const operations = draft && Array.isArray(draft.operations) ? draft.operations : [];
-  const byFilename = new Map((files || []).map(entry => [entry.filename, entry]));
-  if (!draft && error) {
-    return (
-      <div className="ws-mem-review ws-mem-draft">
-        <div className="u-err">{error}</div>
-      </div>
-    );
-  }
-  if (!draft) return null;
-  return (
-    <div className="ws-mem-review ws-mem-draft">
-      <div className="ws-mem-review-head">
-        <div>
-          <div className="ws-mem-review-title">Drafted memory changes</div>
-          <div className="ws-mem-review-summary">{draft.summary || 'Draft generated.'}</div>
-        </div>
-        <div className="ws-mem-review-actions">
-          <button
-            type="button"
-            className="ws-mem-review-apply"
-            onClick={(e) => onApply(e.currentTarget)}
-            disabled={applying || operations.length === 0}
-          >{applying ? 'Applying…' : 'Apply draft'}</button>
-          <button type="button" className="ws-mem-review-dismiss" onClick={onDismiss}>Dismiss</button>
-        </div>
-      </div>
-      {error ? <div className="u-err">{error}</div> : null}
-      <ul className="ws-mem-review-list">
-        {operations.map((operation, idx) => (
-          <li key={`${operation.operation}_${idx}`} className="ws-mem-review-item">
-            <div className="ws-mem-review-action">{formatMemoryDraftOperation(operation.operation)}</div>
-            <div className="ws-mem-review-summary">{operation.reason || 'No reason provided.'}</div>
-            {operation.filename ? <div className="ws-mem-item-path">{operation.filename}</div> : null}
-            {operation.filenameHint ? <div className="ws-mem-item-path">Filename hint: {operation.filenameHint}</div> : null}
-            {Array.isArray(operation.supersedes) && operation.supersedes.length ? (
-              <div className="ws-mem-item-path">Supersedes: {operation.supersedes.join(', ')}</div>
-            ) : null}
-            {operation.operation === 'replace' && operation.filename ? (
-              <div className="ws-mem-draft-compare">
-                <div className="ws-mem-draft-pane">
-                  <div className="ws-mem-draft-label">Current</div>
-                  <pre className="ws-mem-draft-body">{byFilename.get(operation.filename)?.content || ''}</pre>
-                </div>
-                <div className="ws-mem-draft-pane">
-                  <div className="ws-mem-draft-label">Draft</div>
-                  <pre className="ws-mem-draft-body">{operation.content || ''}</pre>
-                </div>
-              </div>
-            ) : (
-              <>
-                <div className="ws-mem-draft-label">Draft</div>
-                <pre className="ws-mem-draft-body">{operation.content || ''}</pre>
-              </>
-            )}
-          </li>
-        ))}
-      </ul>
-    </div>
-  );
-}
-
-function formatMemoryDraftOperation(operation){
-  switch (operation) {
-    case 'create': return 'Create note';
-    case 'replace': return 'Replace note';
-    default: return 'Draft operation';
-  }
-}
-
-function formatMemoryConsolidationAction(action){
-  switch (action) {
-    case 'mark_superseded': return 'Mark superseded';
-    case 'merge_candidates': return 'Merge candidate';
-    case 'split_candidate': return 'Split candidate';
-    case 'normalize_candidate': return 'Normalize metadata';
-    case 'keep': return 'Keep';
-    default: return 'Review item';
-  }
 }
 
 function MemoryEntryRow({ entry, onDelete, onRestore, defaultExpanded = false, showDelete = true, searchSnippet = null }){

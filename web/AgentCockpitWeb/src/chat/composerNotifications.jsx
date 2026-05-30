@@ -492,110 +492,6 @@ function DreamStepper({ progress }){
   );
 }
 
-function ComposerMemoryReviewIcon({ conv, workspaceLabel, onOpenMemoryReview }){
-  const buttonRef = React.useRef(null);
-  const panelRef = React.useRef(null);
-  const [open, setOpen] = React.useState(false);
-  const review = conv && conv.memoryReview;
-  const pos = useFixedPopoverPosition(buttonRef, panelRef, open);
-
-  React.useEffect(() => {
-    if (!open) return undefined;
-    const onDown = (e) => {
-      if (panelRef.current && panelRef.current.contains(e.target)) return;
-      if (buttonRef.current && buttonRef.current.contains(e.target)) return;
-      setOpen(false);
-    };
-    const onKey = (e) => {
-      if (e.key === 'Escape') {
-        e.preventDefault();
-        setOpen(false);
-      }
-    };
-    document.addEventListener('mousedown', onDown);
-    window.addEventListener('keydown', onKey);
-    return () => {
-      document.removeEventListener('mousedown', onDown);
-      window.removeEventListener('keydown', onKey);
-    };
-  }, [open]);
-
-  React.useEffect(() => {
-    if (!review || !review.pending) setOpen(false);
-  }, [review && review.pending, review && review.latestRunId]);
-
-  if (!review || !review.enabled || !review.pending) return null;
-
-  const drafts = Math.max(0, review.pendingDrafts || 0);
-  const safeActions = Math.max(0, review.pendingSafeActions || 0);
-  const failed = Math.max(0, review.failedItems || 0);
-  const count = drafts + safeActions + failed;
-  const title = count === 1 ? '1 Memory Review item' : `${count} Memory Review items`;
-  const style = pos
-    ? { top: pos.top, left: pos.left }
-    : { visibility: 'hidden', top: 0, left: 0 };
-
-  function openReview(){
-    setOpen(false);
-    const workspaceRef = workspaceRefForConv(conv);
-    if (onOpenMemoryReview && workspaceRef) {
-      onOpenMemoryReview(workspaceRef, workspaceLabel || 'workspace', review.latestRunId || null);
-    }
-  }
-
-  return (
-    <>
-      <button
-        ref={buttonRef}
-        type="button"
-        className="composer-notif state-pending state-memory-review"
-        aria-label={title}
-        aria-expanded={open ? 'true' : 'false'}
-        onClick={() => setOpen(v => !v)}
-      >
-        {Ico.moon(14)}
-        <span className="composer-notif-pulse state-pending"/>
-      </button>
-      {open ? (
-        <div
-          ref={panelRef}
-          className="tt composer-action-popover"
-          data-variant="stat"
-          data-placement={pos && pos.placeAbove ? 'above' : 'below'}
-          data-pinned="true"
-          role="dialog"
-          aria-label={title}
-          style={style}
-        >
-          <span className="tt-arrow" style={{ left: pos ? pos.arrowX : 12 }}/>
-          <div className="tt-header">
-            <span className="tt-eye">Memory Review</span>
-          </div>
-          <h4 className="tt-h">{title}</h4>
-          <div className="tt-section">
-            <div className="tt-rows">
-              <div className="tt-kv"><span>Drafts</span><b>{drafts || '-'}</b></div>
-              <div className="tt-kv"><span>Metadata</span><b>{safeActions || '-'}</b></div>
-              <div className="tt-kv"><span>Needs attention</span><b>{failed || '-'}</b></div>
-            </div>
-          </div>
-          <div className="tt-foot">
-            <span className="hint">{formatMemoryReviewComposerStatus(review.latestRunStatus)}</span>
-            <span className="spacer"/>
-            <button type="button" className="tt-btn primary" onClick={openReview}>Review</button>
-          </div>
-        </div>
-      ) : null}
-    </>
-  );
-}
-
-function formatMemoryReviewComposerStatus(status){
-  if (status === 'running') return 'Generating drafts';
-  if (status === 'failed') return 'Review needs attention';
-  return 'Ready to review';
-}
-
 function ComposerWorkspaceContextIcon({ conv, workspaceLabel, onOpenWorkspaceSettings }){
   const buttonRef = React.useRef(null);
   const panelRef = React.useRef(null);
@@ -708,6 +604,5 @@ export {
   ComposerInstructionCompatibilityIcon,
   ComposerCliUpdateIcon,
   ComposerNotifIcon,
-  ComposerMemoryReviewIcon,
   ComposerWorkspaceContextIcon,
 };

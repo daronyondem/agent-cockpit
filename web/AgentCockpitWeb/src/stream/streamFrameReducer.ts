@@ -42,7 +42,6 @@ export type StreamConversationKbStatus = StreamConversationStatus & {
 
 export type StreamConversation = Conversation & {
   kb?: StreamConversationKbStatus | null;
-  memoryReview?: StreamConversationStatus | null;
   workspaceContext?: StreamConversationStatus | null;
 };
 
@@ -78,7 +77,6 @@ export type StreamReducerEffect =
   | { type: 'clearReconnectTimer' }
   | { type: 'clearReconcileTimer' }
   | { type: 'dispatchMemoryUpdate'; detail: Record<string, unknown> }
-  | { type: 'dispatchMemoryReviewUpdate'; detail: Record<string, unknown> }
   | { type: 'dispatchWorkspaceContextUpdate'; detail: Record<string, unknown> }
   | { type: 'dispatchKbStateUpdate'; detail: Record<string, unknown> }
   | { type: 'warn'; message: string };
@@ -257,9 +255,6 @@ export function reduceStreamFrame(
   }
   if (frame.type === 'memory_update') {
     return withEffects(applyMemoryUpdate(next, frame, context, effects));
-  }
-  if (frame.type === 'memory_review_update') {
-    return withEffects(applyConversationStatusUpdate(next, 'memoryReview', frame.review || null, frame.updatedAt || null, effects));
   }
   if (frame.type === 'workspace_context_update') {
     return withEffects(applyConversationStatusUpdate(next, 'workspaceContext', frame.workspaceContext || null, frame.updatedAt || null, effects));
@@ -575,7 +570,7 @@ function applyMemoryUpdate(
 
 function applyConversationStatusUpdate(
   state: StreamReducerState,
-  field: 'memoryReview' | 'workspaceContext',
+  field: 'workspaceContext',
   value: Record<string, unknown> | null,
   updatedAt: string | null,
   effects: StreamReducerEffect[],
@@ -584,10 +579,8 @@ function applyConversationStatusUpdate(
   const workspaceRef = workspaceRefForConv(state.conv);
   if (workspaceRef) {
     effects.push({
-      type: field === 'memoryReview' ? 'dispatchMemoryReviewUpdate' : 'dispatchWorkspaceContextUpdate',
-      detail: field === 'memoryReview'
-        ? { hash: workspaceRef, review: value, updatedAt }
-        : { hash: workspaceRef, workspaceContext: value, updatedAt },
+      type: 'dispatchWorkspaceContextUpdate',
+      detail: { hash: workspaceRef, workspaceContext: value, updatedAt },
     });
   }
   return {

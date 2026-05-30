@@ -13,7 +13,6 @@ import { backendIdForProfile, CLAUDE_CODE_INTERACTIVE_BACKEND_ID, cliHarnessForB
 import {
   ComposerCliUpdateIcon,
   ComposerInstructionCompatibilityIcon,
-  ComposerMemoryReviewIcon,
   ComposerNotifIcon,
   ComposerWorkspaceContextIcon,
 } from './composerNotifications.jsx';
@@ -126,7 +125,7 @@ function GoalStrip({ convId, goal, streaming, sending }){
   );
 }
 
-export const ChatComposer = React.memo(function ChatComposer({ convId, profileLocked, workspaceLabel, onOpenMemoryReview, onOpenWorkspaceSettings, onOpenSettings }){
+export const ChatComposer = React.memo(function ChatComposer({ convId, profileLocked, workspaceLabel, onOpenWorkspaceSettings, onOpenSettings }){
   const state = useConversationSelector(convId, selectChatComposerState, shallowEqual);
   const backends = useBackendList();
   const { profiles: cliProfiles } = useCliProfileSettings();
@@ -483,7 +482,6 @@ export const ChatComposer = React.memo(function ChatComposer({ convId, profileLo
               </button>
             </span>
             <ComposerNotifIcon conv={conv} convId={convId}/>
-            <ComposerMemoryReviewIcon conv={conv} workspaceLabel={workspaceLabel} onOpenMemoryReview={onOpenMemoryReview}/>
             <ComposerWorkspaceContextIcon conv={conv} workspaceLabel={workspaceLabel} onOpenWorkspaceSettings={onOpenWorkspaceSettings}/>
             <ComposerInstructionCompatibilityIcon
               workspaceHash={workspaceRefForConv(conv)}

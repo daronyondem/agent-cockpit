@@ -74,7 +74,7 @@ function selectChatLiveState(s){
   };
 }
 
-export function ChatLive({ convId, onArchived, onDeleted, onRenamed, onOpenMemoryUpdate, onOpenMemoryReview, onOpenWorkspaceSettings, onOpenSettings }){
+export function ChatLive({ convId, onArchived, onDeleted, onRenamed, onOpenMemoryUpdate, onOpenWorkspaceSettings, onOpenSettings }){
   const state = useConversationSelector(convId, selectChatLiveState, shallowEqual);
   const { profiles: cliProfiles } = useCliProfileSettings();
   const dialog = useDialog();
@@ -883,7 +883,6 @@ export function ChatLive({ convId, onArchived, onDeleted, onRenamed, onOpenMemor
         convId={convId}
         profileLocked={profileLocked}
         workspaceLabel={wsLabel}
-        onOpenMemoryReview={onOpenMemoryReview}
         onOpenWorkspaceSettings={onOpenWorkspaceSettings}
         onOpenSettings={onOpenSettings}
       />

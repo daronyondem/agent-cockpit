@@ -110,11 +110,6 @@
   border-color: color-mix(in oklch, var(--status-error), transparent 56%);
   background: color-mix(in oklch, var(--status-error), transparent 92%);
 }
-.composer-notif.state-memory-review{
-  color: var(--status-awaiting);
-  border-color: color-mix(in oklch, var(--status-awaiting), transparent 52%);
-  background: color-mix(in oklch, var(--status-awaiting), transparent 92%);
-}
 .composer-notif.state-workspace-context{
   color: var(--accent, #6366f1);
   border-color: color-mix(in oklch, var(--accent, #6366f1), transparent 52%);
@@ -134,7 +129,6 @@
 }
 .composer-notif.state-cli-update .composer-notif-pulse{ background: var(--status-awaiting); }
 .composer-notif.state-instruction-warning .composer-notif-pulse{ background: var(--status-error); }
-.composer-notif.state-memory-review .composer-notif-pulse{ background: var(--status-awaiting); }
 .composer-notif.state-workspace-context .composer-notif-pulse{ background: var(--accent, #6366f1); }
 .composer-notif-pulse.state-running{ animation: composer-notif-pulse 1.6s ease-in-out infinite; }
 @keyframes composer-notif-pulse{

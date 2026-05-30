@@ -217,7 +217,6 @@ chatService.initialize().then(async () => {
   updateService.start();
   cliUpdateService.start(() => chatService.getSettings());
   chatResult.kbDreamScheduler.start();
-  chatResult.memoryReviewScheduler.start();
   chatResult.workspaceContextScheduler.start();
 
   // Load last-persisted Claude plan usage snapshot, then fire-and-forget

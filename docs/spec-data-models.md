@@ -35,7 +35,7 @@ agent-cockpit/
 │   │   ├── explorer.ts                # Workspace file explorer mutation contracts
 │   │   ├── gitChanges.ts              # Workspace Git status/diff response contracts
 │   │   ├── uploads.ts                 # Attachment/OCR mutation contracts
-│   │   ├── memory.ts                  # Workspace memory enablement/review mutation contracts
+│   │   ├── memory.ts                  # Workspace memory enablement and consolidation mutation contracts
 │   │   ├── worktreeIsolation.ts       # Workspace worktree-isolation status/toggle contracts
 │   │   ├── workspaceContext.ts        # Workspace Context settings mutation contracts
 │   │   ├── knowledgeBase.ts           # KB enablement/folder/glossary/embedding mutation contracts
@@ -121,7 +121,7 @@ agent-cockpit/
 │           ├── cliUpdateStore.js       # Web-only cached CLI update status/action store
 │           ├── streamStore.js          # Per-conversation streaming, queue, draft, and WebSocket state
 │           ├── shell.jsx               # Root app shell, sidebar wiring, chat surface
-│           ├── screens/                # Real V2 screens: KB, files, settings, Memory Review
+│           ├── screens/                # Real V2 screens: KB, files, and settings
 │           └── *.css / *.jsx / *.js    # Shared primitives, dialogs, tooltips, plan usage stores, modals
 ├── test/                               # Jest test suite (TypeScript via ts-jest)
 └── data/                               # Runtime data root, default `<repo>/data` and movable with AGENT_COCKPIT_DATA_DIR
@@ -136,7 +136,6 @@ agent-cockpit/
     │   │   │   ├── snapshot.json       # Merged snapshot: claude captures + notes (parsed metadata + content)
     │   │   │   ├── state.json          # Agent Cockpit sidecar lifecycle metadata keyed by memory filename
     │   │   │   ├── audits/             # Manual consolidation audit JSON files
-    │   │   │   ├── reviews/            # Durable Memory Review run JSON files
     │   │   │   └── files/              # Raw .md entries, split by source
     │   │   │       ├── claude/         # Claude Code native captures; wiped and rewritten on each capture
     │   │   │       │   ├── MEMORY.md   # Source index from Claude Code (if present)
@@ -555,15 +554,6 @@ Together these guarantee that a workspace index always parses on disk and that c
   instructions: string,         // Per-workspace instructions (appended to system prompt on new sessions)
   instructionCompatibilityDismissedFingerprint: string|undefined, // Last dismissed CLI instruction compatibility warning. Fingerprint changes when detected instruction sources or missing harness entrypoints change.
   memoryEnabled: boolean|undefined, // Opt-in per-workspace Memory feature. Defaults to false.
-  memoryReviewSchedule: {            // Per-workspace Memory Review schedule. Defaults to { mode: 'off' }.
-    mode: 'off' | 'window',
-    days?: 'daily' | 'weekdays' | 'custom',
-    customDays?: number[],           // 0=Sunday through 6=Saturday, used when days='custom'.
-    windowStart?: string,            // HH:mm in timezone/server-local time for window mode.
-    windowEnd?: string,              // HH:mm in timezone/server-local time for window mode.
-    timezone?: string,               // Optional IANA timezone.
-  } | undefined,
-  memoryReviewScheduleUpdatedAt: string|undefined, // Last schedule change; scheduled-run guards ignore older runs.
   kbEnabled: boolean|undefined,     // Opt-in per-workspace Knowledge Base feature. Defaults to false.
   kbAutoDigest: boolean|undefined,  // Auto-digest new files after ingestion. Defaults to false.
   kbAutoDream: {                    // Per-workspace automatic dreaming schedule. Defaults to { mode: 'off' }.
@@ -718,8 +708,8 @@ When `archive` is present on the workspace index, the workspace is retired from
 active use but its Agent Cockpit-owned data remains in place. Normal
 conversation listing skips archived workspaces unless the caller explicitly
 opts into archived-workspace inclusion; creating new conversations in that
-workspace returns `workspace_archived`. Workspace Memory Review schedules,
-Knowledge Base auto-dream, and Workspace Context scheduled processing skip
+workspace returns `workspace_archived`. Knowledge Base auto-dream and Workspace
+Context scheduled processing skip
 archived workspaces without clearing their enabled flags. Restoring a
 `history_only` archive requires `workspacePath` to exist; if the user deleted
 the folder, they must remap the archived workspace to an existing folder first.
@@ -832,7 +822,7 @@ Persisted queue for post-reset/archive work that must survive process restarts b
 }
 ```
 
-Current write paths store records only for files that exist. `deleteMemoryEntry()` and `clearWorkspaceMemory()` prune sidecar records for removed files; the `deleted` lifecycle state is reserved for a future audited-forget workflow. Older workspaces without `state.json` still load: `ChatService.getWorkspaceMemory()` synthesizes active workspace metadata in returned `MemoryFile.metadata`, and the next memory write materializes `state.json`.
+Current write paths store records for files that exist. Deleting Agent Cockpit-owned `notes/*` entries prunes their sidecar records; deleting mirrored `claude/*` entries leaves a hidden `status:'deleted'` tombstone so future native CLI captures do not resurrect a user-deleted capture. `clearWorkspaceMemory()` is a full reset and drops every sidecar record, including tombstones. Older workspaces without `state.json` still load: `ChatService.getWorkspaceMemory()` synthesizes active workspace metadata in returned `MemoryFile.metadata`, and the next memory write materializes `state.json`.
 
 Governed memory writes surface their decision through `MemoryWriteOutcome`:
 
@@ -898,57 +888,7 @@ Merge/split/normalize actions can be turned into exact, reviewed drafts through 
 }
 ```
 
-Drafts have `{ id, createdAt, action, summary, operations }`. `create` writes a new `notes/` file and marks selected source entries superseded in sidecar metadata. `replace` rewrites only selected `notes/*` entries in place; `claude/*` entries are never replaced because they are mirrored native CLI captures. Redacted, deleted, and already-superseded sources are rejected for draft generation and skipped during draft apply. Memory Review draft apply may receive an edited draft payload, but the persisted generated operation metadata remains authoritative; only `operations[].content` is accepted from the reviewed payload before the same Markdown validation and redaction pipeline runs.
-
-Memory Review runs persist scheduled/manual proposal + draft state under `memory/reviews/<runId>.json`:
-
-```typescript
-{
-  version: 1,
-  id: string,                         // `memreview_<hex>`
-  workspaceHash: string,
-  status: 'running' | 'pending_review' | 'completed' | 'partially_applied' | 'dismissed' | 'failed',
-  source: 'manual' | 'scheduled',
-  createdAt: string,
-  updatedAt: string,
-  completedAt?: string,
-  summary: string,
-  sourceSnapshotFingerprint: string,  // sha256 over current memory filenames + content/lifecycle fingerprints
-  proposal?: {
-    id: string,
-    createdAt: string,
-    summary: string,
-    actions: MemoryConsolidationAction[]
-  },
-  safeActions: Array<{
-    id: string,
-    status: 'pending' | 'applied' | 'discarded' | 'stale' | 'failed',
-    action: MemoryConsolidationAction, // currently only mark_superseded is created here
-    sourceFingerprints: Record<string, string>,
-    createdAt: string,
-    updatedAt: string,
-    appliedAt?: string,
-    discardedAt?: string,
-    failure?: string,
-    result?: MemoryConsolidationApplyResult
-  }>,
-  drafts: Array<{
-    id: string,
-    status: 'pending' | 'applied' | 'discarded' | 'stale' | 'failed',
-    action: MemoryConsolidationAction, // merge/split/normalize source action
-    sourceFingerprints: Record<string, string>,
-    createdAt: string,
-    updatedAt: string,
-    draft?: MemoryConsolidationDraft,
-    appliedAt?: string,
-    discardedAt?: string,
-    regeneratedAt?: string,
-    failure?: string,
-    result?: MemoryConsolidationDraftApplyResult
-  }>,
-  failures: Array<{ action?: MemoryConsolidationAction, message: string }>
-}
-```
+Drafts have `{ id, createdAt, action, summary, operations }`. `create` writes a new `notes/` file and marks selected source entries superseded in sidecar metadata. `replace` rewrites only selected `notes/*` entries in place; `claude/*` entries are never replaced because they are mirrored native CLI captures. Redacted, deleted, and already-superseded sources are rejected for draft generation and skipped during draft apply. Draft apply may receive an edited draft payload, but the generated operation metadata remains authoritative; only `operations[].content` is accepted from the reviewed payload before the same Markdown validation and redaction pipeline runs.
 
 ## Workspace Context Store (`workspaces/{storageKey}/workspace-context/`)
 
@@ -1011,8 +951,6 @@ lastRunCreatedAt?, lastRunCompletedAt? }`. `GET /conversations/:id` hydrates it
 when Workspace Context is enabled for the workspace. Workspace-scoped
 `workspace_context_update` frames carry the same shape after run starts,
 completion/failure, clear, or enablement changes.
-
-`sourceFingerprints` guard apply/regenerate paths against stale memory: when a source file's content, type, name/description, or lifecycle metadata changes after review generation, the item is marked `stale` instead of being applied. Item status `discarded` means the user dismissed that item from the current review run; it is retained in the persisted run as a review decision/audit record, does not apply memory changes, and does not suppress future review generation. Regenerating a discarded draft clears `discardedAt` and moves the item back to `pending` with a fresh draft. `Conversation.memoryReview` carries the compact composer/settings summary `{ enabled, pending, pendingRuns, pendingDrafts, pendingSafeActions, failedItems, latestRunId?, latestRunStatus?, latestRunCreatedAt?, latestRunUpdatedAt?, latestRunSource?, lastRunId?, lastRunStatus?, lastRunCreatedAt?, lastRunUpdatedAt?, lastRunSource? }`. `latestRun*` points at the actionable run the composer should open when one exists; `lastRun*` always points at the newest persisted run so Workspace Settings can show when the most recent review ran and whether it was manual or scheduled.
 
 Every apply call that has applied or skipped actions writes `memory/audits/consolidation_<timestamp>.json`:
 

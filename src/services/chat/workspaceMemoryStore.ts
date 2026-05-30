@@ -3,17 +3,12 @@ import path from 'path';
 import type {
   MemoryConsolidationAudit,
   MemoryMetadataIndex,
-  MemoryReviewRun,
   MemorySnapshot,
 } from '../../types';
 import { atomicWriteFile } from '../../utils/atomicWrite';
 
 interface WorkspaceMemoryStoreDeps {
   getWorkspaceDir(hash: string): string;
-}
-
-function validMemoryReviewRunId(value: string): boolean {
-  return /^[A-Za-z0-9_-]+$/.test(value);
 }
 
 export class WorkspaceMemoryStore {
@@ -41,14 +36,6 @@ export class WorkspaceMemoryStore {
 
   notesDir(hash: string): string {
     return path.join(this.filesDir(hash), 'notes');
-  }
-
-  reviewsDir(hash: string): string {
-    return path.join(this.memoryDir(hash), 'reviews');
-  }
-
-  reviewRunPath(hash: string, runId: string): string {
-    return path.join(this.reviewsDir(hash), `${runId}.json`);
   }
 
   async ensureFilesDir(hash: string): Promise<string> {
@@ -109,43 +96,4 @@ export class WorkspaceMemoryStore {
     return relPath;
   }
 
-  async saveReviewRun(hash: string, run: MemoryReviewRun): Promise<MemoryReviewRun> {
-    if (!validMemoryReviewRunId(run.id)) {
-      throw new Error('Invalid memory review run id');
-    }
-    await fsp.mkdir(this.reviewsDir(hash), { recursive: true });
-    await atomicWriteFile(this.reviewRunPath(hash, run.id), JSON.stringify(run, null, 2));
-    return run;
-  }
-
-  async getReviewRun(hash: string, runId: string): Promise<MemoryReviewRun | null> {
-    if (!validMemoryReviewRunId(runId)) return null;
-    try {
-      const raw = await fsp.readFile(this.reviewRunPath(hash, runId), 'utf8');
-      return JSON.parse(raw) as MemoryReviewRun;
-    } catch (err: unknown) {
-      if ((err as NodeJS.ErrnoException).code === 'ENOENT') return null;
-      throw err;
-    }
-  }
-
-  async listReviewRuns(hash: string): Promise<MemoryReviewRun[]> {
-    let names: string[];
-    try {
-      names = await fsp.readdir(this.reviewsDir(hash));
-    } catch (err: unknown) {
-      if ((err as NodeJS.ErrnoException).code === 'ENOENT') return [];
-      throw err;
-    }
-
-    const runs: MemoryReviewRun[] = [];
-    for (const name of names) {
-      if (!name.endsWith('.json')) continue;
-      const runId = name.slice(0, -'.json'.length);
-      const run = await this.getReviewRun(hash, runId);
-      if (run) runs.push(run);
-    }
-    runs.sort((a, b) => b.createdAt.localeCompare(a.createdAt) || b.id.localeCompare(a.id));
-    return runs;
-  }
 }

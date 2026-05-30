@@ -8,9 +8,12 @@ real workspaces: a CLI-readable markdown folder plus clear instructions that
 teach the workspace CLI how to maintain it.
 
 Workspace Context deliberately has no graph database, no candidate review queue,
-no Context Map MCP server, and no structured entity/fact schema. The canonical
-data is markdown maintained by the configured
-Workspace Context processor and read directly by normal chat CLIs.
+no Context Map MCP server, no Memory Review queue, and no structured
+entity/fact schema. The canonical data is markdown maintained by the configured
+Workspace Context processor and read directly by normal chat CLIs. Memory is
+the atomic capture/search inbox; Workspace Context maintenance may consume
+accepted active Memory entries and delete them from that inbox once the context
+markdown has absorbed them ([ADR-0081](adr/0081-make-workspace-context-consume-memory-inbox.md)).
 
 ## Mental Model
 
@@ -239,9 +242,17 @@ paths and reads them itself:
   last completed Workspace Context scan run, plus uploaded-file paths referenced
   inside those updated session messages;
 - maintenance runs receive the current markdown files under
-  `workspace-context/context/` and do not receive conversation/session source
-  files;
+  `workspace-context/context/` plus active Memory inbox entries from
+  `memory/files/` when Memory is enabled for the workspace; they do not receive
+  conversation/session source files;
 - source paths are deduplicated and capped at 80 per run.
+
+Maintenance memory-inbox inputs are planned separately from context markdown.
+Only active Memory entries are eligible. The service validates that every Memory
+source path stays under the workspace's `memory/files/` directory and caps the
+memory-inbox portion at 80 entries, newest first. Deleted, superseded, and
+redacted entries that are outside the active default scope are not automatically
+consumed by maintenance.
 
 Workspace files are still useful to Workspace Context because the active chat CLI
 can update context while working on them, and future ingestion pipelines can
@@ -270,12 +281,32 @@ why no update was needed.
 
 The maintenance prompt gives the processor the same current time, workspace
 path, instruction path, context folder, run source, source-window label, and file
-path list, but the file path list is the existing context markdown files. The
-processor is told this is maintenance, not new source ingestion; it should not
-scan conversations, external source files, or workspace files unless explicitly
-listed. It should merge duplicate notes, split oversized files where useful, add
-useful headings and cross-references, preserve temporal/as-of information, remove
-stale duplication, and update markdown directly without approval.
+path list. Context markdown files are listed as normal maintenance inputs. When
+active Memory inbox entries are present, they are listed in a separate
+**Memory Inbox Files** section and the prompt requires exactly one fenced
+`workspace-context-memory-actions` block:
+
+````md
+```workspace-context-memory-actions
+{"acceptedMemoryFiles":[]}
+```
+````
+
+The processor must list only Memory filenames it actually incorporated into the
+Workspace Context markdown. The server parses and validates the JSON after the
+processor exits. If any Memory entries were offered and the action block is
+missing, malformed, not an object, has a non-array `acceptedMemoryFiles`, has a
+non-string item, or names a file that was not in the plan, the run fails visibly
+and no Memory entry is deleted. Accepted entries are deleted only by Agent
+Cockpit after successful validation. The summary shown in run history strips the
+action block and appends the consumed-entry count.
+
+The processor is told this is maintenance, not general new-source ingestion; it
+should not scan conversations, external source files, or workspace files unless
+explicitly listed. It should merge duplicate notes, split oversized files where
+useful, add useful headings and cross-references, preserve temporal/as-of
+information, remove stale duplication, incorporate accepted Memory inbox items,
+and update markdown directly without approval.
 
 Before maintenance source planning, Agent Cockpit prunes Workspace Context run
 logs older than 7 days from both `state.json.runs` and
@@ -292,9 +323,11 @@ is reached.
 
 Maintenance scheduling is separate. The same scheduler performs an hourly
 maintenance eligibility check. For each enabled workspace, it applies the
-per-workspace maintenance interval override when present, compares the newest
-maintenance completion time against `maintenanceIntervalHours`, and starts a
-`maintenance` run when due until `maintenanceCliConcurrency` is reached.
+per-workspace maintenance interval override when present, compares only
+`lastMaintenanceCompletedAt` against `maintenanceIntervalHours`, and starts a
+`maintenance` run when due until `maintenanceCliConcurrency` is reached. Recent
+scan completions do not suppress maintenance. Workspaces with no previous
+maintenance completion are due on the next maintenance scheduler pass.
 Maintenance interval values are whole hours. The default is 24 hours.
 
 Run concurrency is workspace-scoped. A workspace can have at most one active

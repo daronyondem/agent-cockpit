@@ -27,10 +27,6 @@ export interface MemoryEntryRestoreRequest {
   relPath: string;
 }
 
-export interface MemoryReviewDraftApplyRequest {
-  draft?: Record<string, unknown>;
-}
-
 export function validateMemoryConsolidationDraftRequest(body: unknown): MemoryConsolidationDraftRequest {
   const record = asRecord(body);
   const action = optionalRecord(record, 'action', 'action must be an object');
@@ -61,10 +57,4 @@ export function validateMemoryConsolidationDraftApplyRequest(body: unknown): Mem
 export function validateMemoryEntryRestoreRequest(body: unknown): MemoryEntryRestoreRequest {
   const record = asRecord(body);
   return { relPath: requiredNonEmptyString(record, 'relPath', 'relPath required') };
-}
-
-export function validateMemoryReviewDraftApplyRequest(body: unknown): MemoryReviewDraftApplyRequest {
-  const record = asRecord(body);
-  const draft = optionalRecord(record, 'draft', 'draft must be an object');
-  return draft ? { draft } : {};
 }

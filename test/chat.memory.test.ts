@@ -312,224 +312,40 @@ describe('POST /workspaces/:hash/memory/consolidate', () => {
   });
 });
 
-describe('Memory Review scheduling and runs', () => {
-  async function waitForMemoryReviewRun(hash: string, runId: string, status: string): Promise<any> {
-    for (let i = 0; i < 50; i += 1) {
-      const run = await env.chatService.getMemoryReviewRun(hash, runId);
-      if (run?.status === status) return run;
-      await new Promise((resolve) => setTimeout(resolve, 20));
-    }
-    throw new Error(`Timed out waiting for Memory Review ${runId} to reach ${status}`);
-  }
-
-  test('persists a workspace Memory Review schedule', async () => {
-    const conv = await env.chatService.createConversation('Review Schedule', '/tmp/ws-mem-review-schedule');
+describe('Memory Review removed endpoints', () => {
+  test('returns 410 for review schedule and run routes', async () => {
+    const conv = await env.chatService.createConversation('Review Removed', '/tmp/ws-mem-review-removed');
     const hash = env.chatService.getWorkspaceHashForConv(conv.id)!;
 
-    const initial = await env.request('GET', `/api/chat/workspaces/${hash}/memory/review-schedule`);
-    expect(initial.status).toBe(200);
-    expect(initial.body.schedule).toEqual({ mode: 'off' });
-    expect(initial.body.status).toMatchObject({ enabled: false, pending: false });
+    const removedRoutes: Array<[string, string]> = [
+      ['GET', `/api/chat/workspaces/${hash}/memory/review-schedule`],
+      ['PUT', `/api/chat/workspaces/${hash}/memory/review-schedule`],
+      ['POST', `/api/chat/workspaces/${hash}/memory/reviews`],
+      ['GET', `/api/chat/workspaces/${hash}/memory/reviews`],
+      ['GET', `/api/chat/workspaces/${hash}/memory/reviews/pending`],
+      ['GET', `/api/chat/workspaces/${hash}/memory/reviews/run-1`],
+      ['POST', `/api/chat/workspaces/${hash}/memory/reviews/run-1/actions/item-1/apply`],
+      ['POST', `/api/chat/workspaces/${hash}/memory/reviews/run-1/actions/item-1/discard`],
+      ['POST', `/api/chat/workspaces/${hash}/memory/reviews/run-1/drafts/draft-1/apply`],
+      ['POST', `/api/chat/workspaces/${hash}/memory/reviews/run-1/drafts/draft-1/discard`],
+      ['POST', `/api/chat/workspaces/${hash}/memory/reviews/run-1/drafts/draft-1/regenerate`],
+    ];
 
-    const put = await env.request(
-      'PUT',
-      `/api/chat/workspaces/${hash}/memory/review-schedule`,
-      {
-        schedule: {
-          mode: 'window',
-          days: 'weekdays',
-          windowStart: '01:00',
-          windowEnd: '04:00',
-          timezone: 'America/Los_Angeles',
-        },
-      },
-    );
-    expect(put.status).toBe(200);
-    expect(put.body.schedule).toMatchObject({
-      mode: 'window',
-      days: 'weekdays',
-      windowStart: '01:00',
-      windowEnd: '04:00',
-      timezone: 'America/Los_Angeles',
-    });
-    expect(typeof put.body.scheduleUpdatedAt).toBe('string');
-
-    const reloaded = await env.request('GET', `/api/chat/workspaces/${hash}/memory/review-schedule`);
-    expect(reloaded.body.schedule).toEqual(put.body.schedule);
-    expect(reloaded.body.scheduleUpdatedAt).toBe(put.body.scheduleUpdatedAt);
+    for (const [method, url] of removedRoutes) {
+      const response = await env.request(method, url, method === 'GET' ? undefined : {});
+      expect(response.status).toBe(410);
+      expect(response.body.error).toContain('Memory Review has been removed');
+    }
   });
 
-  test('creates a pending Memory Review run and applies reviewed items', async () => {
-    const conv = await env.chatService.createConversation('Review Run', '/tmp/ws-mem-review-run');
+  test('conversation responses no longer include Memory Review status', async () => {
+    const conv = await env.chatService.createConversation('Review Status Removed', '/tmp/ws-mem-review-status-removed');
     const hash = env.chatService.getWorkspaceHashForConv(conv.id)!;
     await env.chatService.setWorkspaceMemoryEnabled(hash, true);
-    const oldPath = await env.chatService.addMemoryNoteEntry(hash, {
-      content: '---\nname: old_deadline\ndescription: old deadline\ntype: project\n---\n\nThe deadline is Thursday.',
-      source: 'memory-note',
-      filenameHint: 'old-deadline',
-    });
-    const newPath = await env.chatService.addMemoryNoteEntry(hash, {
-      content: '---\nname: new_deadline\ndescription: new deadline\ntype: project\n---\n\nThe deadline is Friday.',
-      source: 'memory-note',
-      filenameHint: 'new-deadline',
-    });
-    const firstPath = await env.chatService.addMemoryNoteEntry(hash, {
-      content: '---\nname: old_testing_a\ndescription: old testing a\ntype: feedback\n---\n\nUse node:test for services.',
-      source: 'memory-note',
-      filenameHint: 'old-testing-a',
-    });
-    const secondPath = await env.chatService.addMemoryNoteEntry(hash, {
-      content: '---\nname: old_testing_b\ndescription: old testing b\ntype: feedback\n---\n\nUse node:test for service modules.',
-      source: 'memory-note',
-      filenameHint: 'old-testing-b',
-    });
 
-    const proposalOutput = () => JSON.stringify({
-      summary: 'Review has one metadata action and one draft.',
-      actions: [
-        {
-          action: 'mark_superseded',
-          filename: oldPath,
-          supersededBy: newPath,
-          reason: 'Friday replaces Thursday.',
-        },
-        {
-          action: 'merge_candidates',
-          filenames: [firstPath, secondPath],
-          reason: 'Duplicate testing preferences.',
-        },
-      ],
-    });
-    const draftOutput = () => JSON.stringify({
-      summary: 'Merge testing preferences.',
-      operations: [{
-        operation: 'create',
-        filenameHint: 'node-test-preference',
-        supersedes: [firstPath, secondPath],
-        reason: 'Duplicate service testing preferences.',
-        content: '---\nname: node_test_preference\ndescription: user prefers node:test for services\ntype: feedback\n---\n\nUse node:test for focused service coverage.',
-      }],
-    });
-    let holdNextProposal = true;
-    let releaseProposal: (() => void) | null = null;
-
-    env.mockBackend.setOneShotImpl(async (prompt) => {
-      if (prompt.includes('Draft exact')) {
-        expect(prompt).toContain(firstPath);
-        expect(prompt).toContain(secondPath);
-        return draftOutput();
-      }
-      if (!holdNextProposal) return proposalOutput();
-      holdNextProposal = false;
-      return new Promise((resolve) => {
-        releaseProposal = () => resolve(proposalOutput());
-      });
-    });
-
-    const created = await env.request('POST', `/api/chat/workspaces/${hash}/memory/reviews`, {});
-    expect(created.status).toBe(202);
-    expect(created.body.run.status).toBe('running');
-    expect(created.body.run.safeActions).toHaveLength(0);
-    expect(created.body.run.drafts).toHaveLength(0);
-    expect(created.body.status).toMatchObject({
-      enabled: true,
-      pending: true,
-      pendingRuns: 1,
-      latestRunStatus: 'running',
-    });
-    for (let i = 0; i < 20 && !releaseProposal; i += 1) {
-      await new Promise((resolve) => setTimeout(resolve, 10));
-    }
-    expect(releaseProposal).toBeTruthy();
-    releaseProposal!();
-
-    const completedCreated = await waitForMemoryReviewRun(hash, created.body.run.id, 'pending_review');
-    expect(completedCreated.safeActions).toHaveLength(1);
-    expect(completedCreated.drafts).toHaveLength(1);
-    expect(await env.chatService.getMemoryReviewStatus(hash)).toMatchObject({
-      enabled: true,
-      pending: true,
-      pendingRuns: 1,
-      pendingDrafts: 1,
-      pendingSafeActions: 1,
-    });
-    expect(env.mockBackend._oneShotCalls.slice(0, 2).map((call) => call.options?.timeoutMs)).toEqual([
-      10 * 60_000,
-      10 * 60_000,
-    ]);
-
-    const restarted = await env.request('POST', `/api/chat/workspaces/${hash}/memory/reviews`, {});
-    expect(restarted.status).toBe(202);
-    expect(restarted.body.run.id).not.toBe(created.body.run.id);
-    expect(restarted.body.run.status).toBe('running');
-    const completedRestarted = await waitForMemoryReviewRun(hash, restarted.body.run.id, 'pending_review');
-    expect(await env.chatService.getMemoryReviewStatus(hash)).toMatchObject({
-      enabled: true,
-      pending: true,
-      pendingRuns: 1,
-      pendingDrafts: 1,
-      pendingSafeActions: 1,
-    });
-
-    const retired = await env.request(
-      'GET',
-      `/api/chat/workspaces/${hash}/memory/reviews/${created.body.run.id}`,
-    );
-    expect(retired.status).toBe(200);
-    expect(retired.body.run.status).toBe('dismissed');
-    expect(retired.body.run.safeActions[0].status).toBe('discarded');
-    expect(retired.body.run.drafts[0].status).toBe('discarded');
-
-    const convRes = await env.request('GET', `/api/chat/conversations/${conv.id}`);
-    expect(convRes.status).toBe(200);
-    expect(convRes.body.memoryReview.pending).toBe(true);
-    expect(convRes.body.memoryReview.latestRunId).toBe(restarted.body.run.id);
-
-    const draftId = completedRestarted.drafts[0].id;
-    const draftDismissed = await env.request(
-      'POST',
-      `/api/chat/workspaces/${hash}/memory/reviews/${restarted.body.run.id}/drafts/${draftId}/discard`,
-      {},
-    );
-    expect(draftDismissed.status).toBe(200);
-    expect(draftDismissed.body.run.drafts[0].status).toBe('discarded');
-
-    const draftRegenerated = await env.request(
-      'POST',
-      `/api/chat/workspaces/${hash}/memory/reviews/${restarted.body.run.id}/drafts/${draftId}/regenerate`,
-      {},
-    );
-    expect(draftRegenerated.status).toBe(200);
-    expect(draftRegenerated.body.run.drafts[0].status).toBe('pending');
-    expect(draftRegenerated.body.run.drafts[0].discardedAt).toBeUndefined();
-
-    const reviewedDraft = draftRegenerated.body.run.drafts[0].draft;
-    reviewedDraft.operations[0].content = reviewedDraft.operations[0].content.replace(
-      'Use node:test for focused service coverage.',
-      'Use node:test for focused service coverage, including REST route tests.',
-    );
-    const draftApplied = await env.request(
-      'POST',
-      `/api/chat/workspaces/${hash}/memory/reviews/${restarted.body.run.id}/drafts/${draftId}/apply`,
-      { draft: reviewedDraft },
-    );
-    expect(draftApplied.status).toBe(200);
-    expect(draftApplied.body.run.drafts[0].status).toBe('applied');
-    const createdDraftFile = draftApplied.body.run.drafts[0].result.createdFiles[0];
-    const memoryAfterDraftApply = await env.chatService.getWorkspaceMemory(hash);
-    const createdDraftMemory = memoryAfterDraftApply!.files.find((file) => file.filename === createdDraftFile)!;
-    expect(createdDraftMemory.content).toContain('including REST route tests');
-
-    const actionId = completedRestarted.safeActions[0].id;
-    const actionApplied = await env.request(
-      'POST',
-      `/api/chat/workspaces/${hash}/memory/reviews/${restarted.body.run.id}/actions/${actionId}/apply`,
-      {},
-    );
-    expect(actionApplied.status).toBe(200);
-    expect(actionApplied.body.run.safeActions[0].status).toBe('applied');
-    expect(actionApplied.body.run.status).toBe('completed');
-    expect(actionApplied.body.status.pending).toBe(false);
+    const response = await env.request('GET', `/api/chat/conversations/${conv.id}`);
+    expect(response.status).toBe(200);
+    expect(response.body.memoryReview).toBeUndefined();
   });
 });
 
@@ -585,6 +401,37 @@ describe('DELETE /workspaces/:hash/memory/entries/:relpath', () => {
 
     const loaded = await env.chatService.getWorkspaceMemory(hash);
     expect((loaded?.files || []).find((f) => f.filename === relPath)).toBeUndefined();
+  });
+
+  test('keeps deleted CLI-capture entries hidden after a future capture', async () => {
+    const conv = await env.chatService.createConversation('Del Capture', '/tmp/ws-mem-del-capture');
+    const hash = env.chatService.getWorkspaceHashForConv(conv.id)!;
+    const snapshot = {
+      capturedAt: '2026-04-07T12:00:00.000Z',
+      sourceBackend: 'claude-code',
+      sourcePath: '/tmp/source-mem',
+      index: '- [Pref](user_pref.md)\n',
+      files: [
+        {
+          filename: 'user_pref.md',
+          name: 'Pref',
+          description: 'A preference',
+          type: 'user' as const,
+          content: '---\nname: Pref\ndescription: A preference\ntype: user\n---\n\nBody',
+        },
+      ],
+    };
+    await env.chatService.saveWorkspaceMemory(hash, snapshot);
+
+    const res = await env.request(
+      'DELETE',
+      `/api/chat/workspaces/${hash}/memory/entries/${encodeURIComponent('claude/user_pref.md')}`,
+    );
+    expect(res.status).toBe(200);
+
+    await env.chatService.saveWorkspaceMemory(hash, snapshot);
+    const loaded = await env.chatService.getWorkspaceMemory(hash);
+    expect((loaded?.files || []).find((f) => f.filename === 'claude/user_pref.md')).toBeUndefined();
   });
 
   test('returns 400 on path traversal attempts', async () => {

@@ -2,24 +2,7 @@ import fsp from 'fs/promises';
 import os from 'os';
 import path from 'path';
 import { WorkspaceMemoryStore } from '../src/services/chat/workspaceMemoryStore';
-import type { MemoryReviewRun, MemorySnapshot } from '../src/types';
-
-function makeRun(id: string, createdAt: string): MemoryReviewRun {
-  return {
-    version: 1,
-    id,
-    workspaceHash: 'workspace-1',
-    status: 'pending_review',
-    source: 'manual',
-    createdAt,
-    updatedAt: createdAt,
-    summary: `Run ${id}`,
-    sourceSnapshotFingerprint: `fingerprint-${id}`,
-    safeActions: [],
-    drafts: [],
-    failures: [],
-  };
-}
+import type { MemorySnapshot } from '../src/types';
 
 describe('WorkspaceMemoryStore', () => {
   let root: string;
@@ -74,19 +57,6 @@ describe('WorkspaceMemoryStore', () => {
 
     await fsp.writeFile(store.statePath('workspace-1'), '{not-json', 'utf8');
     await expect(store.readMetadataIndexFile('workspace-1')).rejects.toThrow();
-  });
-
-  it('persists review runs, rejects invalid ids, and lists sorted runs', async () => {
-    await store.saveReviewRun('workspace-1', makeRun('older', '2026-05-24T00:00:00.000Z'));
-    await store.saveReviewRun('workspace-1', makeRun('newer', '2026-05-25T00:00:00.000Z'));
-    await fsp.writeFile(path.join(store.reviewsDir('workspace-1'), 'bad name.json'), '{}', 'utf8');
-
-    await expect(store.getReviewRun('workspace-1', 'bad name')).resolves.toBeNull();
-    await expect(store.saveReviewRun('workspace-1', makeRun('../bad', '2026-05-25T00:00:00.000Z'))).rejects.toThrow('Invalid memory review run id');
-    await expect(store.listReviewRuns('workspace-1')).resolves.toMatchObject([
-      { id: 'newer' },
-      { id: 'older' },
-    ]);
   });
 
   it('writes consolidation audits under the memory audit directory', async () => {
