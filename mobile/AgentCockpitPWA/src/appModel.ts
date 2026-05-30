@@ -256,7 +256,7 @@ export function makeConversationWorkspaceContextFileReference(client: AgentCockp
     title,
     path: resolved.filePath,
     downloadURL: client.conversationWorkspaceContextFileURL(conversation.id, resolved.filePath, 'download'),
-    isImage: false,
+    isImage: isImageFileName(title),
     fetchPreview: () => client.getConversationWorkspaceContextFilePreview(conversation.id, resolved.filePath),
   };
 }
@@ -284,6 +284,7 @@ function workspaceContextPathFromHref(rawHref: string): { filePath: string } | n
       return null;
     }
   }
+  pathname = pathname.split('#')[0].split('?')[0];
   if (!pathname.startsWith('/')) return null;
   try {
     pathname = decodeURIComponent(pathname);
@@ -296,12 +297,14 @@ function workspaceContextPathFromHref(rawHref: string): { filePath: string } | n
   const markerIndex = parsed.indexOf(marker);
   if (markerIndex < 0) return null;
   const rest = parsed.slice(markerIndex + marker.length);
-  const contextMarker = '/workspace-context/context/';
-  const contextIndex = rest.indexOf(contextMarker);
-  if (contextIndex <= 0) return null;
-  const relativePath = rest.slice(contextIndex + contextMarker.length);
+  const markerMatch = rest.match(/^([^/]+)\/workspace-context\/(context|references|assets)\/(.+)$/);
+  if (!markerMatch) return null;
+  const section = markerMatch[2];
+  const relativePath = markerMatch[3];
   if (!relativePath || relativePath.includes('\\') || relativePath.split('/').some((part) => !part || part === '..')) return null;
-  if (!relativePath.toLowerCase().endsWith('.md')) return null;
+  if (section === 'context' && !relativePath.toLowerCase().endsWith('.md')) return null;
+  if (section === 'references' && !/\.(md|markdown|txt)$/i.test(relativePath)) return null;
+  if (section === 'assets' && !/\.(md|markdown|txt|json|csv|tsv|ya?ml|png|jpe?g|gif|webp|bmp|pdf)$/i.test(relativePath)) return null;
   return { filePath: parsed };
 }
 

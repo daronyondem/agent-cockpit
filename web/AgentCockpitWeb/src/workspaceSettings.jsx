@@ -33,7 +33,7 @@ const WS_SETTINGS_TABS = [
   { id: 'archive',      label: 'Archive' },
 ];
 
-const WORKSPACE_CONTEXT_SECTIONS = ['overview', 'processor', 'files', 'runs', 'danger'];
+const WORKSPACE_CONTEXT_SECTIONS = ['overview', 'processor', 'context', 'references', 'assets', 'runs', 'danger'];
 const WORKSPACE_CONTEXT_RUNS_PAGE_SIZE = 5;
 const ARCHIVE_MODE_LABELS = {
   history_only: 'Workspace Metadata and Conversations',
@@ -88,52 +88,70 @@ function renderWorkspaceContextRunMarkdown(markdown){
   return DOMPurify.sanitize(raw);
 }
 
-function resolveWorkspaceContextRunFileLink(href, files, contextDir){
+function stripWorkspaceContextLineSuffix(value){
+  return String(value || '')
+    .replace(/(\.(?:md|markdown|txt|json|csv|tsv|ya?ml)):\d+(?::\d+)?$/i, '$1');
+}
+
+function matchWorkspaceContextMaterial(raw, available, dir, section){
+  const list = Array.isArray(available) ? available : [];
+  const normalizedDir = String(dir || '').replace(/\/+$/, '');
+  const candidates = new Set([raw.replace(/^\.?\//, '')]);
+  if (normalizedDir && raw.startsWith(normalizedDir + '/')) {
+    candidates.add(raw.slice(normalizedDir.length + 1));
+  }
+  const sectionPrefix = section === 'context' ? 'context/' : section + '/';
+  if (raw.startsWith(sectionPrefix)) {
+    candidates.add(raw.slice(sectionPrefix.length));
+  }
+
+  for (const candidate of candidates) {
+    const match = list.find(file => file && file.path === candidate);
+    if (match) return { section, path: match.path };
+  }
+
+  const basename = raw.split('/').pop();
+  const basenameMatches = basename
+    ? list.filter(file => file && (file.path === basename || file.name === basename || String(file.path || '').endsWith('/' + basename)))
+    : [];
+  return basenameMatches.length === 1 ? { section, path: basenameMatches[0].path } : null;
+}
+
+function resolveWorkspaceContextRunFileLink(href, materials, dirs){
   let raw = String(href || '').trim();
   if (!raw) return null;
   try {
     raw = decodeURIComponent(raw);
   } catch {}
   raw = raw.split('#')[0].split('?')[0].trim();
-  raw = raw.replace(/\.md:\d+(?::\d+)?$/i, '.md');
-  raw = raw.replace(/\.markdown:\d+(?::\d+)?$/i, '.markdown');
-  if (!/\.(md|markdown)$/i.test(raw)) return null;
+  raw = stripWorkspaceContextLineSuffix(raw);
 
-  const available = Array.isArray(files) ? files : [];
-  const normalizedContextDir = String(contextDir || '').replace(/\/+$/, '');
-  const candidates = new Set([raw.replace(/^\.?\//, '')]);
-  if (normalizedContextDir && raw.startsWith(normalizedContextDir + '/')) {
-    candidates.add(raw.slice(normalizedContextDir.length + 1));
-  }
-
-  for (const candidate of candidates) {
-    const match = available.find(file => file && file.path === candidate);
-    if (match) return match.path;
-  }
-
-  const basename = raw.split('/').pop();
-  const basenameMatches = basename
-    ? available.filter(file => file && (file.path === basename || file.name === basename || String(file.path || '').endsWith('/' + basename)))
-    : [];
-  return basenameMatches.length === 1 ? basenameMatches[0].path : null;
+  return matchWorkspaceContextMaterial(raw, materials && materials.files, dirs && dirs.contextDir, 'context')
+    || matchWorkspaceContextMaterial(raw, materials && materials.references, dirs && dirs.referencesDir, 'references')
+    || matchWorkspaceContextMaterial(raw, materials && materials.assets, dirs && dirs.assetsDir, 'assets');
 }
 
-function WorkspaceContextRunSummary({ summary, files, contextDir, onOpenFile }){
+function WorkspaceContextRunSummary({ summary, files, references, assets, contextDir, referencesDir, assetsDir, onOpenMaterial }){
   const html = React.useMemo(() => renderWorkspaceContextRunMarkdown(summary), [summary]);
   const onClick = React.useCallback((event) => {
-    if (!onOpenFile) return;
+    if (!onOpenMaterial) return;
     const target = event.target;
     const link = target && typeof target.closest === 'function' ? target.closest('a') : null;
     if (!link) return;
-    const relPath = resolveWorkspaceContextRunFileLink(link.getAttribute('href'), files, contextDir);
-    if (!relPath) return;
+    const material = resolveWorkspaceContextRunFileLink(
+      link.getAttribute('href'),
+      { files, references, assets },
+      { contextDir, referencesDir, assetsDir },
+    );
+    if (!material) return;
     event.preventDefault();
-    onOpenFile(relPath);
-  }, [files, contextDir, onOpenFile]);
+    onOpenMaterial(material);
+  }, [files, references, assets, contextDir, referencesDir, assetsDir, onOpenMaterial]);
   return <div className="ws-wc-run-summary prose" onClick={onClick} dangerouslySetInnerHTML={{ __html: html }}/>;
 }
 
 function normalizeWorkspaceContextSection(section){
+  if (section === 'files') return 'context';
   return WORKSPACE_CONTEXT_SECTIONS.includes(section) ? section : 'overview';
 }
 
@@ -303,7 +321,11 @@ export function WorkspaceSettingsPage({ hash, label, initialTab, initialWorkspac
   const [workspaceContextSettingsDirty, setWorkspaceContextSettingsDirty] = React.useState(false);
   const [workspaceContextState, setWorkspaceContextState] = React.useState(null);
   const [workspaceContextFiles, setWorkspaceContextFiles] = React.useState([]);
+  const [workspaceContextReferences, setWorkspaceContextReferences] = React.useState([]);
+  const [workspaceContextAssets, setWorkspaceContextAssets] = React.useState([]);
   const [workspaceContextContextDir, setWorkspaceContextContextDir] = React.useState('');
+  const [workspaceContextReferencesDir, setWorkspaceContextReferencesDir] = React.useState('');
+  const [workspaceContextAssetsDir, setWorkspaceContextAssetsDir] = React.useState('');
   const [workspaceContextInstructionPath, setWorkspaceContextInstructionPath] = React.useState('');
   const [workspaceContextSelectedFile, setWorkspaceContextSelectedFile] = React.useState(null);
   const [workspaceContextFileContent, setWorkspaceContextFileContent] = React.useState('');
@@ -325,7 +347,11 @@ export function WorkspaceSettingsPage({ hash, label, initialTab, initialWorkspac
     setWorkspaceContextSettingsDirty(false);
     setWorkspaceContextState(next.state || null);
     setWorkspaceContextFiles(Array.isArray(next.files) ? next.files : []);
+    setWorkspaceContextReferences(Array.isArray(next.references) ? next.references : []);
+    setWorkspaceContextAssets(Array.isArray(next.assets) ? next.assets : []);
     setWorkspaceContextContextDir(next.contextDir || '');
+    setWorkspaceContextReferencesDir(next.referencesDir || '');
+    setWorkspaceContextAssetsDir(next.assetsDir || '');
     setWorkspaceContextInstructionPath(next.instructionPath || '');
   }
 
@@ -334,7 +360,11 @@ export function WorkspaceSettingsPage({ hash, label, initialTab, initialWorkspac
     setWorkspaceContextEnabled(!!next.enabled);
     setWorkspaceContextState(next.state || null);
     setWorkspaceContextFiles(Array.isArray(next.files) ? next.files : []);
+    setWorkspaceContextReferences(Array.isArray(next.references) ? next.references : []);
+    setWorkspaceContextAssets(Array.isArray(next.assets) ? next.assets : []);
     setWorkspaceContextContextDir(next.contextDir || '');
+    setWorkspaceContextReferencesDir(next.referencesDir || '');
+    setWorkspaceContextAssetsDir(next.assetsDir || '');
     setWorkspaceContextInstructionPath(next.instructionPath || '');
     const running = workspaceContextRunsFromState(next.state).some(run => run && run.status === 'running');
     if (!running) {
@@ -794,7 +824,7 @@ export function WorkspaceSettingsPage({ hash, label, initialTab, initialWorkspac
     const ok = await dialog.confirm({
       anchor,
       title: 'Clear Workspace Context',
-      body: 'Clear all Workspace Context markdown and run history for this workspace? The workspace setting will stay unchanged.',
+      body: 'Clear all Workspace Context files, references, assets, and run history for this workspace? The workspace setting will stay unchanged.',
       confirmLabel: 'Clear context',
       cancelLabel: 'Cancel',
       destructive: true,
@@ -917,11 +947,16 @@ export function WorkspaceSettingsPage({ hash, label, initialTab, initialWorkspac
           <KbTab enabled={kbEnabled} onToggle={toggleKb}/>
         ) : tab === 'workspaceContext' ? (
           <WorkspaceContextTab
+            hash={hash}
             enabled={workspaceContextEnabled}
             settings={workspaceContextSettings}
             state={workspaceContextState}
             files={workspaceContextFiles}
+            references={workspaceContextReferences}
+            assets={workspaceContextAssets}
             contextDir={workspaceContextContextDir}
+            referencesDir={workspaceContextReferencesDir}
+            assetsDir={workspaceContextAssetsDir}
             instructionPath={workspaceContextInstructionPath}
             selectedFile={workspaceContextSelectedFile}
             fileContent={workspaceContextFileContent}
@@ -1659,11 +1694,16 @@ function WorktreeIsolationTab({ status, busy, onToggle, onRefresh }){
 }
 
 function WorkspaceContextTab({
+  hash,
   enabled,
   settings,
   state,
   files,
+  references,
+  assets,
   contextDir,
+  referencesDir,
+  assetsDir,
   instructionPath,
   selectedFile,
   fileContent,
@@ -1689,6 +1729,8 @@ function WorkspaceContextTab({
   initialSection,
 }){
   const workspaceContextContentRef = React.useRef(null);
+  const dialog = useDialog();
+  const toast = useToasts();
   const ctx = settings || { processorMode: 'global' };
   const globalContext = (globalSettings && globalSettings.workspaceContext) || {};
   const profiles = activeWorkspaceCliProfiles(globalSettings);
@@ -1700,6 +1742,19 @@ function WorkspaceContextTab({
     : globalProfile;
   const [workspaceContextSection, setWorkspaceContextSection] = React.useState(() => normalizeWorkspaceContextSection(initialSection));
   const [fileQuery, setFileQuery] = React.useState('');
+  const [referenceQuery, setReferenceQuery] = React.useState('');
+  const [assetQuery, setAssetQuery] = React.useState('');
+  const [selectedReference, setSelectedReference] = React.useState(null);
+  const [referenceContent, setReferenceContent] = React.useState('');
+  const [referenceDraft, setReferenceDraft] = React.useState('');
+  const [referenceLoading, setReferenceLoading] = React.useState(false);
+  const [referenceSaving, setReferenceSaving] = React.useState(false);
+  const [newReferencePath, setNewReferencePath] = React.useState('');
+  const [selectedAsset, setSelectedAsset] = React.useState(null);
+  const [assetPreview, setAssetPreview] = React.useState(null);
+  const [assetLoading, setAssetLoading] = React.useState(false);
+  const [assetUploading, setAssetUploading] = React.useState(false);
+  const [assetUploadPath, setAssetUploadPath] = React.useState('');
   const [runPage, setRunPage] = React.useState(0);
 
   React.useEffect(() => {
@@ -1725,6 +1780,16 @@ function WorkspaceContextTab({
     if (!query) return true;
     return String(file.path || file.name || '').toLowerCase().includes(query);
   });
+  const visibleReferences = (Array.isArray(references) ? references : []).filter(file => {
+    const query = referenceQuery.trim().toLowerCase();
+    if (!query) return true;
+    return String(file.path || file.name || '').toLowerCase().includes(query);
+  });
+  const visibleAssets = (Array.isArray(assets) ? assets : []).filter(file => {
+    const query = assetQuery.trim().toLowerCase();
+    if (!query) return true;
+    return String(file.path || file.name || '').toLowerCase().includes(query);
+  });
   const globalScanInterval = Number.isFinite(globalContext.scanIntervalMinutes) ? globalContext.scanIntervalMinutes : 5;
   const globalMaintenanceInterval = Number.isFinite(globalContext.maintenanceIntervalHours) ? globalContext.maintenanceIntervalHours : 24;
   const statusText = !enabled ? 'Disabled' : runningRun ? 'Running' : failedRun ? 'Error' : 'Enabled';
@@ -1746,10 +1811,30 @@ function WorkspaceContextTab({
   React.useEffect(() => {
     if (runningRun) setRunPage(0);
   }, [runningRun && runningRun.runId]);
+
+  React.useEffect(() => {
+    if (!selectedReference) return;
+    const list = Array.isArray(references) ? references : [];
+    if (list.some(file => file && file.path === selectedReference)) return;
+    setSelectedReference(null);
+    setReferenceContent('');
+    setReferenceDraft('');
+  }, [references, selectedReference]);
+
+  React.useEffect(() => {
+    if (!selectedAsset) return;
+    const list = Array.isArray(assets) ? assets : [];
+    if (list.some(file => file && file.path === selectedAsset)) return;
+    setSelectedAsset(null);
+    setAssetPreview(null);
+  }, [assets, selectedAsset]);
+
   const workspaceContextSections = [
     { id: 'overview', label: 'Overview', desc: statusText },
     { id: 'processor', label: 'Processor', desc: settingsDirty ? 'Unsaved changes' : mode === 'override' ? 'Workspace override' : 'Global defaults' },
-    { id: 'files', label: 'Markdown Files', desc: enabled ? String(visibleFiles.length) + ' files' : 'Disabled' },
+    { id: 'context', label: 'Context', desc: enabled ? String(visibleFiles.length) + ' files' : 'Disabled' },
+    { id: 'references', label: 'References', desc: enabled ? String(visibleReferences.length) + ' files' : 'Disabled' },
+    { id: 'assets', label: 'Assets', desc: enabled ? String(visibleAssets.length) + ' files' : 'Disabled' },
     { id: 'runs', label: 'Runs', desc: runs.length ? String(runs.length) + ' recent' : 'None yet' },
     { id: 'danger', label: 'Danger Zone', desc: 'Clear data' },
   ];
@@ -1812,8 +1897,144 @@ function WorkspaceContextTab({
 
   function openWorkspaceContextFileFromRun(relPath){
     if (!relPath) return;
-    selectSection('files');
+    selectSection('context');
     if (onSelectFile) onSelectFile(relPath);
+  }
+
+  async function loadWorkspaceContextReference(relPath){
+    if (!hash || !relPath) return;
+    setSelectedReference(relPath);
+    setReferenceLoading(true);
+    try {
+      const res = await AgentApi.workspace.getWorkspaceContextReference(hash, relPath);
+      const content = (res && res.content) || '';
+      setReferenceContent(content);
+      setReferenceDraft(content);
+    } catch (err) {
+      setReferenceContent('');
+      setReferenceDraft('');
+      await dialog.alert({ variant: 'error', title: 'Reference preview failed', body: err.message || String(err) });
+    } finally {
+      setReferenceLoading(false);
+    }
+  }
+
+  async function saveWorkspaceContextReference(anchor){
+    const relPath = (selectedReference || newReferencePath || '').trim();
+    if (!relPath) {
+      await dialog.alert({ anchor, variant: 'error', title: 'Reference path required', body: 'Enter a reference file path ending in .md, .markdown, or .txt.' });
+      return;
+    }
+    setReferenceSaving(true);
+    try {
+      await AgentApi.workspace.saveWorkspaceContextReference(hash, relPath, referenceDraft);
+      setSelectedReference(relPath);
+      setReferenceContent(referenceDraft);
+      setNewReferencePath('');
+      await onRefresh();
+      toast.success('Reference saved');
+    } catch (err) {
+      await dialog.alert({ anchor, variant: 'error', title: 'Save reference failed', body: err.message || String(err) });
+    } finally {
+      setReferenceSaving(false);
+    }
+  }
+
+  async function deleteWorkspaceContextReference(anchor, relPath){
+    const target = relPath || selectedReference;
+    if (!target) return;
+    const ok = await dialog.confirm({ anchor, title: 'Delete Reference', body: 'Delete reference "' + target + '"?', confirmLabel: 'Delete', cancelLabel: 'Cancel', destructive: true });
+    if (!ok) return;
+    setReferenceSaving(true);
+    try {
+      await AgentApi.workspace.deleteWorkspaceContextReference(hash, target);
+      if (selectedReference === target) {
+        setSelectedReference(null);
+        setReferenceContent('');
+        setReferenceDraft('');
+      }
+      await onRefresh();
+      toast.success('Reference deleted');
+    } catch (err) {
+      await dialog.alert({ anchor, variant: 'error', title: 'Delete reference failed', body: err.message || String(err) });
+    } finally {
+      setReferenceSaving(false);
+    }
+  }
+
+  async function loadWorkspaceContextAsset(relPath){
+    if (!hash || !relPath) return;
+    setSelectedAsset(relPath);
+    setAssetLoading(true);
+    try {
+      const asset = (Array.isArray(assets) ? assets : []).find(item => item && item.path === relPath) || {};
+      if (asset.kind === 'image') {
+        setAssetPreview({ imageUrl: AgentApi.workspace.workspaceContextAssetUrl(hash, relPath, 'view'), filename: asset.name || relPath });
+      } else if (asset.previewable) {
+        const res = await AgentApi.workspace.getWorkspaceContextAsset(hash, relPath, 'view');
+        setAssetPreview(res || null);
+      } else {
+        setAssetPreview({ unsupported: true, filename: asset.name || relPath });
+      }
+    } catch (err) {
+      setAssetPreview(null);
+      await dialog.alert({ variant: 'error', title: 'Asset preview failed', body: err.message || String(err) });
+    } finally {
+      setAssetLoading(false);
+    }
+  }
+
+  async function uploadWorkspaceContextAsset(event){
+    const file = event && event.target && event.target.files && event.target.files[0];
+    if (!file) return;
+    const relPath = (assetUploadPath || file.name || '').trim();
+    setAssetUploading(true);
+    try {
+      await AgentApi.workspace.uploadWorkspaceContextAsset(hash, relPath, file);
+      setAssetUploadPath('');
+      await onRefresh();
+      await loadWorkspaceContextAsset(relPath);
+      toast.success('Asset uploaded');
+    } catch (err) {
+      await dialog.alert({ variant: 'error', title: 'Asset upload failed', body: err.message || String(err) });
+    } finally {
+      if (event && event.target) event.target.value = '';
+      setAssetUploading(false);
+    }
+  }
+
+  async function deleteWorkspaceContextAsset(anchor, relPath){
+    const target = relPath || selectedAsset;
+    if (!target) return;
+    const ok = await dialog.confirm({ anchor, title: 'Delete Asset', body: 'Delete asset "' + target + '"?', confirmLabel: 'Delete', cancelLabel: 'Cancel', destructive: true });
+    if (!ok) return;
+    setAssetUploading(true);
+    try {
+      await AgentApi.workspace.deleteWorkspaceContextAsset(hash, target);
+      if (selectedAsset === target) {
+        setSelectedAsset(null);
+        setAssetPreview(null);
+      }
+      await onRefresh();
+      toast.success('Asset deleted');
+    } catch (err) {
+      await dialog.alert({ anchor, variant: 'error', title: 'Delete asset failed', body: err.message || String(err) });
+    } finally {
+      setAssetUploading(false);
+    }
+  }
+
+  function openWorkspaceContextMaterialFromRun(material){
+    if (!material) return;
+    if (material.section === 'context') {
+      openWorkspaceContextFileFromRun(material.path);
+    } else if (material.section === 'references') {
+      selectSection('references');
+      void loadWorkspaceContextReference(material.path);
+    } else if (material.section === 'assets') {
+      selectSection('assets');
+      void loadWorkspaceContextAsset(material.path);
+    }
   }
 
   return (
@@ -1854,8 +2075,12 @@ function WorkspaceContextTab({
               </label>
               <div className="ws-wc-readonly-list">
                 <div><span>Context folder</span><b>{contextDir || 'Not created yet'}</b></div>
+                <div><span>References folder</span><b>{referencesDir || 'Not created yet'}</b></div>
+                <div><span>Assets folder</span><b>{assetsDir || 'Not created yet'}</b></div>
                 <div><span>Instruction file</span><b>{instructionPath || 'Not created yet'}</b></div>
-                <div><span>Markdown files</span><b>{Array.isArray(files) ? files.length : 0}</b></div>
+                <div><span>Context files</span><b>{Array.isArray(files) ? files.length : 0}</b></div>
+                <div><span>References</span><b>{Array.isArray(references) ? references.length : 0}</b></div>
+                <div><span>Assets</span><b>{Array.isArray(assets) ? assets.length : 0}</b></div>
                 <div><span>Last scan</span><b>{latestScanRun ? formatWorkspaceContextRunSource(latestScanRun.source) + ' - ' + formatWorkspaceContextRunStatus(latestScanRun.status) : 'None yet'}</b></div>
                 <div><span>Last maintenance</span><b>{latestMaintenanceRun ? formatWorkspaceContextRunStatus(latestMaintenanceRun.status) : 'None yet'}</b></div>
               </div>
@@ -1947,12 +2172,12 @@ function WorkspaceContextTab({
             </section>
           ) : null}
 
-          {workspaceContextSection === 'files' ? (
-            <section id="ws-wc-panel-files" className="ws-wc-panel" role="tabpanel" aria-labelledby="ws-wc-tab-files">
+          {workspaceContextSection === 'context' ? (
+            <section id="ws-wc-panel-context" className="ws-wc-panel" role="tabpanel" aria-labelledby="ws-wc-tab-context">
               <div className="ws-wc-review-head">
                 <div>
-                  <div className="ws-wc-section-title">Markdown Files</div>
-                  <div className="ws-wc-section-summary u-dim">Read-only preview of the Workspace Context markdown folder.</div>
+                  <div className="ws-wc-section-title">Context</div>
+                  <div className="ws-wc-section-summary u-dim">Read-only preview of synthesized Workspace Context markdown.</div>
                 </div>
                 <button type="button" className="btn ghost" onClick={onRefresh}>{Ico.reset(12)} Refresh</button>
               </div>
@@ -1995,6 +2220,135 @@ function WorkspaceContextTab({
             </section>
           ) : null}
 
+          {workspaceContextSection === 'references' ? (
+            <section id="ws-wc-panel-references" className="ws-wc-panel" role="tabpanel" aria-labelledby="ws-wc-tab-references">
+              <div className="ws-wc-review-head">
+                <div>
+                  <div className="ws-wc-section-title">References</div>
+                  <div className="ws-wc-section-summary u-dim">Exact reusable prompts, templates, style rules, and future instructions.</div>
+                </div>
+                <button type="button" className="btn ghost" onClick={onRefresh}>{Ico.reset(12)} Refresh</button>
+              </div>
+              {!enabled ? (
+                <p className="ws-empty u-dim">Workspace Context is disabled for this workspace.</p>
+              ) : (
+                <div className="ws-wc-file-browser">
+                  <div className="ws-wc-file-list">
+                    <input type="search" value={referenceQuery} onChange={(e) => setReferenceQuery(e.target.value)} placeholder="Search references" aria-label="Search Workspace Context references"/>
+                    <input type="text" value={newReferencePath} onChange={(e) => setNewReferencePath(e.target.value)} placeholder="new-reference.md" aria-label="New reference path"/>
+                    <button type="button" className="btn ghost" disabled={referenceSaving} onClick={() => {
+                      setSelectedReference(null);
+                      setReferenceContent('');
+                      setReferenceDraft('');
+                    }}>New reference</button>
+                    <ul>
+                      {visibleReferences.map(file => (
+                        <li key={file.path}>
+                          <button type="button" className={selectedReference === file.path ? 'active' : ''} onClick={() => loadWorkspaceContextReference(file.path)}>
+                            <span>{workspaceContextFileLabel(file)}</span>
+                            <small>{file.updatedAt ? formatMemoryUpdateTime(file.updatedAt) : ''}</small>
+                          </button>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                  <div className="ws-wc-file-preview">
+                    {referenceLoading ? (
+                      <div className="u-dim">Loading...</div>
+                    ) : (
+                      <>
+                        <div className="ws-wc-file-preview-head">
+                          <span>{selectedReference || newReferencePath || 'New reference'}</span>
+                          {selectedReference ? <small>Editable reference</small> : null}
+                        </div>
+                        <textarea
+                          className="ws-instructions-editor"
+                          value={referenceDraft}
+                          onChange={(e) => setReferenceDraft(e.target.value)}
+                          placeholder="Reference markdown or text"
+                          rows={14}
+                        />
+                        <div className="ws-actions ws-wc-danger-actions">
+                          <button type="button" className="btn primary" disabled={referenceSaving} onClick={(e) => saveWorkspaceContextReference(e.currentTarget)}>
+                            {referenceSaving ? 'Saving...' : 'Save reference'}
+                          </button>
+                          {selectedReference ? (
+                            <button type="button" className="btn ghost danger" disabled={referenceSaving} onClick={(e) => deleteWorkspaceContextReference(e.currentTarget, selectedReference)}>
+                              {Ico.trash(12)} Delete
+                            </button>
+                          ) : null}
+                        </div>
+                      </>
+                    )}
+                  </div>
+                </div>
+              )}
+            </section>
+          ) : null}
+
+          {workspaceContextSection === 'assets' ? (
+            <section id="ws-wc-panel-assets" className="ws-wc-panel" role="tabpanel" aria-labelledby="ws-wc-tab-assets">
+              <div className="ws-wc-review-head">
+                <div>
+                  <div className="ws-wc-section-title">Assets</div>
+                  <div className="ws-wc-section-summary u-dim">Durable non-executable files linked from context or references.</div>
+                </div>
+                <button type="button" className="btn ghost" onClick={onRefresh}>{Ico.reset(12)} Refresh</button>
+              </div>
+              {!enabled ? (
+                <p className="ws-empty u-dim">Workspace Context is disabled for this workspace.</p>
+              ) : (
+                <div className="ws-wc-file-browser">
+                  <div className="ws-wc-file-list">
+                    <input type="search" value={assetQuery} onChange={(e) => setAssetQuery(e.target.value)} placeholder="Search assets" aria-label="Search Workspace Context assets"/>
+                    <input type="text" value={assetUploadPath} onChange={(e) => setAssetUploadPath(e.target.value)} placeholder="asset path (optional)" aria-label="Workspace Context asset upload path"/>
+                    <label className="btn ghost">
+                      Upload asset
+                      <input type="file" style={{ display: 'none' }} disabled={assetUploading} onChange={uploadWorkspaceContextAsset}/>
+                    </label>
+                    <ul>
+                      {visibleAssets.map(file => (
+                        <li key={file.path}>
+                          <button type="button" className={selectedAsset === file.path ? 'active' : ''} onClick={() => loadWorkspaceContextAsset(file.path)}>
+                            <span>{workspaceContextFileLabel(file)}</span>
+                            <small>{file.mimeType || ''}</small>
+                          </button>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                  <div className="ws-wc-file-preview">
+                    {assetLoading ? (
+                      <div className="u-dim">Loading...</div>
+                    ) : selectedAsset ? (
+                      <>
+                        <div className="ws-wc-file-preview-head">
+                          <span>{selectedAsset}</span>
+                          <small>{assetPreview && assetPreview.mimeType ? assetPreview.mimeType : 'Asset'}</small>
+                        </div>
+                        {assetPreview && assetPreview.imageUrl ? (
+                          <img src={assetPreview.imageUrl} alt={selectedAsset} className="file-viewer-image"/>
+                        ) : assetPreview && typeof assetPreview.content === 'string' ? (
+                          <pre>{assetPreview.content}</pre>
+                        ) : (
+                          <p className="ws-empty u-dim">This asset can be downloaded but not previewed inline.</p>
+                        )}
+                        <div className="ws-actions ws-wc-danger-actions">
+                          <a className="btn ghost" href={AgentApi.workspace.workspaceContextAssetUrl(hash, selectedAsset, 'download')}>Download</a>
+                          <button type="button" className="btn ghost danger" disabled={assetUploading} onClick={(e) => deleteWorkspaceContextAsset(e.currentTarget, selectedAsset)}>
+                            {Ico.trash(12)} Delete
+                          </button>
+                        </div>
+                      </>
+                    ) : (
+                      <p className="ws-empty u-dim">Select an asset to preview or download it.</p>
+                    )}
+                  </div>
+                </div>
+              )}
+            </section>
+          ) : null}
+
           {workspaceContextSection === 'runs' ? (
             <section id="ws-wc-panel-runs" className="ws-wc-panel" role="tabpanel" aria-labelledby="ws-wc-tab-runs">
               <div className="ws-wc-review-head">
@@ -2023,14 +2377,18 @@ function WorkspaceContextTab({
                       </div>
                       <div className="ws-wc-run-card-meta">
                         <span>{run.startedAt ? formatMemoryUpdateTime(run.startedAt) : ''}</span>
-                        <span>{run.filesConsidered || 0} file{run.filesConsidered === 1 ? '' : 's'}</span>
+                        <span>{run.filesConsidered || 0} item{run.filesConsidered === 1 ? '' : 's'}</span>
                       </div>
                       {run.summary ? (
                         <WorkspaceContextRunSummary
                           summary={run.summary}
                           files={files}
+                          references={references}
+                          assets={assets}
                           contextDir={contextDir}
-                          onOpenFile={openWorkspaceContextFileFromRun}
+                          referencesDir={referencesDir}
+                          assetsDir={assetsDir}
+                          onOpenMaterial={openWorkspaceContextMaterialFromRun}
                         />
                       ) : null}
                       {run.errorMessage ? <p className="u-err">{run.errorMessage}</p> : null}
@@ -2048,7 +2406,7 @@ function WorkspaceContextTab({
               <div className="ws-wc-section-title">Danger Zone</div>
               <div className="ws-wc-danger-block">
                 <div className="ws-wc-danger-title">Clear Workspace Context</div>
-                <p className="ws-empty u-dim">Clear the markdown context folder and run history. Workspace enablement and processor settings stay in place.</p>
+                <p className="ws-empty u-dim">Clear context, references, assets, and run history. Workspace enablement and processor settings stay in place.</p>
                 <div className="ws-actions ws-wc-danger-actions">
                   <button className="btn ghost danger" disabled={scanBusy || !!runningRun} onClick={(e) => onClear(e.currentTarget)}>{Ico.trash(12)} Clear Workspace Context</button>
                 </div>

@@ -81,6 +81,7 @@ describe('FileLinkUtils.resolveWorkspaceContextHref', () => {
       filename: 'aws.md',
       relativePath: 'aws.md',
       workspaceKey: '5c8625d6cac54df6',
+      section: 'context',
       line: 42,
       column: null,
     });
@@ -93,14 +94,38 @@ describe('FileLinkUtils.resolveWorkspaceContextHref', () => {
       filename: 'AWS Notes.md',
       relativePath: 'accounts/AWS Notes.md',
       workspaceKey: '5c8625d6cac54df6',
+      section: 'context',
       line: 10,
       column: 2,
     });
   });
 
-  test('rejects non-context links, traversal, and non-markdown files', () => {
+  test('resolves reference and asset links', () => {
+    expect(resolveWorkspaceContextHref('/Users/daronyondem/data/chat/workspaces/5c8625d6cac54df6/workspace-context/references/prompts/style.markdown')).toEqual({
+      filePath: '/Users/daronyondem/data/chat/workspaces/5c8625d6cac54df6/workspace-context/references/prompts/style.markdown',
+      filename: 'style.markdown',
+      relativePath: 'prompts/style.markdown',
+      workspaceKey: '5c8625d6cac54df6',
+      section: 'references',
+      line: null,
+      column: null,
+    });
+    expect(resolveWorkspaceContextHref('/Users/daronyondem/data/chat/workspaces/5c8625d6cac54df6/workspace-context/assets/reference.png')).toEqual({
+      filePath: '/Users/daronyondem/data/chat/workspaces/5c8625d6cac54df6/workspace-context/assets/reference.png',
+      filename: 'reference.png',
+      relativePath: 'reference.png',
+      workspaceKey: '5c8625d6cac54df6',
+      section: 'assets',
+      line: null,
+      column: null,
+    });
+  });
+
+  test('rejects unsupported Workspace Context links, traversal, and unsupported files', () => {
     expect(resolveWorkspaceContextHref('https://example.com/aws.md')).toBeNull();
     expect(resolveWorkspaceContextHref('/Users/daronyondem/data/chat/workspaces/5c8625d6cac54df6/workspace-context/context/aws.txt')).toBeNull();
+    expect(resolveWorkspaceContextHref('/Users/daronyondem/data/chat/workspaces/5c8625d6cac54df6/workspace-context/references/script.sh')).toBeNull();
+    expect(resolveWorkspaceContextHref('/Users/daronyondem/data/chat/workspaces/5c8625d6cac54df6/workspace-context/assets/archive.zip')).toBeNull();
     expect(resolveWorkspaceContextHref('/Users/daronyondem/data/chat/workspaces/5c8625d6cac54df6/workspace-context/context/../secret.md')).toBeNull();
     expect(resolveWorkspaceContextHref('/Users/daronyondem/data/chat/workspaces/5c8625d6cac54df6/workspace-context/runs/latest.md')).toBeNull();
   });

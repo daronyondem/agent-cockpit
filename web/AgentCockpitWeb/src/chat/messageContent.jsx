@@ -175,10 +175,11 @@ function buildConversationArtifactDescriptor(ref, convId){
 function buildWorkspaceContextFileDescriptor(ref, convId){
   if (!ref || !ref.filename || !convId) return null;
   const basePath = 'conversations/' + encodeURIComponent(convId) + '/workspace-context-file?path=' + encodeURIComponent(ref.filePath);
+  const isImage = ref.section === 'assets' && CHAT_IMAGE_EXTS.test(ref.filename);
   return {
     filename: ref.filename,
     viewPath: basePath + '&mode=view',
-    imageUrl: null,
+    imageUrl: isImage ? AgentApi.chatUrl(basePath + '&mode=view') : null,
     displayPath: ref.filePath,
     line: ref.line || null,
     column: ref.column || null,
