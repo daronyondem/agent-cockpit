@@ -546,7 +546,11 @@ describe('frontend routes', () => {
 
     expect(mobileModelSrc).toContain('CHAT_SCROLL_BOTTOM_THRESHOLD_PX = 48');
     expect(mobileModelSrc).toContain('function isChatScrolledToEnd');
+    expect(mobileModelSrc).toContain('function chatScrollTopForEnd');
     expect(mobileComponentsSrc).toContain('isChatScrolledToEnd(transcript)');
+    expect(mobileComponentsSrc).toContain('useLayoutEffect');
+    expect(mobileComponentsSrc).toContain('scheduleTranscriptEndScroll()');
+    expect(mobileComponentsSrc).toContain('function handleSendClick()');
     expect(mobileComponentsSrc).toContain('transcriptAutoFollowRef');
     expect(mobileComponentsSrc).toContain('onScroll={handleTranscriptScroll}');
     expect(mobileComponentsSrc).toContain('className="mobile-back-to-end"');

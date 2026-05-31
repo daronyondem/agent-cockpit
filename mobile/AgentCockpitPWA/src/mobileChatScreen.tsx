@@ -1,9 +1,10 @@
-import { useEffect, useMemo, useRef, useState, type MouseEvent } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type MouseEvent } from 'react';
 import DOMPurify from 'dompurify';
 import { marked } from 'marked';
 import type { AgentCockpitAPI } from './api';
 import {
   completedAttachmentMetas,
+  chatScrollTopForEnd,
   displayMessagePreview,
   fileReferencesFromParsed,
   formatGoalElapsed,
@@ -101,6 +102,7 @@ export function ChatScreen(props: {
   const conversation = props.conversation;
   const transcriptRef = useRef<HTMLDivElement | null>(null);
   const transcriptAutoFollowRef = useRef(true);
+  const transcriptEndScrollFrameRef = useRef<number | null>(null);
   const transcriptStreamingRef = useRef(false);
   const messageRefs = useRef<Map<string, HTMLDivElement>>(new Map());
   const pinFocusTimerRef = useRef<number | null>(null);
@@ -134,30 +136,62 @@ export function ChatScreen(props: {
     if (transcriptStreamingRef.current) setShowTranscriptBackToEnd(true);
   }
 
-  function scrollTranscriptToEnd(behavior: ScrollBehavior = 'auto') {
+  function cancelScheduledTranscriptEndScroll() {
+    if (transcriptEndScrollFrameRef.current === null) return;
+    window.cancelAnimationFrame(transcriptEndScrollFrameRef.current);
+    transcriptEndScrollFrameRef.current = null;
+  }
+
+  function applyTranscriptEndScroll(behavior: ScrollBehavior = 'auto') {
     const transcript = transcriptRef.current;
     if (!transcript) return;
-    transcriptAutoFollowRef.current = true;
-    setShowTranscriptBackToEnd(false);
-    if (typeof transcript.scrollTo === 'function') {
-      transcript.scrollTo({ top: transcript.scrollHeight, behavior });
+    const top = chatScrollTopForEnd(transcript);
+    if (behavior !== 'auto' && typeof transcript.scrollTo === 'function') {
+      transcript.scrollTo({ top, behavior });
     } else {
-      transcript.scrollTop = transcript.scrollHeight;
+      transcript.scrollTop = top;
     }
   }
 
-  useEffect(() => {
+  function scheduleTranscriptEndScroll(remainingPasses = 2) {
+    cancelScheduledTranscriptEndScroll();
+    transcriptEndScrollFrameRef.current = window.requestAnimationFrame(() => {
+      transcriptEndScrollFrameRef.current = null;
+      if (!transcriptAutoFollowRef.current) return;
+      applyTranscriptEndScroll('auto');
+      if (remainingPasses > 1) scheduleTranscriptEndScroll(remainingPasses - 1);
+    });
+  }
+
+  function scrollTranscriptToEnd(behavior: ScrollBehavior = 'auto') {
+    transcriptAutoFollowRef.current = true;
+    setShowTranscriptBackToEnd(false);
+    applyTranscriptEndScroll(behavior);
+    scheduleTranscriptEndScroll();
+  }
+
+  function handleSendClick() {
+    if (!props.isStreaming) {
+      transcriptAutoFollowRef.current = true;
+      setShowTranscriptBackToEnd(false);
+      scheduleTranscriptEndScroll();
+    }
+    props.onSend();
+  }
+
+  useLayoutEffect(() => {
     transcriptAutoFollowRef.current = true;
     setShowTranscriptBackToEnd(false);
   }, [conversation?.id]);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     const transcript = transcriptRef.current;
     if (!transcript) {
       return;
     }
     if (transcriptAutoFollowRef.current) {
-      transcript.scrollTop = transcript.scrollHeight;
+      applyTranscriptEndScroll();
+      scheduleTranscriptEndScroll();
       setShowTranscriptBackToEnd(false);
     } else {
       setShowTranscriptBackToEnd(true);
@@ -175,6 +209,7 @@ export function ChatScreen(props: {
     setPinStripIndex((index) => Math.min(index, Math.max(pinnedMessages.length - 1, 0)));
   }, [pinnedMessages.length]);
   useEffect(() => () => {
+    cancelScheduledTranscriptEndScroll();
     if (pinFocusTimerRef.current !== null) window.clearTimeout(pinFocusTimerRef.current);
   }, []);
   function setMessageRef(id: string, node: HTMLDivElement | null) {
@@ -342,7 +377,7 @@ export function ChatScreen(props: {
             placeholder={composerPlaceholder}
             rows={1}
           />
-          <button className={`composer-icon send ${sendDisabled ? 'idle' : ''}`} type="button" aria-label={sendLabel} disabled={sendDisabled} onClick={props.onSend}>
+          <button className={`composer-icon send ${sendDisabled ? 'idle' : ''}`} type="button" aria-label={sendLabel} disabled={sendDisabled} onClick={handleSendClick}>
             <SendIcon />
           </button>
         </div>

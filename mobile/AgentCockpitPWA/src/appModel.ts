@@ -85,6 +85,10 @@ export function isChatScrolledToEnd(element: Pick<HTMLElement, 'scrollHeight' | 
   return element.scrollHeight - element.clientHeight - element.scrollTop <= CHAT_SCROLL_BOTTOM_THRESHOLD_PX;
 }
 
+export function chatScrollTopForEnd(element: Pick<HTMLElement, 'scrollHeight' | 'clientHeight'>): number {
+  return Math.max(0, element.scrollHeight - element.clientHeight);
+}
+
 export function backendIdForProfile(profile?: { harness: string; protocol?: string } | null): string | undefined {
   if (!profile) return undefined;
   if (profile.harness === 'claude-code' && profile.protocol === 'interactive') return CLAUDE_CODE_INTERACTIVE_BACKEND_ID;
