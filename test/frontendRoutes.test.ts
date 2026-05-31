@@ -810,6 +810,12 @@ describe('frontend routes', () => {
     expect(workspaceSettingsSrc).toContain('References folder');
     expect(workspaceSettingsSrc).toContain('Assets folder');
     expect(workspaceSettingsSrc).toContain('Read-only preview of synthesized Workspace Context markdown.');
+    expect(workspaceSettingsSrc).toContain('startNewWorkspaceContextReference');
+    expect(workspaceSettingsSrc).toContain('startWorkspaceContextAssetUpload');
+    expect(workspaceSettingsSrc).toContain('className="ws-wc-preview-editor"');
+    expect(workspaceSettingsSrc).toContain('className="ws-wc-inline-path"');
+    expect(workspaceSettingsSrc).toContain('className="ws-wc-asset-image"');
+    expect(workspaceSettingsSrc).toContain('New upload');
     expect(workspaceSettingsSrc).toContain('Save reference');
     expect(workspaceSettingsSrc).toContain('Upload asset');
     expect(workspaceSettingsSrc).toContain("workspaceContextAssetUrl(hash, selectedAsset, 'download')");
@@ -820,6 +826,8 @@ describe('frontend routes', () => {
     expect(workspaceSettingsSrc).toContain('Latest run logs first.');
     expect(workspaceSettingsSrc).toContain('Older {Ico.chev(12)}');
     expect(workspaceSettingsSrc).toContain('Repair instructions');
+    expect(workspaceSettingsSrc).toContain('aria-label="Repair instructions help"');
+    expect(workspaceSettingsSrc).toContain('It does not run a scan or change saved context, references, or assets.');
     expect(workspaceSettingsSrc).toContain('Clear Workspace Context');
     expect(workspaceSettingsSrc).toContain('workspaceContextContentRef');
     expect(workspaceSettingsSrc).toContain('onSelectFile');
@@ -847,6 +855,10 @@ describe('frontend routes', () => {
     expect(cssSrc).toContain('.ws-wc-initial-scan');
     expect(cssSrc).toContain('.ws-wc-file-browser');
     expect(cssSrc).toContain('.ws-wc-file-preview');
+    expect(cssSrc).toContain('.ws-wc-preview-editor');
+    expect(cssSrc).toContain('.ws-wc-inline-path');
+    expect(cssSrc).toContain('.ws-wc-asset-image');
+    expect(cssSrc).toContain('.ws-wc-new-material');
     expect(cssSrc).toContain('.ws-wc-runs');
     expect(cssSrc).toContain('.ws-wc-run-card');
     expect(cssSrc).toContain('.ws-wc-danger-block');

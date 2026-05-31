@@ -478,12 +478,16 @@ Workspace Settings has a **Workspace Context** tab with a left rail:
   when a run is active.
 - **Processor**: global/default mode selector, optional workspace override
   profile/model/effort/scan interval, and Save Changes only while dirty.
-- **Context**: read-only markdown file list and preview for
-  `workspace-context/context/`.
-- **References**: markdown/text reference browser with create/update/delete
-  controls for exact reusable guidance.
-- **Assets**: durable asset browser with upload, preview/download, metadata, and
-  delete controls for supported non-executable reference files.
+- **Context**: two-pane file browser for `workspace-context/context/` with a
+  search/list rail and read-only markdown preview.
+- **References**: the same two-pane browser pattern for
+  `workspace-context/references/`; the rail is search/list only, and the preview
+  pane holds new-reference path entry, editing, save, and delete controls for
+  exact reusable guidance.
+- **Assets**: the same two-pane browser pattern for `workspace-context/assets/`;
+  the rail is search/list only, and the preview pane holds selected asset
+  preview/download/delete controls or the new-upload path/file controls for
+  supported non-executable reference files.
 - **Runs**: latest-first run records with source, status, start time, files
   considered, markdown-rendered summaries, and errors. Ordering uses
   `startedAt`, matching the timestamp shown on each card. The section shows five
