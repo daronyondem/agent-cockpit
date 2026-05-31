@@ -325,6 +325,24 @@ describe('mobile app model helpers', () => {
     expect(model.goalActionUnsupportedMessage('resume', 'claude-code')).toBe('Goal resume is not supported by Claude Code.');
   });
 
+  test('treats rejected mobile WebSocket construction as a recoverable transport miss', () => {
+    class FakeSocket {
+      url: string;
+
+      constructor(url: string) {
+        this.url = url;
+      }
+    }
+    class ThrowingSocket {
+      constructor() {
+        throw new DOMException('The string did not match the expected pattern.', 'SyntaxError');
+      }
+    }
+
+    expect(model.tryCreateWebSocket('ws://127.0.0.1/test', FakeSocket as any)).toEqual({ url: 'ws://127.0.0.1/test' });
+    expect(model.tryCreateWebSocket('ws://127.0.0.1/test', ThrowingSocket as any)).toBeNull();
+  });
+
   test('rejects stale replayed goal snapshots', () => {
     const olderGoal = {
       threadId: 'thread-1',

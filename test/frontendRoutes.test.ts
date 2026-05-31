@@ -503,6 +503,8 @@ describe('frontend routes', () => {
     expect(lifecycleHookSrc).toContain('function useVisibleIntervalRefresh');
     expect(appSrc).toContain('void resumeStreamConnectionRef.current(conversationID, true)');
     expect(appSrc).toContain('void resumeStreamConnectionRef.current(conversationID)');
+    expect(appSrc).toContain('const socket = tryCreateWebSocket(clientRef.current.websocketURL(conversationID));');
+    expect(appSrc).toContain('if (!socket) {');
     expect(appSrc).toContain('socket.onerror = () =>');
     expect(appSrc).toContain('scheduleStreamReconnect(conversationID)');
     expect(appSrc).toContain('clientRef.current.getActiveStreams()');

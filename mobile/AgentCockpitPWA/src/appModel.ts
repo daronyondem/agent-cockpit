@@ -569,6 +569,14 @@ export function isActiveGoal(goal: Pick<ThreadGoal, 'status'> | null | undefined
   return !!goal && goal.status === 'active';
 }
 
+export function tryCreateWebSocket(url: string, WebSocketCtor: typeof WebSocket = WebSocket): WebSocket | null {
+  try {
+    return new WebSocketCtor(url);
+  } catch {
+    return null;
+  }
+}
+
 export function goalSupportsAction(
   goal: Pick<ThreadGoal, 'backend' | 'supportedActions'> | null | undefined,
   action: keyof NonNullable<ThreadGoal['supportedActions']>,
