@@ -486,8 +486,9 @@ Workspace Settings has a **Workspace Context** tab with a left rail:
   exact reusable guidance.
 - **Assets**: the same two-pane browser pattern for `workspace-context/assets/`;
   the rail is search/list only, and the preview pane holds selected asset
-  preview/download/delete controls or the new-upload path/file controls for
-  supported non-executable reference files.
+  preview plus a primary-styled download link and danger delete control, or the
+  new-upload path and primary-styled file control for supported non-executable
+  reference files.
 - **Runs**: latest-first run records with source, status, start time, files
   considered, markdown-rendered summaries, and errors. Ordering uses
   `startedAt`, matching the timestamp shown on each card. The section shows five
