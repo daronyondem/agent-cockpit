@@ -290,14 +290,17 @@ Codex goal starts use the same new-session prompt composition as `POST /message`
 ```
 POST /conversations/:id/upload  [CSRF]
 Content-Type: multipart/form-data
-Field: files[] (max 10 files, 50MB each)
+Field: files[] (max 10 files, 100MB each)
 ```
-Destination: `data/chat/artifacts/{conversationId}/`. Returns `{ files: AttachmentMeta[] }` — see `spec-data-models.md → AttachmentMeta`. Each entry carries `name`, `path`, `size`, a server-inferred `kind` (`image | pdf | md | text | code | file`), and an optional `meta` sublabel computed on upload: page count for PDFs (`"12 pages"`), line count for code/markdown/text files (`"142 lines"`). `meta` is omitted for images and unknown file types. The v2 composer reads these fields to render typed attachment chips without a follow-up fetch.
+Destination: `data/chat/artifacts/{conversationId}/`. Returns `{ files: AttachmentMeta[] }` — see `spec-data-models.md → AttachmentMeta`. Each entry carries `name`, `path`, `size`, a server-inferred `kind` (`image | pdf | md | text | code | file`), and an optional `meta` sublabel computed on upload: page count for PDFs (`"12 pages"`), line count for code/markdown/text files (`"142 lines"`). `meta` is omitted for images and unknown file types. The v2 composer reads these fields to render typed attachment chips without a follow-up fetch. Over-limit files return `413 { error: "File exceeds the 100 MB upload limit." }`.
+
+`.dng` uploads are normalized before the response is built. The original DNG is preserved at its sanitized upload name, then `src/services/chat/dngPreview.ts` scans the TIFF/DNG Image File Directories for the largest readable JPEG preview while skipping linear-raw subimages. `src/services/chat/uploadImageNormalization.ts` writes a sibling `<original>.preview.jpg`; if the preview's long edge exceeds **2576 px**, the server decodes it with `@napi-rs/canvas`, proportionally downsizes it, and re-encodes JPEG at quality 92. The upload response returns only the generated JPEG sidecar as the attachment (`kind: "image"`, `name` ending `.dng.preview.jpg`, `path` pointing at the sidecar, `size` from the sidecar stat) so harnesses see a normal image path. Malformed TIFF/DNG input, unsupported BigTIFF, DNGs without a readable embedded JPEG preview, and previews that cannot be decoded for required downscaling return `400` with a DNG-specific message rather than bubbling as `500`. HEIC/HEIF conversion is intentionally not part of this route behavior; if Safari/browser upload already converted a photo to JPEG, it arrives through the normal JPEG path.
 
 ```
 DELETE /conversations/:id/upload/:filename  [CSRF]
 ```
 Path traversal guard. Returns `{ ok: true }`. `404`/`400` on error.
+When deleting a generated `.dng.preview.jpg` attachment, the route also best-effort deletes the paired original `.dng` in the same conversation artifact directory. Missing originals are ignored; other delete failures are logged and the preview deletion still succeeds.
 
 ```
 POST /conversations/:id/attachments/ocr  [CSRF]

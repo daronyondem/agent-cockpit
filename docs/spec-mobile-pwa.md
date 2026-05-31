@@ -124,8 +124,8 @@ The PWA currently covers:
 - Queue read/write/clear via `GET`, `PUT`, and `DELETE /api/chat/conversations/:id/queue`.
 - Queue auto-drain after clean `done` frames when no plan/question interaction is pending. The queue drainer sends the head without clearing the live composer draft/attachments; if the follow-up send is blocked by a still-active server stream or another send failure, the original queued item is restored at the queue head and persisted back to the server.
 - Queue reorder and edit modal, including removal of uploaded attachment references.
-- Attachment upload from browser file picker with progress and cancel.
-- Delete completed pending uploads via `DELETE /api/chat/conversations/:id/upload/:filename`.
+- Attachment upload from browser file picker with progress and cancel. DNG uploads are normalized by the server into a generated `<original>.dng.preview.jpg` JPEG sidecar capped to a 2576 px long edge; the returned attachment chip/path is the JPEG preview (`kind: image`), while the original RAW file stays in the conversation artifacts directory and is not shown as a separate attachment. HEIC/HEIF has no special server conversion here; if Safari supplies JPEG bytes they use the normal JPEG path, otherwise unsupported uploads fail through the normal upload-error chip state.
+- Delete completed pending uploads via `DELETE /api/chat/conversations/:id/upload/:filename`. Deleting a generated DNG preview attachment also removes the paired original DNG on the server.
 - Image OCR insertion through `POST /api/chat/conversations/:id/attachments/ocr`; the server rejects OCR when the selected profile/backend cannot transport one-shot image input or the selected/default model does not report `model.capabilities.input.image`.
 - Send/queue wire-content composition by appending `[Uploaded files: <paths>]`.
 - User-message uploaded-file marker stripping and file card rendering.
