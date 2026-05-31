@@ -1888,6 +1888,19 @@ function WorkspaceContextTab({
     onPatch({ maintenanceIntervalHours: Math.max(1, Math.min(8760, n)) });
   }
 
+  function startNewWorkspaceContextReference(){
+    setSelectedReference(null);
+    setReferenceContent('');
+    setReferenceDraft('');
+    setNewReferencePath('');
+  }
+
+  function startWorkspaceContextAssetUpload(){
+    setSelectedAsset(null);
+    setAssetPreview(null);
+    setAssetUploadPath('');
+  }
+
   function selectSection(section){
     setWorkspaceContextSection(section);
     if (workspaceContextContentRef.current && typeof workspaceContextContentRef.current.scrollTo === 'function') {
@@ -2100,7 +2113,17 @@ function WorkspaceContextTab({
                   {Ico.reset(12)} Run maintenance
                 </button>
                 <button type="button" className="btn ghost" onClick={onRefresh}>{Ico.reset(12)} Refresh</button>
-                <button type="button" className="btn ghost" onClick={(e) => onRepairInstructions(e.currentTarget)} disabled={!enabled}>Repair instructions</button>
+                <span className="settings-field-label-row">
+                  <button type="button" className="btn ghost" onClick={(e) => onRepairInstructions(e.currentTarget)} disabled={!enabled}>Repair instructions</button>
+                  <Tip variant="explain" rich={<WorkspaceSettingsHelpTooltip>Recreates the generated Workspace Context instruction file, required folders, and the managed AGENTS.md pointer block for this workspace. It does not run a scan or change saved context, references, or assets.</WorkspaceSettingsHelpTooltip>}>
+                    <button
+                      type="button"
+                      className="settings-help-btn"
+                      aria-label="Repair instructions help"
+                      onClick={(e) => { e.preventDefault(); e.stopPropagation(); }}
+                    >?</button>
+                  </Tip>
+                </span>
               </div>
             </section>
           ) : null}
@@ -2227,7 +2250,10 @@ function WorkspaceContextTab({
                   <div className="ws-wc-section-title">References</div>
                   <div className="ws-wc-section-summary u-dim">Exact reusable prompts, templates, style rules, and future instructions.</div>
                 </div>
-                <button type="button" className="btn ghost" onClick={onRefresh}>{Ico.reset(12)} Refresh</button>
+                <div className="ws-actions">
+                  <button type="button" className="btn ghost" disabled={!enabled || referenceSaving} onClick={startNewWorkspaceContextReference}>New reference</button>
+                  <button type="button" className="btn ghost" onClick={onRefresh}>{Ico.reset(12)} Refresh</button>
+                </div>
               </div>
               {!enabled ? (
                 <p className="ws-empty u-dim">Workspace Context is disabled for this workspace.</p>
@@ -2235,12 +2261,6 @@ function WorkspaceContextTab({
                 <div className="ws-wc-file-browser">
                   <div className="ws-wc-file-list">
                     <input type="search" value={referenceQuery} onChange={(e) => setReferenceQuery(e.target.value)} placeholder="Search references" aria-label="Search Workspace Context references"/>
-                    <input type="text" value={newReferencePath} onChange={(e) => setNewReferencePath(e.target.value)} placeholder="new-reference.md" aria-label="New reference path"/>
-                    <button type="button" className="btn ghost" disabled={referenceSaving} onClick={() => {
-                      setSelectedReference(null);
-                      setReferenceContent('');
-                      setReferenceDraft('');
-                    }}>New reference</button>
                     <ul>
                       {visibleReferences.map(file => (
                         <li key={file.path}>
@@ -2251,6 +2271,9 @@ function WorkspaceContextTab({
                         </li>
                       ))}
                     </ul>
+                    {visibleReferences.length === 0 ? (
+                      <p className="ws-wc-list-empty u-dim">{referenceQuery.trim() ? 'No references match this search.' : 'No references yet.'}</p>
+                    ) : null}
                   </div>
                   <div className="ws-wc-file-preview">
                     {referenceLoading ? (
@@ -2258,17 +2281,28 @@ function WorkspaceContextTab({
                     ) : (
                       <>
                         <div className="ws-wc-file-preview-head">
-                          <span>{selectedReference || newReferencePath || 'New reference'}</span>
-                          {selectedReference ? <small>Editable reference</small> : null}
+                          {selectedReference ? (
+                            <span>{selectedReference}</span>
+                          ) : (
+                            <input
+                              className="ws-wc-inline-path"
+                              type="text"
+                              value={newReferencePath}
+                              onChange={(e) => setNewReferencePath(e.target.value)}
+                              placeholder="new-reference.md"
+                              aria-label="New reference path"
+                            />
+                          )}
+                          <small>{selectedReference ? 'Editable reference' : 'New reference'}</small>
                         </div>
                         <textarea
-                          className="ws-instructions-editor"
+                          className="ws-wc-preview-editor"
                           value={referenceDraft}
                           onChange={(e) => setReferenceDraft(e.target.value)}
                           placeholder="Reference markdown or text"
-                          rows={14}
+                          rows={18}
                         />
-                        <div className="ws-actions ws-wc-danger-actions">
+                        <div className="ws-actions ws-wc-preview-actions">
                           <button type="button" className="btn primary" disabled={referenceSaving} onClick={(e) => saveWorkspaceContextReference(e.currentTarget)}>
                             {referenceSaving ? 'Saving...' : 'Save reference'}
                           </button>
@@ -2293,7 +2327,10 @@ function WorkspaceContextTab({
                   <div className="ws-wc-section-title">Assets</div>
                   <div className="ws-wc-section-summary u-dim">Durable non-executable files linked from context or references.</div>
                 </div>
-                <button type="button" className="btn ghost" onClick={onRefresh}>{Ico.reset(12)} Refresh</button>
+                <div className="ws-actions">
+                  <button type="button" className="btn ghost" disabled={!enabled || assetUploading} onClick={startWorkspaceContextAssetUpload}>New upload</button>
+                  <button type="button" className="btn ghost" onClick={onRefresh}>{Ico.reset(12)} Refresh</button>
+                </div>
               </div>
               {!enabled ? (
                 <p className="ws-empty u-dim">Workspace Context is disabled for this workspace.</p>
@@ -2301,11 +2338,6 @@ function WorkspaceContextTab({
                 <div className="ws-wc-file-browser">
                   <div className="ws-wc-file-list">
                     <input type="search" value={assetQuery} onChange={(e) => setAssetQuery(e.target.value)} placeholder="Search assets" aria-label="Search Workspace Context assets"/>
-                    <input type="text" value={assetUploadPath} onChange={(e) => setAssetUploadPath(e.target.value)} placeholder="asset path (optional)" aria-label="Workspace Context asset upload path"/>
-                    <label className="btn ghost">
-                      Upload asset
-                      <input type="file" style={{ display: 'none' }} disabled={assetUploading} onChange={uploadWorkspaceContextAsset}/>
-                    </label>
                     <ul>
                       {visibleAssets.map(file => (
                         <li key={file.path}>
@@ -2316,6 +2348,9 @@ function WorkspaceContextTab({
                         </li>
                       ))}
                     </ul>
+                    {visibleAssets.length === 0 ? (
+                      <p className="ws-wc-list-empty u-dim">{assetQuery.trim() ? 'No assets match this search.' : 'No assets yet.'}</p>
+                    ) : null}
                   </div>
                   <div className="ws-wc-file-preview">
                     {assetLoading ? (
@@ -2327,13 +2362,13 @@ function WorkspaceContextTab({
                           <small>{assetPreview && assetPreview.mimeType ? assetPreview.mimeType : 'Asset'}</small>
                         </div>
                         {assetPreview && assetPreview.imageUrl ? (
-                          <img src={assetPreview.imageUrl} alt={selectedAsset} className="file-viewer-image"/>
+                          <img src={assetPreview.imageUrl} alt={selectedAsset} className="ws-wc-asset-image"/>
                         ) : assetPreview && typeof assetPreview.content === 'string' ? (
                           <pre>{assetPreview.content}</pre>
                         ) : (
                           <p className="ws-empty u-dim">This asset can be downloaded but not previewed inline.</p>
                         )}
-                        <div className="ws-actions ws-wc-danger-actions">
+                        <div className="ws-actions ws-wc-preview-actions">
                           <a className="btn ghost" href={AgentApi.workspace.workspaceContextAssetUrl(hash, selectedAsset, 'download')}>Download</a>
                           <button type="button" className="btn ghost danger" disabled={assetUploading} onClick={(e) => deleteWorkspaceContextAsset(e.currentTarget, selectedAsset)}>
                             {Ico.trash(12)} Delete
@@ -2341,7 +2376,20 @@ function WorkspaceContextTab({
                         </div>
                       </>
                     ) : (
-                      <p className="ws-empty u-dim">Select an asset to preview or download it.</p>
+                      <>
+                        <div className="ws-wc-file-preview-head">
+                          <span>Upload asset</span>
+                          <small>Optional path</small>
+                        </div>
+                        <div className="ws-wc-new-material">
+                          <input type="text" value={assetUploadPath} onChange={(e) => setAssetUploadPath(e.target.value)} placeholder="asset path (optional)" aria-label="Workspace Context asset upload path"/>
+                          <label className={'btn ghost' + (assetUploading ? ' disabled' : '')}>
+                            Upload asset
+                            <input type="file" style={{ display: 'none' }} disabled={assetUploading} onChange={uploadWorkspaceContextAsset}/>
+                          </label>
+                        </div>
+                        <p className="ws-empty u-dim">Select an asset to preview or download it.</p>
+                      </>
                     )}
                   </div>
                 </div>
