@@ -2,6 +2,7 @@ import type { AgentCockpitAPI } from './api';
 import type {
   AttachmentMeta,
   BackendMetadata,
+  ContentBlock,
   Conversation,
   ConversationArtifact,
   ConversationListItem,
@@ -87,6 +88,51 @@ export function isChatScrolledToEnd(element: Pick<HTMLElement, 'scrollHeight' | 
 
 export function chatScrollTopForEnd(element: Pick<HTMLElement, 'scrollHeight' | 'clientHeight'>): number {
   return Math.max(0, element.scrollHeight - element.clientHeight);
+}
+
+type ScrollSignatureMessage = Pick<Message, 'content' | 'contentBlocks' | 'thinking' | 'toolActivity'>;
+
+export function messageScrollSignature(message: ScrollSignatureMessage | null | undefined): string {
+  if (!message) return '';
+  return messageScrollBlocks(message).map(contentBlockScrollSignature).join('|');
+}
+
+function messageScrollBlocks(message: ScrollSignatureMessage): ContentBlock[] {
+  if (Array.isArray(message.contentBlocks) && message.contentBlocks.length) {
+    return message.contentBlocks;
+  }
+  const legacy: ContentBlock[] = [];
+  if (message.thinking) legacy.push({ type: 'thinking', content: message.thinking });
+  if (Array.isArray(message.toolActivity)) {
+    for (const activity of message.toolActivity) legacy.push({ type: 'tool', activity });
+  }
+  if (message.content) legacy.push({ type: 'text', content: message.content });
+  return legacy;
+}
+
+function contentBlockScrollSignature(block: ContentBlock): string {
+  if (block.type === 'text' || block.type === 'thinking') {
+    return `${block.type}:${(block.content || '').length}`;
+  }
+  if (block.type === 'tool') {
+    const activity = block.activity || {};
+    return [
+      'tool',
+      activity.id || '',
+      activity.tool || '',
+      (activity.description || '').length,
+      activity.status || '',
+      (activity.outcome || '').length,
+      activity.duration == null ? '' : String(activity.duration),
+    ].join(':');
+  }
+  const artifact = block.artifact || {};
+  return [
+    'artifact',
+    artifact.filename || '',
+    artifact.kind || '',
+    (artifact.title || '').length,
+  ].join(':');
 }
 
 export function backendIdForProfile(profile?: { harness: string; protocol?: string } | null): string | undefined {

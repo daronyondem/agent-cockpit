@@ -7,7 +7,7 @@ import { useDialog } from '../dialog.jsx';
 import { useToasts } from '../toast.jsx';
 import { useCliProfileSettings, useConversationSelector, shallowEqual } from '../shellState.jsx';
 import { hiddenStreamErrorMessageIds } from './messageParsing';
-import { collapseProgressRuns } from './messageModel.js';
+import { collapseProgressRuns, messageScrollSignature } from './messageModel.js';
 import { backendIdForProfile, CLAUDE_CODE_INTERACTIVE_BACKEND_ID, workspaceRefForConv } from './chatHelpers.js';
 import { AgentIndexProvider } from './toolRuns.jsx';
 import { FileViewerContext, ImageLightbox } from './messageContent.jsx';
@@ -144,6 +144,7 @@ export function ChatLive({ convId, onArchived, onDeleted, onRenamed, onOpenMemor
   streamingMsgIdRef.current = streamingMsgId;
   const profileLocked = messages.length > 0;
   const lastMessage = messages[messages.length - 1] || null;
+  const lastMessageScrollSignature = messageScrollSignature(lastMessage);
   const hiddenStreamErrorMessageIdsSet = React.useMemo(
     () => hiddenStreamErrorMessageIds(messages, activeStreamError, activeStreamErrorSource),
     [messages, activeStreamError, activeStreamErrorSource]
@@ -469,6 +470,7 @@ export function ChatLive({ convId, onArchived, onDeleted, onRenamed, onOpenMemor
     messages.length,
     lastMessage && lastMessage.id,
     lastMessage && (lastMessage.content || '').length,
+    lastMessageScrollSignature,
     streaming ? 'streaming' : 'idle',
     resettingDep ? 'resetting' : 'ready',
   ].join(':');

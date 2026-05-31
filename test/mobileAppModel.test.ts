@@ -239,6 +239,15 @@ describe('mobile app model helpers', () => {
     expect(model.isChatScrolledToEnd({ scrollHeight: 1000, clientHeight: 500, scrollTop: 451 })).toBe(false);
     expect(model.chatScrollTopForEnd({ scrollHeight: 1000, clientHeight: 500 })).toBe(500);
     expect(model.chatScrollTopForEnd({ scrollHeight: 360, clientHeight: 500 })).toBe(0);
+    expect(model.messageScrollSignature({ content: '', contentBlocks: [] })).toBe('');
+    expect(model.messageScrollSignature({
+      content: '',
+      contentBlocks: [{ type: 'tool', activity: { id: 'tool-1', tool: 'Bash', description: 'Running tests', startTime: 1000 } }],
+    })).not.toBe('');
+    expect(model.messageScrollSignature({
+      content: '',
+      contentBlocks: [{ type: 'thinking', content: 'checking more context' }],
+    })).toBe('thinking:21');
   });
 
   test('normalizes Codex service tier when applying mobile runtime metadata', () => {
