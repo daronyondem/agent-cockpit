@@ -24,6 +24,7 @@ import {
   removeMessagesByID,
   replaceMessageByID,
   shouldApplyGoalSnapshot,
+  tryCreateWebSocket,
   updateSessionsAfterReset,
   upsertMessage,
   userLabel,
@@ -918,7 +919,11 @@ export default function App() {
     setIsStreaming(true);
     isStreamingRef.current = true;
     setActiveStreamIDs((current) => new Set(current).add(conversationID));
-    const socket = new WebSocket(clientRef.current.websocketURL(conversationID));
+    const socket = tryCreateWebSocket(clientRef.current.websocketURL(conversationID));
+    if (!socket) {
+      scheduleStreamReconnect(conversationID);
+      return;
+    }
     socketRef.current = socket;
     socket.onopen = () => {
       clearStreamReconnectTimer();
@@ -1037,7 +1042,10 @@ export default function App() {
       if (existing && existing.readyState !== WebSocket.CLOSED && existing.readyState !== WebSocket.CLOSING) {
         continue;
       }
-      const socket = new WebSocket(clientRef.current.websocketURL(conversationID));
+      const socket = tryCreateWebSocket(clientRef.current.websocketURL(conversationID));
+      if (!socket) {
+        continue;
+      }
       sockets.set(conversationID, socket);
       socket.onopen = () => socket.send(JSON.stringify({ type: 'reconnect' }));
       socket.onmessage = (event) => {
