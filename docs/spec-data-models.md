@@ -1377,6 +1377,12 @@ interface AttachmentMeta {
 legacy imports and mirrored on the client by `StreamStore.attachmentKindFromPath`).
 Legacy entries migrated from the pre-typed `[Uploaded files: …]` tag carry
 only `name`, `path`, and `kind` — `size` and `meta` are unavailable for those.
+For conversation `.dng` uploads, the returned `AttachmentMeta` describes the
+generated JPEG preview sidecar (`<original>.dng.preview.jpg`) rather than the
+preserved original DNG. That sidecar is capped to a 2576 px long edge and is
+typed as `kind: 'image'`, so queued messages and uploaded-file markers hand the
+harness a normal JPEG path. The original DNG remains in the same conversation
+artifact directory for traceability until the preview attachment is deleted.
 
 ### ConversationArtifact
 

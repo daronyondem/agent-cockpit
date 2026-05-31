@@ -1,10 +1,14 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
 import fs from 'fs';
+import http from 'http';
 import path from 'path';
 import WebSocket from 'ws';
-import { createChatRouterEnv, destroyChatRouterEnv, type ChatRouterEnv } from './helpers/chatEnv';
+import * as napiCanvas from '@napi-rs/canvas';
+import { createChatRouterEnv, destroyChatRouterEnv, CSRF_TOKEN, type ChatRouterEnv, type HttpResult } from './helpers/chatEnv';
 import { MockBackendAdapter } from './helpers/mockBackendAdapter';
+import { makeDngWithJpegPreview, makeJpeg } from './helpers/dngFixture';
+import { CONVERSATION_UPLOAD_LIMIT_BYTES } from '../src/routes/chat/uploadRoutes';
 import type { StreamEvent, ActiveStreamEntry, BackendMetadata, CodexThreadGoal, SendMessageOptions, SendMessageResult } from '../src/types';
 
 let env: ChatRouterEnv;
@@ -228,6 +232,61 @@ async function startPendingMessage(content = 'first') {
     sendPromise,
     sendCalls: () => sendCalls,
   };
+}
+
+function uploadSizedConversationFile(convId: string, filename: string, size: number): Promise<HttpResult> {
+  return new Promise((resolve, reject) => {
+    const url = new URL(`/api/chat/conversations/${encodeURIComponent(convId)}/upload`, env.baseUrl);
+    const boundary = '----ac-large-upload-test-' + Math.random().toString(36).slice(2);
+    const head = Buffer.from(
+      `--${boundary}\r\n` +
+        `Content-Disposition: form-data; name="files"; filename="${filename}"\r\n` +
+        `Content-Type: application/octet-stream\r\n\r\n`,
+    );
+    const tail = Buffer.from(`\r\n--${boundary}--\r\n`);
+    const options: http.RequestOptions = {
+      method: 'POST',
+      hostname: url.hostname,
+      port: url.port,
+      path: url.pathname + url.search,
+      headers: {
+        'x-csrf-token': CSRF_TOKEN,
+        'Content-Type': `multipart/form-data; boundary=${boundary}`,
+        'Content-Length': head.length + size + tail.length,
+      },
+    };
+    const req = http.request(options, (res) => {
+      let data = '';
+      res.on('data', (chunk: Buffer) => { data += chunk; });
+      res.on('end', () => {
+        try {
+          resolve({ status: res.statusCode!, body: JSON.parse(data), headers: res.headers });
+        } catch {
+          resolve({ status: res.statusCode!, body: data, headers: res.headers });
+        }
+      });
+    });
+    req.setTimeout(15000, () => {
+      req.destroy(new Error(`Timed out uploading ${filename}`));
+    });
+    req.on('error', reject);
+
+    req.write(head);
+    const chunk = Buffer.alloc(1024 * 1024, 'a');
+    let remaining = size;
+    const writeNext = () => {
+      while (remaining > 0) {
+        const len = Math.min(remaining, chunk.length);
+        remaining -= len;
+        if (!req.write(len === chunk.length ? chunk : chunk.subarray(0, len))) {
+          req.once('drain', writeNext);
+          return;
+        }
+      }
+      req.end(tail);
+    };
+    writeNext();
+  });
 }
 
 describe('PATCH /conversations/:id/archive', () => {
@@ -1467,6 +1526,76 @@ describe('Codex service tier request handling', () => {
   });
 });
 
+// ── POST /conversations/:id/upload ──────────────────────────────────────────
+
+describe('POST /conversations/:id/upload', () => {
+  test('uses a 100 MB per-file limit', () => {
+    expect(CONVERSATION_UPLOAD_LIMIT_BYTES).toBe(100 * 1024 * 1024);
+  });
+
+  test('accepts a file larger than the previous 50 MB ceiling', async () => {
+    const conv = await env.chatService.createConversation('Large upload');
+    const fileSize = 50 * 1024 * 1024 + 1;
+
+    const res = await uploadSizedConversationFile(conv.id, 'large.bin', fileSize);
+
+    expect(res.status).toBe(200);
+    expect(res.body.files[0]).toMatchObject({
+      name: 'large.bin',
+      size: fileSize,
+      kind: 'file',
+    });
+    expect(fs.statSync(path.join(env.chatService.artifactsDir, conv.id, 'large.bin')).size).toBe(fileSize);
+  }, 20000);
+
+  test('returns a capped JPEG preview attachment for DNG uploads', async () => {
+    const conv = await env.chatService.createConversation('DNG upload');
+    const jpeg = makeJpeg(2600, 1300);
+    const dng = makeDngWithJpegPreview(jpeg, 2600, 1300);
+
+    const res = await env.multipartRequest(
+      'POST',
+      `/api/chat/conversations/${conv.id}/upload`,
+      'files',
+      'IMG_3222.dng',
+      'image/x-adobe-dng',
+      dng,
+    );
+
+    expect(res.status).toBe(200);
+    expect(res.body.files).toHaveLength(1);
+    expect(res.body.files[0]).toMatchObject({
+      name: 'IMG_3222.dng.preview.jpg',
+      kind: 'image',
+    });
+    const originalPath = path.join(env.chatService.artifactsDir, conv.id, 'IMG_3222.dng');
+    const previewPath = path.join(env.chatService.artifactsDir, conv.id, 'IMG_3222.dng.preview.jpg');
+    expect(res.body.files[0].path).toBe(previewPath);
+    expect(fs.existsSync(originalPath)).toBe(true);
+    expect(fs.existsSync(previewPath)).toBe(true);
+    const img = await napiCanvas.loadImage(previewPath);
+    expect(Math.max(img.width, img.height)).toBe(2576);
+    expect(img.width).toBe(2576);
+    expect(img.height).toBe(1288);
+  });
+
+  test('returns 400 instead of 500 for malformed DNG uploads', async () => {
+    const conv = await env.chatService.createConversation('Bad DNG upload');
+
+    const res = await env.multipartRequest(
+      'POST',
+      `/api/chat/conversations/${conv.id}/upload`,
+      'files',
+      'bad.dng',
+      'image/x-adobe-dng',
+      Buffer.from('not a dng'),
+    );
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toContain('DNG upload');
+  });
+});
+
 // ── DELETE /conversations/:id/upload/:filename ─────────────────────────────��──
 
 describe('DELETE /conversations/:id/upload/:filename', () => {
@@ -1499,6 +1628,22 @@ describe('DELETE /conversations/:id/upload/:filename', () => {
     expect(res.status).toBe(200);
     expect(res.body.ok).toBe(true);
     expect(fs.existsSync(path.join(artifactDir, 'a_b.txt'))).toBe(false);
+  });
+
+  test('deletes the original DNG when deleting a generated DNG preview attachment', async () => {
+    const conv = await env.chatService.createConversation('Test');
+    const artifactDir = path.join(env.tmpDir, 'data', 'chat', 'artifacts', conv.id);
+    fs.mkdirSync(artifactDir, { recursive: true });
+    const originalPath = path.join(artifactDir, 'IMG_3222.dng');
+    const previewPath = path.join(artifactDir, 'IMG_3222.dng.preview.jpg');
+    fs.writeFileSync(originalPath, 'raw');
+    fs.writeFileSync(previewPath, 'preview');
+
+    const res = await env.request('DELETE', `/api/chat/conversations/${conv.id}/upload/IMG_3222.dng.preview.jpg`);
+
+    expect(res.status).toBe(200);
+    expect(fs.existsSync(previewPath)).toBe(false);
+    expect(fs.existsSync(originalPath)).toBe(false);
   });
 });
 

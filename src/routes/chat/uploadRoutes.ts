@@ -8,11 +8,15 @@ import type { BackendRegistry } from '../../services/backends/registry';
 import { checkOneShotMediaInput } from '../../services/backends/mediaCapabilities';
 import { validateAttachmentOcrRequest } from '../../contracts/uploads';
 import { isContractValidationError } from '../../contracts/validation';
-import type { Request, Response } from '../../types';
+import type { Request, Response, NextFunction } from '../../types';
 import { logger } from '../../utils/logger';
+import { DngPreviewExtractionError } from '../../services/chat/dngPreview';
+import { normalizeUploadedChatImage, originalDngPathForPreview } from '../../services/chat/uploadImageNormalization';
 import { isCliProfileResolutionError, param } from './routeUtils';
 
 const log = logger.child({ module: 'chat-upload-routes' });
+export const CONVERSATION_UPLOAD_LIMIT_BYTES = 100 * 1024 * 1024;
+const CONVERSATION_UPLOAD_MAX_FILES = 10;
 
 export interface UploadRoutesOptions {
   chatService: ChatService;
@@ -36,21 +40,49 @@ export function createUploadRouter(opts: UploadRoutesOptions): express.Router {
         cb(null, safe);
       },
     }),
-    limits: { fileSize: 50 * 1024 * 1024 },
+    limits: { fileSize: CONVERSATION_UPLOAD_LIMIT_BYTES, files: CONVERSATION_UPLOAD_MAX_FILES },
   });
 
-  router.post('/conversations/:id/upload', csrfGuard, upload.array('files', 10), (req: Request, res: Response) => {
-    const files = ((req as unknown as { files?: Express.Multer.File[] }).files || []).map((f) => {
-      const meta = attachmentFromPath(f.path, f.size);
-      return {
-        name: meta.name,
-        path: meta.path,
-        size: meta.size,
-        kind: meta.kind,
-        meta: meta.meta,
-      };
+  const uploadConversationFiles = (req: Request, res: Response, next: NextFunction): void => {
+    upload.array('files', CONVERSATION_UPLOAD_MAX_FILES)(req, res, (err: unknown) => {
+      if (err instanceof multer.MulterError) {
+        const message = err.code === 'LIMIT_FILE_SIZE'
+          ? `File exceeds the ${Math.floor(CONVERSATION_UPLOAD_LIMIT_BYTES / 1024 / 1024)} MB upload limit.`
+          : err.message;
+        res.status(err.code === 'LIMIT_FILE_SIZE' ? 413 : 400).json({ error: message });
+        return;
+      }
+      if (err) {
+        res.status(500).json({ error: (err as Error).message });
+        return;
+      }
+      next();
     });
-    res.json({ files });
+  };
+
+  router.post('/conversations/:id/upload', csrfGuard, uploadConversationFiles, async (req: Request, res: Response) => {
+    try {
+      const files = [];
+      for (const f of ((req as unknown as { files?: Express.Multer.File[] }).files || [])) {
+        const normalizedPath = await normalizeUploadedChatImage(f.path);
+        const stat = await fs.promises.stat(normalizedPath);
+        const meta = attachmentFromPath(normalizedPath, stat.size);
+        files.push({
+          name: meta.name,
+          path: meta.path,
+          size: meta.size,
+          kind: meta.kind,
+          meta: meta.meta,
+        });
+      }
+      res.json({ files });
+    } catch (err: unknown) {
+      if (err instanceof DngPreviewExtractionError) {
+        return res.status(400).json({ error: err.message });
+      }
+      log.error('Failed to process uploaded conversation file', { error: err });
+      return res.status(500).json({ error: 'Failed to process uploaded file' });
+    }
   });
 
   router.get('/conversations/:id/files/:filename', async (req: Request, res: Response) => {
@@ -94,6 +126,14 @@ export function createUploadRouter(opts: UploadRoutesOptions): express.Router {
     }
     try {
       await fs.promises.unlink(filePath);
+      const originalDngPath = originalDngPathForPreview(filePath);
+      if (originalDngPath) {
+        await fs.promises.unlink(originalDngPath).catch((err: unknown) => {
+          if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
+            log.warn('Failed to delete original DNG for preview attachment', { filePath: originalDngPath, error: err });
+          }
+        });
+      }
       res.json({ ok: true });
     } catch (err: unknown) {
       if ((err as NodeJS.ErrnoException).code === 'ENOENT') return res.status(404).json({ error: 'File not found' });
