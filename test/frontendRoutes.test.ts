@@ -538,6 +538,7 @@ describe('frontend routes', () => {
     expect(chatLiveSrc).toContain('CHAT_SCROLL_BOTTOM_THRESHOLD_PX = 48');
     expect(chatLiveSrc).toContain('function isChatScrolledToEnd');
     expect(chatLiveSrc).toContain('feedAutoFollowRef');
+    expect(chatLiveSrc).toContain('lastMessageScrollSignature');
     expect(chatLiveSrc).toContain('onScroll={handleFeedScroll}');
     expect(chatLiveSrc).toContain('className="chat-back-to-end"');
     expect(chatLiveSrc).toContain('scrollFeedToEnd()');
@@ -547,7 +548,9 @@ describe('frontend routes', () => {
     expect(mobileModelSrc).toContain('CHAT_SCROLL_BOTTOM_THRESHOLD_PX = 48');
     expect(mobileModelSrc).toContain('function isChatScrolledToEnd');
     expect(mobileModelSrc).toContain('function chatScrollTopForEnd');
+    expect(mobileModelSrc).toContain('function messageScrollSignature');
     expect(mobileComponentsSrc).toContain('isChatScrolledToEnd(transcript)');
+    expect(mobileComponentsSrc).toContain('messageScrollSignature(lastMessage)');
     expect(mobileComponentsSrc).toContain('useLayoutEffect');
     expect(mobileComponentsSrc).toContain('scheduleTranscriptEndScroll()');
     expect(mobileComponentsSrc).toContain('function handleSendClick()');

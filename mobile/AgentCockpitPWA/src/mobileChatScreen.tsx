@@ -18,6 +18,7 @@ import {
   lastTwoPathComponents,
   makeConversationArtifactReference,
   makeConversationWorkspaceContextFileReference,
+  messageScrollSignature,
   opencodeProviderLabel,
   parseMessageFiles,
   profileForID,
@@ -120,6 +121,7 @@ export function ChatScreen(props: {
     conversation?.messages.length || 0,
     lastMessage?.id || '',
     lastMessage?.content.length || 0,
+    messageScrollSignature(lastMessage),
     props.streamText.length,
     props.isStreaming ? 'streaming' : 'idle',
   ].join(':');

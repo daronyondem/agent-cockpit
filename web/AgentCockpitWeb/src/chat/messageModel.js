@@ -13,6 +13,40 @@ export function deriveBlocks(message){
   return legacy;
 }
 
+export function messageScrollSignature(message){
+  if (!message || typeof message !== 'object') return '';
+  return deriveBlocks(message).map(blockScrollSignature).join('|');
+}
+
+function blockScrollSignature(block){
+  if (!block || typeof block !== 'object') return 'unknown';
+  if (block.type === 'text' || block.type === 'thinking') {
+    return `${block.type}:${(block.content || '').length}`;
+  }
+  if (block.type === 'tool') {
+    const activity = block.activity || {};
+    return [
+      'tool',
+      activity.id || '',
+      activity.tool || '',
+      (activity.description || '').length,
+      activity.status || '',
+      (activity.outcome || '').length,
+      activity.duration == null ? '' : String(activity.duration),
+    ].join(':');
+  }
+  if (block.type === 'artifact') {
+    const artifact = block.artifact || {};
+    return [
+      'artifact',
+      artifact.filename || '',
+      artifact.kind || '',
+      (artifact.title || '').length,
+    ].join(':');
+  }
+  return String(block.type || 'unknown');
+}
+
 /* Splits contentBlocks into render segments. Consecutive tool blocks merge into
    one 'tool-run' segment so the renderer can group them as
    parallel/sequential/agent activity. */
