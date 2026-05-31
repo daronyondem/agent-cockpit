@@ -237,6 +237,8 @@ describe('mobile app model helpers', () => {
     expect(model.patchConversationMessage(conversation, 'm1', true, replacement).messages[0]).toBe(replacement);
     expect(model.isChatScrolledToEnd({ scrollHeight: 1000, clientHeight: 500, scrollTop: 452 })).toBe(true);
     expect(model.isChatScrolledToEnd({ scrollHeight: 1000, clientHeight: 500, scrollTop: 451 })).toBe(false);
+    expect(model.chatScrollTopForEnd({ scrollHeight: 1000, clientHeight: 500 })).toBe(500);
+    expect(model.chatScrollTopForEnd({ scrollHeight: 360, clientHeight: 500 })).toBe(0);
   });
 
   test('normalizes Codex service tier when applying mobile runtime metadata', () => {
