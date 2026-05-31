@@ -2369,7 +2369,7 @@ function WorkspaceContextTab({
                           <p className="ws-empty u-dim">This asset can be downloaded but not previewed inline.</p>
                         )}
                         <div className="ws-actions ws-wc-preview-actions">
-                          <a className="btn ghost" href={AgentApi.workspace.workspaceContextAssetUrl(hash, selectedAsset, 'download')}>Download</a>
+                          <a className="btn primary" href={AgentApi.workspace.workspaceContextAssetUrl(hash, selectedAsset, 'download')}>Download</a>
                           <button type="button" className="btn ghost danger" disabled={assetUploading} onClick={(e) => deleteWorkspaceContextAsset(e.currentTarget, selectedAsset)}>
                             {Ico.trash(12)} Delete
                           </button>
@@ -2383,7 +2383,7 @@ function WorkspaceContextTab({
                         </div>
                         <div className="ws-wc-new-material">
                           <input type="text" value={assetUploadPath} onChange={(e) => setAssetUploadPath(e.target.value)} placeholder="asset path (optional)" aria-label="Workspace Context asset upload path"/>
-                          <label className={'btn ghost' + (assetUploading ? ' disabled' : '')}>
+                          <label className={'btn primary' + (assetUploading ? ' disabled' : '')}>
                             Upload asset
                             <input type="file" style={{ display: 'none' }} disabled={assetUploading} onChange={uploadWorkspaceContextAsset}/>
                           </label>

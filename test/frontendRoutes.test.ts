@@ -818,6 +818,8 @@ describe('frontend routes', () => {
     expect(workspaceSettingsSrc).toContain('New upload');
     expect(workspaceSettingsSrc).toContain('Save reference');
     expect(workspaceSettingsSrc).toContain('Upload asset');
+    expect(workspaceSettingsSrc).toContain("<a className=\"btn primary\" href={AgentApi.workspace.workspaceContextAssetUrl(hash, selectedAsset, 'download')}>Download</a>");
+    expect(workspaceSettingsSrc).toContain("className={'btn primary' + (assetUploading ? ' disabled' : '')}");
     expect(workspaceSettingsSrc).toContain("workspaceContextAssetUrl(hash, selectedAsset, 'download')");
     expect(workspaceSettingsSrc).toContain('Run scan');
     expect(workspaceSettingsSrc).toContain('Run maintenance');
