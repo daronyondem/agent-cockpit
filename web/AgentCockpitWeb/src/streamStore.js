@@ -373,13 +373,19 @@ import { reduceStreamFrame } from './stream/streamFrameReducer.ts';
   function upsertPersistedMessage(convId, message){
     if (!message || !message.id) return;
     update(convId, cur => {
-      const existing = cur.messages.findIndex(m => m.id === message.id);
-      if (existing < 0) return { ...cur, messages: [...cur.messages, message] };
-      const messages = cur.messages.slice();
-      messages[existing] = message;
-      return { ...cur, messages };
+      return { ...cur, messages: upsertMessageList(cur.messages, message) };
     });
     bumpConvListActivity(convId, message.timestamp);
+  }
+
+  function upsertMessageList(messages, message){
+    if (!message || !message.id) return Array.isArray(messages) ? messages : [];
+    const list = Array.isArray(messages) ? messages : [];
+    const existing = list.findIndex(m => m.id === message.id);
+    if (existing < 0) return [...list, message];
+    const next = list.slice();
+    next[existing] = message;
+    return next;
   }
 
   /* ── Conversation list ─────────────────────────────────────────────── */
@@ -1583,18 +1589,31 @@ import { reduceStreamFrame } from './stream/streamFrameReducer.ts';
     if (entry.ocrStatus === 'running') {
       throw new Error('OCR already in progress');
     }
+    const selectedCliProfileId = s.composerCliProfileId || (s.conv && s.conv.cliProfileId) || '';
+    const selectedBackend = s.composerBackend || (s.conv && s.conv.backend) || '';
     update(convId, cur => ({
       ...cur,
       pendingAttachments: cur.pendingAttachments.map(f => f.id === attachmentId
         ? { ...f, ocrStatus: 'running', ocrError: null } : f),
     }));
     try {
-      const { markdown } = await AgentApi.conv.ocrAttachment(convId, entry.result.path);
+      const { markdown, recoveryMessage } = await AgentApi.conv.ocrAttachment(convId, entry.result.path, {
+        cliProfileId: selectedCliProfileId,
+        backend: selectedBackend,
+      });
       update(convId, cur => ({
         ...cur,
+        conv: cur.conv && (selectedCliProfileId || selectedBackend) ? {
+          ...cur.conv,
+          cliProfileId: selectedCliProfileId || cur.conv.cliProfileId,
+          backend: selectedBackend || cur.conv.backend,
+          messages: recoveryMessage ? upsertMessageList(cur.conv.messages, recoveryMessage) : cur.conv.messages,
+        } : cur.conv,
+        messages: recoveryMessage ? upsertMessageList(cur.messages, recoveryMessage) : cur.messages,
         pendingAttachments: cur.pendingAttachments.map(f => f.id === attachmentId
           ? { ...f, ocrStatus: 'done', ocrMarkdown: markdown, ocrError: null } : f),
       }));
+      if (recoveryMessage) bumpConvListActivity(convId, recoveryMessage.timestamp);
       return markdown;
     } catch (err) {
       update(convId, cur => ({

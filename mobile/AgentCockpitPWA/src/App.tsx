@@ -1365,7 +1365,21 @@ export default function App() {
       current.map((item) => (item.id === id ? { ...item, ocrStatus: 'running', ocrError: undefined } : item)),
     );
     try {
-      const markdown = await clientRef.current.ocrAttachment(conversation.id, path);
+      const ocrResponse = await clientRef.current.ocrAttachment(conversation.id, path, {
+        backend: selectedBackend,
+        cliProfileId: selectedCliProfileId,
+      });
+      const markdown = ocrResponse.markdown || '';
+      applyServerMessage(conversation.id, ocrResponse.recoveryMessage);
+      setActiveConversation((current) => {
+        if (!current || current.id !== conversation.id) return current;
+        const next = applyConversationRuntimeSelection(current, {
+          backend: selectedBackend,
+          cliProfileId: selectedCliProfileId,
+        });
+        activeConversationRef.current = next;
+        return next;
+      });
       setPendingAttachments((current) =>
         current.map((item) => (item.id === id ? { ...item, ocrStatus: 'done', ocrMarkdown: markdown } : item)),
       );

@@ -1140,10 +1140,13 @@
        backend/model/effort and returns `{ markdown }`. The composer's
        per-attachment OCR button calls through StreamStore.ocrAttachment,
        which caches the result so re-clicks don't re-spawn the CLI. */
-    ocrAttachment: async (convId, path) => {
+    ocrAttachment: async (convId, path, options = {}) => {
+      const body = { path };
+      if (options.cliProfileId) body.cliProfileId = options.cliProfileId;
+      if (options.backend) body.backend = options.backend;
       const res = await chatFetch(
         'conversations/' + encodeURIComponent(convId) + '/attachments/ocr',
-        { method: 'POST', body: { path } },
+        { method: 'POST', body },
       );
       return await res.json();
     },

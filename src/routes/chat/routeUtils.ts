@@ -3,6 +3,9 @@ import type { ChatService } from '../../services/chatService';
 
 type Conversation = NonNullable<Awaited<ReturnType<ChatService['getConversation']>>>;
 
+export const MISSING_CLI_PROFILE_RECOVERY_MESSAGE =
+  'The saved CLI profile for this conversation was no longer available. Agent Cockpit recovered the conversation with the selected CLI profile and will continue from the saved discussion context.';
+
 /** Extract a named route param as a string (Express 5 types them as string | string[]). */
 export function param(req: Request, name: string): string {
   const val = req.params[name];

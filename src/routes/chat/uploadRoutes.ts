@@ -6,13 +6,18 @@ import { csrfGuard } from '../../middleware/csrf';
 import { attachmentFromPath, type ChatService } from '../../services/chatService';
 import type { BackendRegistry } from '../../services/backends/registry';
 import { checkOneShotMediaInput } from '../../services/backends/mediaCapabilities';
-import { validateAttachmentOcrRequest } from '../../contracts/uploads';
+import { validateAttachmentOcrRequest, type AttachmentOcrResponse } from '../../contracts/uploads';
 import { isContractValidationError } from '../../contracts/validation';
 import type { Request, Response, NextFunction } from '../../types';
 import { logger } from '../../utils/logger';
 import { DngPreviewExtractionError } from '../../services/chat/dngPreview';
 import { normalizeUploadedChatImage, originalDngPathForPreview } from '../../services/chat/uploadImageNormalization';
-import { isCliProfileResolutionError, param } from './routeUtils';
+import {
+  conversationHasMissingCliProfile,
+  isCliProfileResolutionError,
+  MISSING_CLI_PROFILE_RECOVERY_MESSAGE,
+  param,
+} from './routeUtils';
 
 const log = logger.child({ module: 'chat-upload-routes' });
 export const CONVERSATION_UPLOAD_LIMIT_BYTES = 100 * 1024 * 1024;
@@ -144,8 +149,14 @@ export function createUploadRouter(opts: UploadRoutesOptions): express.Router {
   router.post('/conversations/:id/attachments/ocr', csrfGuard, async (req: Request, res: Response) => {
     const convId = param(req, 'id');
     let attachmentPath: string;
+    let requestedCliProfileId: string | undefined;
+    let requestedBackend: string | undefined;
     try {
-      ({ path: attachmentPath } = validateAttachmentOcrRequest(req.body));
+      ({
+        path: attachmentPath,
+        cliProfileId: requestedCliProfileId,
+        backend: requestedBackend,
+      } = validateAttachmentOcrRequest(req.body));
     } catch (err: unknown) {
       if (isContractValidationError(err)) {
         return res.status(400).json({ error: err.message });
@@ -169,8 +180,39 @@ export function createUploadRouter(opts: UploadRoutesOptions): express.Router {
       return res.status(400).json({ error: 'OCR is only supported for image attachments' });
     }
 
-    const conv = await chatService.getConversation(convId);
+    let conv = await chatService.getConversation(convId);
     if (!conv) return res.status(404).json({ error: 'Conversation not found' });
+    let recoveryMessage: Awaited<ReturnType<ChatService['addMessage']>> | null = null;
+    try {
+      if (requestedCliProfileId) {
+        const profileOrProviderChanged = requestedCliProfileId !== conv.cliProfileId
+          || (requestedBackend && requestedBackend !== conv.backend);
+        if (profileOrProviderChanged) {
+          const canRepairMissingProfile = conv.messages.length > 0
+            ? await conversationHasMissingCliProfile(chatService, conv)
+            : false;
+          if (conv.messages.length > 0 && !canRepairMissingProfile) {
+            return res.status(409).json({ error: 'Cannot switch CLI profile after the active session has messages' });
+          }
+          await chatService.updateConversationCliProfile(convId, requestedCliProfileId, requestedBackend || conv.backend);
+          conv = (await chatService.getConversation(convId)) || conv;
+          if (canRepairMissingProfile) {
+            recoveryMessage = await chatService.addMessage(
+              convId,
+              'system',
+              MISSING_CLI_PROFILE_RECOVERY_MESSAGE,
+              conv.backend,
+            );
+            conv = (await chatService.getConversation(convId)) || conv;
+          }
+        }
+      }
+    } catch (err: unknown) {
+      if (isCliProfileResolutionError(err)) {
+        return res.status(400).json({ error: (err as Error).message });
+      }
+      throw err;
+    }
     let runtime: Awaited<ReturnType<ChatService['resolveCliProfileRuntime']>>;
     try {
       runtime = await chatService.resolveCliProfileRuntime(conv.cliProfileId, conv.backend);
@@ -181,6 +223,9 @@ export function createUploadRouter(opts: UploadRoutesOptions): express.Router {
       throw err;
     }
     const backendId = runtime.backendId;
+    if (requestedCliProfileId && requestedBackend && requestedBackend !== backendId) {
+      return res.status(400).json({ error: `CLI profile backend ${backendId} does not match requested backend ${requestedBackend}` });
+    }
     const adapter = backendRegistry.get(backendId);
     if (!adapter) {
       return res.status(500).json({ error: `Backend not registered: ${backendId}` });
@@ -213,7 +258,9 @@ export function createUploadRouter(opts: UploadRoutesOptions): express.Router {
       if (!cleaned) {
         return res.status(502).json({ error: 'OCR returned empty output' });
       }
-      res.json({ markdown: cleaned });
+      const body: AttachmentOcrResponse = { markdown: cleaned };
+      if (recoveryMessage) body.recoveryMessage = recoveryMessage;
+      res.json(body);
     } catch (err: unknown) {
       log.error('Attachment OCR failed', { backendId, convId, error: err });
       return res.status(502).json({ error: (err as Error).message });

@@ -28,6 +28,7 @@ import type {
   ExplorerSaveFileRequest,
 } from '../../../src/contracts/explorer';
 import type { ConversationInputRequest, SendMessageRequest } from '../../../src/contracts/streams';
+import type { AttachmentOcrRequest, AttachmentOcrResponse } from '../../../src/contracts/uploads';
 import type { WorkspaceLocationResponse } from '../../../src/contracts/workspaces';
 
 type RequestOptions = {
@@ -285,12 +286,11 @@ export class AgentCockpitAPI {
     );
   }
 
-  async ocrAttachment(conversationID: string, path: string): Promise<string> {
-    const response = await this.request<{ markdown: string }>('POST', `/api/chat/conversations/${encodeURIComponent(conversationID)}/attachments/ocr`, {
+  async ocrAttachment(conversationID: string, path: string, options: Omit<AttachmentOcrRequest, 'path'> = {}): Promise<AttachmentOcrResponse> {
+    return await this.request<AttachmentOcrResponse>('POST', `/api/chat/conversations/${encodeURIComponent(conversationID)}/attachments/ocr`, {
       csrf: true,
-      body: { path },
+      body: { path, ...options },
     });
-    return response.markdown || '';
   }
 
   async browseDirectory(path?: string, showHidden = false): Promise<DirectoryBrowseResponse> {

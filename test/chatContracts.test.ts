@@ -105,7 +105,11 @@ describe('chat API contracts', () => {
 
   test('validates domain-specific mutation payloads with contract errors', () => {
     expect(validateExplorerSaveFileRequest({ path: 'a.txt', content: '' })).toEqual({ path: 'a.txt', content: '' });
-    expect(validateAttachmentOcrRequest({ path: '/tmp/image.png' })).toEqual({ path: '/tmp/image.png' });
+    expect(validateAttachmentOcrRequest({ path: '/tmp/image.png', cliProfileId: 'profile-1', backend: 'codex' })).toEqual({
+      path: '/tmp/image.png',
+      cliProfileId: 'profile-1',
+      backend: 'codex',
+    });
     expect(validateKbFolderRenameRequest({ fromPath: 'old', toPath: 'new' })).toEqual({ fromPath: 'old', toPath: 'new' });
     expect(validateKbEnabledRequest({ enabled: true })).toEqual({ enabled: true });
     expect(validateKbAutoDigestRequest({ autoDigest: false })).toEqual({ autoDigest: false });
