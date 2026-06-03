@@ -79,6 +79,11 @@ interface OpenCodeRunResult {
   model?: string;
 }
 
+interface OpenCodeExportRecovery {
+  text: string;
+  usage: Usage | null;
+}
+
 interface StreamState {
   proc: ChildProcess | null;
   aborted: boolean;
@@ -257,6 +262,7 @@ export class OpenCodeAdapter extends BaseBackendAdapter {
       let emittedSessionId: string | null = null;
       let assistantMessageId: string | null = null;
       let emittedText = false;
+      let emittedUsage = false;
       const textByAssistantMessageId = new Map<string, string>();
       const emittedToolActivityIds = new Set<string>();
       let buffer = '';
@@ -276,6 +282,7 @@ export class OpenCodeAdapter extends BaseBackendAdapter {
                 yield { type: 'backend_runtime', externalSessionId: event.sessionId, processId: proc.pid ?? null };
               }
             } else if (event.type === 'usage') {
+              emittedUsage = true;
               yield event;
             } else {
               if (event.type === 'tool_activity' && event.id) {
@@ -308,6 +315,7 @@ export class OpenCodeAdapter extends BaseBackendAdapter {
               yield { type: 'backend_runtime', externalSessionId: event.sessionId, processId: proc.pid ?? null };
             }
           } else if (event.type === 'usage') {
+            emittedUsage = true;
             yield event;
           } else {
             if (event.type === 'tool_activity' && event.id) {
@@ -374,15 +382,15 @@ export class OpenCodeAdapter extends BaseBackendAdapter {
         }
         yield { type: 'error', error: stderr || `OpenCode exited with code ${exit.code ?? 'unknown'}` };
       }
-      if (
-        exit.code === 0
-        && !state.aborted
-        && emittedSessionId
-        && shouldRecoverOpenCodeText(emittedText, assistantMessageId, textByAssistantMessageId)
-      ) {
-        const recoveredText = await fetchOpenCodeSessionText(runtime, emittedSessionId, assistantMessageId);
-        if (recoveredText) {
-          yield { type: 'text', content: recoveredText, streaming: false };
+      const shouldRecoverText = shouldRecoverOpenCodeText(emittedText, assistantMessageId, textByAssistantMessageId);
+      const shouldRecoverUsage = !emittedUsage;
+      if (exit.code === 0 && !state.aborted && emittedSessionId && (shouldRecoverText || shouldRecoverUsage)) {
+        const recovery = await fetchOpenCodeSessionRecovery(runtime, emittedSessionId, assistantMessageId);
+        if (shouldRecoverText && recovery.text) {
+          yield { type: 'text', content: recovery.text, streaming: false };
+        }
+        if (shouldRecoverUsage && recovery.usage) {
+          yield { type: 'usage', usage: recovery.usage };
         }
       }
       yield { type: 'done' };
@@ -572,10 +580,14 @@ async function runOpenCodeOnce(runtime: OpenCodeCliRuntime, args: string[], opti
         return;
       }
       const result = collectOpenCodeJson(stdout);
-      if (result.sessionId && (!result.text.trim() || result.textRecoveryRecommended)) {
-        void fetchOpenCodeSessionText(runtime, result.sessionId, result.assistantMessageId || null)
-          .then(recoveredText => {
-            succeed(recoveredText ? { ...result, text: recoveredText } : result);
+      if (result.sessionId && (!result.text.trim() || result.textRecoveryRecommended || !result.usage)) {
+        void fetchOpenCodeSessionRecovery(runtime, result.sessionId, result.assistantMessageId || null)
+          .then(recovery => {
+            succeed({
+              ...result,
+              text: recovery.text ? recovery.text : result.text,
+              usage: result.usage || recovery.usage,
+            });
           })
           .catch(() => succeed(result));
         return;
@@ -821,53 +833,77 @@ function openCodeLineMetadata(line: string): {
   return { sessionId, assistantMessageId };
 }
 
-async function fetchOpenCodeSessionText(
+async function fetchOpenCodeSessionRecovery(
   runtime: OpenCodeCliRuntime,
   sessionId: string,
   assistantMessageId: string | null,
-): Promise<string> {
+): Promise<OpenCodeExportRecovery> {
   try {
-    return extractOpenCodeExportText(await execOpenCodeText(runtime, ['export', sessionId]), assistantMessageId);
+    return extractOpenCodeExportRecovery(await execOpenCodeText(runtime, ['export', sessionId]), assistantMessageId);
   } catch (err: unknown) {
-    opencodeLog.debug('Failed to recover OpenCode text from exported session', {
+    opencodeLog.debug('Failed to recover OpenCode data from exported session', {
       sessionId,
       assistantMessageId,
       error: (err as Error).message,
     });
-    return '';
+    return { text: '', usage: null };
   }
 }
 
-function extractOpenCodeExportText(output: string, assistantMessageId?: string | null): string {
+function extractOpenCodeExportRecovery(output: string, assistantMessageId?: string | null): OpenCodeExportRecovery {
   const clean = stripAnsi(output);
   const start = clean.indexOf('{');
-  if (start < 0) return '';
+  if (start < 0) return { text: '', usage: null };
   let parsed: any;
   try {
     parsed = JSON.parse(clean.slice(start));
   } catch {
-    return '';
+    return { text: '', usage: null };
   }
   const messages = Array.isArray(parsed.messages) ? parsed.messages : [];
   const assistantMessages = messages.filter((candidate: any) => candidate?.info?.role === 'assistant');
   const message = assistantMessageId
     ? assistantMessages.find((candidate: any) => candidate?.info?.id === assistantMessageId)
     : assistantMessages[assistantMessages.length - 1];
-  if (!message || !Array.isArray(message.parts)) return '';
-  return message.parts
+  if (!message) return { text: '', usage: null };
+  const parts = Array.isArray(message.parts) ? message.parts : [];
+  const text = parts
     .filter((part: any) => part?.type === 'text' && typeof part.text === 'string')
     .map((part: any) => part.text)
     .join('')
     .trim();
+  return {
+    text,
+    usage: usageFromOpenCodeExportMessage(message),
+  };
+}
+
+function extractOpenCodeExportText(output: string, assistantMessageId?: string | null): string {
+  return extractOpenCodeExportRecovery(output, assistantMessageId).text;
+}
+
+function usageFromOpenCodeExportMessage(message: any): Usage | null {
+  const infoUsage = usageFromOpenCodeValues(message?.info?.tokens, message?.info?.cost);
+  if (infoUsage) return infoUsage;
+  const parts = Array.isArray(message?.parts) ? message.parts : [];
+  for (let index = parts.length - 1; index >= 0; index -= 1) {
+    const usage = usageFromOpenCodePart(parts[index]);
+    if (usage) return usage;
+  }
+  return null;
 }
 
 function usageFromOpenCodePart(part: any): Usage | null {
-  const tokens = part?.tokens;
-  if (!tokens || typeof tokens !== 'object') return null;
-  const input = numberOrZero(tokens.input);
-  const output = numberOrZero(tokens.output);
-  const cache = tokens.cache && typeof tokens.cache === 'object' ? tokens.cache : {};
-  const cost = typeof part.cost === 'number' && Number.isFinite(part.cost) ? part.cost : 0;
+  return usageFromOpenCodeValues(part?.tokens, part?.cost);
+}
+
+function usageFromOpenCodeValues(tokens: any, rawCost: unknown): Usage | null {
+  const hasTokens = !!tokens && typeof tokens === 'object';
+  const cost = numberOrZero(rawCost);
+  if (!hasTokens && !(cost > 0)) return null;
+  const input = hasTokens ? numberOrZero(tokens.input) : 0;
+  const output = hasTokens ? numberOrZero(tokens.output) : 0;
+  const cache = hasTokens && tokens.cache && typeof tokens.cache === 'object' ? tokens.cache : {};
   return {
     inputTokens: input,
     outputTokens: output,
@@ -1106,6 +1142,7 @@ function waitForExit(proc: ChildProcess): Promise<{ code: number | null; signal:
 export const __opencodeTestUtils = {
   buildOpenCodeRunArgs,
   collectOpenCodeJson,
+  extractOpenCodeExportRecovery,
   extractOpenCodeExportText,
   mcpServersToOpenCodeConfig,
   openCodeLineMetadata,
