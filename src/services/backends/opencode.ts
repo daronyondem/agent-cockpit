@@ -930,7 +930,7 @@ function parseOpenCodeModelsOutput(output: string): ModelOption[] {
     const supportedEffortLevels = openCodeEffortsFromVariants(verbose?.variants);
     models.push({
       id,
-      label: id,
+      label: openCodeModelLabel(id),
       family: provider,
       ...(supportedEffortLevels.length > 0 ? { supportedEffortLevels } : {}),
       capabilities: openCodeCapabilitiesFromVerbose(verbose),
@@ -1087,11 +1087,15 @@ function modelOption(id: string, isDefault = false): ModelOption {
   const provider = id.includes('/') ? id.split('/')[0] : 'opencode';
   return {
     id,
-    label: id,
+    label: openCodeModelLabel(id),
     family: provider,
     ...(isDefault ? { default: true } : {}),
     capabilities: { input: { text: true }, output: { text: true } },
   };
+}
+
+function openCodeModelLabel(id: string): string {
+  return id.startsWith('openrouter/') ? id.slice('openrouter/'.length) : id;
 }
 
 function stripAnsi(text: string): string {

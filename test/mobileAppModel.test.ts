@@ -224,6 +224,9 @@ describe('mobile app model helpers', () => {
     expect(model.opencodeProviderLabel('ollama')).toBe('Ollama');
     expect(model.opencodeProviderLabel('openrouter')).toBe('OpenRouter');
     expect(model.opencodeProviderLabel('custom-provider')).toBe('Custom Provider');
+    expect(model.modelDisplayLabel('openrouter/google/gemini-2.5-pro')).toBe('google/gemini-2.5-pro');
+    expect(model.modelDisplayLabel({ id: 'openrouter/anthropic/claude-sonnet-4', label: 'openrouter/anthropic/claude-sonnet-4' })).toBe('anthropic/claude-sonnet-4');
+    expect(model.modelDisplayLabel('deepseek/deepseek-chat')).toBe('deepseek/deepseek-chat');
   });
 
   test('keeps mobile transcript pin patching and scroll threshold deterministic', () => {

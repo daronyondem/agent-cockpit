@@ -70,7 +70,8 @@
 }
 .msg-agent .avatar.avatar-provider-deepseek,
 .msg-agent .avatar.avatar-provider-ollama,
-.msg-agent .avatar.avatar-provider-opencode{
+.msg-agent .avatar.avatar-provider-opencode,
+.msg-agent .avatar.avatar-provider-openrouter{
   color: transparent;
   background: center / contain no-repeat;
 }
@@ -81,6 +82,11 @@
   background-color: var(--text);
   -webkit-mask: url('/icons/ollama-logo.svg') center / contain no-repeat;
   mask: url('/icons/ollama-logo.svg') center / contain no-repeat;
+}
+.msg-agent .avatar.avatar-provider-openrouter{
+  background-color: var(--text);
+  -webkit-mask: url('/icons/openrouter-logo.svg') center / contain no-repeat;
+  mask: url('/icons/openrouter-logo.svg') center / contain no-repeat;
 }
 .msg-agent .avatar.avatar-provider-opencode{
   background-image: url('/icons/opencode-logo-light.svg');

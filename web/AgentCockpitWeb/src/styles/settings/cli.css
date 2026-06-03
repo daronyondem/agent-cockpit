@@ -231,6 +231,11 @@
   -webkit-mask: url('/icons/ollama-logo.svg') center / contain no-repeat;
   mask: url('/icons/ollama-logo.svg') center / contain no-repeat;
 }
+.cli-harness-icon.cli-provider-openrouter{
+  background-color: var(--text);
+  -webkit-mask: url('/icons/openrouter-logo.svg') center / contain no-repeat;
+  mask: url('/icons/openrouter-logo.svg') center / contain no-repeat;
+}
 .cli-harness-icon.cli-provider-opencode{
   background-image: url('/icons/opencode-logo-light.svg');
 }

@@ -529,7 +529,7 @@ describe('OpenCode backend helpers', () => {
       },
       {
         id: 'openrouter/vision-model',
-        label: 'openrouter/vision-model',
+        label: 'vision-model',
         family: 'openrouter',
         capabilities: {
           input: { text: true, image: true, pdf: true },

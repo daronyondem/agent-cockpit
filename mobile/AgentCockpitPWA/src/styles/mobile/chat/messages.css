@@ -148,6 +148,12 @@
   mask: url('/icons/ollama-logo.svg') center / contain no-repeat;
 }
 
+.provider-avatar.provider-openrouter {
+  background-color: var(--text);
+  -webkit-mask: url('/icons/openrouter-logo.svg') center / contain no-repeat;
+  mask: url('/icons/openrouter-logo.svg') center / contain no-repeat;
+}
+
 .provider-avatar.provider-opencode {
   background-image: url('/icons/opencode-logo-light.svg');
 }

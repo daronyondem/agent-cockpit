@@ -160,6 +160,13 @@ export function opencodeProviderLabel(provider?: string | null): string | null {
     .join(' ');
 }
 
+export function modelDisplayLabel(modelOrId?: string | { id?: string; label?: string } | null): string {
+  const raw = typeof modelOrId === 'string'
+    ? modelOrId
+    : String((modelOrId && (modelOrId.label || modelOrId.id)) || '');
+  return raw.startsWith('openrouter/') ? raw.slice('openrouter/'.length) : raw;
+}
+
 export function profileForID(profiles: CliProfileSummary[] | undefined, profileID?: string | null): CliProfileSummary | null {
   if (!profileID) return null;
   return profiles?.find((profile) => profile.id === profileID) || null;

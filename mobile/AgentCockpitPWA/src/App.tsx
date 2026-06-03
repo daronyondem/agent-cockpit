@@ -17,6 +17,7 @@ import {
   isImageFileName,
   isActiveGoal,
   makeExplorerFileReference,
+  modelDisplayLabel,
   parentExplorerPath,
   patchConversationMessage,
   reconcileEffort,
@@ -1996,7 +1997,7 @@ export default function App() {
           hasUploadingAttachments={hasUploadingAttachments}
           selectedProfile={selectedProfile?.name}
           selectedBackend={selectedBackendMetadata?.label || selectedBackend}
-          selectedModel={selectedModelMetadata?.label || selectedModel}
+          selectedModel={selectedModelMetadata ? modelDisplayLabel(selectedModelMetadata) : (selectedModel ? modelDisplayLabel(selectedModel) : undefined)}
           selectedEffort={selectedEffort}
           selectedServiceTier={serviceTierEnabled ? selectedServiceTier : undefined}
           client={clientRef.current}
