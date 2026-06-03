@@ -168,6 +168,178 @@ describe('OpenCode backend helpers', () => {
     ]);
   });
 
+  test('recovers OpenCode usage from export when live stream omits usage', async () => {
+    let streamRef!: AsyncGenerator<StreamEvent>;
+    const execFileCalls: string[][] = [];
+
+    jest.isolateModules(() => {
+      jest.doMock('child_process', () => {
+        const { EventEmitter } = require('events');
+        const { PassThrough } = require('stream');
+        return {
+          execFile: (_cmd: string, args: string[], _opts: unknown, cb: (err: Error | null, stdout: string, stderr: string) => void) => {
+            execFileCalls.push(args);
+            if (args[0] === 'export') {
+              cb(null, JSON.stringify({
+                messages: [{
+                  info: {
+                    id: 'msg_final',
+                    role: 'assistant',
+                    cost: 0.026352,
+                    tokens: { input: 11502, output: 50, cache: { read: 0, write: 0 } },
+                  },
+                  parts: [{ type: 'text', text: 'Hello' }],
+                }],
+              }), '');
+              return;
+            }
+            cb(null, '', '');
+          },
+          spawn: () => {
+            const proc = new EventEmitter();
+            proc.pid = 8301;
+            proc.stdout = new PassThrough();
+            proc.stderr = new PassThrough();
+            proc.kill = () => {};
+            setImmediate(() => {
+              proc.stdout.write(JSON.stringify({
+                type: 'step_start',
+                sessionID: 'ses_export',
+                part: { type: 'step-start', messageID: 'msg_final', sessionID: 'ses_export' },
+              }) + '\n');
+              proc.stdout.write(JSON.stringify({
+                type: 'text',
+                sessionID: 'ses_export',
+                part: { type: 'text', messageID: 'msg_final', sessionID: 'ses_export', text: 'Hello' },
+              }) + '\n');
+              proc.stdout.end();
+              proc.stderr.end();
+              proc.emit('close', 0, null);
+            });
+            return proc;
+          },
+        };
+      });
+      const { OpenCodeAdapter: IsolatedAdapter } = require('../src/services/backends/opencode');
+      const adapter = new IsolatedAdapter({ workingDir: '/tmp' });
+      streamRef = adapter.sendMessage('hello', {
+        sessionId: 'session-1',
+        conversationId: 'conv-opencode-usage',
+        isNewSession: true,
+        workingDir: '/tmp',
+        systemPrompt: '',
+      }).stream;
+    });
+
+    const events: StreamEvent[] = [];
+    for await (const event of streamRef) {
+      events.push(event);
+    }
+
+    expect(execFileCalls).toContainEqual(['export', 'ses_export']);
+    expect(events).toEqual(expect.arrayContaining([
+      { type: 'external_session', sessionId: 'ses_export' },
+      expect.objectContaining({ type: 'text', content: 'Hello' }),
+      {
+        type: 'usage',
+        usage: {
+          inputTokens: 11502,
+          outputTokens: 50,
+          cacheReadTokens: 0,
+          cacheWriteTokens: 0,
+          costUsd: 0.026352,
+          costSource: 'reported',
+        },
+      },
+      { type: 'done' },
+    ]));
+    jest.dontMock('child_process');
+  });
+
+  test('does not recover export usage when live OpenCode usage already emitted', async () => {
+    let streamRef!: AsyncGenerator<StreamEvent>;
+    const execFileCalls: string[][] = [];
+
+    jest.isolateModules(() => {
+      jest.doMock('child_process', () => {
+        const { EventEmitter } = require('events');
+        const { PassThrough } = require('stream');
+        return {
+          execFile: (_cmd: string, args: string[], _opts: unknown, cb: (err: Error | null, stdout: string, stderr: string) => void) => {
+            execFileCalls.push(args);
+            cb(null, '', '');
+          },
+          spawn: () => {
+            const proc = new EventEmitter();
+            proc.pid = 8302;
+            proc.stdout = new PassThrough();
+            proc.stderr = new PassThrough();
+            proc.kill = () => {};
+            setImmediate(() => {
+              proc.stdout.write(JSON.stringify({
+                type: 'step_start',
+                sessionID: 'ses_live_usage',
+                part: { type: 'step-start', messageID: 'msg_final', sessionID: 'ses_live_usage' },
+              }) + '\n');
+              proc.stdout.write(JSON.stringify({
+                type: 'text',
+                sessionID: 'ses_live_usage',
+                part: { type: 'text', messageID: 'msg_final', sessionID: 'ses_live_usage', text: 'Hello' },
+              }) + '\n');
+              proc.stdout.write(JSON.stringify({
+                type: 'step_finish',
+                sessionID: 'ses_live_usage',
+                part: {
+                  type: 'step-finish',
+                  messageID: 'msg_final',
+                  sessionID: 'ses_live_usage',
+                  tokens: { input: 10, output: 2, cache: { read: 7, write: 3 } },
+                  cost: 0.001,
+                },
+              }) + '\n');
+              proc.stdout.end();
+              proc.stderr.end();
+              proc.emit('close', 0, null);
+            });
+            return proc;
+          },
+        };
+      });
+      const { OpenCodeAdapter: IsolatedAdapter } = require('../src/services/backends/opencode');
+      const adapter = new IsolatedAdapter({ workingDir: '/tmp' });
+      streamRef = adapter.sendMessage('hello', {
+        sessionId: 'session-1',
+        conversationId: 'conv-opencode-live-usage',
+        isNewSession: true,
+        workingDir: '/tmp',
+        systemPrompt: '',
+      }).stream;
+    });
+
+    const events: StreamEvent[] = [];
+    for await (const event of streamRef) {
+      events.push(event);
+    }
+
+    expect(execFileCalls.filter(args => args[0] === 'export')).toHaveLength(0);
+    expect(events.filter(event => event.type === 'usage')).toHaveLength(1);
+    expect(events).toEqual(expect.arrayContaining([
+      {
+        type: 'usage',
+        usage: {
+          inputTokens: 10,
+          outputTokens: 2,
+          cacheReadTokens: 7,
+          cacheWriteTokens: 3,
+          costUsd: 0.001,
+          costSource: 'reported',
+        },
+      },
+      { type: 'done' },
+    ]));
+    jest.dontMock('child_process');
+  });
+
   test('recovers missing OpenCode session with snapshot-read prompt', async () => {
     let streamRef!: AsyncGenerator<StreamEvent>;
     const spawnArgs: string[][] = [];
@@ -586,6 +758,80 @@ describe('OpenCode backend helpers', () => {
 
     expect(__opencodeTestUtils.extractOpenCodeExportText(exportOutput, 'msg_new')).toBe('Hello there');
     expect(__opencodeTestUtils.extractOpenCodeExportText(exportOutput, null)).toBe('Hello there');
+  });
+
+  test('extracts assistant usage from OpenCode export message info', () => {
+    const exportOutput = JSON.stringify({
+      messages: [
+        {
+          info: { id: 'msg_old', role: 'assistant', cost: 9, tokens: { input: 1, output: 2, cache: { read: 3, write: 4 } } },
+          parts: [{ type: 'text', text: 'old answer' }],
+        },
+        {
+          info: {
+            id: 'msg_new',
+            role: 'assistant',
+            cost: 0.026352,
+            tokens: {
+              total: 11781,
+              input: 11502,
+              output: 50,
+              reasoning: 229,
+              cache: { write: 0, read: 0 },
+            },
+            providerID: 'openrouter',
+            modelID: 'google/gemini-3.1-pro-preview',
+          },
+          parts: [
+            { type: 'step-start' },
+            { type: 'text', text: 'Hello' },
+            { type: 'text', text: ' there' },
+            { type: 'step-finish' },
+          ],
+        },
+      ],
+    });
+
+    expect(__opencodeTestUtils.extractOpenCodeExportRecovery(exportOutput, 'msg_new')).toEqual({
+      text: 'Hello there',
+      usage: {
+        inputTokens: 11502,
+        outputTokens: 50,
+        cacheReadTokens: 0,
+        cacheWriteTokens: 0,
+        costUsd: 0.026352,
+        costSource: 'reported',
+      },
+    });
+    expect(__opencodeTestUtils.extractOpenCodeExportRecovery(exportOutput, null).usage?.costUsd).toBe(0.026352);
+  });
+
+  test('extracts assistant usage from OpenCode export step-finish part fallback', () => {
+    const exportOutput = JSON.stringify({
+      messages: [{
+        info: { id: 'msg_new', role: 'assistant' },
+        parts: [
+          { type: 'text', text: 'Hello there' },
+          {
+            type: 'step-finish',
+            tokens: { input: 10, output: 2, cache: { read: 7, write: 3 } },
+            cost: 0.001,
+          },
+        ],
+      }],
+    });
+
+    expect(__opencodeTestUtils.extractOpenCodeExportRecovery(exportOutput, 'msg_new')).toEqual({
+      text: 'Hello there',
+      usage: {
+        inputTokens: 10,
+        outputTokens: 2,
+        cacheReadTokens: 7,
+        cacheWriteTokens: 3,
+        costUsd: 0.001,
+        costSource: 'reported',
+      },
+    });
   });
 
   test('collects final text from OpenCode JSON lines', () => {
