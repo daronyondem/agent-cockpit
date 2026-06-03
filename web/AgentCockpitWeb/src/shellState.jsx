@@ -158,6 +158,13 @@ export function opencodeProviderLabel(provider){
     .join(' ');
 }
 
+export function modelDisplayLabel(modelOrId){
+  const raw = typeof modelOrId === 'string'
+    ? modelOrId
+    : String((modelOrId && (modelOrId.label || modelOrId.id)) || '');
+  return raw.startsWith('openrouter/') ? raw.slice('openrouter/'.length) : raw;
+}
+
 export function assistantDisplayNameFor(backends, profiles, backend, cliProfileId, fallback = 'assistant'){
   if (!backend) return fallback;
   if (backend === 'opencode' && cliProfileId) {
@@ -191,7 +198,7 @@ export function AssistantAvatar({ backend, cliProfileId }){
     ? (profiles || []).find(p => p && p.id === cliProfileId)
     : null;
   const provider = profile ? String(profile.opencode && profile.opencode.provider || '').trim().toLowerCase() : '';
-  if (provider === 'deepseek' || provider === 'ollama' || provider === 'opencode') {
+  if (provider === 'deepseek' || provider === 'ollama' || provider === 'opencode' || provider === 'openrouter') {
     return <span className={`avatar avatar-provider-${provider}`}/>;
   }
   const icon = backendIconFor(backends, backend);

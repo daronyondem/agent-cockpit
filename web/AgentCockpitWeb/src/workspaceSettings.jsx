@@ -40,6 +40,13 @@ const ARCHIVE_MODE_LABELS = {
   file_snapshot: 'Full Backup with Workspace Folder',
 };
 
+function modelDisplayLabel(modelOrId){
+  const raw = typeof modelOrId === 'string'
+    ? modelOrId
+    : String((modelOrId && (modelOrId.label || modelOrId.id)) || '');
+  return raw.startsWith('openrouter/') ? raw.slice('openrouter/'.length) : raw;
+}
+
 function archiveModeLabel(mode){
   return ARCHIVE_MODE_LABELS[mode] || ARCHIVE_MODE_LABELS.history_only;
 }
@@ -2148,7 +2155,7 @@ function WorkspaceContextTab({
                     <label className="ws-wc-field">
                       <span>Model</span>
                       <select value={modelId} onChange={(e) => onModelChange(e.target.value)}>
-                        {models.map(m => <option key={m.id} value={m.id}>{m.label || m.id}</option>)}
+                        {models.map(m => <option key={m.id} value={m.id}>{modelDisplayLabel(m)}</option>)}
                       </select>
                     </label>
                   ) : null}

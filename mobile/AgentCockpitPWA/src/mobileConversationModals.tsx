@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import type { AgentCockpitAPI } from './api';
+import { modelDisplayLabel } from './appModel';
 import {
   ArchiveIcon,
   CheckIcon,
@@ -394,7 +395,7 @@ export function RunSettingsModal(props: {
         </div>
         <strong>Model</strong>
         <div className="choice-grid">
-          {(props.selectedBackendMetadata?.models || []).map((model) => <Choice key={model.id} label={model.label || model.id} selected={props.selectedModel === model.id} onClick={() => props.onModel(model.id)} />)}
+          {(props.selectedBackendMetadata?.models || []).map((model) => <Choice key={model.id} label={modelDisplayLabel(model)} selected={props.selectedModel === model.id} onClick={() => props.onModel(model.id)} />)}
         </div>
         {props.supportedEfforts.length ? (
           <>

@@ -5,7 +5,7 @@ import { Ico } from '../icons.jsx';
 import { StreamStore } from '../streamStore.js';
 import { useDialog } from '../dialog.jsx';
 import { useToasts } from '../toast.jsx';
-import { BackendInlineIcon, useBackendList, useCliProfileSettings, useConversationSelector, shallowEqual } from '../shellState.jsx';
+import { BackendInlineIcon, modelDisplayLabel, useBackendList, useCliProfileSettings, useConversationSelector, shallowEqual } from '../shellState.jsx';
 import { goalElapsedSeconds, goalStatusLabel, goalSupportsAction } from '../goalState.js';
 import { AttTray } from './attachments.jsx';
 import { QueueStack, SuspendedQueueBanner } from './queue.jsx';
@@ -653,9 +653,9 @@ function ComposerPicks({ convId, backends, cliProfiles, composerCliProfileId, co
       {backendModels.length > 0 ? (
         <PickChip
           label="Model"
-          value={model ? model.label : (composerModel || '—')}
+          value={model ? modelDisplayLabel(model) : (composerModel ? modelDisplayLabel(composerModel) : '—')}
           disabled={disabled}
-          options={backendModels.map(m => ({ value: m.id, label: m.label + costTierDot(m.costTier) }))}
+          options={backendModels.map(m => ({ value: m.id, label: modelDisplayLabel(m) + costTierDot(m.costTier) }))}
           currentValue={model ? model.id : ''}
           onChange={v => StreamStore.setComposerModel(convId, v)}
           title="Model"

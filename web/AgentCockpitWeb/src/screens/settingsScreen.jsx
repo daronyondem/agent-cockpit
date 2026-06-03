@@ -168,6 +168,12 @@ function modelsForBackend(backends, backendId){
   const b = (backends || []).find(b => b.id === backendId);
   return (b && Array.isArray(b.models)) ? b.models : [];
 }
+function modelDisplayLabel(modelOrId){
+  const raw = typeof modelOrId === 'string'
+    ? modelOrId
+    : String((modelOrId && (modelOrId.label || modelOrId.id)) || '');
+  return raw.startsWith('openrouter/') ? raw.slice('openrouter/'.length) : raw;
+}
 function defaultModelId(models){
   if (!models || !models.length) return undefined;
   const def = models.find(m => m.default);
@@ -548,7 +554,7 @@ function GeneralTab({ settings, backends, profileBackends, loadProfileBackend, o
       {models.length ? (
         <Field label="Default model">
           <select value={modelId} onChange={(e) => onModelChange(e.target.value)}>
-            {models.map(m => <option key={m.id} value={m.id}>{m.label || m.id}</option>)}
+            {models.map(m => <option key={m.id} value={m.id}>{modelDisplayLabel(m)}</option>)}
           </select>
         </Field>
       ) : null}
@@ -1075,7 +1081,7 @@ function CliProfilesTab({ settings, backends, profileBackends, loadProfileBacken
           const protocol = protocolLabel(profile);
           const opencodeProvider = (profile.opencode && profile.opencode.provider) || '';
           const opencodeProviderId = isOpenCode ? String(opencodeProvider).trim().toLowerCase() : '';
-          const providerIconClass = opencodeProviderId === 'deepseek' || opencodeProviderId === 'ollama' || opencodeProviderId === 'opencode'
+          const providerIconClass = opencodeProviderId === 'deepseek' || opencodeProviderId === 'ollama' || opencodeProviderId === 'opencode' || opencodeProviderId === 'openrouter'
             ? `cli-harness-icon cli-provider-icon cli-provider-${opencodeProviderId}`
             : null;
           const harnessIcon = providerIconClass ? null : backendIconFor(backends, backendIdForProfile(profile));
@@ -1427,7 +1433,7 @@ function SettingsMemoryTab({ settings, backends, profileBackends, loadProfileBac
       {models.length ? (
         <Field label="Memory model">
           <select value={modelId} onChange={(e) => onModelChange(e.target.value)}>
-            {models.map(m => <option key={m.id} value={m.id}>{m.label || m.id}</option>)}
+            {models.map(m => <option key={m.id} value={m.id}>{modelDisplayLabel(m)}</option>)}
           </select>
         </Field>
       ) : null}
@@ -1626,7 +1632,7 @@ function SettingsKbTab({ settings, backends, profileBackends, loadProfileBackend
           <select value={igModel} onChange={(e) => onIgModel(e.target.value)}>
             {igModelOptions.map(m => (
               <option key={m.id} value={m.id} disabled={igModelUnsupported && m.id === igModel}>
-                {m.label || m.id}{igModelUnsupported && m.id === igModel ? ' (no image input)' : ''}
+                {modelDisplayLabel(m)}{igModelUnsupported && m.id === igModel ? ' (no image input)' : ''}
               </option>
             ))}
           </select>
@@ -1657,7 +1663,7 @@ function SettingsKbTab({ settings, backends, profileBackends, loadProfileBackend
       {dgModels.length ? (
         <Field label="Digestion model">
           <select value={dgModel} onChange={(e) => onDgModel(e.target.value)}>
-            {dgModels.map(m => <option key={m.id} value={m.id}>{m.label || m.id}</option>)}
+            {dgModels.map(m => <option key={m.id} value={m.id}>{modelDisplayLabel(m)}</option>)}
           </select>
         </Field>
       ) : null}
@@ -1681,7 +1687,7 @@ function SettingsKbTab({ settings, backends, profileBackends, loadProfileBackend
       {drModels.length ? (
         <Field label="Dreaming model">
           <select value={drModel} onChange={(e) => onDrModel(e.target.value)}>
-            {drModels.map(m => <option key={m.id} value={m.id}>{m.label || m.id}</option>)}
+            {drModels.map(m => <option key={m.id} value={m.id}>{modelDisplayLabel(m)}</option>)}
           </select>
         </Field>
       ) : null}
@@ -1807,7 +1813,7 @@ function SettingsWorkspaceContextTab({ settings, backends, profileBackends, load
       {models.length ? (
         <Field label="Workspace Context model">
           <select value={modelId} onChange={(e) => onModelChange(e.target.value)}>
-            {models.map(m => <option key={m.id} value={m.id}>{m.label || m.id}</option>)}
+            {models.map(m => <option key={m.id} value={m.id}>{modelDisplayLabel(m)}</option>)}
           </select>
         </Field>
       ) : null}
