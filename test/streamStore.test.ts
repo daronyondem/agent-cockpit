@@ -620,6 +620,60 @@ test('reset() posts an explicit replacement profile when provided', async () => 
   });
 });
 
+test('ocrAttachment() posts the selected replacement profile and updates conversation runtime', async () => {
+  localStorage.clear();
+  const Store = (window as any).StreamStore;
+  const api = (global as any).AgentApi;
+  const recoveryMessage = {
+    id: 'sys-recovered',
+    role: 'system',
+    content: 'The saved CLI profile for this conversation was no longer available. Agent Cockpit recovered the conversation with the selected CLI profile and will continue from the saved discussion context.',
+    backend: 'claude-code',
+    timestamp: '2026-06-03T00:00:00.000Z',
+  };
+  api.conv = {
+    ocrAttachment: jest.fn().mockResolvedValue({ markdown: 'ocr markdown', recoveryMessage }),
+  };
+  localStorage.setItem('ac:v2:draft:c1', JSON.stringify({
+    text: '',
+    attachments: [{
+      name: 'screenshot.png',
+      path: '/tmp/artifacts/c1/screenshot.png',
+      kind: 'image',
+      size: 123,
+    }],
+  }));
+  api.fetch.mockResolvedValueOnce(makeResponse({
+    id: 'c1',
+    cliProfileId: 'server-configured-claude-code',
+    backend: 'claude-code',
+    messages: [{ id: 'm1', role: 'user', content: 'existing' }],
+    messageQueue: [],
+    sessionUsage: null,
+  }));
+  await Store.load('c1');
+  Store.setComposerCliProfile('c1', 'profile-claude-replacement', 'claude-code');
+  const attachmentId = Store.getState('c1').pendingAttachments[0].id;
+
+  const markdown = await Store.ocrAttachment('c1', attachmentId);
+
+  expect(markdown).toBe('ocr markdown');
+  expect(api.conv.ocrAttachment).toHaveBeenCalledWith(
+    'c1',
+    '/tmp/artifacts/c1/screenshot.png',
+    {
+      cliProfileId: 'profile-claude-replacement',
+      backend: 'claude-code',
+    },
+  );
+  expect(Store.getState('c1').conv).toMatchObject({
+    cliProfileId: 'profile-claude-replacement',
+    backend: 'claude-code',
+  });
+  expect(Store.getState('c1').messages).toEqual(expect.arrayContaining([recoveryMessage]));
+  expect(Store.getState('c1').conv.messages).toEqual(expect.arrayContaining([recoveryMessage]));
+});
+
 test('replay_start wipes placeholder contentBlocks so replayed frames rebuild cleanly', async () => {
   const ws = await openWs('c1');
   const Store = (window as any).StreamStore;

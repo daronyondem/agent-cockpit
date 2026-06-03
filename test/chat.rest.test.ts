@@ -9,7 +9,8 @@ import { createChatRouterEnv, destroyChatRouterEnv, CSRF_TOKEN, type ChatRouterE
 import { MockBackendAdapter } from './helpers/mockBackendAdapter';
 import { makeDngWithJpegPreview, makeJpeg } from './helpers/dngFixture';
 import { CONVERSATION_UPLOAD_LIMIT_BYTES } from '../src/routes/chat/uploadRoutes';
-import type { StreamEvent, ActiveStreamEntry, BackendMetadata, CodexThreadGoal, SendMessageOptions, SendMessageResult } from '../src/types';
+import { MISSING_CLI_PROFILE_RECOVERY_MESSAGE } from '../src/routes/chat/routeUtils';
+import type { StreamEvent, ActiveStreamEntry, BackendMetadata, CodexThreadGoal, SendMessageOptions, SendMessageResult, CliProfile } from '../src/types';
 
 let env: ChatRouterEnv;
 
@@ -1670,6 +1671,131 @@ describe('POST /conversations/:id/attachments/ocr', () => {
     expect(call.options?.attachments).toEqual([
       { path: imagePath, kind: 'image', name: 'screenshot.png' },
     ]);
+  });
+
+  test('repairs a missing stored profile to the requested composer profile before OCR', async () => {
+    const now = '2026-06-03T00:00:00.000Z';
+    const deletedProfile: CliProfile = {
+      id: 'profile-deleted-claude',
+      name: 'Deleted Claude',
+      harness: 'claude-code',
+      protocol: 'standard',
+      authMode: 'server-configured',
+      createdAt: now,
+      updatedAt: now,
+    };
+    const replacementProfile: CliProfile = {
+      id: 'profile-replacement-claude',
+      name: 'Replacement Claude',
+      harness: 'claude-code',
+      protocol: 'standard',
+      authMode: 'server-configured',
+      createdAt: now,
+      updatedAt: now,
+    };
+    const settings = await env.chatService.getSettings();
+    await env.chatService.saveSettings({
+      ...settings,
+      defaultCliProfileId: deletedProfile.id,
+      defaultBackend: 'claude-code',
+      cliProfiles: [deletedProfile, replacementProfile],
+    });
+    const conv = await env.chatService.createConversation(
+      'Migrated OCR',
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      deletedProfile.id,
+    );
+    await env.chatService.addMessage(conv.id, 'user', 'existing migrated context', 'claude-code');
+    const saved = await env.chatService.getSettings();
+    await env.chatService.saveSettings({
+      ...saved,
+      defaultCliProfileId: replacementProfile.id,
+      defaultBackend: 'claude-code',
+      cliProfiles: [replacementProfile],
+    });
+    const artifactDir = path.join(env.chatService.artifactsDir, conv.id);
+    fs.mkdirSync(artifactDir, { recursive: true });
+    const imagePath = path.join(artifactDir, 'screenshot.png');
+    fs.writeFileSync(imagePath, 'fakeimage');
+    env.mockBackend.setOneShotImpl(async () => 'ocr markdown');
+
+    const res = await env.request('POST', `/api/chat/conversations/${conv.id}/attachments/ocr`, {
+      path: imagePath,
+      cliProfileId: replacementProfile.id,
+      backend: 'claude-code',
+    });
+
+    expect(res.status).toBe(200);
+    expect(res.body.markdown).toBe('ocr markdown');
+    expect(res.body.recoveryMessage).toMatchObject({
+      role: 'system',
+      content: MISSING_CLI_PROFILE_RECOVERY_MESSAGE,
+      backend: 'claude-code',
+    });
+    const loaded = await env.chatService.getConversation(conv.id);
+    expect(loaded?.cliProfileId).toBe(replacementProfile.id);
+    expect(loaded?.backend).toBe('claude-code');
+    expect(loaded?.messages.some((message) => message.content === MISSING_CLI_PROFILE_RECOVERY_MESSAGE)).toBe(true);
+    const call = env.mockBackend._oneShotCalls[env.mockBackend._oneShotCalls.length - 1];
+    expect(call.options?.cliProfile?.id).toBe(replacementProfile.id);
+  });
+
+  test('does not switch a valid locked conversation profile during OCR', async () => {
+    const now = '2026-06-03T00:00:00.000Z';
+    const originalProfile: CliProfile = {
+      id: 'profile-original-claude',
+      name: 'Original Claude',
+      harness: 'claude-code',
+      protocol: 'standard',
+      authMode: 'server-configured',
+      createdAt: now,
+      updatedAt: now,
+    };
+    const otherProfile: CliProfile = {
+      id: 'profile-other-claude',
+      name: 'Other Claude',
+      harness: 'claude-code',
+      protocol: 'standard',
+      authMode: 'server-configured',
+      createdAt: now,
+      updatedAt: now,
+    };
+    const settings = await env.chatService.getSettings();
+    await env.chatService.saveSettings({
+      ...settings,
+      defaultCliProfileId: originalProfile.id,
+      defaultBackend: 'claude-code',
+      cliProfiles: [originalProfile, otherProfile],
+    });
+    const conv = await env.chatService.createConversation(
+      'Locked OCR',
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      originalProfile.id,
+    );
+    await env.chatService.addMessage(conv.id, 'user', 'existing context', 'claude-code');
+    const artifactDir = path.join(env.chatService.artifactsDir, conv.id);
+    fs.mkdirSync(artifactDir, { recursive: true });
+    const imagePath = path.join(artifactDir, 'screenshot.png');
+    fs.writeFileSync(imagePath, 'fakeimage');
+    env.mockBackend.setOneShotImpl(async () => 'should not be called');
+
+    const res = await env.request('POST', `/api/chat/conversations/${conv.id}/attachments/ocr`, {
+      path: imagePath,
+      cliProfileId: otherProfile.id,
+      backend: 'claude-code',
+    });
+
+    expect(res.status).toBe(409);
+    expect(res.body.error).toBe('Cannot switch CLI profile after the active session has messages');
+    expect(env.mockBackend._oneShotCalls).toHaveLength(0);
+    const loaded = await env.chatService.getConversation(conv.id);
+    expect(loaded?.cliProfileId).toBe(originalProfile.id);
   });
 
   test('rejects OCR when selected model image support cannot be verified', async () => {
