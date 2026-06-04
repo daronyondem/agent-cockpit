@@ -220,6 +220,11 @@ tool is unavailable.
   authoring contracts, proposals, scheduling, run folders/history, and outreach;
   harnesses own task intelligence in `routine.md`. Keep lifecycle states minimal
   (`proposed`, `enabled`, `disabled`) unless a later ADR changes the model.
+  Routines must be explicitly enabled per workspace before Agent Cockpit
+  installs the managed `AGENTS.md` instructions, exposes routine actions, or
+  runs scheduled routines; disabled routine reads remove stale managed
+  instructions blocks without creating routine scaffolding, and disabling
+  removes only the managed instructions block while preserving routine data.
 - Memory update notifications should open a focused preview of the exact updated
   memory files before the full Memory listing.
 - Memory consolidation should precede vector/embedding work where applicable.

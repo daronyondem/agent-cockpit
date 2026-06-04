@@ -31,7 +31,8 @@ describe('RoutinesService', () => {
       ...(await chatService.getSettings()),
       defaultBackend: 'claude-code',
     });
-    await chatService.createConversation('Routines workspace', workspacePath);
+    const conv = await chatService.createConversation('Routines workspace', workspacePath);
+    await chatService.setWorkspaceRoutinesEnabled(conv.workspaceId, true);
     notifier = new MockRoutineNotifier();
     service = new RoutinesService({ chatService, backendRegistry, notifier });
   });
@@ -58,6 +59,17 @@ describe('RoutinesService', () => {
     const agents = await fsp.readFile(path.join(workspacePath, 'AGENTS.md'), 'utf8');
     expect(agents).toContain('Agent Cockpit Routines');
     expect(agents).toContain(authoringPath);
+  });
+
+  test('does not create scaffolding or expose routines while disabled', async () => {
+    const hash = workspaceHash(workspacePath);
+    await chatService.setWorkspaceRoutinesEnabled(hash, false);
+
+    expect(await service.getSettingsResponse(hash)).toMatchObject({ enabled: false });
+    await expect(service.listRoutines(hash)).resolves.toEqual([]);
+    await expect(fsp.readFile(service.getAuthoringPath(hash), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
+    await expect(fsp.readFile(path.join(workspacePath, 'AGENTS.md'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
+    await expect(service.runRoutine(hash, 'missing', { source: 'manual' })).resolves.toBeNull();
   });
 
   test('validates routine proposal markers inside the workspace routines folder', async () => {

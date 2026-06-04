@@ -401,6 +401,12 @@ export interface WorkspaceIndex {
   /** Whether markdown-first Workspace Context is enabled for this workspace. */
   workspaceContextEnabled?: boolean;
   /**
+   * Whether Workspace Routines are enabled for this workspace. When
+   * false/undefined, opening the Routines tab must not create routine
+   * scaffolding, install AGENTS.md instructions, or run scheduled routines.
+   */
+  routinesEnabled?: boolean;
+  /**
    * Per-workspace Workspace Context overrides. When absent or
    * `processorMode:'global'`, global Settings.workspaceContext defaults apply.
    */

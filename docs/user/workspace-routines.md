@@ -12,6 +12,13 @@ workspace-specific maintenance workflow.
 
 ## Create A Routine
 
+Routines are enabled per workspace. Open Workspace Settings -> Routines and
+turn on **Workspace Routines** before asking a harness to create one. Enabling
+adds the managed workspace instructions that tell the harness where the routine
+authoring contract lives. Disabling removes that managed instructions block but
+keeps existing routine files, outputs, and persistent state so they come back if
+you re-enable the workspace.
+
 Create routines from any conversation in the workspace. Ask the harness to
 create or update an Agent Cockpit routine, for example:
 
@@ -20,10 +27,10 @@ Create this as an Agent Cockpit routine that runs every morning and notifies me
 if there is a change.
 ```
 
-Agent Cockpit installs a managed `AGENTS.md` pointer for the workspace that
-tells the harness where the routine authoring contract lives. The harness reads
-that contract, writes a `manifest.json` plus `routine.md` under Agent Cockpit's
-workspace data directory, and returns a proposal marker in its final message.
+The managed `AGENTS.md` pointer tells the harness where the routine authoring
+contract lives. The harness reads that contract, writes a `manifest.json` plus
+`routine.md` under Agent Cockpit's workspace data directory, and returns a
+proposal marker in its final message.
 
 The chat message shows a routine proposal card:
 
@@ -35,8 +42,10 @@ routines can still be reviewed or deleted later from Workspace Settings.
 
 ## Manage Routines
 
-Open Workspace Settings -> Routines to see the workspace's routine list. The
-routine detail view lets you edit:
+Open Workspace Settings -> Routines to see the workspace-level enable toggle
+and the workspace's routine list. When the workspace toggle is off, routine
+management controls are hidden and scheduled runs do not start. When it is on,
+the routine detail view lets you edit:
 
 - title and description;
 - trigger type, schedule interval, weekdays, time window, and timezone;

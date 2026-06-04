@@ -231,6 +231,61 @@ describe('getWorkspaceContextEnabled / setWorkspaceContextEnabled', () => {
   });
 });
 
+// ── Workspace Routines ──────────────────────────────────────────────────────
+
+describe('getWorkspaceRoutinesEnabled / setWorkspaceRoutinesEnabled', () => {
+  test('defaults to false and persists after set', async () => {
+    await service.createConversation('Routines Toggle', '/tmp/routines-toggle');
+    const hash = workspaceHash('/tmp/routines-toggle');
+
+    expect(await service.getWorkspaceRoutinesEnabled(hash)).toBe(false);
+
+    const result = await service.setWorkspaceRoutinesEnabled(hash, true);
+    expect(result).toBe(true);
+    expect(await service.getWorkspaceRoutinesEnabled(hash)).toBe(true);
+  });
+
+  test('setWorkspaceRoutinesEnabled returns null for unknown workspace', async () => {
+    expect(await service.setWorkspaceRoutinesEnabled('nopehash', true)).toBeNull();
+  });
+
+  test('enable/disable is independent of memory, kb, and Workspace Context', async () => {
+    await service.createConversation('Routines Split', '/tmp/routines-split');
+    const hash = workspaceHash('/tmp/routines-split');
+    await service.setWorkspaceMemoryEnabled(hash, true);
+    await service.setWorkspaceKbEnabled(hash, true);
+    await service.setWorkspaceContextEnabled(hash, true);
+    await service.setWorkspaceRoutinesEnabled(hash, false);
+
+    expect(await service.getWorkspaceMemoryEnabled(hash)).toBe(true);
+    expect(await service.getWorkspaceKbEnabled(hash)).toBe(true);
+    expect(await service.getWorkspaceContextEnabled(hash)).toBe(true);
+    expect(await service.getWorkspaceRoutinesEnabled(hash)).toBe(false);
+
+    await service.setWorkspaceRoutinesEnabled(hash, true);
+    await service.setWorkspaceMemoryEnabled(hash, false);
+    await service.setWorkspaceKbEnabled(hash, false);
+    await service.setWorkspaceContextEnabled(hash, false);
+
+    expect(await service.getWorkspaceMemoryEnabled(hash)).toBe(false);
+    expect(await service.getWorkspaceKbEnabled(hash)).toBe(false);
+    expect(await service.getWorkspaceContextEnabled(hash)).toBe(false);
+    expect(await service.getWorkspaceRoutinesEnabled(hash)).toBe(true);
+  });
+
+  test('lists only Routines enabled workspaces', async () => {
+    const enabledConv = await service.createConversation('Routines Enabled', '/tmp/routines-enabled');
+    await service.createConversation('Routines Disabled', '/tmp/routines-disabled');
+    const enabledHash = workspaceHash('/tmp/routines-enabled');
+    const disabledHash = workspaceHash('/tmp/routines-disabled');
+
+    await service.setWorkspaceRoutinesEnabled(enabledHash, true);
+
+    expect(await service.listRoutinesEnabledWorkspaceHashes()).toEqual([enabledConv.workspaceId]);
+    expect(await service.getWorkspaceRoutinesEnabled(disabledHash)).toBe(false);
+  });
+});
+
 describe('getWorkspaceContextSettings / setWorkspaceContextSettings', () => {
   test('returns global-mode defaults for a workspace with no override', async () => {
     await service.createConversation('Workspace Context Defaults', '/tmp/workspace-context-defaults');

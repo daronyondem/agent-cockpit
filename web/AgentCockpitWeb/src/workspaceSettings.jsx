@@ -449,6 +449,7 @@ export function WorkspaceSettingsPage({ hash, label, initialTab, initialWorkspac
   const [workspaceContextFileLoading, setWorkspaceContextFileLoading] = React.useState(false);
   const [workspaceContextScanBusy, setWorkspaceContextScanBusy] = React.useState(false);
   const [workspaceContextStopBusy, setWorkspaceContextStopBusy] = React.useState(false);
+  const [routinesEnabled, setRoutinesEnabled] = React.useState(false);
   const [routinesData, setRoutinesData] = React.useState({ routines: [] });
   const [routineSelectedId, setRoutineSelectedId] = React.useState(null);
   const [routineDetail, setRoutineDetail] = React.useState(null);
@@ -504,6 +505,7 @@ export function WorkspaceSettingsPage({ hash, label, initialTab, initialWorkspac
   function applyRoutinesResponse(res){
     const next = res || {};
     const routines = Array.isArray(next.routines) ? next.routines : [];
+    setRoutinesEnabled(!!next.enabled);
     setRoutinesData({ routines });
     if (!routines.some(routineItemIsRunning)) setRoutineRunBusy(false);
     applyRoutineSettingsResponse(next.settings || null);
@@ -562,7 +564,7 @@ export function WorkspaceSettingsPage({ hash, label, initialTab, initialWorkspac
       AgentApi.workspace.getMemory(hash).catch(() => ({})),
       AgentApi.workspace.getKb(hash).catch(() => ({})),
       AgentApi.workspace.getWorkspaceContextSettings(hash).catch(() => ({})),
-      AgentApi.workspace.getRoutines(hash).catch(() => ({ routines: [] })),
+      AgentApi.workspace.getRoutines(hash).catch(() => ({ enabled: false, routines: [] })),
       AgentApi.workspace.getWorktreeIsolation(hash).catch((err) => ({ available: false, enabled: false, blockers: [{ code: 'load_failed', message: err.message || String(err) }] })),
       AgentApi.settings.get().catch(() => ({})),
       AgentApi.settings.backends().catch(() => ({ backends: [] })),
@@ -580,9 +582,9 @@ export function WorkspaceSettingsPage({ hash, label, initialTab, initialWorkspac
       applyWorkspaceContextResponse(workspaceContextRes);
       applyRoutinesResponse(routinesRes);
       const routines = Array.isArray(routinesRes && routinesRes.routines) ? routinesRes.routines : [];
-      const targetRoutine = (initialRoutineId && routines.find(item => item && item.manifest && item.manifest.id === initialRoutineId))
-        || routines[0]
-        || null;
+      const targetRoutine = routinesRes && routinesRes.enabled
+        ? ((initialRoutineId && routines.find(item => item && item.manifest && item.manifest.id === initialRoutineId)) || routines[0] || null)
+        : null;
       if (targetRoutine && targetRoutine.manifest && targetRoutine.manifest.id) {
         selectRoutine(targetRoutine.manifest.id).catch(() => {});
       } else {
@@ -673,7 +675,7 @@ export function WorkspaceSettingsPage({ hash, label, initialTab, initialWorkspac
   }, [hash, tab, workspaceContextRunPollKey, workspaceContextScanBusy, workspaceContextStopBusy]);
 
   React.useEffect(() => {
-    if (!hash || tab !== 'routines') return undefined;
+    if (!hash || tab !== 'routines' || !routinesEnabled) return undefined;
     const running = (Array.isArray(routinesData.routines) ? routinesData.routines : []).some(routineItemIsRunning);
     if (!running && !routineRunBusy) return undefined;
     let cancelled = false;
@@ -698,10 +700,10 @@ export function WorkspaceSettingsPage({ hash, label, initialTab, initialWorkspac
       cancelled = true;
       clearInterval(timer);
     };
-  }, [hash, tab, routineRunPollKey, routineRunBusy, routineSelectedId, routineDirty]);
+  }, [hash, tab, routinesEnabled, routineRunPollKey, routineRunBusy, routineSelectedId, routineDirty]);
 
   React.useEffect(() => {
-    if (!hash || tab !== 'routines' || !routineTelegramConnect || routineTelegramConnect.status !== 'pending') return undefined;
+    if (!hash || tab !== 'routines' || !routinesEnabled || !routineTelegramConnect || routineTelegramConnect.status !== 'pending') return undefined;
     let cancelled = false;
     let inflight = false;
     const poll = () => {
@@ -725,7 +727,7 @@ export function WorkspaceSettingsPage({ hash, label, initialTab, initialWorkspac
       cancelled = true;
       clearInterval(timer);
     };
-  }, [hash, tab, routineTelegramConnect && routineTelegramConnect.status, routineTelegramConnect && routineTelegramConnect.code]);
+  }, [hash, tab, routinesEnabled, routineTelegramConnect && routineTelegramConnect.status, routineTelegramConnect && routineTelegramConnect.code]);
 
   const loadProfileBackend = React.useCallback((profileId) => {
     if (!profileId || profileBackends[profileId]) return;
@@ -909,6 +911,47 @@ export function WorkspaceSettingsPage({ hash, label, initialTab, initialWorkspac
     } catch (err) {
       setWorkspaceContextEnabled(prev);
       dialog.alert({ variant: 'error', title: 'Failed to update Workspace Context setting', body: err.message || String(err) });
+    }
+  }
+
+  async function toggleRoutines(enabled){
+    const prev = routinesEnabled;
+    const prevSelectedId = routineSelectedId;
+    const prevDetail = routineDetail;
+    const prevDraft = routineDraft;
+    const prevDirty = routineDirty;
+    const prevRunBusy = routineRunBusy;
+    const prevTelegramConnect = routineTelegramConnect;
+    setRoutinesEnabled(enabled);
+    if (!enabled) {
+      setRoutineSelectedId(null);
+      setRoutineDetail(null);
+      setRoutineDraft(null);
+      setRoutineDirty(false);
+      setRoutineRunBusy(false);
+      setRoutineTelegramConnect(null);
+    }
+    setRoutineBusy(true);
+    try {
+      const res = await AgentApi.workspace.setRoutinesEnabled(hash, enabled);
+      applyRoutinesResponse(res);
+      if (enabled) {
+        const routines = Array.isArray(res && res.routines) ? res.routines : [];
+        const targetId = routines[0] && routines[0].manifest && routines[0].manifest.id;
+        if (targetId) await selectRoutine(targetId);
+      }
+      toast.success(enabled ? 'Workspace Routines enabled' : 'Workspace Routines disabled');
+    } catch (err) {
+      setRoutinesEnabled(prev);
+      setRoutineSelectedId(prevSelectedId);
+      setRoutineDetail(prevDetail);
+      setRoutineDraft(prevDraft);
+      setRoutineDirty(prevDirty);
+      setRoutineRunBusy(prevRunBusy);
+      setRoutineTelegramConnect(prevTelegramConnect);
+      await dialog.alert({ variant: 'error', title: 'Failed to update Routines setting', body: err.message || String(err) });
+    } finally {
+      setRoutineBusy(false);
     }
   }
 
@@ -1521,6 +1564,7 @@ export function WorkspaceSettingsPage({ hash, label, initialTab, initialWorkspac
         ) : tab === 'routines' ? (
           <RoutinesTab
             hash={hash}
+            enabled={routinesEnabled}
             data={routinesData}
             selectedId={routineSelectedId}
             detail={routineDetail}
@@ -1549,6 +1593,7 @@ export function WorkspaceSettingsPage({ hash, label, initialTab, initialWorkspac
             onPollTelegramConnect={pollRoutineTelegramConnect}
             onCancelTelegramConnect={() => setRoutineTelegramConnect(null)}
             onOpenOutputFolder={openRoutineOutputFolder}
+            onToggleEnabled={toggleRoutines}
             onOpenSettings={onOpenSettings}
           />
         ) : tab === 'worktrees' ? (
@@ -1609,6 +1654,7 @@ function ArchiveTab({ status, form, estimate, busy, onPatch, onEstimate, onArchi
           <ArchiveMetric label="Memory" value={status && status.memoryEnabled ? 'On' : 'Off'}/>
           <ArchiveMetric label="KB" value={status && status.kbEnabled ? 'On' : 'Off'}/>
           <ArchiveMetric label="Context" value={status && status.workspaceContextEnabled ? 'On' : 'Off'}/>
+          <ArchiveMetric label="Routines" value={status && status.routinesEnabled ? 'On' : 'Off'}/>
         </div>
         {archived ? (
           <div className="archived-workspace-snapshot">
@@ -2187,6 +2233,7 @@ function KbTab({ enabled, onToggle }){
 
 function RoutinesTab({
   data,
+  enabled,
   selectedId,
   detail,
   draft,
@@ -2214,6 +2261,7 @@ function RoutinesTab({
   onPollTelegramConnect,
   onCancelTelegramConnect,
   onOpenOutputFolder,
+  onToggleEnabled,
   onOpenSettings,
 }){
   const routines = Array.isArray(data && data.routines) ? data.routines : [];
@@ -2239,10 +2287,45 @@ function RoutinesTab({
       ? 'Chat ID configured'
       : 'Add this workspace destination';
 
+  if (!enabled) {
+    return (
+      <div className="settings-form settings-form-wide ws-form ws-form-routines">
+        <p className="ws-desc u-dim">
+          Workspace Routines run markdown workflows manually or on a schedule
+          through a selected CLI profile. Enabling adds the workspace authoring
+          instructions that let conversations create and edit routine proposals.
+        </p>
+        <label className="toggle ws-toggle">
+          <input
+            type="checkbox"
+            checked={false}
+            disabled={busy}
+            onChange={(e) => onToggleEnabled(e.target.checked)}
+          />
+          <span className="tgl"/>
+          <span>Enable Workspace Routines for this workspace</span>
+        </label>
+        <p className="ws-empty u-dim">Workspace Routines are disabled. Existing routine files, outputs, and persistent state are kept.</p>
+      </div>
+    );
+  }
+
   return (
     <div className="settings-form settings-form-wide ws-form ws-form-workspace-context ws-form-routines">
       <div className="ws-wc-layout">
         <nav className="ws-wc-rail ws-routine-rail" aria-label="Workspace routines">
+          <div className="ws-routine-feature-toggle">
+            <label className="toggle ws-toggle">
+              <input
+                type="checkbox"
+                checked={true}
+                disabled={busy}
+                onChange={(e) => onToggleEnabled(e.target.checked)}
+              />
+              <span className="tgl"/>
+              <span>Workspace Routines</span>
+            </label>
+          </div>
           <div className="ws-routine-rail-head">
             <div>
               <div className="ws-wc-section-title">Routines</div>

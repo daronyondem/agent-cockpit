@@ -57,7 +57,7 @@ describe('WorkspaceFeatureSettingsStore', () => {
     });
   });
 
-  test('persists KB and Workspace Context workspace flags through the shared index boundary', async () => {
+  test('persists KB, Workspace Context, and Routines workspace flags through the shared index boundary', async () => {
     const dir = await fsp.mkdtemp(path.join(os.tmpdir(), 'ac-feature-settings-'));
     const indexes = new Map<string, WorkspaceIndex>([['hash-a', makeIndex()]]);
     const settings: Settings = {
@@ -79,6 +79,7 @@ describe('WorkspaceFeatureSettingsStore', () => {
     expect(await store.setKbEnabled('hash-a', true)).toBe(true);
     expect(await store.setKbAutoDigest('hash-a', true)).toBe(true);
     expect(await store.setWorkspaceContextEnabled('hash-a', true)).toBe(true);
+    expect(await store.setRoutinesEnabled('hash-a', true)).toBe(true);
     expect(await store.setWorkspaceContextSettings('hash-a', { scanIntervalMinutes: 12, maintenanceIntervalHours: 36 })).toEqual({
       processorMode: 'global',
       scanIntervalMinutes: 12,
@@ -88,7 +89,9 @@ describe('WorkspaceFeatureSettingsStore', () => {
     expect(await store.getKbEnabled('hash-a')).toBe(true);
     expect(await store.getKbAutoDigest('hash-a')).toBe(true);
     expect(await store.getWorkspaceContextEnabled('hash-a')).toBe(true);
+    expect(await store.getRoutinesEnabled('hash-a')).toBe(true);
     expect(await store.listKbEnabledWorkspaceHashes()).toEqual(['hash-a']);
     expect(await store.listWorkspaceContextEnabledWorkspaceHashes()).toEqual(['hash-a']);
+    expect(await store.listRoutinesEnabledWorkspaceHashes()).toEqual(['hash-a']);
   });
 });

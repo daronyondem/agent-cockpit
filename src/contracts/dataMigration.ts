@@ -27,6 +27,7 @@ export interface DataExportWorkspaceRecord {
     } | null;
   };
   workspaceContext: { present: boolean; enabled?: boolean | null };
+  routines: { present: boolean; enabled?: boolean | null };
 }
 
 export interface DataExportManifest {

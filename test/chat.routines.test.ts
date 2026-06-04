@@ -20,19 +20,49 @@ describe('Routine routes', () => {
     await destroyChatRouterEnv(env);
   });
 
-  test('initializes authoring files and validates routine proposals', async () => {
+  test('enables authoring files and validates routine proposals', async () => {
+    const agentsPath = path.join(workspacePath, 'AGENTS.md');
+    await fsp.writeFile(
+      agentsPath,
+      [
+        '# Project Agents',
+        '',
+        'Keep this line.',
+        '',
+        '<!-- AGENT_COCKPIT_ROUTINES_START -->',
+        '## Agent Cockpit Routines',
+        'Stale managed block.',
+        '<!-- AGENT_COCKPIT_ROUTINES_END -->',
+        '',
+      ].join('\n'),
+      'utf8',
+    );
+
     const listed = await env.request('GET', `/api/chat/workspaces/${hash}/routines`);
     expect(listed.status).toBe(200);
     expect(listed.headers['cache-control']).toBe('no-store');
+    expect(listed.body.enabled).toBe(false);
     expect(listed.body.routines).toEqual([]);
     expect(listed.body.settings.authoringPath).toContain('ROUTINE_AUTHORING.md');
+    await expect(fsp.readFile(listed.body.settings.authoringPath, 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
+    const passivelyCleanedAgents = await fsp.readFile(agentsPath, 'utf8');
+    expect(passivelyCleanedAgents).toContain('Keep this line.');
+    expect(passivelyCleanedAgents).not.toContain('AGENT_COCKPIT_ROUTINES_START');
+    expect(passivelyCleanedAgents).not.toContain('Agent Cockpit Routines');
+    expect(passivelyCleanedAgents).not.toContain('AGENT_COCKPIT_ROUTINES_END');
 
-    const authoring = await fsp.readFile(listed.body.settings.authoringPath, 'utf8');
+    const enabled = await enableRoutines(env, hash);
+    expect(enabled.body.enabled).toBe(true);
+    expect(enabled.body.settings.enabled).toBe(true);
+    const authoring = await fsp.readFile(enabled.body.settings.authoringPath, 'utf8');
     expect(authoring).toContain('Agent Cockpit Routine Authoring');
-    const agents = await fsp.readFile(path.join(workspacePath, 'AGENTS.md'), 'utf8');
+    const agents = await fsp.readFile(agentsPath, 'utf8');
+    expect(agents).toContain('Keep this line.');
+    expect(agents).toContain('AGENT_COCKPIT_ROUTINES_START');
     expect(agents).toContain('Agent Cockpit Routines');
+    expect(agents).toContain('AGENT_COCKPIT_ROUTINES_END');
 
-    const manifestPath = await writeRoutine(listed.body.settings.routinesDir, {
+    const manifestPath = await writeRoutine(enabled.body.settings.routinesDir, {
       id: 'proposal-test',
       title: 'Proposal Test',
       state: 'proposed',
@@ -43,6 +73,27 @@ describe('Routine routes', () => {
     expect(validated.status).toBe(200);
     expect(validated.body.proposals).toHaveLength(1);
     expect(validated.body.proposals[0].routineId).toBe('proposal-test');
+
+    const disabled = await env.request('PUT', `/api/chat/workspaces/${hash}/routines/enabled`, { enabled: false });
+    expect(disabled.status).toBe(200);
+    expect(disabled.body.enabled).toBe(false);
+    const disabledAgents = await fsp.readFile(agentsPath, 'utf8');
+    expect(disabledAgents).toContain('Keep this line.');
+    expect(disabledAgents).not.toContain('AGENT_COCKPIT_ROUTINES_START');
+    expect(disabledAgents).not.toContain('Agent Cockpit Routines');
+    expect(disabledAgents).not.toContain('AGENT_COCKPIT_ROUTINES_END');
+    const disabledValidation = await env.request('POST', `/api/chat/workspaces/${hash}/routines/proposals/validate`, {
+      marker: manifestPath,
+    });
+    expect(disabledValidation.status).toBe(403);
+
+    const reenabled = await enableRoutines(env, hash);
+    const reenabledAgents = await fsp.readFile(agentsPath, 'utf8');
+    expect(reenabledAgents).toContain('Keep this line.');
+    expect(reenabledAgents).toContain('AGENT_COCKPIT_ROUTINES_START');
+    expect(reenabledAgents).toContain('Agent Cockpit Routines');
+    expect(reenabledAgents).toContain('AGENT_COCKPIT_ROUTINES_END');
+    expect(reenabled.body.routines.map((item: { manifest: { id: string } }) => item.manifest.id)).toEqual(['proposal-test']);
   });
 
   test('installs, edits, starts, and deletes routines through routes', async () => {
@@ -50,7 +101,7 @@ describe('Routine routes', () => {
       await new Promise((resolve) => setTimeout(resolve, 100));
       return 'Routine route run completed.';
     });
-    const listed = await env.request('GET', `/api/chat/workspaces/${hash}/routines`);
+    const listed = await enableRoutines(env, hash);
     const manifestPath = await writeRoutine(listed.body.settings.routinesDir, {
       id: 'route-routine',
       title: 'Route Routine',
@@ -167,6 +218,7 @@ describe('Routine routes', () => {
   });
 
   test('pairs a Telegram destination through route polling', async () => {
+    await enableRoutines(env, hash);
     await env.chatService.saveSettings({
       ...(await env.chatService.getSettings()),
       integrations: { telegram: { botToken: 'route-token' } },
@@ -217,6 +269,12 @@ describe('Routine routes', () => {
     }
   });
 });
+
+async function enableRoutines(env: ChatRouterEnv, hash: string) {
+  const enabled = await env.request('PUT', `/api/chat/workspaces/${hash}/routines/enabled`, { enabled: true });
+  expect(enabled.status).toBe(200);
+  return enabled;
+}
 
 async function writeRoutine(
   routinesDir: string,

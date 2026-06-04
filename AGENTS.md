@@ -76,7 +76,7 @@ Follow ADR-0051 for shared contracts, logging, and ownership boundaries.
 - Data migration treats `AGENT_COCKPIT_DATA_DIR` as the package unit. Export/import changes must preserve the full-bundle contract, destructive replace-after-backup semantics, exact `REPLACE` confirmation, manifest checksum verification, runtime-file exclusions, and post-import checks for workspace paths, Memory, KB SQLite/PGLite, Ollama embeddings, CLI auth, Pandoc, and LibreOffice.
 - For usage-pricing work, keep provider-specific rules in focused calculators under `src/services/usagePricing/`. Do not collapse Codex/OpenAI service tiers, Claude token/cache pricing, Kiro credits, or future CLI pricing into one generic formula when provider behavior differs.
 - For Workspace Context work, keep `src/services/workspaceContext/service.ts` as the coordinator. Keep markdown storage, instruction management, source planning, processor prompting, run state, and scheduling inside focused modules under `src/services/workspaceContext/` as the feature grows; do not reintroduce graph, candidate-review, MCP subsystems, or the old Memory Review scheduler/UI workflow unless a new ADR supersedes the markdown-first design. Workspace Context maintenance is the automatic path that consumes accepted active Memory inbox entries and deletes them after folding them into context markdown.
-- For Workspace Routines work, keep Agent Cockpit as the infrastructure layer under `src/services/routines/`: authoring contracts, proposal validation, scheduling, run folders/history, and outreach. Keep task-specific intelligence in routine markdown executed by the selected harness, and keep shared route/client validators in `src/contracts/routines.ts`.
+- For Workspace Routines work, keep Agent Cockpit as the infrastructure layer under `src/services/routines/`: authoring contracts, proposal validation, scheduling, run folders/history, and outreach. Keep task-specific intelligence in routine markdown executed by the selected harness, and keep shared route/client validators in `src/contracts/routines.ts`. Routines are opt-in per workspace through `WorkspaceIndex.routinesEnabled`; disabled workspaces must not install managed `AGENTS.md` instructions, create routine scaffolding from passive reads, or run scheduled routines.
 - Put shared request/response shapes and runtime validators in `src/contracts/` whenever routes, clients, tests, or specs need the same boundary. Contract files imported by web or mobile must stay browser-safe and must not import server-only modules.
 - Keep browser-visible stream frames in `src/contracts/streamFrames.ts`. Backend adapters may use broader server-only `StreamEvent` shapes, but web/mobile clients should consume only the browser-safe frame union. Desktop stream-frame state changes belong in the pure reducer under `web/AgentCockpitWeb/src/stream/`; keep `streamStore.js` as the socket/API/timer effect adapter.
 - Web and mobile clients should import shared types only from browser-safe contracts. Do not reach into backend services, route modules, filesystem helpers, or server-only types from frontend code.
@@ -197,14 +197,3 @@ When in doubt, lean toward writing one - but keep the bar honest. Over-writing p
   excuse to change the recorded decision text.
 - Do **not** edit `docs/adr/README.md`. CI regenerates it from frontmatter on every PR touching `docs/adr/**`.
 - The lint job (`npm run adr:lint`) validates frontmatter, filename, status/superseded-by rules, required sections, and that every path in `affects:` exists. Run it before pushing if you want fast feedback.
-
-<!-- AGENT_COCKPIT_ROUTINES_START -->
-## Agent Cockpit Routines
-
-This workspace can define Agent Cockpit Routines: workspace-owned markdown workflows that Agent Cockpit can run manually or on a schedule through the selected CLI harness.
-Routine authoring contract: `/Users/daronyondem/github/agent-cockpit/data/chat/workspaces/b1bbf2b785731c0e/routines/ROUTINE_AUTHORING.md`
-Routine index: `/Users/daronyondem/github/agent-cockpit/data/chat/workspaces/b1bbf2b785731c0e/routines/index.json`
-Routine items folder: `/Users/daronyondem/github/agent-cockpit/data/chat/workspaces/b1bbf2b785731c0e/routines/items`
-
-When the user explicitly asks to create or edit an Agent Cockpit routine, read the authoring contract first, then create or update the routine files in the routines folder. Do not enable, disable, schedule, or delete routines yourself.
-<!-- AGENT_COCKPIT_ROUTINES_END -->
