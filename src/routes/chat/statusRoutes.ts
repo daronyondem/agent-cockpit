@@ -18,6 +18,7 @@ import { validateSettingsRequest, type VersionResponse } from '../../contracts/c
 import { validateUsagePricingOverridesRequest } from '../../contracts/usagePricing';
 import { isContractValidationError } from '../../contracts/validation';
 import { cliHarnessForBackend } from '../../services/cliProfiles';
+import { mergeSettingsSecretsForSave, redactSettingsSecrets } from '../../services/settingsService';
 
 export interface ChatStatusRoutesOptions {
   chatService: ChatService;
@@ -279,7 +280,7 @@ export function createChatStatusRouter(opts: ChatStatusRoutesOptions): express.R
 
   router.get('/settings', async (_req: Request, res: Response) => {
     try {
-      res.json(await chatService.getSettings());
+      res.json(redactSettingsSecrets(await chatService.getSettings()));
     } catch (err: unknown) {
       sendError(res, 500, err);
     }
@@ -287,11 +288,14 @@ export function createChatStatusRouter(opts: ChatStatusRoutesOptions): express.R
 
   router.put('/settings', csrfGuard, async (req: Request, res: Response) => {
     try {
-      const settings = await chatService.saveSettings(validateSettingsRequest(req.body));
-      res.json(settings);
+      const current = await chatService.getSettings();
+      const settings = await chatService.saveSettings(mergeSettingsSecretsForSave(
+        validateSettingsRequest(req.body),
+        current,
+      ));
+      res.json(redactSettingsSecrets(settings));
     } catch (err: unknown) {
-      const message = (err as Error).message || '';
-      sendError(res, message === 'settings must be an object' ? 400 : 500, err);
+      sendError(res, isContractValidationError(err) ? 400 : 500, err);
     }
   });
 

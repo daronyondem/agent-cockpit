@@ -725,6 +725,24 @@ export interface Settings {
    * use these defaults or provide a workspace-level override.
    */
   workspaceContext?: WorkspaceContextGlobalSettings;
+  /**
+   * Globally-configured external integrations. Routine/workspace settings
+   * choose destinations, while shared credentials live here.
+   */
+  integrations?: {
+    telegram?: {
+      /** Secret bot token. Persisted server-side and redacted from browser responses. */
+      botToken?: string;
+      /** Browser response hint derived from the persisted token. */
+      configured?: boolean;
+      /** Client-only save flag used to clear the persisted token. */
+      clearBotToken?: boolean;
+      botUsername?: string;
+      botId?: string;
+      botFirstName?: string;
+      updatedAt?: string;
+    };
+  };
 }
 
 export type MemoryProcessorStatus =

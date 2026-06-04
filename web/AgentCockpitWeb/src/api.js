@@ -32,6 +32,30 @@
     return qs ? `${base}?${qs}` : base;
   }
 
+  function explorerScopeParams(scope){
+    if (!scope) return {};
+    if (scope.type === 'routine-output') {
+      return {
+        scope: 'routine-output',
+        routineId: scope.routineId || '',
+        runId: scope.runId || '',
+      };
+    }
+    if (scope.type === 'routine-outputs') {
+      return {
+        scope: 'routine-outputs',
+        routineId: scope.routineId || '',
+      };
+    }
+    if (scope.type === 'routine-state') {
+      return {
+        scope: 'routine-state',
+        routineId: scope.routineId || '',
+      };
+    }
+    return {};
+  }
+
   function chatQueryPath(path, params){
     const qs = params ? new URLSearchParams(
       Object.entries(params).filter(([, v]) => v != null && v !== '')
@@ -491,12 +515,12 @@
   }
 
   const ExplorerApi = {
-    tree: (hash, relPath) => explorerFetch(hash, 'tree', { path: relPath || '' })
+    tree: (hash, relPath, scope) => explorerFetch(hash, 'tree', { path: relPath || '', ...explorerScopeParams(scope) })
       .then(r => r.json()),
-    preview: (hash, relPath) => explorerFetch(hash, 'preview', { path: relPath, mode: 'view' })
+    preview: (hash, relPath, scope) => explorerFetch(hash, 'preview', { path: relPath, mode: 'view', ...explorerScopeParams(scope) })
       .then(r => r.json()),
-    rawUrl: (hash, relPath) => explorerUrl(hash, 'preview', { path: relPath, mode: 'raw' }),
-    downloadUrl: (hash, relPath) => explorerUrl(hash, 'preview', { path: relPath, mode: 'download' }),
+    rawUrl: (hash, relPath, scope) => explorerUrl(hash, 'preview', { path: relPath, mode: 'raw', ...explorerScopeParams(scope) }),
+    downloadUrl: (hash, relPath, scope) => explorerUrl(hash, 'preview', { path: relPath, mode: 'download', ...explorerScopeParams(scope) }),
     mkdir: (hash, parent, name) => explorerFetch(hash, 'mkdir', null, {
       method: 'POST', body: { parent: parent || '', name },
     }).then(r => r.json()),
@@ -891,6 +915,50 @@
     deleteWorkspaceContextAsset: (hash, relPath) => chatFetch(
       'workspaces/' + encodeURIComponent(hash) + '/workspace-context/assets/' + encodeURIComponent(relPath || ''),
       { method: 'DELETE' },
+    ).then(r => r.json()),
+    getRoutines: (hash) => chatFetch(
+      'workspaces/' + encodeURIComponent(hash) + '/routines',
+      { cache: 'no-store' },
+    ).then(r => r.json()),
+    getRoutine: (hash, routineId) => chatFetch(
+      'workspaces/' + encodeURIComponent(hash) + '/routines/' + encodeURIComponent(routineId || ''),
+      { cache: 'no-store' },
+    ).then(r => r.json()),
+    installRoutine: (hash, routineId, state) => chatFetch(
+      'workspaces/' + encodeURIComponent(hash) + '/routines/' + encodeURIComponent(routineId || '') + '/install',
+      { method: 'POST', body: { state: state === 'enabled' ? 'enabled' : 'disabled' } },
+    ).then(r => r.json()),
+    updateRoutine: (hash, routineId, patch) => chatFetch(
+      'workspaces/' + encodeURIComponent(hash) + '/routines/' + encodeURIComponent(routineId || ''),
+      { method: 'PUT', body: patch || {} },
+    ).then(r => r.json()),
+    runRoutine: (hash, routineId) => chatFetch(
+      'workspaces/' + encodeURIComponent(hash) + '/routines/' + encodeURIComponent(routineId || '') + '/run',
+      { method: 'POST', body: {} },
+    ).then(r => r.json()),
+    deleteRoutine: (hash, routineId) => chatFetch(
+      'workspaces/' + encodeURIComponent(hash) + '/routines/' + encodeURIComponent(routineId || ''),
+      { method: 'DELETE' },
+    ).then(r => r.json()),
+    repairRoutineInstructions: (hash) => chatFetch(
+      'workspaces/' + encodeURIComponent(hash) + '/routines/repair-instructions',
+      { method: 'POST', body: {} },
+    ).then(r => r.json()),
+    validateRoutineProposal: (hash, request) => chatFetch(
+      'workspaces/' + encodeURIComponent(hash) + '/routines/proposals/validate',
+      { method: 'POST', body: request || {} },
+    ).then(r => r.json()),
+    saveRoutineSettings: (hash, settings) => chatFetch(
+      'workspaces/' + encodeURIComponent(hash) + '/routines/settings',
+      { method: 'PUT', body: { settings: settings || {} } },
+    ).then(r => r.json()),
+    startRoutineTelegramDestinationConnect: (hash) => chatFetch(
+      'workspaces/' + encodeURIComponent(hash) + '/routines/telegram-destination/start',
+      { method: 'POST', body: {} },
+    ).then(r => r.json()),
+    pollRoutineTelegramDestinationConnect: (hash) => chatFetch(
+      'workspaces/' + encodeURIComponent(hash) + '/routines/telegram-destination/poll',
+      { method: 'POST', body: {} },
     ).then(r => r.json()),
     getKb: (hash) => chatFetch(
       'workspaces/' + encodeURIComponent(hash) + '/kb'

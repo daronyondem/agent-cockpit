@@ -106,7 +106,7 @@ function pathDirName(rel){
   return i < 0 ? '' : String(rel).slice(0, i);
 }
 
-export function FilesBrowser({ hash, label, onClose }){
+export function FilesBrowser({ hash, label, initialPath = '', scope = null, readOnly = false, onClose }){
   const dialog = useDialog();
   const [mode, setMode] = React.useState('files');
   const [currentFolder, setCurrentFolder] = React.useState('');
@@ -123,8 +123,15 @@ export function FilesBrowser({ hash, label, onClose }){
   const [dragOver, setDragOver] = React.useState(false);
   const [treeWidth, setTreeWidth] = React.useState(() => loadFxWidth(hash));
   const [resizing, setResizing] = React.useState(false);
+  const scopedRoot = !!scope;
+  const readOnlyMode = !!readOnly || scopedRoot;
+  const rootLabel = scopedRoot ? (label || 'files') : (label || 'workspace');
+  const initialFolder = React.useMemo(() => String(initialPath || '').replace(/^[/\\]+/, ''), [initialPath]);
 
   React.useEffect(() => { setTreeWidth(loadFxWidth(hash)); }, [hash]);
+  React.useEffect(() => {
+    if (scopedRoot && mode !== 'files') setMode('files');
+  }, [scopedRoot, mode]);
 
   const gitFiles = gitStatus.files || [];
   const gitByPath = React.useMemo(() => {
@@ -189,7 +196,7 @@ export function FilesBrowser({ hash, label, onClose }){
   /* ----- tree loading ----- */
   const loadFolder = React.useCallback(async (rel) => {
     try {
-      const data = await AgentApi.explorer.tree(hash, rel || '');
+      const data = await AgentApi.explorer.tree(hash, rel || '', scope);
       setCurrentFolder(data.path || '');
       setEntries(data.entries || []);
       setChildrenMap(prev => {
@@ -206,7 +213,7 @@ export function FilesBrowser({ hash, label, onClose }){
     } catch (e) {
       setErr(e.message || String(e));
     }
-  }, [hash]);
+  }, [hash, scope]);
 
   const currentFolderRef = React.useRef(currentFolder);
   currentFolderRef.current = currentFolder;
@@ -238,9 +245,19 @@ export function FilesBrowser({ hash, label, onClose }){
   }, [hash]);
 
   React.useEffect(() => {
-    loadFolder('');
-    loadGitStatus();
-  }, [loadFolder, loadGitStatus]);
+    setSelected(null);
+    setPreview(null);
+    setChildrenMap(new Map());
+    setExpanded(new Set([initialFolder || '']));
+    loadFolder(initialFolder);
+    if (scopedRoot) {
+      setGitStatus({ loading: false, isGitRepo: false, branch: null, files: [], error: null });
+      setGitDiff(null);
+      setSelectedChange(null);
+    } else {
+      loadGitStatus();
+    }
+  }, [initialFolder, scopedRoot, loadFolder, loadGitStatus]);
 
   /* Refresh a single folder's children in the map in place. Used after any
      mutation so only the affected branch is re-fetched — avoids the
@@ -248,7 +265,7 @@ export function FilesBrowser({ hash, label, onClose }){
      branches rendering empty when the mutation targeted a non-current folder. */
   const refreshBranch = React.useCallback(async (rel) => {
     try {
-      const data = await AgentApi.explorer.tree(hash, rel || '');
+        const data = await AgentApi.explorer.tree(hash, rel || '', scope);
       const key = data.path || rel || '';
       setChildrenMap(prev => {
         const next = new Map(prev);
@@ -263,12 +280,12 @@ export function FilesBrowser({ hash, label, onClose }){
     } catch (e) {
       setErr(e.message || String(e));
     }
-  }, [hash, loadGitStatus]);
+  }, [hash, loadGitStatus, scope]);
 
   const expandFolder = React.useCallback(async (rel) => {
     if (!childrenMap.has(rel)) {
       try {
-        const data = await AgentApi.explorer.tree(hash, rel);
+        const data = await AgentApi.explorer.tree(hash, rel, scope);
         setChildrenMap(prev => {
           const next = new Map(prev);
           next.set(data.path || rel, data.entries || []);
@@ -284,7 +301,7 @@ export function FilesBrowser({ hash, label, onClose }){
       next.add(rel);
       return next;
     });
-  }, [hash, childrenMap]);
+  }, [hash, childrenMap, scope]);
 
   const collapseFolder = React.useCallback((rel) => {
     setExpanded(prev => {
@@ -297,8 +314,8 @@ export function FilesBrowser({ hash, label, onClose }){
   const refreshAll = React.useCallback(async () => {
     setChildrenMap(new Map());
     await loadFolder(currentFolder);
-    await loadGitStatus();
-  }, [currentFolder, loadFolder, loadGitStatus]);
+    if (!scopedRoot) await loadGitStatus();
+  }, [currentFolder, loadFolder, loadGitStatus, scopedRoot]);
 
   /* ----- preview loading ----- */
   const loadPreview = React.useCallback(async (rel, entry) => {
@@ -309,7 +326,7 @@ export function FilesBrowser({ hash, label, onClose }){
     setPreview(base);
     if (kind === 'text' || kind === 'markdown') {
       try {
-        const data = await AgentApi.explorer.preview(hash, rel);
+        const data = await AgentApi.explorer.preview(hash, rel, scope);
         setPreview({ ...base, loading: false, content: data.content || '', language: data.language || null, size: typeof data.size === 'number' ? data.size : size });
       } catch (e) {
         if (e.status === 413) {
@@ -321,7 +338,7 @@ export function FilesBrowser({ hash, label, onClose }){
     } else {
       setPreview({ ...base, loading: false });
     }
-  }, [hash]);
+  }, [hash, scope]);
 
   const handleRowClick = React.useCallback((rel, type, name) => {
     if (type === 'dir') {
@@ -494,14 +511,14 @@ export function FilesBrowser({ hash, label, onClose }){
   }, [hash, selected, preview, refreshBranch, dialog]);
 
   const doDownload = React.useCallback((rel) => {
-    const url = AgentApi.explorer.downloadUrl(hash, rel);
+    const url = AgentApi.explorer.downloadUrl(hash, rel, scope);
     const a = document.createElement('a');
     a.href = url;
     a.rel = 'noopener';
     document.body.appendChild(a);
     a.click();
     a.remove();
-  }, [hash]);
+  }, [hash, scope]);
 
   /* ----- uploads ----- */
   const uploadsRef = React.useRef(uploads);
@@ -641,11 +658,12 @@ export function FilesBrowser({ hash, label, onClose }){
 
   /* ----- drag-and-drop on tree pane ----- */
   const onPaneDragOver = React.useCallback((e) => {
+    if (readOnlyMode) return;
     if (!e.dataTransfer || !Array.from(e.dataTransfer.types || []).includes('Files')) return;
     e.preventDefault();
     e.dataTransfer.dropEffect = 'copy';
     setDragOver(true);
-  }, []);
+  }, [readOnlyMode]);
 
   const onPaneDragLeave = React.useCallback((e) => {
     if (e.target !== e.currentTarget) return;
@@ -653,6 +671,7 @@ export function FilesBrowser({ hash, label, onClose }){
   }, []);
 
   const onPaneDrop = React.useCallback((e) => {
+    if (readOnlyMode) return;
     if (!e.dataTransfer || !Array.from(e.dataTransfer.types || []).includes('Files')) return;
     e.preventDefault();
     setDragOver(false);
@@ -665,7 +684,7 @@ export function FilesBrowser({ hash, label, onClose }){
     }
     const files = Array.from(e.dataTransfer.files || []);
     if (files.length) startUploads(files);
-  }, [startUploads]);
+  }, [readOnlyMode, startUploads]);
 
   /* ----- render ----- */
   const rootEntries = childrenMap.get(currentFolder) || entries;
@@ -689,9 +708,11 @@ export function FilesBrowser({ hash, label, onClose }){
           </span>
           <span className="fx-mode-toggle" role="tablist" aria-label="Workspace file view">
             <button className={mode === 'files' ? 'active' : ''} role="tab" aria-selected={mode === 'files'} onClick={() => setMode('files')}>Files</button>
-            <button className={mode === 'changes' ? 'active' : ''} role="tab" aria-selected={mode === 'changes'} onClick={() => setMode('changes')}>
-              Changes{changeCount ? ` ${changeCount}` : ''}
-            </button>
+            {!scopedRoot ? (
+              <button className={mode === 'changes' ? 'active' : ''} role="tab" aria-selected={mode === 'changes'} onClick={() => setMode('changes')}>
+                Changes{changeCount ? ` ${changeCount}` : ''}
+              </button>
+            ) : null}
           </span>
         </span>
         {mode === 'files' ? (
@@ -702,7 +723,7 @@ export function FilesBrowser({ hash, label, onClose }){
               tabIndex={0}
               onClick={() => loadFolder('')}
               onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); loadFolder(''); } }}
-            >{label || 'workspace'}</span>
+            >{rootLabel}</span>
             {crumbs.map((p, i) => {
               const rel = crumbs.slice(0, i + 1).join('/');
               const isLast = i === crumbs.length - 1;
@@ -723,14 +744,14 @@ export function FilesBrowser({ hash, label, onClose }){
           </span>
         ) : (
           <span className="path">
-            <span>{label || 'workspace'}</span>
+            <span>{rootLabel}</span>
             {gitStatus.branch ? <span className="slash">/</span> : null}
             {gitStatus.branch ? <span>{gitStatus.branch}</span> : null}
           </span>
         )}
         <span style={{marginLeft:"auto",display:"flex",gap:6}}>
           <button className="btn ghost" style={{padding:"4px 8px"}} onClick={refreshAll} title="Refresh">{Ico.reset(12)}</button>
-          {mode === 'files' ? (
+          {mode === 'files' && !readOnlyMode ? (
             <>
               <button className="btn ghost" style={{padding:"4px 8px"}} onClick={(e) => doMkdir(e.currentTarget)} title="New folder">{Ico.folder(12)} New folder</button>
               <button className="btn ghost" style={{padding:"4px 8px"}} onClick={(e) => doNewFile(e.currentTarget)} title="New file">{Ico.fileAdd(12)} New file</button>
@@ -744,9 +765,9 @@ export function FilesBrowser({ hash, label, onClose }){
 
       <div
         className={`fx-tree ${dragOver ? 'drag-over' : ''}`}
-        onDragOver={mode === 'files' ? onPaneDragOver : undefined}
-        onDragLeave={mode === 'files' ? onPaneDragLeave : undefined}
-        onDrop={mode === 'files' ? onPaneDrop : undefined}
+        onDragOver={mode === 'files' && !readOnlyMode ? onPaneDragOver : undefined}
+        onDragLeave={mode === 'files' && !readOnlyMode ? onPaneDragLeave : undefined}
+        onDrop={mode === 'files' && !readOnlyMode ? onPaneDrop : undefined}
       >
         {mode === 'files' && err ? (
           <div className="u-err" style={{padding:"12px 8px",fontSize:12}}>{err}</div>
@@ -766,6 +787,7 @@ export function FilesBrowser({ hash, label, onClose }){
             onDownload={doDownload}
             onOpenChange={loadGitDiff}
             gitByPath={gitByPath}
+            readOnly={readOnlyMode}
           />
         ) : (
           <FxChangesList
@@ -777,7 +799,7 @@ export function FilesBrowser({ hash, label, onClose }){
             onSelect={loadGitDiff}
           />
         )}
-        {mode === 'files' && uploads.length ? (
+        {mode === 'files' && !readOnlyMode && uploads.length ? (
           <FxUploadPanel uploads={uploads} onClear={clearDoneUploads}/>
         ) : null}
       </div>
@@ -801,6 +823,8 @@ export function FilesBrowser({ hash, label, onClose }){
             onSaveEdit={saveEdit}
             onDraftChange={(v) => setPreview(p => p ? { ...p, draft: v } : p)}
             onDownload={doDownload}
+            scope={scope}
+            readOnly={readOnlyMode}
           />
         ) : (
           <FxGitDiffPane diff={gitDiff} selectedChange={selectedChange}/>
@@ -810,7 +834,7 @@ export function FilesBrowser({ hash, label, onClose }){
   );
 }
 
-function FxTreeBranch({ parentRel, entries, depth, expanded, childrenMap, selectedPath, gitStatusForRel, onRowClick, onRename, onDelete, onDownload, onOpenChange, gitByPath }){
+function FxTreeBranch({ parentRel, entries, depth, expanded, childrenMap, selectedPath, gitStatusForRel, onRowClick, onRename, onDelete, onDownload, onOpenChange, gitByPath, readOnly }){
   if (!entries || !entries.length) {
     return depth === 0 ? (
       <div className="u-dim" style={{padding:"10px 8px",fontSize:12}}>Empty folder</div>
@@ -841,6 +865,7 @@ function FxTreeBranch({ parentRel, entries, depth, expanded, childrenMap, select
               onDelete={(anchor) => onDelete(rel, e.type, e.name, anchor)}
               onDownload={() => onDownload(rel)}
               onOpenChange={change && !isDir ? () => onOpenChange(change) : null}
+              readOnly={readOnly}
             />
             {isDir && isExpanded ? (
               <FxTreeBranch
@@ -857,6 +882,7 @@ function FxTreeBranch({ parentRel, entries, depth, expanded, childrenMap, select
                 onDownload={onDownload}
                 onOpenChange={onOpenChange}
                 gitByPath={gitByPath}
+                readOnly={readOnly}
               />
             ) : null}
           </React.Fragment>
@@ -866,7 +892,7 @@ function FxTreeBranch({ parentRel, entries, depth, expanded, childrenMap, select
   );
 }
 
-function FxTreeRow({ rel, name, isDir, size, changeStatus, isExpanded, isSelected, depth, onClick, onRename, onDelete, onDownload, onOpenChange }){
+function FxTreeRow({ rel, name, isDir, size, changeStatus, isExpanded, isSelected, depth, onClick, onRename, onDelete, onDownload, onOpenChange, readOnly }){
   const indent = depth * 14;
   const chev = isDir
     ? (isExpanded ? Ico.chevD(12) : Ico.chev(12))
@@ -897,11 +923,13 @@ function FxTreeRow({ rel, name, isDir, size, changeStatus, isExpanded, isSelecte
             onClick={(e) => { e.stopPropagation(); onOpenChange(); }}
           >{Ico.diff ? Ico.diff(12) : Ico.file(12)}</button>
         ) : null}
-        <button
-          className="iconbtn"
-          title="Rename"
-          onClick={(e) => { e.stopPropagation(); onRename(e.currentTarget); }}
-        >{Ico.edit(12)}</button>
+        {!readOnly ? (
+          <button
+            className="iconbtn"
+            title="Rename"
+            onClick={(e) => { e.stopPropagation(); onRename(e.currentTarget); }}
+          >{Ico.edit(12)}</button>
+        ) : null}
         {!isDir ? (
           <button
             className="iconbtn"
@@ -909,11 +937,13 @@ function FxTreeRow({ rel, name, isDir, size, changeStatus, isExpanded, isSelecte
             onClick={(e) => { e.stopPropagation(); onDownload(); }}
           >{Ico.download(12)}</button>
         ) : null}
-        <button
-          className="iconbtn danger"
-          title="Delete"
-          onClick={(e) => { e.stopPropagation(); onDelete(e.currentTarget); }}
-        >{Ico.trash(12)}</button>
+        {!readOnly ? (
+          <button
+            className="iconbtn danger"
+            title="Delete"
+            onClick={(e) => { e.stopPropagation(); onDelete(e.currentTarget); }}
+          >{Ico.trash(12)}</button>
+        ) : null}
       </span>
     </div>
   );
@@ -1145,7 +1175,7 @@ function FxUploadPanel({ uploads, onClear }){
   );
 }
 
-function FxPreviewPane({ preview, hash, onStartEdit, onCancelEdit, onSaveEdit, onDraftChange, onDownload }){
+function FxPreviewPane({ preview, hash, scope, readOnly, onStartEdit, onCancelEdit, onSaveEdit, onDraftChange, onDownload }){
   if (!preview) {
     return (
       <div style={{padding:"24px 18px"}} className="u-dim">Select a file to preview</div>
@@ -1190,7 +1220,7 @@ function FxPreviewPane({ preview, hash, onStartEdit, onCancelEdit, onSaveEdit, o
             <button className="btn ghost" onClick={(e) => onCancelEdit(e.currentTarget)} disabled={preview.saving}>Cancel</button>
             <button className="btn primary" onClick={(e) => onSaveEdit(e.currentTarget)} disabled={preview.saving}>{preview.saving ? 'Saving…' : 'Save'}</button>
           </>
-        ) : editable ? (
+        ) : editable && !readOnly ? (
           <button className="btn ghost" onClick={onStartEdit}>{Ico.edit(12)} Edit</button>
         ) : null}
         <button className="btn" onClick={() => onDownload(preview.path)}>{Ico.download(12)} Download</button>
@@ -1199,7 +1229,7 @@ function FxPreviewPane({ preview, hash, onStartEdit, onCancelEdit, onSaveEdit, o
         {preview.kind === 'image' ? (
           <div style={{display:"flex",justifyContent:"center",padding:"8px"}}>
             <img
-              src={AgentApi.explorer.rawUrl(hash, preview.path)}
+              src={AgentApi.explorer.rawUrl(hash, preview.path, scope)}
               alt={preview.name}
               style={{maxWidth:"100%",maxHeight:"70vh",height:"auto"}}
             />

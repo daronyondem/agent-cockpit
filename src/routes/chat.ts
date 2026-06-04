@@ -20,6 +20,7 @@ import { KbDigestionService } from '../services/knowledgeBase/digest';
 import { KbDreamService } from '../services/knowledgeBase/dream';
 import { KbDreamScheduler } from '../services/knowledgeBase/autoDream';
 import { WorkspaceContextScheduler, WorkspaceContextService } from '../services/workspaceContext/service';
+import { RoutinesScheduler, RoutinesService } from '../services/routines/service';
 import { WorkspaceTaskQueueRegistry } from '../services/knowledgeBase/workspaceTaskQueue';
 import { createKbSearchMcpServer } from '../services/kbSearchMcp';
 import { SessionFinalizerQueue, type SessionFinalizerJob } from '../services/sessionFinalizerQueue';
@@ -30,6 +31,7 @@ import { createChatStatusRouter } from './chat/statusRoutes';
 import { createCliProfileRouter } from './chat/cliProfileRoutes';
 import { createDataMigrationRouter } from './chat/dataMigrationRoutes';
 import { createWorkspaceContextRouter } from './chat/workspaceContextRoutes';
+import { createRoutineRouter } from './chat/routineRoutes';
 import { createConversationRouter } from './chat/conversationRoutes';
 import { createExplorerRouter } from './chat/explorerRoutes';
 import { createFilesystemRouter } from './chat/filesystemRoutes';
@@ -954,6 +956,13 @@ export function createChatRouter({ chatService, backendRegistry, updateService, 
     chatService,
     processor: workspaceContextService,
   });
+  const routinesService = new RoutinesService({
+    chatService,
+    backendRegistry,
+  });
+  const routinesScheduler = new RoutinesScheduler({
+    service: routinesService,
+  });
 
   async function runSessionFinalizerJob(job: SessionFinalizerJob): Promise<void> {
     if (job.type === 'session_summary') {
@@ -1191,6 +1200,7 @@ export function createChatRouter({ chatService, backendRegistry, updateService, 
     enqueueWorkspaceContextFinalizer,
   }));
   router.use(createWorkspaceContextRouter({ chatService, workspaceContextService, emitFreshWorkspaceContextUpdate }));
+  router.use(createRoutineRouter({ chatService, routinesService }));
   router.use(createWorkspaceArchiveRouter({
     chatService,
     hasInFlightTurnForWorkspace,
@@ -1212,7 +1222,7 @@ export function createChatRouter({ chatService, backendRegistry, updateService, 
     enqueueMemoryFinalizer,
     enqueueWorkspaceContextFinalizer,
   }));
-  router.use(createExplorerRouter(chatService));
+  router.use(createExplorerRouter(chatService, { routinesService }));
   router.use(createGitRouter(chatService));
   router.use(createGoalRouter({
     chatService,
@@ -1524,6 +1534,7 @@ export function createChatRouter({ chatService, backendRegistry, updateService, 
     streamSupervisor.abortAndDetachAllRuntime();
     kbDreamScheduler.stop();
     workspaceContextScheduler.stop();
+    routinesScheduler.stop();
     sessionFinalizers.stop();
     memoryWatcher.unwatchAll();
     memoryFingerprints.clear();
@@ -1536,5 +1547,5 @@ export function createChatRouter({ chatService, backendRegistry, updateService, 
     wsFns = fns;
   }
 
-  return { router, shutdown, activeStreams, streamJobs, setWsFunctions, abortActiveStream, reconcileInterruptedJobs, memoryMcp, kbDreamScheduler, workspaceContextService, workspaceContextScheduler, sessionFinalizers };
+  return { router, shutdown, activeStreams, streamJobs, setWsFunctions, abortActiveStream, reconcileInterruptedJobs, memoryMcp, kbDreamScheduler, workspaceContextService, workspaceContextScheduler, routinesService, routinesScheduler, sessionFinalizers };
 }

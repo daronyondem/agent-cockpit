@@ -878,6 +878,120 @@ describe('frontend routes', () => {
     expect(cssSrc).toContain('.composer-notif.state-workspace-context');
   });
 
+  test('Settings exposes global integrations with Telegram bot configuration', () => {
+    const settingsSrc = fs.readFileSync(path.join(ROOT, 'web/AgentCockpitWeb/src/screens/settingsScreen.jsx'), 'utf8');
+    const workspaceSettingsSrc = fs.readFileSync(path.join(ROOT, 'web/AgentCockpitWeb/src/workspaceSettings.jsx'), 'utf8');
+    const appShellSrc = fs.readFileSync(path.join(ROOT, 'web/AgentCockpitWeb/src/appShell.jsx'), 'utf8');
+    const cssSrc = readDesktopCss();
+
+    expect(settingsSrc).toContain("{ id: 'integrations', label: 'Integrations', icon: Ico.message }");
+    expect(settingsSrc).toContain('function SettingsIntegrationsTab');
+    expect(settingsSrc).toContain('Shared bot used by routines and future outbound notifications.');
+    expect(settingsSrc).toContain('clearBotToken');
+    expect(settingsSrc).toContain('Disconnect Telegram');
+    expect(workspaceSettingsSrc).toContain('telegramBotConfigured');
+    expect(workspaceSettingsSrc).toContain("onOpenSettings('integrations')");
+    expect(workspaceSettingsSrc).toContain('Open Integrations');
+    expect(workspaceSettingsSrc).not.toContain('<span>Bot token</span>');
+    expect(appShellSrc).toContain('onOpenSettings={onOpenSettings}');
+    expect(cssSrc).toContain('.settings-integration-card');
+    expect(cssSrc).toContain('.settings-integration-head');
+  });
+
+  test('desktop exposes Workspace Routines proposal and management controls', () => {
+    const apiSrc = fs.readFileSync(path.join(ROOT, 'web/AgentCockpitWeb/src/api.js'), 'utf8');
+    const workspaceSettingsSrc = fs.readFileSync(path.join(ROOT, 'web/AgentCockpitWeb/src/workspaceSettings.jsx'), 'utf8');
+    const messageParsingSrc = fs.readFileSync(path.join(ROOT, 'web/AgentCockpitWeb/src/chat/messageParsing.ts'), 'utf8');
+    const messageContentSrc = fs.readFileSync(path.join(ROOT, 'web/AgentCockpitWeb/src/chat/messageContent.jsx'), 'utf8');
+    const chatLiveSrc = fs.readFileSync(path.join(ROOT, 'web/AgentCockpitWeb/src/chat/chatLive.jsx'), 'utf8');
+    const appShellSrc = fs.readFileSync(path.join(ROOT, 'web/AgentCockpitWeb/src/appShell.jsx'), 'utf8');
+    const cssSrc = readDesktopCss();
+
+    expect(apiSrc).toContain('getRoutines: (hash) =>');
+    expect(apiSrc).toContain('getRoutine: (hash, routineId) =>');
+    expect(apiSrc).toContain('installRoutine: (hash, routineId, state) =>');
+    expect(apiSrc).toContain('updateRoutine: (hash, routineId, patch) =>');
+    expect(apiSrc).toContain('runRoutine: (hash, routineId) =>');
+    expect(apiSrc).toContain('deleteRoutine: (hash, routineId) =>');
+    expect(apiSrc).toContain('repairRoutineInstructions: (hash) =>');
+    expect(apiSrc).toContain('validateRoutineProposal: (hash, request) =>');
+    expect(apiSrc).toContain('saveRoutineSettings: (hash, settings) =>');
+    expect(apiSrc).toContain('startRoutineTelegramDestinationConnect: (hash) =>');
+    expect(apiSrc).toContain('pollRoutineTelegramDestinationConnect: (hash) =>');
+    expect(apiSrc).toContain("scope: 'routine-output'");
+    expect(apiSrc).toContain("scope: 'routine-outputs'");
+    expect(apiSrc).toContain("scope: 'routine-state'");
+
+    expect(workspaceSettingsSrc).toContain("{ id: 'routines'");
+    expect(workspaceSettingsSrc).toContain('function routineManifestPatchFromDraft');
+    expect(workspaceSettingsSrc).toContain('function routineTimezoneOptions');
+    expect(workspaceSettingsSrc).toContain("Intl.supportedValuesOf('timeZone')");
+    expect(workspaceSettingsSrc).toContain('function RoutinesTab');
+    expect(workspaceSettingsSrc).toContain('AgentApi.workspace.getRoutines(hash)');
+    expect(workspaceSettingsSrc).toContain('AgentApi.workspace.installRoutine(hash, routineId, state)');
+    expect(workspaceSettingsSrc).toContain('AgentApi.workspace.runRoutine(hash, routineId)');
+    expect(workspaceSettingsSrc).toContain('function routineItemIsRunning');
+    expect(workspaceSettingsSrc).toContain('function mergeRoutineSnapshot');
+    expect(workspaceSettingsSrc).toContain('.some(routineItemIsRunning)');
+    expect(workspaceSettingsSrc).toContain('if (detailRes) applyRoutineDetailResponse(detailRes, { preserveDraft: routineDirty })');
+    expect(workspaceSettingsSrc).toContain("res.run && res.run.status === 'running'");
+    expect(workspaceSettingsSrc).toContain('AgentApi.workspace.deleteRoutine(hash, routineId)');
+    expect(workspaceSettingsSrc).toContain('AgentApi.workspace.repairRoutineInstructions(hash)');
+    expect(workspaceSettingsSrc).toContain('AgentApi.workspace.saveRoutineSettings(hash, { telegram })');
+    expect(workspaceSettingsSrc).toContain('AgentApi.workspace.startRoutineTelegramDestinationConnect(hash)');
+    expect(workspaceSettingsSrc).toContain('AgentApi.workspace.pollRoutineTelegramDestinationConnect(hash)');
+    expect(workspaceSettingsSrc).toContain('ws-form-routines');
+    expect(workspaceSettingsSrc).toContain('className="ws-wc-layout"');
+    expect(workspaceSettingsSrc).toContain('className="ws-wc-rail ws-routine-rail"');
+    expect(workspaceSettingsSrc).toContain('className="ws-wc-preview-editor ws-routine-editor"');
+    expect(workspaceSettingsSrc).toContain('Outreach');
+    expect(workspaceSettingsSrc).toContain('<span>Telegram</span>');
+    expect(workspaceSettingsSrc).toContain('Connect Destination');
+    expect(workspaceSettingsSrc).toContain('Send to the target Telegram chat');
+    expect(workspaceSettingsSrc).toContain('Check now');
+    expect(workspaceSettingsSrc).toContain('Chat ID (advanced)');
+    expect(workspaceSettingsSrc).toContain('Run now');
+    expect(workspaceSettingsSrc).toContain('Outputs');
+    expect(workspaceSettingsSrc).toContain('Persistent State');
+    expect(workspaceSettingsSrc).toContain('ws-routine-actions-spacer');
+    expect(workspaceSettingsSrc).toContain('onOpenOutputs={openRoutineOutputs}');
+    expect(workspaceSettingsSrc).toContain('onOpenPersistentState={openRoutinePersistentState}');
+    expect(workspaceSettingsSrc).toContain('Install disabled');
+    expect(workspaceSettingsSrc).toContain('Browser default ({browserTz})');
+    expect(workspaceSettingsSrc).toContain('Browse Output Folder');
+    expect(workspaceSettingsSrc).toContain("type: 'routine-output'");
+    expect(workspaceSettingsSrc).toContain("type: 'routine-outputs'");
+    expect(workspaceSettingsSrc).toContain("type: 'routine-state'");
+    expect(workspaceSettingsSrc).toContain('returnToWorkspaceSettings');
+    expect(workspaceSettingsSrc).toContain('initialRoutineId');
+
+    expect(appShellSrc).toContain('returnToWorkspaceSettings');
+    expect(appShellSrc).toContain('const onCloseFiles = React.useCallback');
+    expect(appShellSrc).toContain('initialRoutineId={workspaceSettings.initialRoutineId}');
+
+    expect(messageParsingSrc).toContain('AGENT_COCKPIT_ROUTINE_PROPOSAL');
+    expect(messageParsingSrc).toContain('export function extractRoutineProposals');
+    expect(messageContentSrc).toContain('function RoutineProposalCard');
+    expect(messageContentSrc).toContain('routineProposalInstallKey(wsHash, marker)');
+    expect(messageContentSrc).toContain('routineProposalIsInstalled(proposal)');
+    expect(messageContentSrc).toContain("new CustomEvent('ac:routine-proposal-installed'");
+    expect(messageContentSrc).toContain("setStatus('Installed')");
+    expect(messageContentSrc).toContain('setInstalled(true)');
+    expect(messageContentSrc).toContain('AgentApi.workspace.validateRoutineProposal(wsHash, { marker })');
+    expect(messageContentSrc).toContain('AgentApi.workspace.installRoutine(wsHash, proposal.routineId, state)');
+    expect(messageContentSrc).toContain("onOpenWorkspaceSettings(wsHash, workspaceLabel || 'workspace', 'routines')");
+    expect(chatLiveSrc).toContain('workspaceLabel: wsLabel');
+    expect(chatLiveSrc).toContain('onOpenWorkspaceSettings={onOpenWorkspaceSettings}');
+
+    expect(cssSrc).toContain('.routine-proposal-card');
+    expect(cssSrc).toContain('.routine-proposal-installed');
+    expect(cssSrc).toContain('.ws-routine-rail');
+    expect(cssSrc).toContain('.ws-routine-settings');
+    expect(cssSrc).toContain('.ws-wc-status-badge.is-routine-enabled');
+    expect(cssSrc).toContain('.ws-routine-editor');
+    expect(cssSrc).toContain('.ws-routine-output-link');
+  });
+
   test('desktop exposes workspace archive lifecycle controls', () => {
     const apiSrc = fs.readFileSync(path.join(ROOT, 'web/AgentCockpitWeb/src/api.js'), 'utf8');
     const appShellSrc = fs.readFileSync(path.join(ROOT, 'web/AgentCockpitWeb/src/appShell.jsx'), 'utf8');

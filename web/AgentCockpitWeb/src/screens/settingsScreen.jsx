@@ -23,6 +23,7 @@ const SETTINGS_TABS = [
   { id: 'memory',  label: 'Memory', icon: Ico.reflect },
   { id: 'kb',      label: 'Knowledge Base', icon: Ico.book },
   { id: 'workspaceContext', label: 'Workspace Context', icon: Ico.graph },
+  { id: 'integrations', label: 'Integrations', icon: Ico.message },
   { id: 'security', label: 'Security', icon: Ico.key },
   { id: 'usage',   label: 'Usage & Cost', icon: Ico.zap },
   { id: 'migration', label: 'Migration', icon: Ico.download },
@@ -449,6 +450,7 @@ export function SettingsScreen({ onClose, initialTab, onOpenWorkspaceSettings })
               : tab === 'memory'  ? <SettingsMemoryTab settings={settings} backends={backends} profileBackends={profileBackends} loadProfileBackend={loadProfileBackend} onPatch={patch}/>
               : tab === 'kb'      ? <SettingsKbTab settings={settings} backends={backends} profileBackends={profileBackends} loadProfileBackend={loadProfileBackend} onPatch={patch}/>
               : tab === 'workspaceContext' ? <SettingsWorkspaceContextTab settings={settings} backends={backends} profileBackends={profileBackends} loadProfileBackend={loadProfileBackend} onPatch={patch}/>
+              : tab === 'integrations' ? <SettingsIntegrationsTab settings={settings} onPatch={patch}/>
               : tab === 'security' ? <SecurityTab/>
               : tab === 'usage'   ? <UsageTab/>
               : tab === 'migration' ? (
@@ -1883,6 +1885,86 @@ function SettingsWorkspaceContextTab({ settings, backends, profileBackends, load
         />
       </Field>
 
+    </div>
+  );
+}
+
+/* ──────────────────── Integrations tab ──────────────────── */
+
+function SettingsIntegrationsTab({ settings, onPatch }){
+  const integrations = settings.integrations || {};
+  const telegram = integrations.telegram || {};
+  const configured = !!telegram.configured && !telegram.clearBotToken;
+  const clearing = telegram.clearBotToken === true;
+  const draftToken = telegram.botToken || '';
+  const statusLabel = clearing ? 'Disconnect on save' : configured ? 'Connected' : 'Not connected';
+  const statusClass = clearing ? 'err' : configured ? 'ok' : '';
+  const botLabel = telegram.botUsername
+    ? `@${String(telegram.botUsername).replace(/^@/, '')}`
+    : telegram.botFirstName || telegram.botId || 'Telegram bot';
+
+  function patchTelegram(patch){
+    onPatch(prev => ({
+      integrations: {
+        ...((prev && prev.integrations) || {}),
+        telegram: {
+          ...(((prev && prev.integrations) || {}).telegram || {}),
+          ...patch,
+        },
+      },
+    }));
+  }
+
+  return (
+    <div className="settings-form settings-form-wide settings-integrations">
+      <div className="settings-section-title">Outgoing</div>
+      <section className="settings-integration-card" aria-label="Telegram integration">
+        <div className="settings-integration-head">
+          <div className="settings-integration-title">
+            <span className="settings-integration-icon">{Ico.message(14)}</span>
+            <div>
+              <h3>Telegram</h3>
+              <p className="u-dim">Shared bot used by routines and future outbound notifications.</p>
+            </div>
+          </div>
+          <span className={`settings-status-pill ${statusClass}`}>{statusLabel}</span>
+        </div>
+
+        {configured ? (
+          <div className="ws-muted-metadata">
+            <span>Bot: {botLabel}</span>
+            <span>Workspaces choose their own Telegram destination.</span>
+          </div>
+        ) : (
+          <p className="settings-desc u-dim">
+            Paste a Telegram bot token once here. Workspace routines can then send to whichever chat ID each workspace configures.
+          </p>
+        )}
+
+        <Field
+          label={configured ? 'Replace bot token' : 'Bot token'}
+          hint={configured ? 'Leave blank to keep the saved token.' : 'Create a bot with BotFather, then paste the token here.'}
+        >
+          <input
+            type="password"
+            value={draftToken}
+            placeholder={configured ? 'Saved token configured' : '123456789:ABC...'}
+            onChange={(e) => patchTelegram({ botToken: e.target.value, clearBotToken: false })}
+          />
+        </Field>
+
+        <div className="settings-inline-row settings-integration-actions">
+          {configured || clearing ? (
+            <button
+              type="button"
+              className="btn ghost danger"
+              onClick={() => patchTelegram({ botToken: '', clearBotToken: true, configured: false })}
+            >
+              {Ico.trash(13)} Disconnect Telegram
+            </button>
+          ) : null}
+        </div>
+      </section>
     </div>
   );
 }

@@ -770,11 +770,13 @@ export function ChatLive({ convId, onArchived, onDeleted, onRenamed, onOpenMemor
             )}
             <FileViewerContext.Provider value={{
               wsHash: workspaceRefForConv(conv),
+              workspaceLabel: wsLabel,
               convId,
               workingDir: conv.workingDir || null,
               executionDir: conv.executionDir || conv.workingDir || null,
               openFileViewer,
               openLightbox,
+              onOpenWorkspaceSettings,
             }}>
             <AgentIndexProvider messages={feedMessages}>
               {messageFeedEntries.map(entry => {

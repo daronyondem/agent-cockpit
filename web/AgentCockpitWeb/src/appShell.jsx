@@ -20,7 +20,7 @@ const MemoryUpdateModal = React.lazy(() => import('./workspaceSettings.jsx').the
 export function App(){
   const [activeConvId, setActiveConvId] = React.useState(null);
   const [kbView, setKbView] = React.useState(null);     // { hash, label } | null
-  const [filesView, setFilesView] = React.useState(null); // { hash, label } | null
+  const [filesView, setFilesView] = React.useState(null); // { hash, label, initialPath?, scope?, readOnly?, returnToWorkspaceSettings? } | null
   const [settingsView, setSettingsView] = React.useState(null); // { initialTab } | null — global app settings, no per-workspace context
   const [folderPickerOpen, setFolderPickerOpen] = React.useState(false);
   const [folderPickerInitialPath, setFolderPickerInitialPath] = React.useState('');
@@ -28,7 +28,7 @@ export function App(){
   const [viewingArchive, setViewingArchive] = React.useState(false);
   const [updateTarget, setUpdateTarget] = React.useState(null); // { localVersion, remoteVersion } | null
   const [restarting, setRestarting] = React.useState(false);
-  const [workspaceSettings, setWorkspaceSettings] = React.useState(null); // { hash, label, initialTab, initialWorkspaceContextSection } | null
+  const [workspaceSettings, setWorkspaceSettings] = React.useState(null); // { hash, label, initialTab, initialWorkspaceContextSection, initialRoutineId } | null
   const [memoryUpdateView, setMemoryUpdateView] = React.useState(null); // { hash, label, update } | null
   const [welcomeOpen, setWelcomeOpen] = React.useState(() => {
     try { return new URLSearchParams(window.location.search).get('welcome') === '1'; }
@@ -198,13 +198,20 @@ export function App(){
     setSbOpen(false);
   }, []);
 
-  const onOpenFiles = React.useCallback((hash, label) => {
+  const onOpenFiles = React.useCallback((hash, label, options) => {
     setWelcomeOpen(false);
     setWorkspaceSettings(null);
     setMemoryUpdateView(null);
     setKbView(null);
     setSettingsView(null);
-    setFilesView({ hash, label });
+    setFilesView({
+      hash,
+      label,
+      initialPath: options && options.initialPath || '',
+      scope: options && options.scope || null,
+      readOnly: !!(options && options.readOnly),
+      returnToWorkspaceSettings: options && options.returnToWorkspaceSettings || null,
+    });
     setSbOpen(false);
   }, []);
 
@@ -332,6 +339,12 @@ export function App(){
     StreamStore.refreshConvList();
   }, []);
 
+  const onCloseFiles = React.useCallback(() => {
+    const returnToWorkspaceSettings = filesView && filesView.returnToWorkspaceSettings;
+    setFilesView(null);
+    if (returnToWorkspaceSettings) setWorkspaceSettings(returnToWorkspaceSettings);
+  }, [filesView]);
+
   const createConv = React.useCallback(async (workingDir) => {
     if (creatingConv) return;
     setCreatingConv(true);
@@ -455,6 +468,9 @@ export function App(){
               label={workspaceSettings.label}
               initialTab={workspaceSettings.initialTab}
               initialWorkspaceContextSection={workspaceSettings.initialWorkspaceContextSection}
+              initialRoutineId={workspaceSettings.initialRoutineId}
+              onOpenFiles={onOpenFiles}
+              onOpenSettings={onOpenSettings}
               onClose={onCloseWorkspaceSettings}
             />
           </React.Suspense>
@@ -472,7 +488,14 @@ export function App(){
       ) : filesView ? (
         <section className="main main-files">
           <React.Suspense fallback={<ScreenLoading label="Loading files..."/>}>
-            <FilesBrowser hash={filesView.hash} label={filesView.label} onClose={() => setFilesView(null)}/>
+            <FilesBrowser
+              hash={filesView.hash}
+              label={filesView.label}
+              initialPath={filesView.initialPath}
+              scope={filesView.scope}
+              readOnly={filesView.readOnly}
+              onClose={onCloseFiles}
+            />
           </React.Suspense>
         </section>
       ) : kbView ? (

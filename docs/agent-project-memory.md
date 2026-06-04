@@ -216,6 +216,10 @@ tool is unavailable.
 - Workspace Context run logs are short-term operational records. Maintenance
   should prune `workspace-context/runs/*.md` and `state.json.runs` entries older
   than 7 days; durable learned context belongs in context markdown files.
+- Workspace Routines are workspace-owned markdown workflows. Agent Cockpit owns
+  authoring contracts, proposals, scheduling, run folders/history, and outreach;
+  harnesses own task intelligence in `routine.md`. Keep lifecycle states minimal
+  (`proposed`, `enabled`, `disabled`) unless a later ADR changes the model.
 - Memory update notifications should open a focused preview of the exact updated
   memory files before the full Memory listing.
 - Memory consolidation should precede vector/embedding work where applicable.
