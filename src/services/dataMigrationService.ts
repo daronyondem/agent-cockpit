@@ -115,6 +115,7 @@ export interface DataMigrationCheckResult {
       embedding?: CheckStatus;
     };
     workspaceContext: CheckStatus;
+    routines: CheckStatus;
   }>;
   tools: {
     pandoc: CheckStatus;
@@ -501,6 +502,7 @@ export class DataMigrationService {
         workspace.knowledge.vectors || skipped('No vector store to check'),
         workspace.knowledge.embedding || skipped('No embedding config to check'),
         workspace.workspaceContext,
+        workspace.routines,
       ]),
     ];
     const errors = statuses.filter(item => item.status === 'error').length;
@@ -714,6 +716,7 @@ export class DataMigrationService {
       const knowledgeDir = path.join(workspaceRoot, 'knowledge');
       const memoryDir = path.join(workspaceRoot, 'memory');
       const workspaceContextDir = path.join(workspaceRoot, 'workspace-context');
+      const routinesDir = path.join(workspaceRoot, 'routines');
       result.push({
         workspaceId,
         storageKey,
@@ -733,6 +736,10 @@ export class DataMigrationService {
         workspaceContext: {
           present: fs.existsSync(workspaceContextDir),
           enabled: booleanField(index?.workspaceContextEnabled),
+        },
+        routines: {
+          present: fs.existsSync(routinesDir),
+          enabled: booleanField(index?.routinesEnabled),
         },
       });
     }
@@ -782,6 +789,7 @@ export class DataMigrationService {
           embedding,
         },
         workspaceContext: workspace.workspaceContext.present ? ok('Workspace Context data present', path.join(root, 'workspace-context')) : skipped('No Workspace Context directory present'),
+        routines: workspace.routines.present ? ok('Workspace Routines data present', path.join(root, 'routines')) : skipped('No Workspace Routines directory present'),
       });
     }
     return checks;

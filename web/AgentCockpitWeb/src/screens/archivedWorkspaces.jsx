@@ -156,6 +156,7 @@ export function ArchivedWorkspacesPanel({ onOpenWorkspaceSettings }){
                   <Metric label="Memory" value={workspace.memoryEnabled ? 'On' : 'Off'}/>
                   <Metric label="KB" value={workspace.kbEnabled ? 'On' : 'Off'}/>
                   <Metric label="Context" value={workspace.workspaceContextEnabled ? 'On' : 'Off'}/>
+                  <Metric label="Routines" value={workspace.routinesEnabled ? 'On' : 'Off'}/>
                 </div>
 
                 {archive.note ? <p className="archived-workspace-note">{archive.note}</p> : null}

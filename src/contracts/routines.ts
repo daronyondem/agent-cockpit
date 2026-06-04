@@ -8,6 +8,7 @@ import {
   optionalRecord,
   optionalString,
   optionalStringEnum,
+  requiredBoolean,
   requiredString,
 } from './validation';
 
@@ -112,9 +113,16 @@ export interface WorkspaceRoutineSettingsResponse {
 }
 
 export interface RoutineSettingsEnvelope {
+  enabled: boolean;
   routinesDir: string;
   authoringPath: string;
   notification: WorkspaceRoutineSettingsResponse;
+}
+
+export interface RoutineListResponse {
+  enabled: boolean;
+  routines: RoutineListItem[];
+  settings: RoutineSettingsEnvelope;
 }
 
 export interface TelegramDestinationSummary {
@@ -140,6 +148,10 @@ export interface RoutineTelegramDestinationConnectPollResponse {
 
 export interface RoutineInstallRequest {
   state: 'enabled' | 'disabled';
+}
+
+export interface RoutineEnabledRequest {
+  enabled: boolean;
 }
 
 export interface RoutineUpdateRequest {
@@ -214,6 +226,13 @@ export function validateRoutineInstallRequest(body: unknown): RoutineInstallRequ
   const record = asRecord(body);
   return {
     state: optionalStringEnum(record, 'state', ['enabled', 'disabled'] as const, 'state must be enabled or disabled') || 'disabled',
+  };
+}
+
+export function validateRoutineEnabledRequest(body: unknown): RoutineEnabledRequest {
+  const record = asRecord(body);
+  return {
+    enabled: requiredBoolean(record, 'enabled', 'enabled must be a boolean'),
   };
 }
 

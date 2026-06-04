@@ -130,7 +130,7 @@ agent-cockpit/
     │   ├── stream-jobs.json            # Durable active CLI turn registry for server-restart reconciliation
     │   ├── workspaces.json             # Workspace identity registry: stable workspaceId -> storage key/current path
     │   ├── workspaces/{storageKey}/    # Workspace-based storage; storageKey is usually the original path hash
-    │   │   ├── index.json              # Source of truth: conversations + session metadata (includes `memoryEnabled`, `kbEnabled`, `workspaceContextEnabled`, and optional `worktreeIsolation`)
+    │   │   ├── index.json              # Source of truth: conversations + session metadata (includes `memoryEnabled`, `kbEnabled`, `workspaceContextEnabled`, `routinesEnabled`, and optional `worktreeIsolation`)
     │   │   ├── session-finalizers.json # Persisted background jobs for reset/archive finalizers
     │   │   ├── archive/                # Workspace archive summaries, including final learning pass output
     │   │   ├── memory/                 # Per-workspace memory store (opt-in per workspace)
@@ -150,7 +150,7 @@ agent-cockpit/
     │   │   │   ├── assets/*            # Allowlisted non-executable reference files linked from context/references
     │   │   │   ├── runs/*.md           # Run summaries, including latest.md
     │   │   │   └── state.json          # Small operational run-state sidecar
-    │   │   ├── routines/               # Per-workspace Routine authoring, manifests, run folders, and outreach settings
+    │   │   ├── routines/               # Per-workspace Routine authoring, manifests, run folders, and outreach settings; created only after Routines are enabled or repaired
     │   │   │   ├── ROUTINE_AUTHORING.md # Harness-readable routine proposal/edit contract
     │   │   │   ├── index.json          # Generated routine list with paths and latest run summaries
     │   │   │   ├── settings.json       # Workspace outreach settings such as Telegram destination configuration
@@ -255,6 +255,7 @@ data/
       } | null;
     };
     workspaceContext: { present: boolean; enabled?: boolean | null };
+    routines: { present: boolean; enabled?: boolean | null };
   }];
   excluded: string[];
   warnings: string[];
@@ -264,8 +265,9 @@ data/
 The bundle is meant to preserve everything user-owned under the data root:
 settings, workspace identity registry, conversations and sessions, uploaded and
 generated artifacts, Memory files and sidecars, Workspace Context markdown,
-Knowledge Base SQLite metadata and PGLite vectors, plan-usage caches, install
-metadata, and first-party auth when `AUTH_DATA_DIR` stays under the data root.
+Workspace Routines data, Knowledge Base SQLite metadata and PGLite vectors,
+plan-usage caches, install metadata, and first-party auth when `AUTH_DATA_DIR`
+stays under the data root.
 
 The preferred browser export path uses `DataExportJobStatusResponse` while the
 server prepares the bundle:
@@ -581,6 +583,7 @@ Together these guarantee that a workspace index always parses on disk and that c
     dimensions?: number,            // Embedding dimensions (must match model). Default 768.
   } | undefined,
   workspaceContextEnabled: boolean|undefined, // Opt-in per-workspace Workspace Context feature. Defaults to false.
+  routinesEnabled: boolean|undefined, // Opt-in per-workspace Workspace Routines feature. Defaults to false. Disabled workspaces keep routine data but do not install AGENTS instructions or run scheduled routines.
   workspaceContext: {                // Per-workspace Workspace Context processor settings. Defaults to { processorMode: 'global' }.
     processorMode?: 'global' | 'override', // 'global' uses Settings.workspaceContext processor defaults; 'override' stores workspace CLI overrides.
     cliProfileId?: string,          // Optional workspace processor profile when processorMode='override'.

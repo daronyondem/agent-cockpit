@@ -908,6 +908,7 @@ describe('frontend routes', () => {
     const cssSrc = readDesktopCss();
 
     expect(apiSrc).toContain('getRoutines: (hash) =>');
+    expect(apiSrc).toContain('setRoutinesEnabled: (hash, enabled) =>');
     expect(apiSrc).toContain('getRoutine: (hash, routineId) =>');
     expect(apiSrc).toContain('installRoutine: (hash, routineId, state) =>');
     expect(apiSrc).toContain('updateRoutine: (hash, routineId, patch) =>');
@@ -927,7 +928,10 @@ describe('frontend routes', () => {
     expect(workspaceSettingsSrc).toContain('function routineTimezoneOptions');
     expect(workspaceSettingsSrc).toContain("Intl.supportedValuesOf('timeZone')");
     expect(workspaceSettingsSrc).toContain('function RoutinesTab');
+    expect(workspaceSettingsSrc).toContain('const [routinesEnabled, setRoutinesEnabled]');
+    expect(workspaceSettingsSrc).toContain('function toggleRoutines');
     expect(workspaceSettingsSrc).toContain('AgentApi.workspace.getRoutines(hash)');
+    expect(workspaceSettingsSrc).toContain('AgentApi.workspace.setRoutinesEnabled(hash, enabled)');
     expect(workspaceSettingsSrc).toContain('AgentApi.workspace.installRoutine(hash, routineId, state)');
     expect(workspaceSettingsSrc).toContain('AgentApi.workspace.runRoutine(hash, routineId)');
     expect(workspaceSettingsSrc).toContain('function routineItemIsRunning');
@@ -941,6 +945,8 @@ describe('frontend routes', () => {
     expect(workspaceSettingsSrc).toContain('AgentApi.workspace.startRoutineTelegramDestinationConnect(hash)');
     expect(workspaceSettingsSrc).toContain('AgentApi.workspace.pollRoutineTelegramDestinationConnect(hash)');
     expect(workspaceSettingsSrc).toContain('ws-form-routines');
+    expect(workspaceSettingsSrc).toContain('ws-routine-feature-toggle');
+    expect(workspaceSettingsSrc).toContain('Workspace Routines are disabled');
     expect(workspaceSettingsSrc).toContain('className="ws-wc-layout"');
     expect(workspaceSettingsSrc).toContain('className="ws-wc-rail ws-routine-rail"');
     expect(workspaceSettingsSrc).toContain('className="ws-wc-preview-editor ws-routine-editor"');

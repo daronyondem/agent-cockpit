@@ -81,6 +81,7 @@ export interface WorkspaceSummaryResponse {
   memoryEnabled: boolean;
   kbEnabled: boolean;
   workspaceContextEnabled: boolean;
+  routinesEnabled: boolean;
 }
 
 export interface WorkspaceArchiveResponse {

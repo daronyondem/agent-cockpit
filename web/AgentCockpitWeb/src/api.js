@@ -920,6 +920,10 @@
       'workspaces/' + encodeURIComponent(hash) + '/routines',
       { cache: 'no-store' },
     ).then(r => r.json()),
+    setRoutinesEnabled: (hash, enabled) => chatFetch(
+      'workspaces/' + encodeURIComponent(hash) + '/routines/enabled',
+      { method: 'PUT', body: { enabled: !!enabled } },
+    ).then(r => r.json()),
     getRoutine: (hash, routineId) => chatFetch(
       'workspaces/' + encodeURIComponent(hash) + '/routines/' + encodeURIComponent(routineId || ''),
       { cache: 'no-store' },

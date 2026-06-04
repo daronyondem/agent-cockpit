@@ -16,6 +16,7 @@ import {
   validateKbGlossaryTermRequest,
 } from '../src/contracts/knowledgeBase';
 import { validateMemoryEnabledRequest } from '../src/contracts/memory';
+import { validateRoutineEnabledRequest } from '../src/contracts/routines';
 import { validateConversationInputRequest, validateSendMessageRequest } from '../src/contracts/streams';
 import { validateAttachmentOcrRequest } from '../src/contracts/uploads';
 import {
@@ -124,6 +125,7 @@ describe('chat API contracts', () => {
     });
     expect(validateMemoryEnabledRequest({ enabled: false })).toEqual({ enabled: false });
     expect(validateWorkspaceContextEnabledRequest({ enabled: true })).toEqual({ enabled: true });
+    expect(validateRoutineEnabledRequest({ enabled: true })).toEqual({ enabled: true });
 
     for (const fn of [
       () => validateSendMessageRequest({ content: '' }),
@@ -138,6 +140,7 @@ describe('chat API contracts', () => {
       () => validateKbEmbeddingConfigRequest({ dimensions: 0 }),
       () => validateMemoryEnabledRequest({ enabled: 'yes' }),
       () => validateWorkspaceContextEnabledRequest({ enabled: 'yes' }),
+      () => validateRoutineEnabledRequest({ enabled: 'yes' }),
     ]) {
       try {
         fn();

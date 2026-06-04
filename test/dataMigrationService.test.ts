@@ -29,6 +29,7 @@ describe('DataMigrationService', () => {
     await fsp.mkdir(path.join(workspaceRoot, 'memory', 'files'), { recursive: true });
     await fsp.mkdir(path.join(workspaceRoot, 'workspace-context'), { recursive: true });
     await fsp.mkdir(path.join(workspaceRoot, 'knowledge', 'vectors'), { recursive: true });
+    await fsp.mkdir(path.join(workspaceRoot, 'routines'), { recursive: true });
     await fsp.mkdir(path.join(dataRoot, 'sessions'), { recursive: true });
     await fsp.mkdir(workspacePath, { recursive: true });
     await fsp.writeFile(path.join(dataRoot, 'sessions', 'session.json'), 'runtime');
@@ -48,6 +49,7 @@ describe('DataMigrationService', () => {
       memoryEnabled: true,
       kbEnabled: true,
       workspaceContextEnabled: true,
+      routinesEnabled: true,
       kbEmbedding: { model: 'nomic-embed-text', ollamaHost: 'http://localhost:11434', dimensions: 768 },
     }));
     await fsp.writeFile(path.join(dataRoot, 'chat', 'workspaces.json'), JSON.stringify({
@@ -89,6 +91,7 @@ describe('DataMigrationService', () => {
         embeddingConfig: { model: 'nomic-embed-text' },
       },
       workspaceContext: { present: true, enabled: true },
+      routines: { present: true, enabled: true },
     });
     expect(entryNames).toContain(`data/chat/workspaces/${workspaceStorageKey}/knowledge/state.db`);
     expect(entryNames).toContain(`data/chat/workspaces/${workspaceStorageKey}/knowledge/vectors/PG_VERSION`);

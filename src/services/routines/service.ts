@@ -58,8 +58,10 @@ export interface RoutinesChatService {
   getWorkspaceContextDir(hash: string): string;
   getWorkspaceContextEnabled(hash: string): Promise<boolean>;
   getWorkspaceKbEnabled(hash: string): Promise<boolean>;
+  getWorkspaceRoutinesEnabled(hash: string): Promise<boolean>;
   getKbKnowledgeDir(hash: string): string;
   getKbState?(hash: string): Promise<KbState>;
+  listRoutinesEnabledWorkspaceHashes?(): Promise<string[]>;
   listWorkspaces?(opts?: { archived?: boolean; includeArchived?: boolean }): Promise<Array<{ workspaceId: string; archived?: boolean }>>;
 }
 
@@ -130,6 +132,7 @@ export class RoutinesService {
   }
 
   async getRoutinePersistentStateExplorerDir(workspaceRef: string, routineId: string): Promise<string | null> {
+    if (!(await this.workspaceEnabled(workspaceRef))) return null;
     const manifest = await this.readManifest(workspaceRef, routineId);
     if (!manifest) return null;
     const routineDir = this.getRoutineDir(workspaceRef, manifest.id);
@@ -139,6 +142,7 @@ export class RoutinesService {
   }
 
   async getRoutineRunOutputDir(workspaceRef: string, routineId: string, runId: string): Promise<string | null> {
+    if (!(await this.workspaceEnabled(workspaceRef))) return null;
     const manifest = await this.readManifest(workspaceRef, routineId);
     if (!manifest) return null;
     const runtime = await this.readRuntimeState(workspaceRef, manifest.id);
@@ -154,6 +158,7 @@ export class RoutinesService {
   }
 
   async getRoutineOutputsDir(workspaceRef: string, routineId: string): Promise<string | null> {
+    if (!(await this.workspaceEnabled(workspaceRef))) return null;
     const manifest = await this.readManifest(workspaceRef, routineId);
     if (!manifest) return null;
     const routineDir = this.getRoutineDir(workspaceRef, manifest.id);
@@ -177,10 +182,27 @@ export class RoutinesService {
     await this.refreshIndex(workspaceRef);
   }
 
+  async uninstallWorkspaceInstructions(workspaceRef: string): Promise<void> {
+    const workspacePath = await this.chatService.getWorkspacePath(workspaceRef);
+    if (!workspacePath) throw new Error('Workspace not found');
+    const agentsPath = path.join(workspacePath, 'AGENTS.md');
+    let current = '';
+    try {
+      current = await fsp.readFile(agentsPath, 'utf8');
+    } catch (err: unknown) {
+      if ((err as NodeJS.ErrnoException).code === 'ENOENT') return;
+      throw err;
+    }
+    const withoutManaged = removeManagedBlock(current).trimEnd();
+    const next = withoutManaged ? `${withoutManaged}\n` : '';
+    if (next !== current) await atomicWriteFile(agentsPath, next, 'utf8');
+  }
+
   async getSettingsResponse(workspaceRef: string): Promise<RoutineSettingsEnvelope> {
     const settings = await this.readWorkspaceSettings(workspaceRef);
     const globalSettings = await this.chatService.getSettings();
     return {
+      enabled: await this.workspaceEnabled(workspaceRef),
       routinesDir: this.getRoutinesDir(workspaceRef),
       authoringPath: this.getAuthoringPath(workspaceRef),
       notification: workspaceRoutineSettingsResponse(settings, globalSettings),
@@ -278,6 +300,7 @@ export class RoutinesService {
   }
 
   async listRoutines(workspaceRef: string): Promise<RoutineListItem[]> {
+    if (!(await this.workspaceEnabled(workspaceRef))) return [];
     await this.ensureWorkspace(workspaceRef);
     const itemsDir = this.getItemsDir(workspaceRef);
     let dirs: string[];
@@ -312,6 +335,7 @@ export class RoutinesService {
   }
 
   async getRoutine(workspaceRef: string, routineId: string): Promise<(RoutineListItem & { routineContent: string; runs: RoutineRunRecord[] }) | null> {
+    if (!(await this.workspaceEnabled(workspaceRef))) return null;
     await this.ensureWorkspace(workspaceRef);
     const manifest = await this.readManifest(workspaceRef, routineId);
     if (!manifest) return null;
@@ -337,6 +361,7 @@ export class RoutinesService {
   }
 
   async installRoutine(workspaceRef: string, routineId: string, state: 'enabled' | 'disabled'): Promise<RoutineListItem | null> {
+    if (!(await this.workspaceEnabled(workspaceRef))) return null;
     const manifest = await this.readManifest(workspaceRef, routineId);
     if (!manifest) return null;
     const next = { ...manifest, state };
@@ -350,6 +375,7 @@ export class RoutinesService {
     routineId: string,
     patch: { manifest?: Partial<RoutineManifest>; routineContent?: string },
   ): Promise<RoutineListItem | null> {
+    if (!(await this.workspaceEnabled(workspaceRef))) return null;
     const current = await this.readManifest(workspaceRef, routineId);
     if (!current) return null;
     const next = validateRoutineManifest({
@@ -369,6 +395,7 @@ export class RoutinesService {
   }
 
   async deleteRoutine(workspaceRef: string, routineId: string): Promise<boolean> {
+    if (!(await this.workspaceEnabled(workspaceRef))) return false;
     const manifest = await this.readManifest(workspaceRef, routineId);
     if (!manifest) return false;
     if (this.isRunning(workspaceRef, manifest.id)) {
@@ -380,6 +407,7 @@ export class RoutinesService {
   }
 
   async validateProposalMarker(workspaceRef: string, marker: string): Promise<RoutineProposalMarkerResult | null> {
+    if (!(await this.workspaceEnabled(workspaceRef))) return null;
     await this.ensureWorkspace(workspaceRef);
     if (!path.isAbsolute(marker)) return null;
     const markerPath = path.resolve(marker);
@@ -412,6 +440,7 @@ export class RoutinesService {
   }
 
   async runRoutine(workspaceRef: string, routineId: string, opts: RoutineRunOptions): Promise<RoutineRunRecord | null> {
+    if (!(await this.workspaceEnabled(workspaceRef))) return null;
     const key = this.runningKey(workspaceRef, routineId);
     if (this.starting.has(key) || this.running.has(key)) {
       throw new Error('Routine run already running');
@@ -522,6 +551,10 @@ export class RoutinesService {
   private async resolveRuntime(manifest: RoutineManifest): Promise<CliProfileRuntime> {
     if (!this.chatService.resolveCliProfileRuntime) throw new Error('CLI profile runtime resolution is unavailable');
     return this.chatService.resolveCliProfileRuntime(manifest.harness?.cliProfileId || null, null);
+  }
+
+  private async workspaceEnabled(workspaceRef: string): Promise<boolean> {
+    return this.chatService.getWorkspaceRoutinesEnabled(workspaceRef);
   }
 
   private async buildRunEnvelope(
@@ -827,6 +860,9 @@ export class RoutinesService {
   }
 
   private async listWorkspaceRefsForScheduler(): Promise<string[]> {
+    if (this.chatService.listRoutinesEnabledWorkspaceHashes) {
+      return this.chatService.listRoutinesEnabledWorkspaceHashes();
+    }
     if (this.chatService.listWorkspaces) {
       const workspaces = await this.chatService.listWorkspaces({ includeArchived: false });
       return workspaces.filter((workspace) => !workspace.archived).map((workspace) => workspace.workspaceId);

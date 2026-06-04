@@ -3115,6 +3115,19 @@ export class ChatService {
     return this._featureSettingsStore.listWorkspaceContextEnabledWorkspaceHashes();
   }
 
+  /** Per-workspace Workspace Routines enable/disable (stored on the workspace index). */
+  async getWorkspaceRoutinesEnabled(hash: string): Promise<boolean> {
+    return this._featureSettingsStore.getRoutinesEnabled(this._workspaceIdForRef(hash));
+  }
+
+  async setWorkspaceRoutinesEnabled(hash: string, enabled: boolean): Promise<boolean | null> {
+    return this._featureSettingsStore.setRoutinesEnabled(this._workspaceIdForRef(hash), enabled);
+  }
+
+  async listRoutinesEnabledWorkspaceHashes(): Promise<string[]> {
+    return this._featureSettingsStore.listRoutinesEnabledWorkspaceHashes();
+  }
+
   async getWorkspaceContextStatus(hash: string): Promise<ConversationWorkspaceContextStatus> {
     const enabled = await this.getWorkspaceContextEnabled(hash);
     const contextDir = this.getWorkspaceContextDir(hash);

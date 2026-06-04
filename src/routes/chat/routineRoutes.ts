@@ -1,6 +1,7 @@
 import express from 'express';
 import { csrfGuard } from '../../middleware/csrf';
 import {
+  validateRoutineEnabledRequest,
   validateRoutineInstallRequest,
   validateRoutineProposalValidationRequest,
   validateRoutineUpdateRequest,
@@ -29,11 +30,37 @@ export function createRoutineRouter(opts: RoutineRoutesOptions): express.Router 
       res.set('Cache-Control', 'no-store');
       const workspaceId = param(req, 'workspaceId');
       if (!(await chatService.getWorkspacePath(workspaceId))) return res.status(404).json({ error: 'Workspace not found' });
+      const enabled = await chatService.getWorkspaceRoutinesEnabled(workspaceId);
+      if (!enabled) await routinesService.uninstallWorkspaceInstructions(workspaceId);
       res.json({
-        routines: await routinesService.listRoutines(workspaceId),
+        enabled,
+        routines: enabled ? await routinesService.listRoutines(workspaceId) : [],
         settings: await routinesService.getSettingsResponse(workspaceId),
       });
     } catch (err: unknown) {
+      res.status(500).json({ error: (err as Error).message });
+    }
+  });
+
+  router.put('/workspaces/:workspaceId/routines/enabled', csrfGuard, async (req: Request, res: Response) => {
+    try {
+      const workspaceId = param(req, 'workspaceId');
+      if (!(await chatService.getWorkspacePath(workspaceId))) return res.status(404).json({ error: 'Workspace not found' });
+      const { enabled } = validateRoutineEnabledRequest(req.body);
+      const persisted = await chatService.setWorkspaceRoutinesEnabled(workspaceId, enabled);
+      if (persisted === null) return res.status(404).json({ error: 'Workspace not found' });
+      if (persisted) {
+        await routinesService.ensureWorkspace(workspaceId);
+      } else {
+        await routinesService.uninstallWorkspaceInstructions(workspaceId);
+      }
+      res.json({
+        enabled: persisted,
+        routines: persisted ? await routinesService.listRoutines(workspaceId) : [],
+        settings: await routinesService.getSettingsResponse(workspaceId),
+      });
+    } catch (err: unknown) {
+      if (isContractValidationError(err)) return res.status(400).json({ error: err.message });
       res.status(500).json({ error: (err as Error).message });
     }
   });
@@ -65,7 +92,7 @@ export function createRoutineRouter(opts: RoutineRoutesOptions): express.Router 
   router.post('/workspaces/:workspaceId/routines/telegram-destination/start', csrfGuard, async (req: Request, res: Response) => {
     try {
       const workspaceId = param(req, 'workspaceId');
-      if (!(await chatService.getWorkspacePath(workspaceId))) return res.status(404).json({ error: 'Workspace not found' });
+      if (!(await requireRoutinesEnabled(chatService, workspaceId, res))) return;
       res.json(await routinesService.startTelegramDestinationConnect(workspaceId));
     } catch (err: unknown) {
       res.status(500).json({ error: (err as Error).message });
@@ -75,7 +102,7 @@ export function createRoutineRouter(opts: RoutineRoutesOptions): express.Router 
   router.post('/workspaces/:workspaceId/routines/telegram-destination/poll', csrfGuard, async (req: Request, res: Response) => {
     try {
       const workspaceId = param(req, 'workspaceId');
-      if (!(await chatService.getWorkspacePath(workspaceId))) return res.status(404).json({ error: 'Workspace not found' });
+      if (!(await requireRoutinesEnabled(chatService, workspaceId, res))) return;
       res.json(await routinesService.pollTelegramDestinationConnect(workspaceId));
     } catch (err: unknown) {
       res.status(500).json({ error: (err as Error).message });
@@ -85,7 +112,7 @@ export function createRoutineRouter(opts: RoutineRoutesOptions): express.Router 
   router.post('/workspaces/:workspaceId/routines/proposals/validate', csrfGuard, async (req: Request, res: Response) => {
     try {
       const workspaceId = param(req, 'workspaceId');
-      if (!(await chatService.getWorkspacePath(workspaceId))) return res.status(404).json({ error: 'Workspace not found' });
+      if (!(await requireRoutinesEnabled(chatService, workspaceId, res))) return;
       const request = validateRoutineProposalValidationRequest(req.body);
       const proposals = request.marker
         ? [await routinesService.validateProposalMarker(workspaceId, request.marker)].filter(Boolean)
@@ -100,7 +127,7 @@ export function createRoutineRouter(opts: RoutineRoutesOptions): express.Router 
   router.post('/workspaces/:workspaceId/routines/repair-instructions', csrfGuard, async (req: Request, res: Response) => {
     try {
       const workspaceId = param(req, 'workspaceId');
-      if (!(await chatService.getWorkspacePath(workspaceId))) return res.status(404).json({ error: 'Workspace not found' });
+      if (!(await requireRoutinesEnabled(chatService, workspaceId, res))) return;
       await routinesService.ensureWorkspace(workspaceId);
       res.json({ ok: true, settings: await routinesService.getSettingsResponse(workspaceId) });
     } catch (err: unknown) {
@@ -112,7 +139,7 @@ export function createRoutineRouter(opts: RoutineRoutesOptions): express.Router 
     try {
       res.set('Cache-Control', 'no-store');
       const workspaceId = param(req, 'workspaceId');
-      if (!(await chatService.getWorkspacePath(workspaceId))) return res.status(404).json({ error: 'Workspace not found' });
+      if (!(await requireRoutinesEnabled(chatService, workspaceId, res))) return;
       const routine = await routinesService.getRoutine(workspaceId, param(req, 'routineId'));
       if (!routine) return res.status(404).json({ error: 'Routine not found' });
       res.json({ routine });
@@ -124,7 +151,7 @@ export function createRoutineRouter(opts: RoutineRoutesOptions): express.Router 
   router.put('/workspaces/:workspaceId/routines/:routineId', csrfGuard, async (req: Request, res: Response) => {
     try {
       const workspaceId = param(req, 'workspaceId');
-      if (!(await chatService.getWorkspacePath(workspaceId))) return res.status(404).json({ error: 'Workspace not found' });
+      if (!(await requireRoutinesEnabled(chatService, workspaceId, res))) return;
       const request = validateRoutineUpdateRequest(req.body);
       const routine = await routinesService.updateRoutine(workspaceId, param(req, 'routineId'), request);
       if (!routine) return res.status(404).json({ error: 'Routine not found' });
@@ -138,7 +165,7 @@ export function createRoutineRouter(opts: RoutineRoutesOptions): express.Router 
   router.post('/workspaces/:workspaceId/routines/:routineId/install', csrfGuard, async (req: Request, res: Response) => {
     try {
       const workspaceId = param(req, 'workspaceId');
-      if (!(await chatService.getWorkspacePath(workspaceId))) return res.status(404).json({ error: 'Workspace not found' });
+      if (!(await requireRoutinesEnabled(chatService, workspaceId, res))) return;
       const { state } = validateRoutineInstallRequest(req.body);
       const routine = await routinesService.installRoutine(workspaceId, param(req, 'routineId'), state);
       if (!routine) return res.status(404).json({ error: 'Routine not found' });
@@ -153,7 +180,7 @@ export function createRoutineRouter(opts: RoutineRoutesOptions): express.Router 
     try {
       const workspaceId = param(req, 'workspaceId');
       const routineId = param(req, 'routineId');
-      if (!(await chatService.getWorkspacePath(workspaceId))) return res.status(404).json({ error: 'Workspace not found' });
+      if (!(await requireRoutinesEnabled(chatService, workspaceId, res))) return;
       const routine = await routinesService.getRoutine(workspaceId, routineId);
       if (!routine) return res.status(404).json({ error: 'Routine not found' });
       if (routine.manifest.state === 'proposed') {
@@ -178,7 +205,7 @@ export function createRoutineRouter(opts: RoutineRoutesOptions): express.Router 
   router.delete('/workspaces/:workspaceId/routines/:routineId', csrfGuard, async (req: Request, res: Response) => {
     try {
       const workspaceId = param(req, 'workspaceId');
-      if (!(await chatService.getWorkspacePath(workspaceId))) return res.status(404).json({ error: 'Workspace not found' });
+      if (!(await requireRoutinesEnabled(chatService, workspaceId, res))) return;
       const deleted = await routinesService.deleteRoutine(workspaceId, param(req, 'routineId'));
       if (!deleted) return res.status(404).json({ error: 'Routine not found' });
       res.json({ ok: true });
@@ -190,6 +217,18 @@ export function createRoutineRouter(opts: RoutineRoutesOptions): express.Router 
   });
 
   return router;
+}
+
+async function requireRoutinesEnabled(chatService: ChatService, workspaceId: string, res: Response): Promise<boolean> {
+  if (!(await chatService.getWorkspacePath(workspaceId))) {
+    res.status(404).json({ error: 'Workspace not found' });
+    return false;
+  }
+  if (!(await chatService.getWorkspaceRoutinesEnabled(workspaceId))) {
+    res.status(403).json({ error: 'Workspace Routines are disabled' });
+    return false;
+  }
+  return true;
 }
 
 async function waitForRoutineRunSnapshot(

@@ -6,6 +6,15 @@
   gap: 10px;
 }
 
+.ws-routine-feature-toggle{
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 10px;
+}
+
+.ws-routine-feature-toggle .ws-toggle{
+  margin: 0;
+}
+
 .ws-routine-rail-head{
   display: flex;
   align-items: flex-start;

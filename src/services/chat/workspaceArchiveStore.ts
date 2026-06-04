@@ -195,6 +195,7 @@ export class WorkspaceArchiveStore {
       memoryEnabled: Boolean(index.memoryEnabled),
       kbEnabled: Boolean(index.kbEnabled),
       workspaceContextEnabled: Boolean(index.workspaceContextEnabled),
+      routinesEnabled: Boolean(index.routinesEnabled),
     };
   }
 
@@ -220,6 +221,7 @@ export class WorkspaceArchiveStore {
       `- Memory enabled: ${Boolean(index.memoryEnabled)}`,
       `- Knowledge Base enabled: ${Boolean(index.kbEnabled)}`,
       `- Workspace Context enabled: ${Boolean(index.workspaceContextEnabled)}`,
+      `- Workspace Routines enabled: ${Boolean(index.routinesEnabled)}`,
       ...(archive.note ? ['', '## Archive Note', '', archive.note] : []),
       '',
     ];
