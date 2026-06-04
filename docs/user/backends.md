@@ -86,9 +86,9 @@ Backend selection is per conversation. New conversations remember the currently
 selected default, and existing conversation context remains in Agent Cockpit's
 workspace storage regardless of which backend produced it.
 
-Provider-neutral context features such as Memory, Knowledge Base, and Workspace
-Context are designed to make switching backends useful instead of starting from
-an empty prompt every time.
+Provider-neutral context features such as Memory, Knowledge Base, Workspace
+Context, and Workspace Routines are designed to make switching backends useful
+instead of starting from an empty prompt every time.
 
 ## Concurrent Conversations On The Same Repo
 

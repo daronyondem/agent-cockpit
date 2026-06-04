@@ -26,10 +26,10 @@ diagrams line up so future changes can see what must be updated.
 
 | Documentation group | Files | Purpose |
 |---|---|---|
-| Project entry and setup | `README.md`, `ONBOARDING.md`, `BACKENDS.md`, `docs/README.md`, `docs/user/*.md` | Product overview, self-hosting, backend capability comparison, and end-user guides including local Ollama/OpenCode model setup. |
+| Project entry and setup | `README.md`, `ONBOARDING.md`, `BACKENDS.md`, `docs/README.md`, `docs/user/*.md` | Product overview, self-hosting, backend capability comparison, and end-user guides including local Ollama/OpenCode model setup and Workspace Routines. |
 | Agent guidance | `AGENTS.md`, `CLAUDE.md`, `.kiro/steering/claude-md.md` | Repository instructions for coding agents and cross-tool compatibility. |
 | Canonical spec index | `SPEC.md`, `docs/SPEC.md` | Thin root redirect plus the canonical spec table of contents. |
-| Canonical feature specs | `docs/spec-data-models.md`, `docs/spec-api-endpoints.md`, `docs/spec-backend-services.md`, `docs/spec-workspace-context.md`, `docs/spec-server-security.md`, `docs/spec-frontend.md`, `docs/spec-mobile-pwa.md`, `docs/spec-deployment.md`, `docs/spec-testing.md` | Current implemented behavior by area. |
+| Canonical feature specs | `docs/spec-data-models.md`, `docs/spec-api-endpoints.md`, `docs/spec-backend-services.md`, `docs/spec-workspace-context.md`, `docs/spec-routines.md`, `docs/spec-server-security.md`, `docs/spec-frontend.md`, `docs/spec-mobile-pwa.md`, `docs/spec-deployment.md`, `docs/spec-testing.md` | Current implemented behavior by area. |
 | Coverage and diagrams | `docs/spec-coverage.md` | This traceability matrix and cross-feature flow diagrams. |
 | Release operations | `docs/release-workflow.md`, `docs/release-notes-prompt.md`, `docs/releases/README.md`, `docs/releases/v*.md` | Agent-owned release preparation, release-note generation prompt, and per-release developer detail documents. |
 | Design/planning docs | `docs/design/claude-code-interactive/*.md`, `docs/design/knowledge-base/*.md`, `docs/design/context-map.md`, `CLI_PROFILES_MULTI_ACCOUNT_PLAN.md` | Implemented design intent and historical planning context. Status headings decide whether content is current behavior or historical support. |
@@ -54,6 +54,7 @@ diagrams line up so future changes can see what must be updated.
 | Knowledge Base upload, conversion, handlers, document structure, source ranges, chunk planning, glossary | `src/services/knowledgeBase/ingestion.ts`, `src/services/knowledgeBase/workspaceTaskQueue.ts`, `src/services/knowledgeBase/handlers/index.ts`, `src/services/knowledgeBase/handlers/pdf.ts`, `src/services/knowledgeBase/handlers/docx.ts`, `src/services/knowledgeBase/handlers/pptx.ts`, `src/services/knowledgeBase/handlers/passthrough.ts`, `src/services/knowledgeBase/ingestion/pageConversion.ts`, `src/services/knowledgeBase/ingestion/pdfSignals.ts`, `src/services/knowledgeBase/ingestion/pptxSignals.ts`, `src/services/knowledgeBase/ingestion/pptxSlideRender.ts`, `src/services/knowledgeBase/libreOffice.ts`, `src/services/knowledgeBase/pandoc.ts`, `src/services/knowledgeBase/documentStructure.ts`, `src/services/knowledgeBase/sourceRange.ts`, `src/services/knowledgeBase/chunkPlanner.ts`, `src/services/knowledgeBase/glossary.ts`, `src/services/knowledgeBase/db.ts`, `src/routes/chat.ts`, `src/routes/chat/kbRoutes.ts` | `docs/spec-backend-services.md`, `docs/spec-data-models.md`, `docs/spec-api-endpoints.md`, `docs/design/knowledge-base/ingestion-hybrid.md`, `docs/design/knowledge-base/vnext-implementation-plan.md` | `test/knowledgeBase.*.test.ts`, `test/chat.kb.test.ts`, `test/kbSearchMcp.test.ts`, `test/frontendRoutes.test.ts` | KB pipeline below and `docs/design/knowledge-base/ingestion-hybrid.md`. |
 | Knowledge Base dreaming, synthesis, reflections, embeddings, vector search, MCP search tools, auto-dream | `src/services/knowledgeBase/digest.ts`, `src/services/knowledgeBase/dream.ts`, `src/services/knowledgeBase/dreamOps.ts`, `src/services/knowledgeBase/dreamMarkdown.ts`, `src/services/knowledgeBase/embeddings.ts`, `src/services/knowledgeBase/vectorStore.ts`, `src/services/knowledgeBase/autoDream.ts`, `src/services/kbSearchMcp/index.ts`, `src/services/kbSearchMcp/stub.cjs`, `web/AgentCockpitWeb/src/screens/kbBrowser.jsx`, `web/AgentCockpitWeb/src/synthesisAtlas.js`, `web/AgentCockpitWeb/src/stepper.css` | `docs/spec-backend-services.md`, `docs/spec-data-models.md`, `docs/spec-api-endpoints.md`, `docs/spec-frontend.md`, `docs/design/knowledge-base/vnext-implementation-plan.md`, ADRs 0029, 0033-0035, 0039 | `test/knowledgeBase.*.test.ts`, `test/kbSearchMcp.test.ts`, `test/synthesisAtlas.test.ts`, `test/frontendRoutes.test.ts` | KB pipeline below. |
 | Workspace Context markdown operating memory, references, and assets | `src/services/workspaceContext/defaults.ts`, `src/services/workspaceContext/service.ts`, `src/routes/chat/workspaceContextRoutes.ts`, `src/contracts/workspaceContext.ts`, `src/routes/chat.ts`, `src/services/chatService.ts`, `src/services/chat/workspaceFeatureSettingsStore.ts`, `web/AgentCockpitWeb/src/workspaceSettings.jsx`, `web/AgentCockpitWeb/src/screens/settingsScreen.jsx`, `web/AgentCockpitWeb/src/fileLinks.ts`, `web/AgentCockpitWeb/src/streamStore.js`, `web/AgentCockpitWeb/src/chat/composerNotifications.jsx`, `web/AgentCockpitWeb/src/appShell.jsx` | `docs/spec-workspace-context.md`, `docs/spec-api-endpoints.md`, `docs/spec-data-models.md`, `docs/spec-backend-services.md`, `docs/spec-frontend.md`, `docs/adr/0081-make-workspace-context-consume-memory-inbox.md`, `docs/adr/0082-add-workspace-context-references-and-assets.md` | `test/workspaceContext.service.test.ts`, `test/chat.workspaceContext.test.ts`, `test/frontendRoutes.test.ts`, `test/fileLinks.test.ts`, `test/streamStore.test.ts`, `test/settingsService.test.ts`, `test/chat.workspaceFeatureSettingsStore.test.ts`, `test/chat.workspaceIdentityStore.test.ts` | Workspace Context flow below. |
+| Workspace Routines markdown workflows and scheduled runs | `src/contracts/routines.ts`, `src/services/routines/service.ts`, `src/services/settingsService.ts`, `src/routes/chat/routineRoutes.ts`, `src/routes/chat/explorerRoutes.ts`, `src/routes/chat/statusRoutes.ts`, `src/routes/chat.ts`, `server.ts`, `web/AgentCockpitWeb/src/api.js`, `web/AgentCockpitWeb/src/screens/filesBrowser.jsx`, `web/AgentCockpitWeb/src/screens/settingsScreen.jsx`, `web/AgentCockpitWeb/src/workspaceSettings.jsx`, `web/AgentCockpitWeb/src/chat/messageParsing.ts`, `web/AgentCockpitWeb/src/chat/messageContent.jsx`, `web/AgentCockpitWeb/src/chat/chatLive.jsx`, `web/AgentCockpitWeb/src/styles/settings/shellForms.css`, `web/AgentCockpitWeb/src/styles/workspace/routines.css`, `web/AgentCockpitWeb/src/styles/chat/messages.css` | `docs/spec-routines.md`, `docs/spec-api-endpoints.md`, `docs/spec-data-models.md`, `docs/spec-backend-services.md`, `docs/spec-frontend.md`, `docs/spec-mobile-pwa.md`, `docs/parity-decisions.md`, `docs/adr/0084-represent-workspace-routines-as-markdown-workflows.md`, `docs/user/workspace-routines.md`, `docs/reference/data-layout.md` | `test/routines.service.test.ts`, `test/chat.routines.test.ts`, `test/settingsService.test.ts`, `test/frontendRoutes.test.ts` | Workspace Routines flow below. |
 | Desktop V2 frontend | `web/AgentCockpitWeb/index.html`, `web/AgentCockpitWeb/vite.config.ts`, `web/AgentCockpitWeb/tsconfig.json`, `web/AgentCockpitWeb/src/api.js`, `web/AgentCockpitWeb/src/streamStore.js`, `web/AgentCockpitWeb/src/stream/*.ts`, `web/AgentCockpitWeb/src/shell.jsx`, `web/AgentCockpitWeb/src/shellState.jsx`, `web/AgentCockpitWeb/src/chat/*.jsx`, `web/AgentCockpitWeb/src/chat/*.js`, `web/AgentCockpitWeb/src/syntaxHighlight.js`, `web/AgentCockpitWeb/src/*.jsx`, `web/AgentCockpitWeb/src/*.js`, `web/AgentCockpitWeb/src/*.ts`, `web/AgentCockpitWeb/src/*.css`, `web/AgentCockpitWeb/src/styles/**/*.css`, generated `public/v2-built/*`, `scripts/check-web-bundle-size.js` | `docs/spec-frontend.md`, `docs/spec-api-endpoints.md`, `docs/parity-decisions.md`, ADRs 0048, 0049, 0054, and 0077 | `npm run web:typecheck`, `npm run web:build`, `npm run web:budget`, `test/frontendRoutes.test.ts`, `test/streamFrameReducer.test.ts`, `test/streamStore.test.ts`, `test/planUsageStores.test.ts`, `test/tabIndicator.test.ts`, `test/synthesisAtlas.test.ts`, `test/webBundleBudget.test.ts` | Frontend/client flow below. |
 | Shared static assets and install metadata | `public/favicon.svg`, `public/logo-full-no-text.svg`, `public/logo-small.svg`, `public/logo-text.svg`, `public/icons/*.svg`, `mobile/AgentCockpitPWA/public/manifest.webmanifest`, `mobile/AgentCockpitPWA/public/icon.svg`, `mobile/AgentCockpitPWA/public/icon-192.png`, `mobile/AgentCockpitPWA/public/icon-512.png`, `mobile/AgentCockpitPWA/public/apple-touch-icon.png` | `docs/spec-data-models.md`, `docs/spec-frontend.md`, `docs/spec-mobile-pwa.md`, `docs/spec-deployment.md`, `README.md` | `test/frontendRoutes.test.ts`, `npm run mobile:build` | Frontend/client flow below. |
 | Mobile PWA | `mobile/AgentCockpitPWA/package.json`, `mobile/AgentCockpitPWA/tsconfig.json`, `mobile/AgentCockpitPWA/vite.config.ts`, `mobile/AgentCockpitPWA/index.html`, `mobile/AgentCockpitPWA/public/*`, `mobile/AgentCockpitPWA/src/main.tsx`, `mobile/AgentCockpitPWA/src/App.tsx`, `mobile/AgentCockpitPWA/src/appModel.ts`, `mobile/AgentCockpitPWA/src/mobileComponents.tsx`, `mobile/AgentCockpitPWA/src/mobileConversationListScreen.tsx`, `mobile/AgentCockpitPWA/src/mobileChatScreen.tsx`, `mobile/AgentCockpitPWA/src/mobileModals.tsx`, `mobile/AgentCockpitPWA/src/mobileConversationModals.tsx`, `mobile/AgentCockpitPWA/src/mobileSessionScreens.tsx`, `mobile/AgentCockpitPWA/src/mobileFileModals.tsx`, `mobile/AgentCockpitPWA/src/mobileIcons.tsx`, `mobile/AgentCockpitPWA/src/mobilePrimitives.tsx`, `mobile/AgentCockpitPWA/src/useMobileLifecycle.ts`, `mobile/AgentCockpitPWA/src/useViewportHeightVar.ts`, `mobile/AgentCockpitPWA/src/api.ts`, `mobile/AgentCockpitPWA/src/types.ts`, `mobile/AgentCockpitPWA/src/styles.css`, `mobile/AgentCockpitPWA/src/styles/mobile/**/*.css`, `mobile/AgentCockpitPWA/src/vite-env.d.ts`, browser-safe `src/contracts/*.ts` type imports, generated ignored `public/mobile-built/*` | `docs/spec-mobile-pwa.md`, `docs/spec-frontend.md`, `docs/parity-decisions.md`, ADRs 0025-0026, 0049, and 0050 | `npm run mobile:typecheck`, `npm run mobile:build`, `test/frontendRoutes.test.ts`, `test/mobileAppModel.test.ts`, `test/mobileBuildService.test.ts` | Frontend/client flow below. |
@@ -79,6 +80,7 @@ flowchart TD
   ChatRoutes --> Memory["Workspace Memory + Memory MCP"]
   ChatRoutes --> KB["Knowledge Base + KB MCP"]
   ChatRoutes --> WorkspaceContext["Workspace Context markdown"]
+  ChatRoutes --> Routines["Workspace Routines scheduler + runs"]
   ChatRoutes --> Updates["Self-update + CLI updates"]
   WS --> Browser
   StreamSupervisor --> WS
@@ -252,6 +254,29 @@ flowchart LR
 settings resolution, storage, instruction injection, scan and maintenance runs, scheduling,
 routes, UI, and quality gates.
 
+## Workspace Routines Flow
+
+```mermaid
+flowchart LR
+  Author["chat harness reads ROUTINE_AUTHORING.md"] --> Files["routines/items/<id>/manifest.json + routine.md"]
+  Files --> Marker["assistant proposal marker"]
+  Marker --> Card["desktop proposal card validates marker"]
+  Card --> Install["install enabled/disabled"]
+  Install --> Settings["Workspace Settings Routines tab"]
+  Settings --> Scheduler["RoutinesScheduler"]
+  Scheduler --> Run["runOneShot input.md"]
+  Run --> Output["run output/tmp/final/notify files"]
+  Run --> Persistent["persistent-state cross-run files"]
+  Output --> History["state.json run history"]
+  Output --> Browser["read-only output/state file browser scopes"]
+  Persistent --> Browser
+  Output --> Telegram["global Telegram bot + workspace destination"]
+```
+
+`docs/spec-routines.md` contains the full Workspace Routines details for
+storage, proposal markers, manifest validation, execution, scheduling,
+outreach, routes, UI, and tests.
+
 ## Frontend and Mobile Data Flow
 
 ```mermaid
@@ -270,7 +295,8 @@ flowchart TD
 
 Desktop V2 is the full administrative UI. The mobile PWA intentionally covers
 the mobile chat/file/session workflow and leaves settings-heavy surfaces such as
-KB, Memory, Workspace Context, and CLI updates to desktop V2.
+KB, Memory, Workspace Context, Workspace Routines, and CLI updates to desktop
+V2.
 
 ## Operations Flow
 

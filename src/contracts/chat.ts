@@ -89,7 +89,26 @@ export function validateSettingsRequest(body: unknown): Settings {
   validateOptionalObject(record.memory, 'memory');
   validateOptionalObject(record.knowledgeBase, 'knowledgeBase');
   validateOptionalObject(record.workspaceContext, 'workspaceContext');
+  validateIntegrations(record.integrations);
   return record as unknown as Settings;
+}
+
+function validateIntegrations(value: unknown): void {
+  if (value === undefined) return;
+  const integrations = asRecord(value, 'integrations must be an object');
+  if (integrations.telegram === undefined) return;
+  const telegram = asRecord(integrations.telegram, 'integrations.telegram must be an object');
+  optionalString(telegram, 'botToken', 'integrations.telegram.botToken must be a string');
+  optionalString(telegram, 'botUsername', 'integrations.telegram.botUsername must be a string');
+  optionalString(telegram, 'botId', 'integrations.telegram.botId must be a string');
+  optionalString(telegram, 'botFirstName', 'integrations.telegram.botFirstName must be a string');
+  optionalString(telegram, 'updatedAt', 'integrations.telegram.updatedAt must be a string');
+  if (telegram.configured !== undefined && typeof telegram.configured !== 'boolean') {
+    contractError('integrations.telegram.configured must be a boolean');
+  }
+  if (telegram.clearBotToken !== undefined && typeof telegram.clearBotToken !== 'boolean') {
+    contractError('integrations.telegram.clearBotToken must be a boolean');
+  }
 }
 
 function validateCliProfiles(value: unknown): void {

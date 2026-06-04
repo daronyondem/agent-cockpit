@@ -6,7 +6,7 @@ import { AgentApi } from '../api.js';
 import { resolveConversationArtifactHref, resolveLocalFileHref, resolveWorkspaceContextHref } from '../fileLinks';
 import { Ico } from '../icons.jsx';
 import hljs from '../syntaxHighlight.js';
-import { extractFileDeliveries, extractUploadedFiles } from './messageParsing';
+import { extractFileDeliveries, extractRoutineProposals, extractUploadedFiles } from './messageParsing';
 
 const CHAT_IMAGE_EXTS = /\.(png|jpe?g|gif|webp|svg|bmp)$/i;
 
@@ -14,11 +14,13 @@ const CHAT_IMAGE_EXTS = /\.(png|jpe?g|gif|webp|svg|bmp)$/i;
    lightbox openers to deeply nested text segments. */
 export const FileViewerContext = React.createContext({
   wsHash: null,
+  workspaceLabel: null,
   convId: null,
   workingDir: null,
   executionDir: null,
   openFileViewer: null,
   openLightbox: null,
+  onOpenWorkspaceSettings: null,
 });
 
 /* Fullscreen overlay for inline chat-message images. */
@@ -259,7 +261,11 @@ function GeneratedArtifactCard({ artifact, filename, viewPath, downloadUrl, imag
 
 export const TextSegment = React.memo(function TextSegment({ content }){
   const { wsHash, convId, workingDir, executionDir, openFileViewer, openLightbox } = React.useContext(FileViewerContext);
-  const { cleaned, files } = extractFileDeliveries(content);
+  const fileExtraction = extractFileDeliveries(content);
+  const routineExtraction = extractRoutineProposals(fileExtraction.cleaned);
+  const cleaned = routineExtraction.cleaned;
+  const files = fileExtraction.files;
+  const routineMarkers = routineExtraction.markers;
   const html = React.useMemo(() => renderMarkdown(cleaned), [cleaned]);
   const proseRef = React.useRef(null);
 
@@ -377,9 +383,128 @@ export const TextSegment = React.memo(function TextSegment({ content }){
           ))}
         </div>
       ) : null}
+      {routineMarkers.length ? (
+        <div className="routine-proposal-stack">
+          {routineMarkers.map((marker, i) => (
+            <RoutineProposalCard key={marker + ':' + i} marker={marker}/>
+          ))}
+        </div>
+      ) : null}
     </>
   );
 });
+
+function RoutineProposalCard({ marker }){
+  const { wsHash, workspaceLabel, onOpenWorkspaceSettings } = React.useContext(FileViewerContext);
+  const installKey = React.useMemo(() => routineProposalInstallKey(wsHash, marker), [marker, wsHash]);
+  const [busy, setBusy] = React.useState(false);
+  const [status, setStatus] = React.useState('');
+  const [installed, setInstalled] = React.useState(() => loadRoutineProposalInstalled(installKey));
+
+  React.useEffect(() => {
+    let cancelled = false;
+    const markInstalled = () => {
+      saveRoutineProposalInstalled(installKey);
+      if (!cancelled) {
+        setInstalled(true);
+        setStatus('Installed');
+      }
+    };
+    const locallyInstalled = loadRoutineProposalInstalled(installKey);
+    setInstalled(locallyInstalled);
+    setStatus('');
+    if (!wsHash || !marker || locallyInstalled) return () => { cancelled = true; };
+    AgentApi.workspace.validateRoutineProposal(wsHash, { marker }).then((res) => {
+      const proposal = res && Array.isArray(res.proposals) ? res.proposals[0] : null;
+      if (routineProposalIsInstalled(proposal)) markInstalled();
+    }).catch(() => {});
+    const onInstalled = (event) => {
+      if (event && event.detail && event.detail.installKey === installKey) markInstalled();
+    };
+    window.addEventListener('ac:routine-proposal-installed', onInstalled);
+    return () => {
+      cancelled = true;
+      window.removeEventListener('ac:routine-proposal-installed', onInstalled);
+    };
+  }, [installKey, marker, wsHash]);
+
+  async function validate(){
+    if (!wsHash) throw new Error('Workspace unavailable');
+    const res = await AgentApi.workspace.validateRoutineProposal(wsHash, { marker });
+    const proposal = res && Array.isArray(res.proposals) ? res.proposals[0] : null;
+    if (!proposal || !proposal.routineId) throw new Error('Routine proposal is no longer available');
+    return proposal;
+  }
+
+  async function install(state){
+    if (installed) return;
+    setBusy(true);
+    setStatus('');
+    try {
+      const proposal = await validate();
+      if (!routineProposalIsInstalled(proposal)) {
+        await AgentApi.workspace.installRoutine(wsHash, proposal.routineId, state);
+      }
+      saveRoutineProposalInstalled(installKey);
+      setInstalled(true);
+      setStatus('Installed');
+      window.dispatchEvent(new CustomEvent('ac:routine-proposal-installed', { detail: { installKey } }));
+      if (onOpenWorkspaceSettings) onOpenWorkspaceSettings(wsHash, workspaceLabel || 'workspace', 'routines');
+    } catch (err) {
+      setStatus((err && err.message) || String(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="routine-proposal-card">
+      <span className="routine-proposal-icon" aria-hidden="true">{Ico.clock(16)}</span>
+      <span className="routine-proposal-main">
+        <b>{installed ? 'Installed' : 'Routine proposal'}</b>
+      </span>
+      <span className="routine-proposal-actions">
+        {installed ? (
+          <span className="routine-proposal-installed">{Ico.check(12)} Installed</span>
+        ) : (
+          <>
+            <button type="button" className="btn primary file-card-btn" disabled={busy || !wsHash} onClick={() => install('enabled')}>
+              {busy ? 'Installing...' : 'Install'}
+            </button>
+            <button type="button" className="btn ghost file-card-btn" disabled={busy || !wsHash} onClick={() => install('disabled')}>Install disabled</button>
+          </>
+        )}
+      </span>
+      {status && !installed ? <span className="routine-proposal-status">{status}</span> : null}
+    </div>
+  );
+}
+
+function routineProposalInstallKey(wsHash, marker){
+  if (!wsHash || !marker) return '';
+  return `ac:v2:routine-proposal-installed:${wsHash}:${encodeURIComponent(marker)}`;
+}
+
+function routineProposalIsInstalled(proposal){
+  const state = proposal && proposal.manifest && proposal.manifest.state;
+  return state === 'enabled' || state === 'disabled';
+}
+
+function loadRoutineProposalInstalled(key){
+  if (!key) return false;
+  try {
+    return window.localStorage.getItem(key) === '1';
+  } catch {
+    return false;
+  }
+}
+
+function saveRoutineProposalInstalled(key){
+  if (!key) return;
+  try {
+    window.localStorage.setItem(key, '1');
+  } catch {}
+}
 
 function FileDeliveryCard({ filePath, wsHash, convId, onOpenView }){
   const filename = (filePath.split('/').pop() || filePath);

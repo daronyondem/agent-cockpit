@@ -41,6 +41,54 @@ export const DEFAULT_SETTINGS: Settings = {
   },
 };
 
+export function redactSettingsSecrets(settings: Settings): Settings {
+  const telegram = settings.integrations?.telegram;
+  if (!telegram) return settings;
+  const { botToken: _botToken, clearBotToken: _clearBotToken, ...safeTelegram } = telegram;
+  const configured = Boolean(typeof telegram.botToken === 'string' && telegram.botToken.trim());
+  return {
+    ...settings,
+    integrations: {
+      ...(settings.integrations || {}),
+      telegram: {
+        ...safeTelegram,
+        configured,
+      },
+    },
+  };
+}
+
+export function mergeSettingsSecretsForSave(incoming: Settings, current: Settings): Settings {
+  const incomingTelegram = incoming.integrations?.telegram;
+  if (!incomingTelegram) return incoming;
+
+  const tokenInput = typeof incomingTelegram.botToken === 'string'
+    ? incomingTelegram.botToken.trim()
+    : undefined;
+  const shouldClearToken = incomingTelegram.clearBotToken === true;
+  const currentToken = current.integrations?.telegram?.botToken;
+  const { configured: _configured, clearBotToken: _clearBotToken, ...nextTelegram } = incomingTelegram;
+
+  if (shouldClearToken) {
+    delete nextTelegram.botToken;
+  } else if (tokenInput) {
+    nextTelegram.botToken = tokenInput;
+    nextTelegram.updatedAt = new Date().toISOString();
+  } else if (currentToken) {
+    nextTelegram.botToken = currentToken;
+  } else {
+    delete nextTelegram.botToken;
+  }
+
+  return {
+    ...incoming,
+    integrations: {
+      ...(incoming.integrations || {}),
+      telegram: nextTelegram,
+    },
+  };
+}
+
 export class SettingsService {
   private readonly _settingsFile: string;
 
@@ -101,7 +149,24 @@ export class SettingsService {
   }
 
   private _normalizeSettings(settings: Settings): Settings {
-    return this._withValidDefaultServiceTier(this._withFirstAvailableCliProfileDefault(this._normalizeCliProfiles(settings)));
+    return this._normalizeIntegrations(this._withValidDefaultServiceTier(this._withFirstAvailableCliProfileDefault(this._normalizeCliProfiles(settings))));
+  }
+
+  private _normalizeIntegrations(settings: Settings): Settings {
+    const telegram = settings.integrations?.telegram;
+    if (!telegram) return settings;
+    const { configured: _configured, clearBotToken: _clearBotToken, botToken: rawBotToken, ...safeTelegram } = telegram;
+    const botToken = typeof rawBotToken === 'string' ? rawBotToken.trim() : '';
+    return {
+      ...settings,
+      integrations: {
+        ...(settings.integrations || {}),
+        telegram: {
+          ...safeTelegram,
+          ...(botToken ? { botToken } : {}),
+        },
+      },
+    };
   }
 
   private _withLegacyDefaultCliProfile(settings: Settings): Settings {

@@ -16,20 +16,68 @@ import { param } from './routeUtils';
 
 type ResolveOk = { ok: true; abs: string; root: string };
 type ResolveErr = { ok: false; status: number; error: string };
+type ExplorerScopeOptions = { allowRoutineOutput?: boolean };
+type RoutinesExplorerScope = {
+  getRoutineRunOutputDir(workspaceRef: string, routineId: string, runId: string): Promise<string | null>;
+  getRoutineOutputsDir(workspaceRef: string, routineId: string): Promise<string | null>;
+  getRoutinePersistentStateExplorerDir(workspaceRef: string, routineId: string): Promise<string | null>;
+};
 
 const EXPLORER_TEXT_VIEW_LIMIT = 5 * 1024 * 1024;
 const EXPLORER_UPLOAD_LIMIT = 500 * 1024 * 1024;
 
-export function createExplorerRouter(chatService: ChatService): express.Router {
+export function createExplorerRouter(
+  chatService: ChatService,
+  opts: { routinesService?: RoutinesExplorerScope } = {},
+): express.Router {
   const router = express.Router();
 
-  async function resolveExplorerPath(hash: string, relPath: string): Promise<ResolveOk | ResolveErr> {
+  async function resolveExplorerPath(
+    hash: string,
+    relPath: string,
+    query: Request['query'] = {},
+    options: ExplorerScopeOptions = {},
+  ): Promise<ResolveOk | ResolveErr> {
+    const scope = queryParam(query.scope);
+    if (scope === 'routine-output' || scope === 'routine-outputs' || scope === 'routine-state') {
+      if (!options.allowRoutineOutput) {
+        return { ok: false, status: 403, error: 'Routine folders are read-only' };
+      }
+      if (!opts.routinesService) {
+        return { ok: false, status: 404, error: 'Routine folder browsing is unavailable' };
+      }
+      const routineId = queryParam(query.routineId);
+      if (!routineId) {
+        return { ok: false, status: 400, error: 'routineId is required for routine folder browsing' };
+      }
+      let rootDir: string | null;
+      if (scope === 'routine-output') {
+        const runId = queryParam(query.runId);
+        if (!runId) {
+          return { ok: false, status: 400, error: 'runId is required for routine output browsing' };
+        }
+        rootDir = await opts.routinesService.getRoutineRunOutputDir(hash, routineId, runId);
+      } else if (scope === 'routine-state') {
+        rootDir = await opts.routinesService.getRoutinePersistentStateExplorerDir(hash, routineId);
+      } else {
+        rootDir = await opts.routinesService.getRoutineOutputsDir(hash, routineId);
+      }
+      if (!rootDir) return { ok: false, status: 404, error: 'Routine folder not found' };
+      const root = path.resolve(rootDir);
+      const rel = (relPath || '').replace(/^[/\\]+/, '');
+      const abs = path.resolve(root, rel);
+      if (!insideRoot(abs, root)) {
+        return { ok: false, status: 403, error: 'Access denied: path is outside routine folder' };
+      }
+      return { ok: true, abs, root };
+    }
+    if (scope) return { ok: false, status: 400, error: 'Unsupported explorer scope' };
     const wsRoot = await chatService.getWorkspacePath(hash);
     if (!wsRoot) return { ok: false, status: 404, error: 'Workspace not found' };
     const root = path.resolve(wsRoot);
     const rel = (relPath || '').replace(/^[/\\]+/, '');
     const abs = path.resolve(root, rel);
-    if (abs !== root && !abs.startsWith(root + path.sep)) {
+    if (!insideRoot(abs, root)) {
       return { ok: false, status: 403, error: 'Access denied: path is outside workspace' };
     }
     return { ok: true, abs, root };
@@ -39,7 +87,7 @@ export function createExplorerRouter(chatService: ChatService): express.Router {
     try {
       const hash = param(req, 'workspaceId');
       const rel = (req.query.path as string) || '';
-      const r = await resolveExplorerPath(hash, rel);
+      const r = await resolveExplorerPath(hash, rel, req.query, { allowRoutineOutput: true });
       if (!r.ok) return res.status(r.status).json({ error: r.error });
 
       let stat: fs.Stats;
@@ -100,7 +148,7 @@ export function createExplorerRouter(chatService: ChatService): express.Router {
       const mode = (req.query.mode as string) || 'view';
       if (!rel) return res.status(400).json({ error: 'path query parameter is required' });
 
-      const r = await resolveExplorerPath(hash, rel);
+      const r = await resolveExplorerPath(hash, rel, req.query, { allowRoutineOutput: true });
       if (!r.ok) return res.status(r.status).json({ error: r.error });
       if (r.abs === r.root) return res.status(400).json({ error: 'Path must be a file' });
 
@@ -157,7 +205,7 @@ export function createExplorerRouter(chatService: ChatService): express.Router {
     try {
       const hash = param(req, 'workspaceId');
       const rel = (req.query.path as string) || '';
-      const r = await resolveExplorerPath(hash, rel);
+      const r = await resolveExplorerPath(hash, rel, req.query);
       if (!r.ok) { res.status(r.status).json({ error: r.error }); return; }
       let stat: fs.Stats;
       try {
@@ -227,9 +275,9 @@ export function createExplorerRouter(chatService: ChatService): express.Router {
     try {
       const hash = param(req, 'workspaceId');
       const { from, to, overwrite } = validateExplorerRenameRequest(req.body);
-      const fromRes = await resolveExplorerPath(hash, from);
+      const fromRes = await resolveExplorerPath(hash, from, req.query);
       if (!fromRes.ok) return res.status(fromRes.status).json({ error: fromRes.error });
-      const toRes = await resolveExplorerPath(hash, to);
+      const toRes = await resolveExplorerPath(hash, to, req.query);
       if (!toRes.ok) return res.status(toRes.status).json({ error: toRes.error });
       if (fromRes.abs === fromRes.root) return res.status(400).json({ error: 'Cannot rename workspace root' });
       if (toRes.abs === toRes.root) return res.status(400).json({ error: 'Cannot overwrite workspace root' });
@@ -268,7 +316,7 @@ export function createExplorerRouter(chatService: ChatService): express.Router {
       if (/[/\\]/.test(trimmed) || trimmed === '.' || trimmed === '..') {
         return res.status(400).json({ error: 'Invalid folder name' });
       }
-      const parentRes = await resolveExplorerPath(hash, parent);
+      const parentRes = await resolveExplorerPath(hash, parent, req.query);
       if (!parentRes.ok) return res.status(parentRes.status).json({ error: parentRes.error });
 
       let parentStat: fs.Stats;
@@ -315,7 +363,7 @@ export function createExplorerRouter(chatService: ChatService): express.Router {
         return res.status(413).json({ error: `Content exceeds the ${Math.floor(EXPLORER_TEXT_VIEW_LIMIT / 1024 / 1024)} MB edit limit.` });
       }
 
-      const parentRes = await resolveExplorerPath(hash, parent);
+      const parentRes = await resolveExplorerPath(hash, parent, req.query);
       if (!parentRes.ok) return res.status(parentRes.status).json({ error: parentRes.error });
 
       let parentStat: fs.Stats;
@@ -359,7 +407,7 @@ export function createExplorerRouter(chatService: ChatService): express.Router {
         return res.status(413).json({ error: `Content exceeds the ${Math.floor(EXPLORER_TEXT_VIEW_LIMIT / 1024 / 1024)} MB edit limit.` });
       }
 
-      const r = await resolveExplorerPath(hash, rel);
+      const r = await resolveExplorerPath(hash, rel, req.query);
       if (!r.ok) return res.status(r.status).json({ error: r.error });
       if (r.abs === r.root) return res.status(400).json({ error: 'Path must be a file' });
 
@@ -389,7 +437,7 @@ export function createExplorerRouter(chatService: ChatService): express.Router {
       const hash = param(req, 'workspaceId');
       const rel = req.query.path as string | undefined;
       if (!rel) return res.status(400).json({ error: 'path query parameter is required' });
-      const r = await resolveExplorerPath(hash, rel);
+      const r = await resolveExplorerPath(hash, rel, req.query);
       if (!r.ok) return res.status(r.status).json({ error: r.error });
       if (r.abs === r.root) return res.status(400).json({ error: 'Cannot delete workspace root' });
 
@@ -430,4 +478,13 @@ function explorerMimeType(filename: string): string {
     '.pdf': 'application/pdf',
   };
   return map[ext] || 'application/octet-stream';
+}
+
+function queryParam(value: unknown): string {
+  if (Array.isArray(value)) return queryParam(value[0]);
+  return typeof value === 'string' ? value.trim() : '';
+}
+
+function insideRoot(abs: string, root: string): boolean {
+  return abs === root || abs.startsWith(root + path.sep);
 }

@@ -43,7 +43,8 @@
 Agent Cockpit is an open source, local-first web UI for command-line AI agents.
 It runs on your machine, talks to local CLIs such as Claude Code, OpenAI Codex,
 Kiro, and OpenCode, streams their work into a browser interface, and stores your
-conversations, memory, and knowledge base on disk.
+conversations, memory, knowledge base, workspace context, and routine state on
+disk.
 
 The core idea is simple: models and vendors will keep changing, but your working
 context should not reset every time. Agent Cockpit decouples your AI interaction
@@ -53,8 +54,8 @@ data from the vendor interface you happen to use today.
 
 - You use more than one AI vendor and want a single browser interface across
   them.
-- You want conversations, memory, knowledge-base entries, and workspace context
-  on a machine you control.
+- You want conversations, memory, knowledge-base entries, workspace context,
+  and repeatable routines on a machine you control.
 - You want to switch from Claude Code to Codex, Kiro, or OpenCode without losing the
   workspace understanding built up over time.
 - You use AI for coding, writing, research, planning, operations, or other
@@ -90,8 +91,9 @@ model.
 
 **Local open storage**
 Conversation files, session metadata, settings, memory snapshots, and
-knowledge-base artifacts are stored under your local data directory as
-JSON/Markdown plus local indexes where search requires them.
+knowledge-base artifacts, routine manifests, run outputs, and persistent state
+are stored under your local data directory as JSON/Markdown plus local indexes
+where search requires them.
 
 **Portable workspace context**
 Workspace Memory, Knowledge Base, instruction compatibility checks, and
@@ -109,6 +111,12 @@ Cockpit creates a `workspace-context/` folder, installs a managed pointer block
 in the workspace `AGENTS.md`, and uses a configured CLI processor to catch up
 those markdown files from recent conversations and sessions. The active chat CLI
 reads and updates the same files through normal workspace instructions.
+
+**Workspace Routines**
+Turn a markdown prompt workflow into a manual or scheduled workspace routine.
+Agent Cockpit handles proposal installation, run history, output folders,
+persistent state, and Telegram notifications while the selected CLI harness owns
+the task logic.
 
 **Worktree Isolation**
 For Git-backed workspaces, you can run each conversation in its own Git

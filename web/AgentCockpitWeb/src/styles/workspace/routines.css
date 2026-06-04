@@ -1,0 +1,170 @@
+.ws-form-routines .ws-wc-panel{
+  max-width: 860px;
+}
+
+.ws-routine-rail{
+  gap: 10px;
+}
+
+.ws-routine-rail-head{
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.ws-routine-rail-head small{
+  color: var(--text-3);
+  font: 11px var(--mono-font);
+}
+
+.ws-routine-rail-actions{
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.ws-routine-list{
+  flex: 0 0 auto;
+  background: transparent;
+  border: 0;
+  padding: 0;
+}
+
+.ws-routine-list ul{
+  max-height: 280px;
+}
+
+.ws-routine-settings{
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+  border-top: 1px solid var(--border);
+  padding-top: 10px;
+}
+
+.ws-routine-settings .btn{
+  justify-content: center;
+}
+
+.ws-routine-connect-card{
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface-2);
+  color: var(--text-2);
+  padding: 9px;
+  font-size: 12px;
+}
+
+.ws-routine-connect-card.is-connected{
+  border-color: color-mix(in srgb, var(--status-done) 45%, var(--border));
+  color: var(--status-done);
+}
+
+.ws-routine-connect-card.is-warning{
+  border-color: color-mix(in srgb, var(--status-warning) 45%, var(--border));
+}
+
+.ws-routine-connect-code{
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.ws-routine-connect-code code{
+  display: block;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface);
+  color: var(--text);
+  padding: 6px 8px;
+  font: 12px var(--mono-font);
+  overflow-wrap: anywhere;
+}
+
+.ws-routine-connect-actions{
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.ws-routine-connect-actions .btn{
+  flex: 1 1 0;
+}
+
+.ws-routine-actions{
+  justify-content: flex-start;
+}
+
+.ws-routine-actions-spacer{
+  flex: 1 1 auto;
+  min-width: 20px;
+}
+
+.ws-routine-grid{
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.ws-routine-toggle{
+  align-self: end;
+  min-height: 32px;
+}
+
+.ws-routine-editor{
+  min-height: 420px;
+}
+
+.ws-form-routines .ws-wc-run-card-meta span{
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.ws-routine-output-link{
+  padding: 3px 8px;
+  min-height: 24px;
+  font-size: 11px;
+}
+
+.ws-wc-status-badge.is-routine-enabled{
+  color: var(--status-done);
+  border-color: color-mix(in srgb, var(--status-done) 50%, var(--border));
+}
+
+.ws-wc-status-badge[class*="is-routine-"]{
+  text-transform: capitalize;
+}
+
+.ws-wc-status-badge.is-routine-disabled{
+  color: var(--text-3);
+}
+
+.ws-wc-status-badge.is-routine-proposed{
+  color: var(--accent);
+  border-color: color-mix(in srgb, var(--accent) 50%, var(--border));
+  background: var(--accent-soft);
+}
+
+@media (max-width: 860px){
+  .ws-form-routines .ws-wc-layout{
+    flex-direction: column;
+  }
+
+  .ws-form-routines .ws-wc-rail{
+    flex: 0 0 auto;
+    border-right: 0;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .ws-routine-grid{
+    grid-template-columns: 1fr;
+  }
+
+  .ws-routine-actions-spacer{
+    display: none;
+  }
+}

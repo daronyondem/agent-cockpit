@@ -16,6 +16,7 @@ data/
 │   │   ├── memory/
 │   │   ├── knowledge/
 │   │   ├── workspace-context/
+│   │   ├── routines/
 │   │   └── session-finalizers.json
 │   ├── workspace-snapshots/{workspaceId}/ # Optional verified ZIP snapshots for archived workspaces
 │   ├── workspace-trash/       # Product-owned moved originals from snapshot archive cleanup
@@ -43,9 +44,10 @@ data.migration/
 ## Workspace Scope
 
 Conversations, session files, memory, Knowledge Base artifacts, and Workspace
-Context state are scoped by stable workspace identity. `data/chat/workspaces.json`
-maps each immutable `workspaceId` to mutable path metadata and to the on-disk
-`storageKey`; legacy workspaces keep their original path hash as the storage key.
+Context state are scoped by stable workspace identity. Workspace Routines are
+scoped the same way. `data/chat/workspaces.json` maps each immutable
+`workspaceId` to mutable path metadata and to the on-disk `storageKey`; legacy
+workspaces keep their original path hash as the storage key.
 
 Archived workspaces keep their Agent Cockpit-owned data under the same
 `workspaces/{storageKey}/` directory until the user restores or deletes the
@@ -56,6 +58,36 @@ when no destination is supplied the server uses `restored-workspaces/`. If
 snapshot archival moves the original folder instead of deleting it, the moved
 copy lives under `workspace-trash/` and is removed with the archived workspace
 record.
+
+## Workspace Routines Data
+
+Workspace Routines live under Agent Cockpit data, not inside the workspace
+project folder:
+
+```text
+data/chat/workspaces/{storageKey}/routines/
+├── ROUTINE_AUTHORING.md
+├── index.json
+├── settings.json
+└── items/{routineId}/
+    ├── manifest.json
+    ├── routine.md
+    ├── state.json
+    ├── persistent-state/
+    └── runs/{runId}/
+        ├── input.md
+        ├── output/
+        ├── tmp/
+        ├── final.md
+        └── notify.md
+```
+
+`ROUTINE_AUTHORING.md` is the contract a harness reads before creating or
+editing a routine. `settings.json` stores workspace outreach settings such as
+the Telegram destination chat; the shared Telegram bot token lives in
+`data/chat/settings.json` under global integrations. `persistent-state/` is the
+cross-run state folder for one routine. `runs/{runId}/output/` contains durable
+artifacts for a single execution.
 
 ## Export And Import
 

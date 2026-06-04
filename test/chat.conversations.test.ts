@@ -304,6 +304,37 @@ describe('PUT /settings', () => {
     expect(res.status).toBe(200);
     expect(res.body.theme).toBe('system');
   });
+
+  test('redacts and preserves global Telegram integration token', async () => {
+    const saved = await env.request('PUT', '/api/chat/settings', {
+      theme: 'system',
+      integrations: { telegram: { botToken: '123:secret' } },
+    });
+    expect(saved.status).toBe(200);
+    expect(saved.body.integrations.telegram.configured).toBe(true);
+    expect(JSON.stringify(saved.body)).not.toContain('123:secret');
+
+    const fetched = await env.request('GET', '/api/chat/settings');
+    expect(fetched.status).toBe(200);
+    expect(fetched.body.integrations.telegram.configured).toBe(true);
+    expect(JSON.stringify(fetched.body)).not.toContain('123:secret');
+
+    const preserved = await env.request('PUT', '/api/chat/settings', {
+      ...fetched.body,
+      theme: 'dark',
+    });
+    expect(preserved.status).toBe(200);
+    expect(preserved.body.integrations.telegram.configured).toBe(true);
+    expect((await env.chatService.getSettings()).integrations?.telegram?.botToken).toBe('123:secret');
+
+    const cleared = await env.request('PUT', '/api/chat/settings', {
+      ...preserved.body,
+      integrations: { telegram: { configured: true, clearBotToken: true } },
+    });
+    expect(cleared.status).toBe(200);
+    expect(cleared.body.integrations.telegram.configured).toBe(false);
+    expect((await env.chatService.getSettings()).integrations?.telegram?.botToken).toBeUndefined();
+  });
 });
 
 // ── GET /backends ─────────────────────────────────────────────────────────

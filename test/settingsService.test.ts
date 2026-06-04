@@ -3,7 +3,7 @@
 import fs from 'fs';
 import path from 'path';
 import os from 'os';
-import { SettingsService } from '../src/services/settingsService';
+import { mergeSettingsSecretsForSave, redactSettingsSecrets, SettingsService } from '../src/services/settingsService';
 import { serverConfiguredCliProfileId } from '../src/services/cliProfiles';
 
 let tmpDir: string;
@@ -46,6 +46,49 @@ describe('settings', () => {
     expect(loaded.theme).toBe('dark');
     expect(loaded.sendBehavior).toBe('ctrl-enter');
     expect(loaded.systemPrompt).toBe('Be helpful');
+  });
+
+  test('redacts global Telegram bot token while preserving configured status', async () => {
+    const settings = await service.saveSettings({
+      ...(await service.getSettings()),
+      integrations: { telegram: { botToken: '123:secret' } },
+    } as any);
+
+    const redacted = redactSettingsSecrets(settings);
+
+    expect(redacted.integrations?.telegram?.configured).toBe(true);
+    expect(redacted.integrations?.telegram?.botToken).toBeUndefined();
+    expect(JSON.stringify(redacted)).not.toContain('123:secret');
+  });
+
+  test('preserves and clears global Telegram bot token through whole-settings saves', async () => {
+    const current = await service.saveSettings({
+      ...(await service.getSettings()),
+      integrations: { telegram: { botToken: '123:secret' } },
+    } as any);
+
+    const redacted = redactSettingsSecrets(current);
+    const saved = await service.saveSettings(mergeSettingsSecretsForSave({
+      ...redacted,
+      theme: 'dark',
+    }, current));
+
+    expect(saved.theme).toBe('dark');
+    expect(saved.integrations?.telegram?.botToken).toBe('123:secret');
+
+    const blankTokenSave = await service.saveSettings(mergeSettingsSecretsForSave({
+      ...redactSettingsSecrets(saved),
+      integrations: { telegram: { configured: true, botToken: '' } },
+    } as any, saved));
+
+    expect(blankTokenSave.integrations?.telegram?.botToken).toBe('123:secret');
+
+    const cleared = await service.saveSettings(mergeSettingsSecretsForSave({
+      ...redactSettingsSecrets(blankTokenSave),
+      integrations: { telegram: { configured: true, clearBotToken: true } },
+    } as any, blankTokenSave));
+
+    expect(cleared.integrations?.telegram?.botToken).toBeUndefined();
   });
 
   test('migrates legacy customInstructions to systemPrompt', async () => {

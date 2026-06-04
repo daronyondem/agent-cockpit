@@ -8,6 +8,11 @@ export interface UploadedFilesExtraction {
   paths: string[];
 }
 
+export interface RoutineProposalExtraction {
+  cleaned: string;
+  markers: string[];
+}
+
 interface StreamErrorMessageLike {
   id?: string;
   role?: string;
@@ -19,6 +24,7 @@ interface StreamErrorMessageLike {
 }
 
 const FILE_DELIVERY_RE = /<!--\s*FILE_DELIVERY:(.*?)\s*-->/g;
+const ROUTINE_PROPOSAL_RE = /<!--\s*AGENT_COCKPIT_ROUTINE_PROPOSAL:v1:(.*?)\s*-->/g;
 const UPLOADED_FILES_RE = /\n*\[Uploaded files?: ([^\]]+)\]\s*$/;
 
 export function extractFileDeliveries(text: unknown): FileDeliveryExtraction {
@@ -39,6 +45,17 @@ export function extractUploadedFiles(text: unknown): UploadedFilesExtraction {
   const paths = match[1].split(',').map(s => s.trim()).filter(Boolean);
   const cleaned = text.slice(0, match.index).replace(/\s+$/, '');
   return { cleaned, paths };
+}
+
+export function extractRoutineProposals(text: unknown): RoutineProposalExtraction {
+  if (typeof text !== 'string' || !text) return { cleaned: typeof text === 'string' ? text : '', markers: [] };
+  const markers: string[] = [];
+  const cleaned = text.replace(ROUTINE_PROPOSAL_RE, (_match, p) => {
+    const trimmed = (p || '').trim();
+    if (trimmed) markers.push(trimmed);
+    return '';
+  });
+  return { cleaned, markers };
 }
 
 export function streamErrorMessageText(message: StreamErrorMessageLike | null | undefined): string | null {

@@ -11,12 +11,13 @@
 | 3. API Endpoints | [spec-api-endpoints.md](spec-api-endpoints.md) | REST + WebSocket API surface |
 | 4. Backend Services | [spec-backend-services.md](spec-backend-services.md) | ChatService, adapter system, KB pipeline, update service |
 | 5. Workspace Context Feature | [spec-workspace-context.md](spec-workspace-context.md) | Markdown-first workspace operating memory, CLI-maintained context files, scan and maintenance runs |
-| 6. Server Initialization & Security | [spec-server-security.md](spec-server-security.md) | Config, startup order, auth, CSRF, CSP |
-| 7. Frontend Behavior | [spec-frontend.md](spec-frontend.md) | SPA architecture, streaming, KB browser, settings |
-| 8. Mobile PWA Client | [spec-mobile-pwa.md](spec-mobile-pwa.md) | Installable mobile web client architecture, implemented slice, deferred work |
-| 9. Export, Limitations & Deployment | [spec-deployment.md](spec-deployment.md) | Markdown export, known limitations, deployment |
-| 10. Testing & CI/CD | [spec-testing.md](spec-testing.md) | Test suite, test files, CI workflows |
-| 11. Documentation Coverage & Feature Flows | [spec-coverage.md](spec-coverage.md) | Documentation inventory, source-to-doc traceability matrix, and cross-feature diagrams |
+| 6. Workspace Routines | [spec-routines.md](spec-routines.md) | Workspace-owned markdown workflows, scheduled/manual harness runs, proposal installation, run folders, and Telegram outreach destination pairing |
+| 7. Server Initialization & Security | [spec-server-security.md](spec-server-security.md) | Config, startup order, auth, CSRF, CSP |
+| 8. Frontend Behavior | [spec-frontend.md](spec-frontend.md) | SPA architecture, streaming, KB browser, settings |
+| 9. Mobile PWA Client | [spec-mobile-pwa.md](spec-mobile-pwa.md) | Installable mobile web client architecture, implemented slice, deferred work |
+| 10. Export, Limitations & Deployment | [spec-deployment.md](spec-deployment.md) | Markdown export, known limitations, deployment |
+| 11. Testing & CI/CD | [spec-testing.md](spec-testing.md) | Test suite, test files, CI workflows |
+| 12. Documentation Coverage & Feature Flows | [spec-coverage.md](spec-coverage.md) | Documentation inventory, source-to-doc traceability matrix, and cross-feature diagrams |
 
 ### Design Documents
 
@@ -37,7 +38,7 @@ Cockpit without reading the implementation specification:
 | Document | Description |
 |----------|-------------|
 | [README.md](README.md) | Public docs entry point that routes to user, deploy, and reference guides. |
-| [user/README.md](user/README.md) | User guide for quickstart, backends, Ollama/OpenCode local models, Memory, Knowledge Base, Workspace Context, and mobile PWA. |
+| [user/README.md](user/README.md) | User guide for quickstart, backends, Ollama/OpenCode local models, Memory, Knowledge Base, Workspace Context, Workspace Routines, and mobile PWA. |
 | [deploy/README.md](deploy/README.md) | Deploy guide for platform installers, remote access, security, Install Doctor, and updates. |
 | [reference/README.md](reference/README.md) | Technical reference for environment variables, data layout, backend capabilities, development, and testing. |
 | [product-positioning.md](product-positioning.md) | Public-copy message architecture for keeping positioning provider-neutral and user-owned-context focused. |

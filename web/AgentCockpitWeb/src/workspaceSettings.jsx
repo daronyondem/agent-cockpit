@@ -29,6 +29,7 @@ const WS_SETTINGS_TABS = [
   { id: 'memory',       label: 'Memory' },
   { id: 'kb',           label: 'Knowledge Base' },
   { id: 'workspaceContext',   label: 'Workspace Context' },
+  { id: 'routines',     label: 'Routines' },
   { id: 'worktrees',    label: 'Worktrees' },
   { id: 'archive',      label: 'Archive' },
 ];
@@ -88,6 +89,115 @@ function workspaceContextRunFromStatus(status, previousState){
 function workspaceContextRunTimestamp(run){
   const timestamp = Date.parse((run && run.startedAt) || '');
   return Number.isFinite(timestamp) ? timestamp : 0;
+}
+
+function routineRunTimestamp(run){
+  const timestamp = Date.parse((run && run.startedAt) || '');
+  return Number.isFinite(timestamp) ? timestamp : 0;
+}
+
+function routineItemIsRunning(item){
+  return !!(item && (item.running || (item.lastRun && item.lastRun.status === 'running')));
+}
+
+function browserTimezone(){
+  try {
+    return Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
+  } catch {
+    return 'UTC';
+  }
+}
+
+function routineTimezoneOptions(value){
+  const current = (value || '').trim();
+  let zones = [];
+  try {
+    if (Intl.supportedValuesOf) zones = Intl.supportedValuesOf('timeZone');
+  } catch {}
+  if (!zones.length) {
+    zones = [
+      'UTC',
+      'America/Los_Angeles',
+      'America/Denver',
+      'America/Chicago',
+      'America/New_York',
+      'America/Toronto',
+      'America/Mexico_City',
+      'America/Sao_Paulo',
+      'Europe/London',
+      'Europe/Paris',
+      'Europe/Berlin',
+      'Europe/Istanbul',
+      'Asia/Dubai',
+      'Asia/Kolkata',
+      'Asia/Singapore',
+      'Asia/Tokyo',
+      'Australia/Sydney',
+    ];
+  }
+  const deduped = Array.from(new Set(zones));
+  if (!deduped.includes('UTC')) deduped.unshift('UTC');
+  if (current && !deduped.includes(current)) deduped.unshift(current);
+  return deduped;
+}
+
+function routineDraftFromDetail(detail){
+  const manifest = (detail && detail.manifest) || {};
+  const trigger = manifest.trigger || { type: 'manual' };
+  const harness = manifest.harness || {};
+  const notification = manifest.notification || { mode: 'workspaceDefault' };
+  return {
+    title: manifest.title || '',
+    triggerType: trigger.type === 'schedule' ? 'schedule' : 'manual',
+    intervalMinutes: trigger.type === 'schedule' ? String(trigger.intervalMinutes || 60) : '60',
+    timezone: trigger.type === 'schedule' ? (trigger.timezone || '') : '',
+    weekdaysOnly: trigger.type === 'schedule' ? !!trigger.weekdaysOnly : false,
+    windowStart: trigger.type === 'schedule' ? (trigger.windowStart || '') : '',
+    windowEnd: trigger.type === 'schedule' ? (trigger.windowEnd || '') : '',
+    cliProfileId: harness.cliProfileId || '',
+    model: harness.model || '',
+    effort: harness.effort || '',
+    notificationMode: notification.mode || 'workspaceDefault',
+    routineContent: (detail && detail.routineContent) || '',
+  };
+}
+
+function routineManifestPatchFromDraft(draft){
+  const trigger = draft.triggerType === 'schedule'
+    ? {
+        type: 'schedule',
+        intervalMinutes: Math.max(1, Math.min(1440, parseInt(draft.intervalMinutes || '60', 10) || 60)),
+        ...(draft.timezone.trim() ? { timezone: draft.timezone.trim() } : {}),
+        ...(draft.weekdaysOnly ? { weekdaysOnly: true } : {}),
+        ...(draft.windowStart.trim() || draft.windowEnd.trim() ? {
+          windowStart: draft.windowStart.trim(),
+          windowEnd: draft.windowEnd.trim(),
+        } : {}),
+      }
+    : { type: 'manual' };
+  const harness = {
+    ...(draft.cliProfileId.trim() ? { cliProfileId: draft.cliProfileId.trim() } : {}),
+    ...(draft.model.trim() ? { model: draft.model.trim() } : {}),
+    ...(draft.effort.trim() ? { effort: draft.effort.trim() } : {}),
+  };
+  return {
+    title: draft.title.trim(),
+    trigger,
+    ...(Object.keys(harness).length ? { harness } : { harness: {} }),
+    notification: { mode: draft.notificationMode === 'off' ? 'off' : 'workspaceDefault' },
+  };
+}
+
+function routineSettingsDraftFromResponse(response){
+  const telegram = response && response.notification && response.notification.telegram;
+  return {
+    telegramEnabled: !!(telegram && telegram.enabled),
+    telegramBotConfigured: !!(telegram && telegram.botConfigured),
+    telegramDestinationConfigured: !!(telegram && telegram.destinationConfigured),
+    telegramChatId: (telegram && telegram.chatId) || '',
+    telegramChatTitle: (telegram && telegram.chatTitle) || '',
+    telegramChatType: (telegram && telegram.chatType) || '',
+  };
 }
 
 function renderWorkspaceContextRunMarkdown(markdown){
@@ -299,7 +409,7 @@ function workspaceDefaultEffort(levels){
 }
 
 
-export function WorkspaceSettingsPage({ hash, label, initialTab, initialWorkspaceContextSection, onClose }){
+export function WorkspaceSettingsPage({ hash, label, initialTab, initialWorkspaceContextSection, initialRoutineId, onOpenFiles, onOpenSettings, onClose }){
   const [tab, setTab] = React.useState(() => WS_SETTINGS_TABS.some(t => t.id === initialTab) ? initialTab : 'instructions');
   const [loading, setLoading] = React.useState(true);
   const [loadError, setLoadError] = React.useState(null);
@@ -339,6 +449,17 @@ export function WorkspaceSettingsPage({ hash, label, initialTab, initialWorkspac
   const [workspaceContextFileLoading, setWorkspaceContextFileLoading] = React.useState(false);
   const [workspaceContextScanBusy, setWorkspaceContextScanBusy] = React.useState(false);
   const [workspaceContextStopBusy, setWorkspaceContextStopBusy] = React.useState(false);
+  const [routinesData, setRoutinesData] = React.useState({ routines: [] });
+  const [routineSelectedId, setRoutineSelectedId] = React.useState(null);
+  const [routineDetail, setRoutineDetail] = React.useState(null);
+  const [routineDraft, setRoutineDraft] = React.useState(null);
+  const [routineDirty, setRoutineDirty] = React.useState(false);
+  const [routineBusy, setRoutineBusy] = React.useState(false);
+  const [routineRunBusy, setRoutineRunBusy] = React.useState(false);
+  const [routineSettingsDraft, setRoutineSettingsDraft] = React.useState(routineSettingsDraftFromResponse(null));
+  const [routineSettingsDirty, setRoutineSettingsDirty] = React.useState(false);
+  const [routineTelegramConnect, setRoutineTelegramConnect] = React.useState(null);
+  const [routineTelegramConnectBusy, setRoutineTelegramConnectBusy] = React.useState(false);
   const [worktreeStatus, setWorktreeStatus] = React.useState(null);
   const [worktreeBusy, setWorktreeBusy] = React.useState(false);
   const [globalSettings, setGlobalSettings] = React.useState({});
@@ -380,8 +501,51 @@ export function WorkspaceSettingsPage({ hash, label, initialTab, initialWorkspac
     }
   }
 
+  function applyRoutinesResponse(res){
+    const next = res || {};
+    const routines = Array.isArray(next.routines) ? next.routines : [];
+    setRoutinesData({ routines });
+    if (!routines.some(routineItemIsRunning)) setRoutineRunBusy(false);
+    applyRoutineSettingsResponse(next.settings || null);
+    if (routineSelectedId && !routines.some(item => item && item.manifest && item.manifest.id === routineSelectedId)) {
+      setRoutineSelectedId(null);
+      setRoutineDetail(null);
+      setRoutineDraft(null);
+      setRoutineDirty(false);
+    }
+  }
+
+  function applyRoutineSettingsResponse(res){
+    setRoutineSettingsDraft(routineSettingsDraftFromResponse(res || null));
+    setRoutineSettingsDirty(false);
+  }
+
+  function mergeRoutineSnapshot(routine){
+    if (!routine || !routine.manifest || !routine.manifest.id) return;
+    setRoutinesData(prev => {
+      const routines = Array.isArray(prev && prev.routines) ? prev.routines : [];
+      const seen = routines.some(item => item && item.manifest && item.manifest.id === routine.manifest.id);
+      const nextRoutines = seen
+        ? routines.map(item => item && item.manifest && item.manifest.id === routine.manifest.id ? { ...item, ...routine } : item)
+        : [routine, ...routines];
+      return { ...(prev || {}), routines: nextRoutines };
+    });
+    if (routineSelectedId === routine.manifest.id) {
+      applyRoutineDetailResponse({ routine }, { preserveDraft: routineDirty });
+    }
+    if (!routineItemIsRunning(routine)) setRoutineRunBusy(false);
+  }
+
   const workspaceContextRunPollKey = workspaceContextRunsFromState(workspaceContextState)
     .map(run => `${run.runId || ''}:${run.status || ''}`)
+    .join('|');
+
+  const routineRunPollKey = (Array.isArray(routinesData.routines) ? routinesData.routines : [])
+    .map(item => {
+      const manifest = item && item.manifest;
+      const lastRun = item && item.lastRun;
+      return `${manifest && manifest.id || ''}:${item && item.running ? 'running' : ''}:${lastRun && lastRun.status || ''}`;
+    })
     .join('|');
 
   React.useEffect(() => {
@@ -398,10 +562,11 @@ export function WorkspaceSettingsPage({ hash, label, initialTab, initialWorkspac
       AgentApi.workspace.getMemory(hash).catch(() => ({})),
       AgentApi.workspace.getKb(hash).catch(() => ({})),
       AgentApi.workspace.getWorkspaceContextSettings(hash).catch(() => ({})),
+      AgentApi.workspace.getRoutines(hash).catch(() => ({ routines: [] })),
       AgentApi.workspace.getWorktreeIsolation(hash).catch((err) => ({ available: false, enabled: false, blockers: [{ code: 'load_failed', message: err.message || String(err) }] })),
       AgentApi.settings.get().catch(() => ({})),
       AgentApi.settings.backends().catch(() => ({ backends: [] })),
-    ]).then(([locationRes, archiveRes, instrRes, memRes, kbRes, workspaceContextRes, worktreeRes, settingsRes, backendsRes]) => {
+    ]).then(([locationRes, archiveRes, instrRes, memRes, kbRes, workspaceContextRes, routinesRes, worktreeRes, settingsRes, backendsRes]) => {
       if (cancelled) return;
       setWorkspaceLocation(locationRes || null);
       setWorkspaceLocationDraft((locationRes && locationRes.workspacePath) || '');
@@ -413,6 +578,19 @@ export function WorkspaceSettingsPage({ hash, label, initialTab, initialWorkspac
       setMemorySnapshot(memRes.snapshot || null);
       setKbEnabled(!!kbRes.enabled);
       applyWorkspaceContextResponse(workspaceContextRes);
+      applyRoutinesResponse(routinesRes);
+      const routines = Array.isArray(routinesRes && routinesRes.routines) ? routinesRes.routines : [];
+      const targetRoutine = (initialRoutineId && routines.find(item => item && item.manifest && item.manifest.id === initialRoutineId))
+        || routines[0]
+        || null;
+      if (targetRoutine && targetRoutine.manifest && targetRoutine.manifest.id) {
+        selectRoutine(targetRoutine.manifest.id).catch(() => {});
+      } else {
+        setRoutineSelectedId(null);
+        setRoutineDetail(null);
+        setRoutineDraft(null);
+        setRoutineDirty(false);
+      }
       setWorktreeStatus(worktreeRes || null);
       setWorkspaceContextSelectedFile(null);
       setWorkspaceContextFileContent('');
@@ -427,7 +605,7 @@ export function WorkspaceSettingsPage({ hash, label, initialTab, initialWorkspac
       if (!cancelled) setLoading(false);
     });
     return () => { cancelled = true; };
-  }, [hash, initialTab]);
+  }, [hash, initialTab, initialRoutineId]);
 
   React.useEffect(() => {
     if (!hash) return;
@@ -493,6 +671,61 @@ export function WorkspaceSettingsPage({ hash, label, initialTab, initialWorkspac
       clearInterval(timer);
     };
   }, [hash, tab, workspaceContextRunPollKey, workspaceContextScanBusy, workspaceContextStopBusy]);
+
+  React.useEffect(() => {
+    if (!hash || tab !== 'routines') return undefined;
+    const running = (Array.isArray(routinesData.routines) ? routinesData.routines : []).some(routineItemIsRunning);
+    if (!running && !routineRunBusy) return undefined;
+    let cancelled = false;
+    const refresh = () => {
+      AgentApi.workspace.getRoutines(hash).then((res) => {
+        if (cancelled) return;
+        const selectedStillExists = res && Array.isArray(res.routines) && res.routines.some(item => item && item.manifest && item.manifest.id === routineSelectedId);
+        if (routineSelectedId && selectedStillExists) {
+          return AgentApi.workspace.getRoutine(hash, routineSelectedId).catch(() => null).then((detailRes) => {
+            if (cancelled) return;
+            applyRoutinesResponse(res);
+            if (detailRes) applyRoutineDetailResponse(detailRes, { preserveDraft: routineDirty });
+          });
+        }
+        applyRoutinesResponse(res);
+        return null;
+      }).catch(() => {});
+    };
+    const timer = setInterval(refresh, 1000);
+    refresh();
+    return () => {
+      cancelled = true;
+      clearInterval(timer);
+    };
+  }, [hash, tab, routineRunPollKey, routineRunBusy, routineSelectedId, routineDirty]);
+
+  React.useEffect(() => {
+    if (!hash || tab !== 'routines' || !routineTelegramConnect || routineTelegramConnect.status !== 'pending') return undefined;
+    let cancelled = false;
+    let inflight = false;
+    const poll = () => {
+      if (inflight) return;
+      inflight = true;
+      setRoutineTelegramConnectBusy(true);
+      AgentApi.workspace.pollRoutineTelegramDestinationConnect(hash).then((res) => {
+        if (cancelled) return;
+        applyRoutineTelegramConnectPollResponse(res || {}, { silent: true });
+      }).catch((err) => {
+        if (cancelled) return;
+        setRoutineTelegramConnect(prev => prev ? { ...prev, status: 'error', error: err.message || String(err) } : prev);
+      }).finally(() => {
+        inflight = false;
+        if (!cancelled) setRoutineTelegramConnectBusy(false);
+      });
+    };
+    poll();
+    const timer = setInterval(poll, 2500);
+    return () => {
+      cancelled = true;
+      clearInterval(timer);
+    };
+  }, [hash, tab, routineTelegramConnect && routineTelegramConnect.status, routineTelegramConnect && routineTelegramConnect.code]);
 
   const loadProfileBackend = React.useCallback((profileId) => {
     if (!profileId || profileBackends[profileId]) return;
@@ -866,6 +1099,303 @@ export function WorkspaceSettingsPage({ hash, label, initialTab, initialWorkspac
     }
   }
 
+  function applyRoutineDetailResponse(res, opts){
+    const detail = res && res.routine ? res.routine : res;
+    setRoutineDetail(detail || null);
+    if (!detail) {
+      setRoutineDraft(null);
+      setRoutineDirty(false);
+      return;
+    }
+    if (opts && opts.preserveDraft && routineDraft) return;
+    setRoutineDraft(routineDraftFromDetail(detail));
+    setRoutineDirty(false);
+  }
+
+  async function selectRoutine(routineId){
+    if (!routineId) return;
+    setRoutineSelectedId(routineId);
+    setRoutineBusy(true);
+    try {
+      const res = await AgentApi.workspace.getRoutine(hash, routineId);
+      applyRoutineDetailResponse(res);
+    } catch (err) {
+      setRoutineDetail(null);
+      setRoutineDraft(null);
+      await dialog.alert({ variant: 'error', title: 'Routine load failed', body: err.message || String(err) });
+    } finally {
+      setRoutineBusy(false);
+    }
+  }
+
+  async function refreshRoutines(selectId){
+    const res = await AgentApi.workspace.getRoutines(hash);
+    applyRoutinesResponse(res);
+    const routines = Array.isArray(res && res.routines) ? res.routines : [];
+    const targetId = (selectId && routines.some(item => item && item.manifest && item.manifest.id === selectId))
+      ? selectId
+      : (routines[0] && routines[0].manifest && routines[0].manifest.id);
+    if (targetId) {
+      await selectRoutine(targetId);
+    } else {
+      setRoutineSelectedId(null);
+      setRoutineDetail(null);
+      setRoutineDraft(null);
+      setRoutineDirty(false);
+    }
+    return res;
+  }
+
+  function patchRoutineDraft(patch){
+    setRoutineDraft(prev => ({ ...(prev || routineDraftFromDetail(routineDetail)), ...patch }));
+    setRoutineDirty(true);
+  }
+
+  async function saveRoutine(anchor){
+    if (!routineDetail || !routineDraft || routineBusy) return;
+    if (!routineDraft.title.trim()) {
+      await dialog.alert({ anchor, variant: 'error', title: 'Title required', body: 'Routine title is required.' });
+      return;
+    }
+    setRoutineBusy(true);
+    try {
+      const res = await AgentApi.workspace.updateRoutine(hash, routineDetail.manifest.id, {
+        manifest: routineManifestPatchFromDraft(routineDraft),
+        routineContent: routineDraft.routineContent,
+      });
+      applyRoutineDetailResponse(res);
+      await refreshRoutines(routineDetail.manifest.id);
+      toast.success('Routine saved');
+    } catch (err) {
+      await dialog.alert({ anchor, variant: 'error', title: 'Save routine failed', body: err.message || String(err) });
+    } finally {
+      setRoutineBusy(false);
+    }
+  }
+
+  async function installRoutineState(routineId, state, anchor){
+    if (!routineId || routineBusy) return;
+    setRoutineBusy(true);
+    try {
+      await AgentApi.workspace.installRoutine(hash, routineId, state);
+      await refreshRoutines(routineId);
+      toast.success(state === 'enabled' ? 'Routine enabled' : 'Routine disabled');
+    } catch (err) {
+      await dialog.alert({ anchor, variant: 'error', title: 'Routine update failed', body: err.message || String(err) });
+    } finally {
+      setRoutineBusy(false);
+    }
+  }
+
+  async function runRoutineNow(routineId, anchor){
+    if (!routineId || routineRunBusy) return;
+    let keepPolling = false;
+    setRoutineRunBusy(true);
+    try {
+      const res = await AgentApi.workspace.runRoutine(hash, routineId);
+      if (res && res.routine) {
+        mergeRoutineSnapshot(res.routine);
+        keepPolling = routineItemIsRunning(res.routine) || (res.run && res.run.status === 'running');
+      } else {
+        const refreshed = await refreshRoutines(routineId);
+        const routines = Array.isArray(refreshed && refreshed.routines) ? refreshed.routines : [];
+        keepPolling = routines.some(routineItemIsRunning);
+      }
+      toast.success('Routine run started');
+    } catch (err) {
+      if (err && err.status === 409) {
+        const refreshed = await refreshRoutines(routineId).catch(() => null);
+        const routines = Array.isArray(refreshed && refreshed.routines) ? refreshed.routines : [];
+        keepPolling = routines.length ? routines.some(routineItemIsRunning) : true;
+        toast.warn('Routine run already running');
+        return;
+      }
+      keepPolling = false;
+      await dialog.alert({ anchor, variant: 'error', title: 'Run routine failed', body: err.message || String(err) });
+    } finally {
+      if (!keepPolling) setRoutineRunBusy(false);
+    }
+  }
+
+  async function deleteRoutine(routineId, anchor){
+    if (!routineId || routineBusy) return;
+    const ok = await dialog.confirm({
+      anchor,
+      title: 'Delete Routine',
+      body: 'Delete this routine and its run history from the workspace?',
+      confirmLabel: 'Delete',
+      cancelLabel: 'Cancel',
+      destructive: true,
+    });
+    if (!ok) return;
+    setRoutineBusy(true);
+    try {
+      await AgentApi.workspace.deleteRoutine(hash, routineId);
+      await refreshRoutines(null);
+      toast.success('Routine deleted');
+    } catch (err) {
+      await dialog.alert({ anchor, variant: 'error', title: 'Delete routine failed', body: err.message || String(err) });
+    } finally {
+      setRoutineBusy(false);
+    }
+  }
+
+  async function repairRoutineInstructions(anchor){
+    setRoutineBusy(true);
+    try {
+      await AgentApi.workspace.repairRoutineInstructions(hash);
+      await refreshRoutines(routineSelectedId);
+      toast.success('Routine instructions repaired');
+    } catch (err) {
+      await dialog.alert({ anchor, variant: 'error', title: 'Repair failed', body: err.message || String(err) });
+    } finally {
+      setRoutineBusy(false);
+    }
+  }
+
+  function patchRoutineSettingsDraft(patch){
+    setRoutineSettingsDraft(prev => ({ ...(prev || routineSettingsDraftFromResponse(null)), ...patch }));
+    setRoutineSettingsDirty(true);
+  }
+
+  function applyRoutineTelegramConnectPollResponse(res, opts = {}){
+    const status = res && res.status;
+    if (status === 'connected') {
+      if (res.settings) applyRoutineSettingsResponse(res.settings);
+      setRoutineTelegramConnect({
+        status: 'connected',
+        destination: res.destination || null,
+      });
+      if (!opts.silent) toast.success('Telegram destination connected');
+      return;
+    }
+    if (status === 'expired') {
+      setRoutineTelegramConnect(prev => prev ? { ...prev, status: 'expired' } : { status: 'expired' });
+      return;
+    }
+    if (status === 'missing_bot') {
+      setRoutineTelegramConnect({ status: 'missing_bot' });
+      return;
+    }
+    setRoutineTelegramConnect(prev => ({
+      ...(prev || {}),
+      status: 'pending',
+      code: res && res.code || prev && prev.code || '',
+      expiresAt: res && res.expiresAt || prev && prev.expiresAt || '',
+    }));
+  }
+
+  async function startRoutineTelegramConnect(anchor){
+    if (routineTelegramConnectBusy) return;
+    setRoutineTelegramConnectBusy(true);
+    try {
+      const res = await AgentApi.workspace.startRoutineTelegramDestinationConnect(hash);
+      if (res && res.status === 'missing_bot') {
+        setRoutineTelegramConnect({ status: 'missing_bot' });
+        return;
+      }
+      setRoutineTelegramConnect({
+        status: 'pending',
+        code: res && res.code || '',
+        expiresAt: res && res.expiresAt || '',
+        instruction: res && res.instruction || '',
+      });
+      toast.success('Telegram connection code created');
+    } catch (err) {
+      await dialog.alert({ anchor, variant: 'error', title: 'Telegram connection failed', body: err.message || String(err) });
+    } finally {
+      setRoutineTelegramConnectBusy(false);
+    }
+  }
+
+  async function pollRoutineTelegramConnect(anchor){
+    if (routineTelegramConnectBusy) return;
+    setRoutineTelegramConnectBusy(true);
+    try {
+      const res = await AgentApi.workspace.pollRoutineTelegramDestinationConnect(hash);
+      applyRoutineTelegramConnectPollResponse(res || {});
+    } catch (err) {
+      setRoutineTelegramConnect(prev => prev ? { ...prev, status: 'error', error: err.message || String(err) } : { status: 'error', error: err.message || String(err) });
+      await dialog.alert({ anchor, variant: 'error', title: 'Telegram check failed', body: err.message || String(err) });
+    } finally {
+      setRoutineTelegramConnectBusy(false);
+    }
+  }
+
+  async function saveRoutineSettings(anchor){
+    setRoutineBusy(true);
+    try {
+      const telegram = {
+        enabled: !!routineSettingsDraft.telegramEnabled,
+        chatId: routineSettingsDraft.telegramChatId || '',
+        chatTitle: routineSettingsDraft.telegramChatTitle || '',
+        chatType: routineSettingsDraft.telegramChatType || '',
+      };
+      const res = await AgentApi.workspace.saveRoutineSettings(hash, { telegram });
+      applyRoutineSettingsResponse(res || null);
+      toast.success('Routine notification settings saved');
+    } catch (err) {
+      await dialog.alert({ anchor, variant: 'error', title: 'Save notification settings failed', body: err.message || String(err) });
+    } finally {
+      setRoutineBusy(false);
+    }
+  }
+
+  const openRoutineOutputFolder = React.useCallback((run) => {
+    if (!onOpenFiles || !run || !run.routineId || !run.runId) return;
+    const routineTitle = (routineDetail && routineDetail.manifest && routineDetail.manifest.title) || run.routineId || 'Routine';
+    onOpenFiles(hash, `${routineTitle} Output`, {
+      readOnly: true,
+      returnToWorkspaceSettings: {
+        hash,
+        label,
+        initialTab: 'routines',
+        initialRoutineId: run.routineId,
+      },
+      scope: {
+        type: 'routine-output',
+        routineId: run.routineId,
+        runId: run.runId,
+      },
+    });
+  }, [hash, label, onOpenFiles, routineDetail]);
+
+  const openRoutineOutputs = React.useCallback((routine) => {
+    const manifest = routine && routine.manifest;
+    if (!onOpenFiles || !manifest || !manifest.id) return;
+    onOpenFiles(hash, `${manifest.title || manifest.id} Outputs`, {
+      readOnly: true,
+      returnToWorkspaceSettings: {
+        hash,
+        label,
+        initialTab: 'routines',
+        initialRoutineId: manifest.id,
+      },
+      scope: {
+        type: 'routine-outputs',
+        routineId: manifest.id,
+      },
+    });
+  }, [hash, label, onOpenFiles]);
+
+  const openRoutinePersistentState = React.useCallback((routine) => {
+    const manifest = routine && routine.manifest;
+    if (!onOpenFiles || !manifest || !manifest.id) return;
+    onOpenFiles(hash, `${manifest.title || manifest.id} Persistent State`, {
+      readOnly: true,
+      returnToWorkspaceSettings: {
+        hash,
+        label,
+        initialTab: 'routines',
+        initialRoutineId: manifest.id,
+      },
+      scope: {
+        type: 'routine-state',
+        routineId: manifest.id,
+      },
+    });
+  }, [hash, label, onOpenFiles]);
+
   async function deleteMemoryEntry(relPath, anchor){
     const ok = await dialog.confirm({ anchor, title: 'Delete entry', body: 'Delete memory entry "' + relPath + '"?', confirmLabel: 'Delete', cancelLabel: 'Cancel', destructive: true });
     if (!ok) return;
@@ -987,6 +1517,39 @@ export function WorkspaceSettingsPage({ hash, label, initialTab, initialWorkspac
             settingsDirty={workspaceContextSettingsDirty}
             saving={saving}
             initialSection={initialWorkspaceContextSection}
+          />
+        ) : tab === 'routines' ? (
+          <RoutinesTab
+            hash={hash}
+            data={routinesData}
+            selectedId={routineSelectedId}
+            detail={routineDetail}
+            draft={routineDraft}
+            dirty={routineDirty}
+            busy={routineBusy}
+            runBusy={routineRunBusy}
+            settingsDraft={routineSettingsDraft}
+            settingsDirty={routineSettingsDirty}
+            telegramConnect={routineTelegramConnect}
+            telegramConnectBusy={routineTelegramConnectBusy}
+            globalSettings={globalSettings}
+            onSelect={selectRoutine}
+            onRefresh={() => refreshRoutines(routineSelectedId)}
+            onPatchDraft={patchRoutineDraft}
+            onSave={saveRoutine}
+            onInstallState={installRoutineState}
+            onRun={runRoutineNow}
+            onOpenOutputs={openRoutineOutputs}
+            onOpenPersistentState={openRoutinePersistentState}
+            onDelete={deleteRoutine}
+            onRepairInstructions={repairRoutineInstructions}
+            onPatchSettings={patchRoutineSettingsDraft}
+            onSaveSettings={saveRoutineSettings}
+            onStartTelegramConnect={startRoutineTelegramConnect}
+            onPollTelegramConnect={pollRoutineTelegramConnect}
+            onCancelTelegramConnect={() => setRoutineTelegramConnect(null)}
+            onOpenOutputFolder={openRoutineOutputFolder}
+            onOpenSettings={onOpenSettings}
           />
         ) : tab === 'worktrees' ? (
           <WorktreeIsolationTab
@@ -1618,6 +2181,335 @@ function KbTab({ enabled, onToggle }){
       ) : (
         <p className="ws-empty u-dim">Knowledge Base is disabled for this workspace.</p>
       )}
+    </div>
+  );
+}
+
+function RoutinesTab({
+  data,
+  selectedId,
+  detail,
+  draft,
+  dirty,
+  busy,
+  runBusy,
+  settingsDraft,
+  settingsDirty,
+  telegramConnect,
+  telegramConnectBusy,
+  globalSettings,
+  onSelect,
+  onRefresh,
+  onPatchDraft,
+  onSave,
+  onInstallState,
+  onRun,
+  onOpenOutputs,
+  onOpenPersistentState,
+  onDelete,
+  onRepairInstructions,
+  onPatchSettings,
+  onSaveSettings,
+  onStartTelegramConnect,
+  onPollTelegramConnect,
+  onCancelTelegramConnect,
+  onOpenOutputFolder,
+  onOpenSettings,
+}){
+  const routines = Array.isArray(data && data.routines) ? data.routines : [];
+  const profiles = activeWorkspaceCliProfiles(globalSettings);
+  const routineRuns = React.useMemo(() => {
+    const runs = Array.isArray(detail && detail.runs) ? detail.runs : [];
+    const lastRun = detail && detail.lastRun;
+    const merged = lastRun ? [lastRun, ...runs.filter(run => run && run.runId !== lastRun.runId)] : runs;
+    return merged.slice().sort((a, b) => routineRunTimestamp(b) - routineRunTimestamp(a));
+  }, [detail]);
+
+  const visibleRuns = routineRuns.slice(0, 6);
+  const running = !!(detail && detail.running);
+  const state = draft && draft.state || detail && detail.manifest && detail.manifest.state || 'proposed';
+  const canRun = detail && state !== 'proposed' && !running;
+  const title = detail && detail.manifest ? detail.manifest.title : '';
+  const browserTz = browserTimezone();
+  const timezoneOptions = React.useMemo(() => routineTimezoneOptions(draft && draft.timezone), [draft && draft.timezone]);
+  const telegramConnectStatus = telegramConnect && telegramConnect.status;
+  const telegramDestinationLabel = settingsDraft.telegramChatTitle
+    ? `${settingsDraft.telegramChatTitle}${settingsDraft.telegramChatType ? ` (${settingsDraft.telegramChatType})` : ''}`
+    : settingsDraft.telegramChatId
+      ? 'Chat ID configured'
+      : 'Add this workspace destination';
+
+  return (
+    <div className="settings-form settings-form-wide ws-form ws-form-workspace-context ws-form-routines">
+      <div className="ws-wc-layout">
+        <nav className="ws-wc-rail ws-routine-rail" aria-label="Workspace routines">
+          <div className="ws-routine-rail-head">
+            <div>
+              <div className="ws-wc-section-title">Routines</div>
+              <small>{routines.length} total</small>
+            </div>
+            <div className="ws-routine-rail-actions">
+              <button type="button" className="btn ghost" disabled={busy} onClick={onRefresh} title="Refresh routines" aria-label="Refresh routines">{Ico.reset(12)}</button>
+              <button type="button" className="btn ghost" disabled={busy} onClick={(e) => onRepairInstructions(e.currentTarget)} title="Repair routine instructions" aria-label="Repair routine instructions">{Ico.settings(12)}</button>
+            </div>
+          </div>
+          <div className="ws-wc-file-list ws-routine-list">
+            <ul>
+              {routines.map(item => {
+                const manifest = item.manifest || {};
+                const itemRunning = !!item.running;
+                return (
+                  <li key={manifest.id}>
+                    <button
+                      type="button"
+                      className={selectedId === manifest.id ? 'active' : ''}
+                      onClick={() => onSelect(manifest.id)}
+                    >
+                      <span>{manifest.title || manifest.id}</span>
+                      <small>{itemRunning ? 'Running' : (manifest.state || 'unknown')}</small>
+                    </button>
+                  </li>
+                );
+              })}
+            </ul>
+            {routines.length === 0 ? (
+              <p className="ws-wc-list-empty u-dim">No routines yet.</p>
+            ) : null}
+          </div>
+
+          <div className="ws-routine-settings">
+            <div className="ws-wc-section-title">Outreach</div>
+            <label className="toggle ws-toggle">
+              <input
+                type="checkbox"
+                checked={!!settingsDraft.telegramEnabled}
+                onChange={(e) => onPatchSettings({ telegramEnabled: e.target.checked })}
+              />
+              <span className="tgl"/>
+              <span>Telegram</span>
+            </label>
+            <label className="ws-wc-field">
+              <span>Chat ID (advanced)</span>
+              <input
+                value={settingsDraft.telegramChatId || ''}
+                onChange={(e) => onPatchSettings({ telegramChatId: e.target.value, telegramChatTitle: '', telegramChatType: '' })}
+              />
+            </label>
+            <div className="ws-muted-metadata">
+              <span>Bot: {settingsDraft.telegramBotConfigured ? 'Connected in Global Settings' : 'Connect Telegram in Global Settings'}</span>
+              <span>Destination: {settingsDraft.telegramDestinationConfigured ? telegramDestinationLabel : 'Add this workspace destination'}</span>
+            </div>
+            {!settingsDraft.telegramBotConfigured && onOpenSettings ? (
+              <button type="button" className="btn ghost" disabled={busy} onClick={() => onOpenSettings('integrations')}>
+                {Ico.message(12)} Open Integrations
+              </button>
+            ) : null}
+            {settingsDraft.telegramBotConfigured && telegramConnectStatus !== 'pending' ? (
+              <button type="button" className="btn ghost" disabled={busy || telegramConnectBusy} onClick={(e) => onStartTelegramConnect(e.currentTarget)}>
+                {Ico.message(12)} Connect Destination
+              </button>
+            ) : null}
+            {telegramConnectStatus === 'pending' ? (
+              <div className="ws-routine-connect-card">
+                <div className="ws-routine-connect-code">
+                  <span>Send to the target Telegram chat</span>
+                  <code>{(telegramConnect && telegramConnect.instruction) || `/connect ${telegramConnect && telegramConnect.code || ''}`}</code>
+                </div>
+                <div className="ws-muted-metadata">
+                  <span>For groups, add the bot first and send the same message in that group.</span>
+                  {telegramConnect && telegramConnect.expiresAt ? <span>Expires {formatMemoryUpdateTime(telegramConnect.expiresAt)}</span> : null}
+                </div>
+                <div className="ws-routine-connect-actions">
+                  <button type="button" className="btn ghost" disabled={telegramConnectBusy} onClick={(e) => onPollTelegramConnect(e.currentTarget)}>
+                    {telegramConnectBusy ? 'Checking...' : 'Check now'}
+                  </button>
+                  <button type="button" className="btn ghost" disabled={telegramConnectBusy} onClick={onCancelTelegramConnect}>Cancel</button>
+                </div>
+              </div>
+            ) : null}
+            {telegramConnectStatus === 'connected' ? (
+              <div className="ws-routine-connect-card is-connected">
+                <span>Installed destination: {telegramDestinationLabel}</span>
+              </div>
+            ) : null}
+            {telegramConnectStatus === 'expired' ? (
+              <div className="ws-routine-connect-card is-warning">
+                <span>Connection code expired. Start again to get a new code.</span>
+              </div>
+            ) : null}
+            {telegramConnectStatus === 'missing_bot' ? (
+              <div className="ws-routine-connect-card is-warning">
+                <span>Connect Telegram in Global Settings before choosing a destination.</span>
+              </div>
+            ) : null}
+            {telegramConnectStatus === 'error' ? (
+              <div className="ws-routine-connect-card is-warning">
+                <span>{telegramConnect && telegramConnect.error || 'Telegram connection failed.'}</span>
+              </div>
+            ) : null}
+            <button type="button" className="btn primary" disabled={busy || telegramConnectBusy || !settingsDirty} onClick={(e) => onSaveSettings(e.currentTarget)}>
+              {busy ? 'Saving...' : 'Save outreach'}
+            </button>
+          </div>
+        </nav>
+
+        <div className="ws-wc-content">
+          {!detail || !draft ? (
+            <section className="ws-wc-panel" role="tabpanel">
+              <div className="ws-wc-title-row">
+                <div>
+                  <h3 className="ws-wc-title">Routines</h3>
+                </div>
+              </div>
+            </section>
+          ) : (
+            <>
+              <section className="ws-wc-panel ws-routine-panel" role="tabpanel" aria-label="Selected routine">
+                <div className="ws-wc-title-row">
+                  <div>
+                    <h3 className="ws-wc-title">{title || 'Routine'}</h3>
+                    <p className="ws-desc u-dim">{detail.manifest && detail.manifest.id}</p>
+                  </div>
+                  <span className={'ws-wc-status-badge is-routine-' + state}>{running ? 'Running' : state}</span>
+                </div>
+
+                <div className="ws-actions ws-routine-actions">
+                  {state === 'proposed' ? (
+                    <>
+                      <button type="button" className="btn primary" disabled={busy} onClick={(e) => onInstallState(detail.manifest.id, 'enabled', e.currentTarget)}>{Ico.check(12)} Install enabled</button>
+                      <button type="button" className="btn ghost" disabled={busy} onClick={(e) => onInstallState(detail.manifest.id, 'disabled', e.currentTarget)}>Install disabled</button>
+                    </>
+                  ) : (
+                    <button type="button" className="btn primary" disabled={busy || runBusy || !canRun} onClick={(e) => onRun(detail.manifest.id, e.currentTarget)}>
+                      {Ico.play(12)} {running || runBusy ? 'Running...' : 'Run now'}
+                    </button>
+                  )}
+                  <button type="button" className="btn ghost" disabled={busy} onClick={() => onOpenOutputs && onOpenOutputs(detail)}>
+                    {Ico.folder(12)} Outputs
+                  </button>
+                  <button type="button" className="btn ghost" disabled={busy} onClick={() => onOpenPersistentState && onOpenPersistentState(detail)}>
+                    {Ico.archive(12)} Persistent State
+                  </button>
+                  <button type="button" className="btn primary" disabled={busy || !dirty} onClick={(e) => onSave(e.currentTarget)}>
+                    {busy ? 'Saving...' : 'Save Routine'}
+                  </button>
+                  <span className="ws-routine-actions-spacer" aria-hidden="true" />
+                  <button type="button" className="btn ghost" disabled={busy} onClick={onRefresh}>{Ico.reset(12)} Refresh</button>
+                  {state !== 'proposed' ? (
+                    <button type="button" className="btn ghost" disabled={busy} onClick={(e) => onInstallState(detail.manifest.id, state === 'enabled' ? 'disabled' : 'enabled', e.currentTarget)}>
+                      {state === 'enabled' ? 'Disable' : 'Enable'}
+                    </button>
+                  ) : null}
+                  <button type="button" className="btn ghost danger" disabled={busy || running} onClick={(e) => onDelete(detail.manifest.id, e.currentTarget)}>{Ico.trash(12)} Delete</button>
+                </div>
+
+                <label className="ws-wc-field">
+                  <span>Title</span>
+                  <input value={draft.title} onChange={(e) => onPatchDraft({ title: e.target.value })}/>
+                </label>
+              </section>
+
+              <section className="ws-wc-panel ws-routine-panel" role="tabpanel" aria-label="Routine trigger">
+                <div className="ws-wc-section-title">Trigger</div>
+                <div className="seg seg-inline ws-wc-seg">
+                  <button type="button" aria-pressed={draft.triggerType === 'manual'} onClick={() => onPatchDraft({ triggerType: 'manual' })}>Manual</button>
+                  <button type="button" aria-pressed={draft.triggerType === 'schedule'} onClick={() => onPatchDraft({ triggerType: 'schedule' })}>Schedule</button>
+                </div>
+                {draft.triggerType === 'schedule' ? (
+                  <div className="ws-routine-grid">
+                    <label className="ws-wc-field">
+                      <span>Interval minutes</span>
+                      <input type="number" min={1} max={1440} value={draft.intervalMinutes} onChange={(e) => onPatchDraft({ intervalMinutes: e.target.value })}/>
+                    </label>
+                    <label className="ws-wc-field">
+                      <span>Timezone</span>
+                      <select value={draft.timezone || ''} onChange={(e) => onPatchDraft({ timezone: e.target.value })}>
+                        <option value="">Browser default ({browserTz})</option>
+                        {timezoneOptions.map(zone => <option key={zone} value={zone}>{zone}</option>)}
+                      </select>
+                    </label>
+                    <label className="toggle ws-toggle ws-routine-toggle">
+                      <input type="checkbox" checked={!!draft.weekdaysOnly} onChange={(e) => onPatchDraft({ weekdaysOnly: e.target.checked })}/>
+                      <span className="tgl"/>
+                      <span>Weekdays only</span>
+                    </label>
+                  </div>
+                ) : null}
+              </section>
+
+              <section className="ws-wc-panel ws-routine-panel" role="tabpanel" aria-label="Routine harness">
+                <div className="ws-wc-section-title">Harness</div>
+                <label className="ws-wc-field">
+                  <span>CLI profile</span>
+                  <select value={draft.cliProfileId} onChange={(e) => onPatchDraft({ cliProfileId: e.target.value })}>
+                    <option value="">Default CLI Profile</option>
+                    {profiles.map(profile => <option key={profile.id} value={profile.id}>{profile.name}</option>)}
+                  </select>
+                </label>
+                <div className="ws-wc-field">
+                  <span>Notification</span>
+                  <div className="seg seg-inline ws-wc-seg">
+                    <button type="button" aria-pressed={draft.notificationMode !== 'off'} onClick={() => onPatchDraft({ notificationMode: 'workspaceDefault' })}>Workspace default</button>
+                    <button type="button" aria-pressed={draft.notificationMode === 'off'} onClick={() => onPatchDraft({ notificationMode: 'off' })}>Off</button>
+                  </div>
+                </div>
+              </section>
+
+              <section className="ws-wc-panel ws-routine-panel" role="tabpanel" aria-label="Routine markdown">
+                <div className="ws-wc-review-head">
+                  <div>
+                    <div className="ws-wc-section-title">Markdown</div>
+                    <div className="ws-wc-section-summary u-dim">{detail.routinePath}</div>
+                  </div>
+                </div>
+                <textarea
+                  className="ws-wc-preview-editor ws-routine-editor"
+                  value={draft.routineContent}
+                  onChange={(e) => onPatchDraft({ routineContent: e.target.value })}
+                  rows={20}
+                />
+              </section>
+
+              <section className="ws-wc-panel ws-routine-panel" role="tabpanel" aria-label="Routine runs">
+                <div className="ws-wc-review-head">
+                  <div>
+                    <div className="ws-wc-section-title">Runs</div>
+                    <div className="ws-wc-section-summary u-dim">Latest runs first.</div>
+                  </div>
+                </div>
+                {visibleRuns.length ? (
+                  <div className="ws-wc-runs">
+                    {visibleRuns.map(run => (
+                      <div key={run.runId} className="ws-wc-run-card">
+                        <div className="ws-wc-run-card-head">
+                          <b>{run.source === 'scheduled' ? 'Scheduled' : 'Manual'}</b>
+                          <span>{run.status || 'unknown'}</span>
+                        </div>
+                        <div className="ws-wc-run-card-meta">
+                          <span>{run.startedAt ? formatMemoryUpdateTime(run.startedAt) : ''}</span>
+                          {run.outputDir ? (
+                            <button
+                              type="button"
+                              className="btn ghost ws-routine-output-link"
+                              onClick={() => onOpenOutputFolder && onOpenOutputFolder(run)}
+                            >
+                              {Ico.folder(12)} Browse Output Folder
+                            </button>
+                          ) : null}
+                        </div>
+                        {run.notificationError ? <p className="u-err">{run.notificationError}</p> : null}
+                        {run.errorMessage ? <p className="u-err">{run.errorMessage}</p> : null}
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="ws-empty u-dim">No routine runs yet.</p>
+                )}
+              </section>
+            </>
+          )}
+        </div>
+      </div>
     </div>
   );
 }

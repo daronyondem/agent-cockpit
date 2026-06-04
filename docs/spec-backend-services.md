@@ -12,7 +12,7 @@
 
 `ChatService` remains the public facade for conversation, workspace, memory, KB, Workspace Context, settings, queue, usage, artifact, workspace-archive, workspace-location, workspace-instruction, and worktree-isolation operations. Pure attachment helpers stay in `src/services/chat/attachments.ts` and are re-exported where legacy imports still expect them from `chatService.ts`; generated artifact persistence lives in `src/services/chat/artifactStore.ts` behind `createConversationArtifact`; workspace/session pathing, `index.json` and `session-N.json` reads/writes, and the convId→workspaceId lookup rebuild live in `src/services/chat/workspaceSessionStore.ts`; conversation sidebar listing and simple lifecycle/index mutations (`rename`, archive/restore, unread state, external session ID persistence) live in `src/services/chat/conversationLifecycleStore.ts`; message append/edit/pin operations, session history/message reads, and message-window/pinned-message projection helpers live in `src/services/chat/conversationMessageStore.ts`; conversation/session usage accumulation and per-backend usage buckets live in `src/services/chat/conversationUsageStore.ts`; workspace Memory pathing, snapshot/state JSON persistence, and consolidation audit files live in `src/services/chat/workspaceMemoryStore.ts`; workspace KB pathing plus SQLite DB and PGLite vector-store caches live in `src/services/chat/workspaceKnowledgeStore.ts`; message-queue persistence and legacy queue normalization live in `src/services/chat/messageQueueStore.ts` behind the same public `getQueue`/`setQueue`/`clearQueue` methods; workspace archive summary/lifecycle persistence lives in `src/services/chat/workspaceArchiveStore.ts`; workspace file snapshots, checksum verification, safe extraction, product-trash cleanup, and default restore destinations live in `src/services/chat/workspaceSnapshotService.ts`; usage-ledger persistence/aggregation lives in `src/services/chat/usageLedgerStore.ts` behind `addUsage`, `getUsageStats`, and `clearUsageStats`; usage-pricing defaults, estimation, and mutable overrides live in `src/services/usagePricing/` behind `getUsagePricingCatalog`, `saveUsagePricingOverrides`, and `clearUsagePricingOverrides`; stable workspace identity and legacy storage-key resolution live in `src/services/chat/workspaceIdentityStore.ts`; workspace KB and Workspace Context enablement/settings flags live in `src/services/chat/workspaceFeatureSettingsStore.ts`; workspace-instruction compatibility detection and pointer-file creation live in `src/services/chat/workspaceInstructionStore.ts` behind the existing instruction facade methods; Git worktree probing/lifecycle commands live in `src/services/chat/worktreeIsolationService.ts` behind ChatService orchestration. This keeps helper/store behavior testable without changing the service API.
 
-Chat API route registration is split by domain. `src/routes/chat.ts` owns dependency construction, stream lifecycle orchestration, and route composition. Focused routers own status/settings (`statusRoutes.ts`), CLI profile metadata/auth (`cliProfileRoutes.ts`), conversation/session/queue CRUD (`conversationRoutes.ts`), stream send/input/abort/status (`streamRoutes.ts`), backend goal mutations (`goalRoutes.ts`), conversation uploads and workspace file delivery (`uploadRoutes.ts`), local directory picker routes (`filesystemRoutes.ts`), workspace archive routes (`workspaceArchiveRoutes.ts`), workspace location routes (`workspaceLocationRoutes.ts`), workspace instruction routes (`workspaceInstructionRoutes.ts`), workspace file explorer routes (`explorerRoutes.ts`), read-only workspace/conversation Git status/diff routes (`gitRoutes.ts`), workspace worktree-isolation status/toggle routes (`worktreeIsolationRoutes.ts`), memory routes (`memoryRoutes.ts`), Workspace Context routes including conversation-scoped context/reference/asset previews (`workspaceContextRoutes.ts`), and KB routes (`kbRoutes.ts`). Common Express helpers live in `src/routes/chat/routeUtils.ts`; goal lifecycle transcript formatting and runtime snapshots live in `src/services/chat/goalEventMessages.ts` so routes and stream processing persist the same `Message.goalEvent` shape. Runtime request validators and small shared response contracts live in focused files under `src/contracts/`; browser-safe wire types avoid importing server-only `src/types` where web/mobile clients use type-only references.
+Chat API route registration is split by domain. `src/routes/chat.ts` owns dependency construction, stream lifecycle orchestration, and route composition. Focused routers own status/settings (`statusRoutes.ts`), CLI profile metadata/auth (`cliProfileRoutes.ts`), conversation/session/queue CRUD (`conversationRoutes.ts`), stream send/input/abort/status (`streamRoutes.ts`), backend goal mutations (`goalRoutes.ts`), conversation uploads and workspace file delivery (`uploadRoutes.ts`), local directory picker routes (`filesystemRoutes.ts`), workspace archive routes (`workspaceArchiveRoutes.ts`), workspace location routes (`workspaceLocationRoutes.ts`), workspace instruction routes (`workspaceInstructionRoutes.ts`), workspace file explorer routes (`explorerRoutes.ts`), read-only workspace/conversation Git status/diff routes (`gitRoutes.ts`), workspace worktree-isolation status/toggle routes (`worktreeIsolationRoutes.ts`), memory routes (`memoryRoutes.ts`), Workspace Context routes including conversation-scoped context/reference/asset previews (`workspaceContextRoutes.ts`), Workspace Routines routes (`routineRoutes.ts`), and KB routes (`kbRoutes.ts`). Common Express helpers live in `src/routes/chat/routeUtils.ts`; goal lifecycle transcript formatting and runtime snapshots live in `src/services/chat/goalEventMessages.ts` so routes and stream processing persist the same `Message.goalEvent` shape. Runtime request validators and small shared response contracts live in focused files under `src/contracts/`; browser-safe wire types avoid importing server-only `src/types` where web/mobile clients use type-only references.
 
 Conversation upload image normalization is owned by focused chat modules rather than `uploadRoutes.ts`. `src/services/chat/dngPreview.ts` is a pure TIFF/DNG parser for the supported baseline TIFF layout (`II`/`MM` endian markers, TIFF magic 42, 32-bit IFD offsets). It scans IFD0, linked IFDs, and SubIFDs up to a bounded depth, considers only single-strip JPEG preview candidates (`Compression=7` or JPEG SOI bytes) with non-linear-raw photometric interpretation and 8-bit-or-smaller samples, parses JPEG SOF dimensions without fully decoding pixels, trims at JPEG EOI when present, and returns the largest readable candidate. Linear raw subimages (`PhotometricInterpretation=34892`) are intentionally skipped; Agent Cockpit does not demosaic RAW sensor data for chat uploads. `src/services/chat/uploadImageNormalization.ts` applies this parser only to `.dng` uploads, writes `<original>.preview.jpg`, and caps the generated JPEG to `CHAT_UPLOAD_IMAGE_MAX_LONG_EDGE_PX = 2576` with `@napi-rs/canvas`/JPEG quality 92 when the embedded preview exceeds the cap. Other upload formats pass through unchanged. The generated JPEG sidecar is the only `AttachmentMeta` returned to clients for the upload, while the original DNG remains on disk until the sidecar is deleted. This decision is captured in [ADR-0083](adr/0083-extract-dng-embedded-previews-for-chat-uploads.md).
 
@@ -447,6 +447,89 @@ running/failed run counts, context dir, markdown file count, and latest/last run
 metadata. Workspace Context routes and processor run transitions call the
 router's workspace fan-out helper so every connected conversation in the
 workspace patches `conv.workspaceContext`.
+
+### Workspace Routines Service
+
+**Files:** `src/contracts/routines.ts`,
+`src/services/routines/service.ts`, `src/routes/chat/routineRoutes.ts`.
+
+Workspace Routines are workspace-owned markdown workflows that Agent Cockpit can
+run manually or on a schedule through the selected CLI harness. Agent Cockpit
+owns infrastructure only: authoring contracts, proposal validation,
+install/enable/disable/delete lifecycle, schedule checks, run folders, run
+history, and notification routing. The harness owns the actual task logic in
+`routine.md`. This boundary is recorded in
+[ADR-0084](adr/0084-represent-workspace-routines-as-markdown-workflows.md).
+
+`RoutinesService.ensureWorkspace(ref)` creates
+`workspaces/{storageKey}/routines/ROUTINE_AUTHORING.md`, `index.json`,
+`settings.json`, and `items/`, then installs a managed Agent Cockpit Routines
+block in the workspace root `AGENTS.md`. The authoring file is the prompt
+contract for harnesses that create or edit routines. It tells them to write a
+manifest plus markdown workflow, leave new routines in `state:"proposed"`, and
+emit an `AGENT_COCKPIT_ROUTINE_PROPOSAL` marker in the final assistant message.
+
+The manifest validator in `src/contracts/routines.ts` accepts only
+`schemaVersion:1`, `kind:"agent-cockpit.routine"`, a normalized id, a relative
+markdown `routineFile`, state `proposed | enabled | disabled`, a manual or
+interval schedule trigger, optional CLI profile/model/effort selection, and
+notification mode `off | workspaceDefault`. Schedule windows require paired
+`HH:mm` start/end values and valid IANA time zones when a timezone is supplied.
+
+`RoutinesService.runRoutine(ref, routineId, { source })` creates a per-run
+folder under `items/{routineId}/runs/{runId}/`, writes `input.md`, resolves the
+routine's configured CLI profile runtime through ChatService, and calls the
+adapter's `runOneShot()` with `allowTools:true`, the workspace path as
+`workingDir`, and optional manifest model/effort/timeout/profile. The prompt
+points the harness at the routine markdown, workspace path, output/tmp folders,
+the routine's persistent state folder, previous run folders, `notify.md`, and
+enabled Workspace Context / Knowledge Base pointers. The run prompt explicitly
+tells the harness to use the persistent state folder for cross-run state and not
+to create `.agent-cockpit` or similar hidden Agent Cockpit metadata folders in
+the workspace unless the user requested workspace-visible output. The run record
+is persisted to `state.json`, including final
+output path, status, timestamps, notification success/error, and any runtime
+error message. Each routine has one starting/running run at a time.
+`RoutinesService.getRoutineRunOutputDir(ref, routineId, runId)` resolves only a
+recorded run's computed `runs/{runId}/output` directory and is used by the
+workspace file explorer's read-only `routine-output` scope.
+`RoutinesService.getRoutineOutputsDir(ref, routineId)` resolves the routine's
+`runs/` directory, creating it when the routine exists, for the read-only
+`routine-outputs` scope. `RoutinesService.getRoutinePersistentStateExplorerDir(ref, routineId)`
+resolves the routine's `persistent-state/` directory, creating it when the
+routine exists, for the read-only `routine-state` scope. Explorer write routes
+reject all routine scopes.
+
+`RoutinesScheduler` is constructed by `createChatRouter()`, started from
+`server.ts`, and stopped during chat-route shutdown. It wakes every 60 seconds,
+lists active workspaces, loads enabled scheduled routines, checks interval,
+weekday, timezone, and optional time-window eligibility, then starts due runs in
+the background. Scheduler failures are logged and do not block other workspaces.
+
+`TelegramRoutineNotifier` is the first outreach channel. Global Settings stores
+the shared Telegram bot token at `settings.integrations.telegram.botToken`,
+while workspace routine settings store
+`{ telegram: { enabled, chatId, chatTitle?, chatType? } }` for the destination.
+Legacy workspace-level `telegram.botToken` values still work and take
+precedence for compatibility, but API responses never echo any bot token. They
+return `configured`, `botConfigured`, and `destinationConfigured` status flags
+instead. `RoutinesService.startTelegramDestinationConnect(ref)` creates a
+process-local, short-lived `AC-######` pairing code for a workspace when either
+a legacy workspace token or the global bot token exists. The legacy token is
+preferred only for compatibility; new UI saves the token globally.
+`pollTelegramDestinationConnect(ref)` calls Telegram `getUpdates`, matches a
+recent message or channel post containing the active code, extracts the sending
+chat id/title/type, writes the destination into workspace settings, enables
+Telegram outreach, and returns the redacted settings envelope. Pairing codes are
+not written to disk and starting a new pairing for the same workspace replaces
+the previous pending code. When a
+completed run writes non-empty `notify.md` and the routine notification mode is
+`workspaceDefault`, Agent Cockpit posts plain text to Telegram with a
+10-second timeout and a 3900-character cap. Notification failure does not fail
+the run; it is recorded on the run record.
+
+See [Workspace Routines](spec-routines.md) for the storage layout, proposal
+flow, route table, frontend behavior, and focused tests.
 
 ### Workspace Knowledge Base
 

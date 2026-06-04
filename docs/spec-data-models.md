@@ -38,6 +38,7 @@ agent-cockpit/
 │   │   ├── memory.ts                  # Workspace memory enablement and consolidation mutation contracts
 │   │   ├── worktreeIsolation.ts       # Workspace worktree-isolation status/toggle contracts
 │   │   ├── workspaceContext.ts        # Workspace Context settings mutation contracts
+│   │   ├── routines.ts                # Workspace Routines manifests, settings, run records, and validators
 │   │   ├── knowledgeBase.ts           # KB enablement/folder/glossary/embedding mutation contracts
 │   │   ├── settings.ts                # Global settings mutation contract helpers
 │   │   ├── serviceTier.ts             # Browser-safe service-tier input normalization
@@ -149,6 +150,16 @@ agent-cockpit/
     │   │   │   ├── assets/*            # Allowlisted non-executable reference files linked from context/references
     │   │   │   ├── runs/*.md           # Run summaries, including latest.md
     │   │   │   └── state.json          # Small operational run-state sidecar
+    │   │   ├── routines/               # Per-workspace Routine authoring, manifests, run folders, and outreach settings
+    │   │   │   ├── ROUTINE_AUTHORING.md # Harness-readable routine proposal/edit contract
+    │   │   │   ├── index.json          # Generated routine list with paths and latest run summaries
+    │   │   │   ├── settings.json       # Workspace outreach settings such as Telegram destination configuration
+    │   │   │   └── items/<routineId>/  # One routine per normalized id
+    │   │   │       ├── manifest.json   # Schema v1 `agent-cockpit.routine` manifest
+    │   │   │       ├── routine.md      # Harness-authored workflow intelligence
+    │   │   │       ├── state.json      # Latest run and bounded run history
+    │   │   │       ├── persistent-state/ # Cross-run routine state under Agent Cockpit data
+    │   │   │       └── runs/<runId>/   # Per-execution input/output/tmp/final/notify files
     │   │   ├── knowledge/              # Per-workspace Knowledge Base (opt-in per workspace). Created lazily on first enable.
     │   │   │   ├── state.db            # SQLite database (better-sqlite3, WAL mode, foreign_keys ON)
     │   │   │   ├── raw/<rawId>.<ext>   # Uploaded files, stored verbatim (rawId = sha256[:16])
@@ -1701,6 +1712,18 @@ is normalized to an integer from 1 to 10; it controls how many workspace
 maintenance runs the hourly maintenance check can start at once. Legacy
 `contextMap` settings are migrated into this block on read/write, and removed
 fields such as source toggles plus extraction/synthesis concurrency are stripped.
+
+The `integrations` block stores globally-shared external integration
+credentials. `integrations.telegram.botToken` is the single Telegram bot token
+used by routines and future outbound notifications; workspaces store only their
+destination chat IDs/title/type unless they still have a legacy workspace-level
+bot token. Routine Telegram destination pairing creates short-lived in-memory
+codes and persists only the resulting workspace destination metadata.
+Browser-facing `/settings` responses never include `botToken`; they include
+`integrations.telegram.configured: true` when a token exists. Whole-settings
+saves preserve the existing token when the browser posts a redacted Telegram
+object, replace it when a new non-empty `botToken` is supplied, and clear it
+only when `integrations.telegram.clearBotToken: true` is posted.
 
 **Migration:** `dreamingConcurrency` was renamed to `cliConcurrency` in the hybrid-ingestion design (PR 1). On read, `SettingsService.getSettings()` copies `dreamingConcurrency` forward to `cliConcurrency` when the new key is missing — disk state is left untouched until the next save. Existing settings files load without warnings; the deprecated `dreamingConcurrency` field stays on the `Settings` type for one release cycle, then is removed.
 
