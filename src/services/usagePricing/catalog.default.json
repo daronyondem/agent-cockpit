@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "version": "2026-05-28",
+  "version": "2026-06-09",
   "currency": "USD",
   "entries": [
     {
@@ -117,6 +117,21 @@
         "input": 5,
         "cachedInput": 0.5,
         "output": 30
+      }
+    },
+    {
+      "id": "anthropic-claude-fable-5-family",
+      "provider": "anthropic",
+      "modelPattern": "claude-fable-5*",
+      "unit": "tokens",
+      "sourceUrl": "https://platform.claude.com/docs/en/about-claude/pricing",
+      "verifiedAt": "2026-06-09",
+      "effectiveDate": "2026-06-09",
+      "ratesPerMillion": {
+        "input": 10,
+        "cacheWrite": 12.5,
+        "cachedInput": 1,
+        "output": 50
       }
     },
     {

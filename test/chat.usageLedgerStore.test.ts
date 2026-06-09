@@ -2,6 +2,7 @@ import fsp from 'fs/promises';
 import os from 'os';
 import path from 'path';
 import { UsageLedgerStore, addToUsage, emptyUsage } from '../src/services/chat/usageLedgerStore';
+import { BUILTIN_USAGE_PRICING_CATALOG } from '../src/services/usagePricing/catalog';
 import { applyCostEstimate } from '../src/services/usagePricing/estimator';
 import type { UsageLedger } from '../src/types';
 
@@ -67,7 +68,7 @@ describe('UsageLedgerStore', () => {
     expect(record.usage.costSource).toBe('estimated');
     expect(record.usage.estimatedCostUsd).toBeCloseTo(17.5);
     expect(record.usage.costSnapshot).toMatchObject({
-      catalogVersion: '2026-05-28',
+      catalogVersion: BUILTIN_USAGE_PRICING_CATALOG.version,
       pricedAt: '2026-05-20T00:00:00.000Z',
       provider: 'openai',
       model: 'gpt-5.4',

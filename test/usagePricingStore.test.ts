@@ -1,6 +1,7 @@
 import fsp from 'fs/promises';
 import os from 'os';
 import path from 'path';
+import { BUILTIN_USAGE_PRICING_CATALOG } from '../src/services/usagePricing/catalog';
 import { UsagePricingStore } from '../src/services/usagePricing/store';
 import type { UsagePricingEntry } from '../src/services/usagePricing/types';
 
@@ -42,7 +43,7 @@ describe('UsagePricingStore', () => {
 
     expect(catalogs.overrides.entries).toEqual([overrideEntry]);
     expect(catalogs.effective.entries[0]).toEqual(overrideEntry);
-    expect(catalogs.effective.version).toMatch(/^2026-05-28\+user-overrides:/);
+    expect(catalogs.effective.version).toMatch(new RegExp(`^${BUILTIN_USAGE_PRICING_CATALOG.version}\\+user-overrides:`));
 
     const reloaded = new UsagePricingStore(file);
     const reloadedCatalogs = await reloaded.getCatalogs();

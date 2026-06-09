@@ -190,7 +190,14 @@ describe('ClaudeCodeAdapter', () => {
     const meta = adapter.metadata;
     expect(meta.models).toBeDefined();
     expect(Array.isArray(meta.models)).toBe(true);
-    expect(meta.models!.length).toBe(5);
+    expect(meta.models!.length).toBe(6);
+
+    const fable = meta.models!.find(m => m.id === 'claude-fable-5');
+    expect(fable).toBeDefined();
+    expect(fable!.label).toBe('Fable 5');
+    expect(fable!.family).toBe('fable');
+    expect(fable!.costTier).toBe('high');
+    expect(fable!.capabilities?.input?.image).toBe(true);
 
     const opus48 = meta.models!.find(m => m.id === 'claude-opus-4-8');
     expect(opus48).toBeDefined();
@@ -226,6 +233,9 @@ describe('ClaudeCodeAdapter', () => {
   test('metadata declares supportedEffortLevels per model', () => {
     const adapter = new ClaudeCodeAdapter({ workingDir: '/tmp' });
     const meta = adapter.metadata;
+
+    const fable = meta.models!.find(m => m.id === 'claude-fable-5');
+    expect(fable!.supportedEffortLevels).toEqual(['low', 'medium', 'high', 'xhigh', 'max']);
 
     // Opus 4.8 and 4.7 support xhigh and max.
     const opus48 = meta.models!.find(m => m.id === 'claude-opus-4-8');
@@ -806,7 +816,7 @@ describe('ClaudeCodeAdapter sendMessage', () => {
     expect(capturedArgs![idx + 1]).toBe('high');
   });
 
-  test('passes --effort max only when supported (Opus)', async () => {
+  test('passes --effort max only when supported by the selected model', async () => {
     let capturedArgs: string[] | undefined;
     let streamRef: AsyncGenerator<any>;
     jest.isolateModules(() => {
