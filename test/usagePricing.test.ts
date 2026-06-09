@@ -107,6 +107,17 @@ describe('usage cost estimator', () => {
     expect(estimate.costSnapshot?.pricingEntryId).toBe('anthropic-claude-opus-4.8-family');
   });
 
+  test('uses Fable 5 pricing', () => {
+    const estimate = estimateUsageCost({
+      backend: 'claude-code',
+      model: 'claude-fable-5',
+      usage: { ...baseUsage, inputTokens: 1_000_000, outputTokens: 1_000_000 },
+    });
+    expect(estimate.costSource).toBe('estimated');
+    expect(estimate.estimatedCostUsd).toBeCloseTo(60);
+    expect(estimate.costSnapshot?.pricingEntryId).toBe('anthropic-claude-fable-5-family');
+  });
+
   test('uses current Opus 4.6 pricing instead of deprecated Opus 4 pricing', () => {
     const estimate = estimateUsageCost({
       backend: 'claude-code',

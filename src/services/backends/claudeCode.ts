@@ -142,6 +142,15 @@ export class ClaudeCodeAdapter extends BaseBackendAdapter {
       },
       models: [
         {
+          id: 'claude-fable-5',
+          label: 'Fable 5',
+          family: 'fable',
+          description: 'Most capable Claude model for demanding reasoning and long-horizon agentic work',
+          costTier: 'high',
+          supportedEffortLevels: ['low', 'medium', 'high', 'xhigh', 'max'],
+          capabilities: CLAUDE_MODEL_CAPABILITIES,
+        },
+        {
           id: 'claude-opus-4-8',
           label: 'Opus 4.8',
           family: 'opus',

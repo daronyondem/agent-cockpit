@@ -639,7 +639,7 @@ Together these guarantee that a workspace index always parses on disk and that c
     titleManuallySet?: boolean, // true once `renameConversation()` has run. Locks the title against all automatic mutations (resetSession, addMessage's first-message snapshot, generateAndUpdateTitle). Absent when the title is still auto-managed.
     backend: string,            // Internal backend id: 'claude-code' | 'claude-code-interactive' | 'kiro' | 'codex' | 'opencode'. Kept for back-compat and transcript rendering. Some backends share a physical CLI harness/profile.
     cliProfileId?: string,      // Runtime CLI profile selected for this conversation. When present, runtime adapter selection is derived from Settings.cliProfiles[id].harness plus Claude Code's optional protocol while command/auth/config still come from the physical profile.
-    model?: string,             // Full model ID (e.g. 'claude-opus-4-8', 'claude-sonnet-4-6', 'claude-haiku-4-5'); absent = backend default
+    model?: string,             // Full model ID (e.g. 'claude-fable-5', 'claude-opus-4-8', 'claude-sonnet-4-6', 'claude-haiku-4-5'); absent = backend default
     effort?: string,            // Adaptive reasoning effort: 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max'; absent = model default. Supported values are backend/model-specific. Stale unsupported values are reconciled to `high` when available, then the first supported level, or removed when the model has no effort support.
     serviceTier?: string,       // Codex-only service tier override. Current value: 'fast'. Absent = use the selected Codex profile/config default.
     currentSessionId: string,   // UUID of the active CLI session
@@ -1458,7 +1458,7 @@ Flat object assembled from workspace index + active session file:
   id: string,
   title: string,
   backend: string,
-  model?: string,               // Full model ID (e.g. 'claude-opus-4-8', 'claude-sonnet-4-6', 'claude-haiku-4-5')
+  model?: string,               // Full model ID (e.g. 'claude-fable-5', 'claude-opus-4-8', 'claude-sonnet-4-6', 'claude-haiku-4-5')
   effort?: string,              // Adaptive reasoning effort: 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max'
   serviceTier?: string,         // Codex-only service tier override; currently 'fast'
   workingDir: string,           // The workspace path
