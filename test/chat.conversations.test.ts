@@ -431,7 +431,7 @@ describe('POST /conversations/:id/reset', () => {
 
     // Simulate an active stream by adding an entry to env.activeStreams
     env.activeStreams.set(conv.id, {
-      stream: (async function* () { yield { type: 'done' } as StreamEvent; })(),
+      stream: (async function* () { yield { type: 'done' }; })(),
       abort: () => {},
       sendInput: () => {},
       backend: 'claude-code',

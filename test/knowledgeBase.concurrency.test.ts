@@ -310,8 +310,8 @@ describe('WorkspaceTaskQueueRegistry', () => {
     const aRan = jest.fn();
     const bRan = jest.fn();
 
-    a.run(async () => { aRan(); await aGate.promise; });
-    b.run(async () => { bRan(); await bGate.promise; });
+    const aDone = a.run(async () => { aRan(); await aGate.promise; });
+    const bDone = b.run(async () => { bRan(); await bGate.promise; });
 
     await flushMicrotasks();
     // Both queues run their first task in parallel — they don't share a budget.
@@ -322,6 +322,7 @@ describe('WorkspaceTaskQueueRegistry', () => {
     bGate.resolve();
     await reg.waitForIdle('hash-a');
     await reg.waitForIdle('hash-b');
+    await Promise.all([aDone, bDone]);
   });
 
   test('setConcurrency clamps to >= 1 and floors fractional values', async () => {
@@ -330,8 +331,8 @@ describe('WorkspaceTaskQueueRegistry', () => {
     const q = reg.get('hash');
     const gates = [gate(), gate()];
     const ran: number[] = [];
-    q.run(async () => { ran.push(1); await gates[0].promise; });
-    q.run(async () => { ran.push(2); await gates[1].promise; });
+    const firstRun = q.run(async () => { ran.push(1); await gates[0].promise; });
+    const secondRun = q.run(async () => { ran.push(2); await gates[1].promise; });
     await flushMicrotasks();
     expect(ran).toEqual([1]); // clamped to 1, not 0
 
@@ -341,6 +342,7 @@ describe('WorkspaceTaskQueueRegistry', () => {
     expect(ran).toEqual([1, 2]);
     gates[1].resolve();
     await reg.waitForIdle('hash');
+    await Promise.all([firstRun, secondRun]);
   });
 
   test('waitForIdle resolves immediately for unknown hashes', async () => {

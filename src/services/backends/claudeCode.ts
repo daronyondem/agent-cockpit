@@ -534,7 +534,7 @@ export class ClaudeCodeAdapter extends BaseBackendAdapter {
       let lastProgressAgentId: string | null = null;
       let detectedModel: string | null = null;
 
-      proc.stdout!.on('data', (chunk: Buffer) => {
+      proc.stdout.on('data', (chunk: Buffer) => {
         const raw = chunk.toString();
         console.log(`[claudeCode] stdout chunk (${raw.length} bytes)`);
         buffer += raw;
@@ -588,7 +588,7 @@ export class ClaudeCodeAdapter extends BaseBackendAdapter {
                   textQueue.push({ type: 'thinking', content: block.thinking });
                 } else if (block.type === 'tool_use' && 'name' in block && block.name) {
                   if (block.id) toolNameById[block.id] = block.name;
-                  const detail = extractToolDetails(block as CliToolUseBlock);
+                  const detail = extractToolDetails(block);
                   if (!detail.isAgent && lastProgressAgentId) {
                     detail.parentAgentId = lastProgressAgentId;
                   }
@@ -611,7 +611,7 @@ export class ClaudeCodeAdapter extends BaseBackendAdapter {
                 }> = [];
                 for (const block of event.message.content) {
                   if (block.type === 'tool_result' && 'tool_use_id' in block) {
-                    const trBlock = block as CliToolResultBlock;
+                    const trBlock = block;
                     let resultContent = '';
                     if (typeof trBlock.content === 'string') {
                       resultContent = trBlock.content;
@@ -642,7 +642,7 @@ export class ClaudeCodeAdapter extends BaseBackendAdapter {
                   textQueue.push({ type: 'result', content: typeof event.result === 'string' ? event.result : JSON.stringify(event.result) });
                 }
               }
-              const usageEvent = extractUsage(event as { usage?: Record<string, number>; cost_usd?: number });
+              const usageEvent = extractUsage(event);
               if (usageEvent) {
                 if (detectedModel) usageEvent.model = detectedModel;
                 textQueue.push(usageEvent);
@@ -658,7 +658,7 @@ export class ClaudeCodeAdapter extends BaseBackendAdapter {
         }
       });
 
-      proc.stderr!.on('data', (chunk: Buffer) => {
+      proc.stderr.on('data', (chunk: Buffer) => {
         const s = chunk.toString();
         console.log(`[claudeCode] stderr: ${s.substring(0, 300)}`);
         stderrOutput += s;
@@ -679,7 +679,7 @@ export class ClaudeCodeAdapter extends BaseBackendAdapter {
               if (event.result) {
                 textQueue.push({ type: 'result', content: typeof event.result === 'string' ? event.result : JSON.stringify(event.result) });
               }
-              const usageEvent = extractUsage(event as { usage?: Record<string, number>; cost_usd?: number });
+              const usageEvent = extractUsage(event);
               if (usageEvent) {
                 if (detectedModel) usageEvent.model = detectedModel;
                 textQueue.push(usageEvent);

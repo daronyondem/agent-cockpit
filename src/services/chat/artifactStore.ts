@@ -35,7 +35,7 @@ export class ArtifactStore {
     const convDir = path.join(this.deps.artifactsDir, convId);
     await fsp.mkdir(convDir, { recursive: true });
 
-    let sourcePath = input.sourcePath ? path.resolve(input.sourcePath) : '';
+    const sourcePath = input.sourcePath ? path.resolve(input.sourcePath) : '';
     let bytes: Buffer | null = null;
     let size: number | undefined;
     let mimeType = input.mimeType;

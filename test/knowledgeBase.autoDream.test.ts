@@ -37,8 +37,8 @@ function createScheduler(opts: {
     requestStop: opts.requestStop || jest.fn().mockReturnValue(true),
   };
   const scheduler = new KbDreamScheduler({
-    chatService: chatService as any,
-    kbDreaming: kbDreaming as any,
+    chatService: chatService,
+    kbDreaming: kbDreaming,
     now: () => now,
     logger: { warn: jest.fn() },
   });

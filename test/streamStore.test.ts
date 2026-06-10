@@ -1050,7 +1050,7 @@ describe('attachment + queue helpers', () => {
     const Store = (window as any).StreamStore;
     expect(Store.parseUploadedFilesTag('hello world')).toBeNull();
     expect(Store.parseUploadedFilesTag('')).toBeNull();
-    expect(Store.parseUploadedFilesTag(null as unknown as string)).toBeNull();
+    expect(Store.parseUploadedFilesTag(null)).toBeNull();
   });
 
   test('blank state has empty pendingAttachments and queue arrays', async () => {

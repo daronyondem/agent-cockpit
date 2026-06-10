@@ -81,8 +81,8 @@ export class UpdateService {
   }
 
   start(): void {
-    this._checkRemoteVersion();
-    this._checkInterval = setInterval(() => this._checkRemoteVersion(), 15 * 60 * 1000);
+    void this._checkRemoteVersion();
+    this._checkInterval = setInterval(() => { void this._checkRemoteVersion(); }, 15 * 60 * 1000);
     this._checkInterval.unref();
   }
 

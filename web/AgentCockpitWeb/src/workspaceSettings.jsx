@@ -1384,7 +1384,7 @@ export function WorkspaceSettingsPage({ hash, label, initialTab, initialWorkspac
     }
   }
 
-  const openRoutineOutputFolder = React.useCallback((run) => {
+  function openRoutineOutputFolder(run){
     if (!onOpenFiles || !run || !run.routineId || !run.runId) return;
     const routineTitle = (routineDetail && routineDetail.manifest && routineDetail.manifest.title) || run.routineId || 'Routine';
     onOpenFiles(hash, `${routineTitle} Output`, {
@@ -1401,9 +1401,9 @@ export function WorkspaceSettingsPage({ hash, label, initialTab, initialWorkspac
         runId: run.runId,
       },
     });
-  }, [hash, label, onOpenFiles, routineDetail]);
+  }
 
-  const openRoutineOutputs = React.useCallback((routine) => {
+  function openRoutineOutputs(routine){
     const manifest = routine && routine.manifest;
     if (!onOpenFiles || !manifest || !manifest.id) return;
     onOpenFiles(hash, `${manifest.title || manifest.id} Outputs`, {
@@ -1419,9 +1419,9 @@ export function WorkspaceSettingsPage({ hash, label, initialTab, initialWorkspac
         routineId: manifest.id,
       },
     });
-  }, [hash, label, onOpenFiles]);
+  }
 
-  const openRoutinePersistentState = React.useCallback((routine) => {
+  function openRoutinePersistentState(routine){
     const manifest = routine && routine.manifest;
     if (!onOpenFiles || !manifest || !manifest.id) return;
     onOpenFiles(hash, `${manifest.title || manifest.id} Persistent State`, {
@@ -1437,7 +1437,7 @@ export function WorkspaceSettingsPage({ hash, label, initialTab, initialWorkspac
         routineId: manifest.id,
       },
     });
-  }, [hash, label, onOpenFiles]);
+  }
 
   async function deleteMemoryEntry(relPath, anchor){
     const ok = await dialog.confirm({ anchor, title: 'Delete entry', body: 'Delete memory entry "' + relPath + '"?', confirmLabel: 'Delete', cancelLabel: 'Cancel', destructive: true });

@@ -61,11 +61,11 @@ class CodexGoalMockBackend extends MockBackendAdapter {
     const goal = this.goal;
     return {
       stream: (async function*() {
-        yield { type: 'external_session', sessionId: goal.threadId } as StreamEvent;
-        yield { type: 'goal_updated', goal } as StreamEvent;
-        yield { type: 'text', content: 'goal output', streaming: true } as StreamEvent;
-        yield { type: 'goal_updated', goal: { ...goal, status: 'complete', updatedAt: 2 } } as StreamEvent;
-        yield { type: 'done' } as StreamEvent;
+        yield { type: 'external_session', sessionId: goal.threadId };
+        yield { type: 'goal_updated', goal };
+        yield { type: 'text', content: 'goal output', streaming: true };
+        yield { type: 'goal_updated', goal: { ...goal, status: 'complete', updatedAt: 2 } };
+        yield { type: 'done' };
       })(),
       abort: () => {},
       sendInput: () => {},
@@ -137,9 +137,9 @@ class ClaudeGoalMockBackend extends MockBackendAdapter {
     const goal = this.goal;
     return {
       stream: (async function*() {
-        yield { type: 'goal_updated', goal } as StreamEvent;
-        yield { type: 'text', content: 'claude goal output', streaming: true } as StreamEvent;
-        yield { type: 'done' } as StreamEvent;
+        yield { type: 'goal_updated', goal };
+        yield { type: 'text', content: 'claude goal output', streaming: true };
+        yield { type: 'done' };
       })(),
       abort: () => {},
       sendInput: () => {},
@@ -181,9 +181,9 @@ class ClaudeInteractiveGoalMockBackend extends ClaudeGoalMockBackend {
     const goal = this.goal;
     return {
       stream: (async function*() {
-        yield { type: 'goal_updated', goal } as StreamEvent;
-        yield { type: 'text', content: 'interactive goal output', streaming: true } as StreamEvent;
-        yield { type: 'done' } as StreamEvent;
+        yield { type: 'goal_updated', goal };
+        yield { type: 'text', content: 'interactive goal output', streaming: true };
+        yield { type: 'done' };
       })(),
       abort: () => {},
       sendInput: () => {},
@@ -210,12 +210,12 @@ async function startPendingMessage(content = 'first') {
       }
     }
     return originalAddMessage(...args);
-  }) as typeof env.chatService.addMessage;
+  });
 
   env.mockBackend.sendMessage = function() {
     sendCalls += 1;
     return {
-      stream: (async function*() { yield { type: 'done' } as StreamEvent; })(),
+      stream: (async function*() { yield { type: 'done' }; })(),
       abort: () => {},
       sendInput: () => {},
     };
@@ -515,7 +515,7 @@ describe('GET /active-streams', () => {
     const c3 = await env.chatService.createConversation('Idle');
 
     const makeEntry = (): ActiveStreamEntry => ({
-      stream: (async function* () { yield { type: 'done' } as StreamEvent; })(),
+      stream: (async function* () { yield { type: 'done' }; })(),
       abort: () => {},
       sendInput: () => {},
       backend: 'claude-code',
@@ -1027,7 +1027,7 @@ describe('POST /conversations/:id/abort', () => {
     env.chatService.addStreamErrorMessage = (async (...args: Parameters<typeof env.chatService.addStreamErrorMessage>) => {
       await new Promise(resolve => setTimeout(resolve, 50));
       return originalAddStreamErrorMessage(...args);
-    }) as typeof env.chatService.addStreamErrorMessage;
+    });
 
     const send = await env.request('POST', `/api/chat/conversations/${conv.id}/message`, {
       content: 'start',
@@ -1076,7 +1076,7 @@ describe('POST /conversations/:id/abort', () => {
       markPersistStarted();
       await persistGate;
       return originalAddStreamErrorMessage(...args);
-    }) as typeof env.chatService.addStreamErrorMessage;
+    });
 
     const send = await env.request('POST', `/api/chat/conversations/${conv.id}/message`, {
       content: 'start',
@@ -1378,7 +1378,7 @@ describe('POST /conversations/:id/message active-stream guard', () => {
         }
       }
       return originalAddMessage(...args);
-    }) as typeof env.chatService.addMessage;
+    });
 
     env.mockBackend.sendMessage = function() {
       sendCalls += 1;
@@ -1469,7 +1469,7 @@ describe('POST /conversations/:id/message active-stream guard', () => {
 describe('Codex service tier request handling', () => {
   test('persists Fast tier on message send and passes it to the backend', async () => {
     const codexBackend = new CodexGoalMockBackend();
-    codexBackend.setMockEvents([{ type: 'done' } as StreamEvent]);
+    codexBackend.setMockEvents([{ type: 'done' }]);
     env.backendRegistry.register(codexBackend);
     const conv = await env.chatService.createConversation('Fast REST', '/tmp/fast-rest', 'codex');
 
@@ -1486,7 +1486,7 @@ describe('Codex service tier request handling', () => {
 
   test('default service tier clears a stored Codex Fast override', async () => {
     const codexBackend = new CodexGoalMockBackend();
-    codexBackend.setMockEvents([{ type: 'done' } as StreamEvent]);
+    codexBackend.setMockEvents([{ type: 'done' }]);
     env.backendRegistry.register(codexBackend);
     const conv = await env.chatService.createConversation('Default REST', '/tmp/default-rest', 'codex', undefined, undefined, undefined, 'fast');
 

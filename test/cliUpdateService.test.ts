@@ -87,7 +87,7 @@ describe('CliUpdateService', () => {
       sendBehavior: 'enter',
       systemPrompt: '',
       cliProfiles: [],
-    } as Settings;
+    };
     mockExecFile(() => new Error('unexpected command'));
 
     const status = await service.checkNow(async () => settings);

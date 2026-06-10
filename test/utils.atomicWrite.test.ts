@@ -68,7 +68,7 @@ describe('atomicWriteFile', () => {
       reads.push(fsp.readFile(target, 'utf8'));
     }
     const [, ...results] = await Promise.all([writePromise, ...reads]);
-    for (const r of results as string[]) {
+    for (const r of results) {
       // Must be one of the two valid payloads, never a partial mix.
       expect(['{"v":"old"}', '{"v":"new"}']).toContain(r);
     }

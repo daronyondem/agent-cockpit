@@ -194,7 +194,7 @@ export function createGoalRouter(opts: GoalRoutesOptions): express.Router {
     let claudeCodeMode: ClaudeCodeMode | null | undefined;
     let serviceTier: ServiceTier | null | undefined;
     try {
-      claudeCodeMode = parseClaudeCodeModeInput(req.body?.claudeCodeMode) as ClaudeCodeMode | null | undefined;
+      claudeCodeMode = parseClaudeCodeModeInput(req.body?.claudeCodeMode);
       serviceTier = parseServiceTierInput(req.body.serviceTier);
     } catch (err: unknown) {
       return res.status(400).json({ error: (err as Error).message });

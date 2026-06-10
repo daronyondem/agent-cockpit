@@ -150,7 +150,7 @@ class AcpClient {
           if ('method' in msg && msg.method) {
             // Notification or server-to-client request (e.g. session/request_permission)
             // Check method BEFORE id — server requests have both method and id
-            this.notificationQueue.push(msg as JsonRpcNotification);
+            this.notificationQueue.push(msg);
             if (this.notificationResolve) {
               this.notificationResolve();
               this.notificationResolve = null;
@@ -713,7 +713,7 @@ export class KiroAdapter extends BaseBackendAdapter {
     });
 
     let stderrBuf = '';
-    proc.stderr!.on('data', (chunk: Buffer) => {
+    proc.stderr.on('data', (chunk: Buffer) => {
       stderrBuf += chunk.toString();
       if (stderrBuf.length > 4000) stderrBuf = stderrBuf.slice(-4000);
     });
@@ -755,7 +755,7 @@ export class KiroAdapter extends BaseBackendAdapter {
         settle(() => reject(new Error(msg)));
       });
 
-      (async () => {
+      void (async () => {
         try {
           await client.request('initialize', {
             protocolVersion: 1,
@@ -819,7 +819,7 @@ export class KiroAdapter extends BaseBackendAdapter {
 
             if (notification.method !== 'session/update') continue;
 
-            const params = (notification.params || {}) as Record<string, unknown>;
+            const params = (notification.params || {});
             const update = params.update as Record<string, unknown>;
             if (!update) continue;
 
@@ -913,7 +913,7 @@ export class KiroAdapter extends BaseBackendAdapter {
       console.log(`[kiro] Process closed for conv=${conversationId} code=${code} signal=${signal}`);
     });
 
-    proc.stderr!.on('data', (chunk: Buffer) => {
+    proc.stderr.on('data', (chunk: Buffer) => {
       console.error(`[kiro] stderr: ${chunk.toString().substring(0, 500)}`);
     });
 
@@ -1129,7 +1129,7 @@ export class KiroAdapter extends BaseBackendAdapter {
         // (multi-agent, large refactors) from being SIGTERM'd mid-flight.
         this._resetIdleTimer(convId);
 
-        const params = (notification.params || {}) as Record<string, unknown>;
+        const params = (notification.params || {});
 
         // ── Permission requests (auto-approve) ─────────────────────────
         if (notification.method === 'session/request_permission') {
@@ -1177,7 +1177,7 @@ export class KiroAdapter extends BaseBackendAdapter {
           }
           // Extract credits and context usage from metadata
           if (notification.method === '_kiro.dev/metadata') {
-            const meta = notification.params as Record<string, unknown> | undefined;
+            const meta = notification.params;
             if (meta) {
               const credits = typeof meta.credits === 'number' ? meta.credits : undefined;
               const contextPct = typeof meta.contextUsagePercentage === 'number' ? meta.contextUsagePercentage : undefined;

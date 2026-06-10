@@ -3349,7 +3349,7 @@ export class ChatService {
         digested: 0,
         failed: 0,
         'pending-delete': 0,
-      } as Record<KbRawStatus, number>,
+      },
       failedByStage: {
         conversion: 0,
         digestion: 0,
@@ -3576,10 +3576,10 @@ export class ChatService {
         if (conv.sessions && conv.sessions.length > 0) {
           const lastDividerIdx = conv.messages.reduce((acc: number, m: LegacyMessage, i: number) => m.isSessionDivider ? i : acc, -1);
           currentMessages = lastDividerIdx >= 0
-            ? conv.messages.slice(lastDividerIdx + 1).filter(m => !m.isSessionDivider) as Message[]
-            : conv.messages.filter(m => !m.isSessionDivider) as Message[];
+            ? conv.messages.slice(lastDividerIdx + 1).filter(m => !m.isSessionDivider)
+            : conv.messages.filter(m => !m.isSessionDivider);
         } else {
-          currentMessages = (conv.messages || []).filter(m => !m.isSessionDivider) as Message[];
+          currentMessages = (conv.messages || []).filter(m => !m.isSessionDivider);
         }
 
         const sessionNumber = conv.sessionNumber || 1;

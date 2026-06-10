@@ -84,7 +84,7 @@ Follow ADR-0051 for shared contracts, logging, and ownership boundaries.
 - Prefer behavior-oriented frontend tests for parsing, projection, state updates, and user-visible outcomes. Use source-string/static tests only for route registration, build guards, or import-boundary checks where runtime coverage is impractical.
 - Use `src/utils/logger.ts` for backend logging in touched code. Do not add new backend `console.*` calls unless the file is an intentional CLI/test/build script or already documented as an allowed exception.
 - When adding or changing an ownership boundary, update the relevant spec docs and add focused tests for the new module instead of only testing through the largest facade.
-- Before opening a PR, run `npm run maintainability:check` and `npm run spec:drift` in addition to the existing required verification commands.
+- Before opening a PR, run `npm run lint`, `npm run maintainability:check`, and `npm run spec:drift` in addition to the existing required verification commands.
 
 # Claude Code Interactive Compatibility
 

@@ -52,7 +52,7 @@ describe('settings', () => {
     const settings = await service.saveSettings({
       ...(await service.getSettings()),
       integrations: { telegram: { botToken: '123:secret' } },
-    } as any);
+    });
 
     const redacted = redactSettingsSecrets(settings);
 
@@ -65,7 +65,7 @@ describe('settings', () => {
     const current = await service.saveSettings({
       ...(await service.getSettings()),
       integrations: { telegram: { botToken: '123:secret' } },
-    } as any);
+    });
 
     const redacted = redactSettingsSecrets(current);
     const saved = await service.saveSettings(mergeSettingsSecretsForSave({
@@ -79,14 +79,14 @@ describe('settings', () => {
     const blankTokenSave = await service.saveSettings(mergeSettingsSecretsForSave({
       ...redactSettingsSecrets(saved),
       integrations: { telegram: { configured: true, botToken: '' } },
-    } as any, saved));
+    }, saved));
 
     expect(blankTokenSave.integrations?.telegram?.botToken).toBe('123:secret');
 
     const cleared = await service.saveSettings(mergeSettingsSecretsForSave({
       ...redactSettingsSecrets(blankTokenSave),
       integrations: { telegram: { configured: true, clearBotToken: true } },
-    } as any, blankTokenSave));
+    }, blankTokenSave));
 
     expect(cleared.integrations?.telegram?.botToken).toBeUndefined();
   });

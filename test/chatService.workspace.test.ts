@@ -330,7 +330,7 @@ describe('getWorkspaceContextSettings / setWorkspaceContextSettings', () => {
         memory: false,
         git: 'yes',
       },
-    } as any);
+    });
 
     expect(saved).toEqual({
       processorMode: 'override',

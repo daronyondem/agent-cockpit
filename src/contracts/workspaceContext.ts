@@ -29,7 +29,7 @@ export function validateWorkspaceContextSettingsRequest(body: unknown): Workspac
   const record = asRecord(body, 'settings must be an object');
   const input = Object.prototype.hasOwnProperty.call(record, 'settings') ? record.settings : body;
   if (!input || typeof input !== 'object' || Array.isArray(input)) contractError('settings must be an object');
-  return { settings: input as WorkspaceContextWorkspaceSettings };
+  return { settings: input };
 }
 
 export function validateWorkspaceContextEnabledRequest(body: unknown): WorkspaceContextEnabledRequest {

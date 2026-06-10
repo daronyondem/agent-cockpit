@@ -12,7 +12,7 @@ import {
   type RegistrationResponseJSON,
   type WebAuthnCredential,
 } from '@simplewebauthn/server';
-import type { Request, Response, NextFunction, Express } from '../types';
+import type { Request, Response, NextFunction, Express as ExpressApp } from '../types';
 import type { AppConfig } from '../types';
 import { LocalAuthError, LocalAuthStore, type LocalOwner, type LocalPasskeyCredential } from '../services/localAuthStore';
 
@@ -23,6 +23,12 @@ export interface AuthUser {
   email: string;
   displayName: string;
   provider: AuthProvider;
+}
+
+declare global {
+  namespace Express {
+    interface User extends AuthUser {}
+  }
 }
 
 const authLimiter = rateLimit({
@@ -791,7 +797,7 @@ function storedCredential(passkey: LocalPasskeyCredential): WebAuthnCredential {
   };
 }
 
-export function setupAuth(app: Express, config: AppConfig): void {
+export function setupAuth(app: ExpressApp, config: AppConfig): void {
   const localAuth = new LocalAuthStore(config.AUTH_DATA_DIR);
   const legacyOAuthEnabled = config.AUTH_ENABLE_LEGACY_OAUTH;
   const hasGoogle = legacyOAuthEnabled && config.GOOGLE_CLIENT_ID && config.GOOGLE_CLIENT_SECRET;
@@ -1382,7 +1388,7 @@ export function requireAuth(req: Request, res: Response, next: NextFunction): vo
 // sidebar footer. Requests that bypass auth (localhost) and arrive without a
 // user object get null fields so the client can render a neutral placeholder.
 export function meHandler(req: Request, res: Response): void {
-  const u = req.user as { displayName?: string; email?: string; provider?: AuthProvider } | undefined;
+  const u = req.user;
   res.json({
     displayName: u?.displayName ?? null,
     email: u?.email ?? null,

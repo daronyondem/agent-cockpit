@@ -978,7 +978,7 @@ class CodexAppServerClient {
           if ('method' in msg && msg.method) {
             // Notification or server-to-client request — both go through
             // the queue; the consumer distinguishes by the presence of `id`.
-            this.notificationQueue.push(msg as JsonRpcNotification);
+            this.notificationQueue.push(msg);
             if (this.notificationResolve) {
               this.notificationResolve();
               this.notificationResolve = null;
@@ -1599,7 +1599,7 @@ export class CodexAdapter extends BaseBackendAdapter {
     proc.on('close', (code, signal) => {
       console.log(`[codex] Process closed for conv=${conversationId} code=${code} signal=${signal}`);
     });
-    proc.stderr!.on('data', (chunk: Buffer) => {
+    proc.stderr.on('data', (chunk: Buffer) => {
       console.error(`[codex] stderr: ${chunk.toString().substring(0, 500)}`);
     });
 
@@ -1992,7 +1992,7 @@ export class CodexAdapter extends BaseBackendAdapter {
 
         this._resetIdleTimer(convId);
 
-        const params = (notification.params || {}) as Record<string, unknown>;
+        const params = (notification.params || {});
         const method = notification.method;
 
         if (notification.id != null) {
@@ -2366,7 +2366,7 @@ export class CodexAdapter extends BaseBackendAdapter {
         // (multi-agent, large refactors) from being SIGTERM'd mid-flight.
         this._resetIdleTimer(convId);
 
-        const params = (notification.params || {}) as Record<string, unknown>;
+        const params = (notification.params || {});
         const method = notification.method;
 
         // ── Server-to-client requests (auto-approve) ────────────────

@@ -104,7 +104,7 @@ export async function rasterizeSlidesViaLibreOffice(
     ));
     const canvasImport = async () => napiCanvas;
     const CanvasFactory = await createIsomorphicCanvasFactory(canvasImport);
-    const pdf = await getDocumentProxy(data, { CanvasFactory } as unknown as Parameters<typeof getDocumentProxy>[1]);
+    const pdf = await getDocumentProxy(data, { CanvasFactory });
     const totalPages = pdf.numPages;
     const slidesDir = path.join(outDir, 'slides');
     await fsp.mkdir(slidesDir, { recursive: true });

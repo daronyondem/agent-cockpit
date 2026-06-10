@@ -1671,7 +1671,7 @@ function validateEntry(
 function takeString(value: unknown): string {
   if (typeof value === 'string') return value.trim();
   if (Array.isArray(value) && value.length > 0 && typeof value[0] === 'string') {
-    return (value[0] as string).trim();
+    return (value[0]).trim();
   }
   return '';
 }

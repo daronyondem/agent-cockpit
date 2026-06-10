@@ -513,7 +513,7 @@ function mapHookEventToStreamEvents(
     name: toolName,
     id,
     input,
-  } as CliToolUseBlock);
+  });
   synthesizedToolIds.add(id);
   const signature = questionToolSignature(detail);
   if (signature) synthesizedQuestionSignatures.add(signature);
@@ -578,7 +578,7 @@ function buildInteractiveClaudeArgs(
 
   if (options.effort && options.model) {
     const modelOption = models?.find((candidate) => candidate.id === options.model);
-    if (modelOption?.supportedEffortLevels?.includes(options.effort as EffortLevel)) {
+    if (modelOption?.supportedEffortLevels?.includes(options.effort)) {
       args.push('--effort', options.effort);
     }
   }
@@ -594,7 +594,7 @@ function buildInteractiveClaudeArgs(
   }
 
   if (Array.isArray(options.mcpServers) && options.mcpServers.length > 0) {
-    args.push('--mcp-config', mcpServersToClaudeConfigJson(options.mcpServers as McpServerConfig[]));
+    args.push('--mcp-config', mcpServersToClaudeConfigJson(options.mcpServers));
   }
 
   if (runtime.configDir) {

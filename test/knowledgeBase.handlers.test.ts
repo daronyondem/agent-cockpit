@@ -283,7 +283,7 @@ describe('docxHandler', () => {
     runPandocSpy = jest
       .spyOn(pandocModule, 'runPandoc')
       .mockImplementation(async (args) => {
-        const extractArg = (args as string[]).find((a) =>
+        const extractArg = (args).find((a) =>
           a.startsWith('--extract-media='),
         )!;
         const mediaRoot = extractArg.replace('--extract-media=', '');
@@ -440,7 +440,7 @@ describe('docxHandler', () => {
     runPandocSpy = jest
       .spyOn(pandocModule, 'runPandoc')
       .mockImplementation(async (args) => {
-        const extractArg = (args as string[]).find((a) =>
+        const extractArg = (args).find((a) =>
           a.startsWith('--extract-media='),
         )!;
         const mediaRoot = extractArg.replace('--extract-media=', '');
@@ -490,7 +490,7 @@ describe('docxHandler', () => {
     runPandocSpy = jest
       .spyOn(pandocModule, 'runPandoc')
       .mockImplementation(async (args) => {
-        const extractArg = (args as string[]).find((a) =>
+        const extractArg = (args).find((a) =>
           a.startsWith('--extract-media='),
         )!;
         const mediaRoot = extractArg.replace('--extract-media=', '');

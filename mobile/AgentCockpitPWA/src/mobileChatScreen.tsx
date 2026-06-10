@@ -603,8 +603,8 @@ function MessageBubble(props: {
   function copy(mode: 'text' | 'md') {
     const text = mode === 'md' ? props.message.content : (contentRef.current?.textContent || props.message.content);
     if (!text) return;
-    const write = navigator.clipboard?.writeText(text);
-    if (!write) return;
+    if (!navigator.clipboard?.writeText) return;
+    const write = navigator.clipboard.writeText(text);
     void write.then(() => {
       setCopied(mode);
       window.setTimeout(() => setCopied(null), 1400);
@@ -745,7 +745,7 @@ function MarkdownContent(props: { content: string; className?: string; onOpenLin
 }
 
 function renderMarkdown(content: string): string {
-  const raw = marked.parse(content || '', { breaks: true, gfm: true, async: false }) as string;
+  const raw = marked.parse(content || '', { breaks: true, gfm: true, async: false });
   return DOMPurify.sanitize(raw);
 }
 

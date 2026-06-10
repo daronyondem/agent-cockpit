@@ -32,7 +32,7 @@ function mockReadFile(overrides: ReadFileOverride[]): jest.SpyInstance {
       return hit.content!;
     }
     // Delegate unmatched paths to real impl so the service can read/write its cache.
-    return (jest.requireActual('fs/promises') as typeof fsp).readFile(p, enc);
+    return (jest.requireActual('fs/promises')).readFile(p, enc);
   });
 }
 

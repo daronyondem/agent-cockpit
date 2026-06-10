@@ -485,7 +485,7 @@ export async function processStream(
         if (restAny.isAgent && restAny.id) {
           log.debug('Agent tool activity detected', { id: restAny.id, parentAgentId: restAny.parentAgentId || null });
         }
-        emit({ type: 'tool_activity', ...rest } as WsServerFrame);
+        emit({ type: 'tool_activity', ...rest });
         if (!event.isPlanMode && !event.isQuestion) {
           if (pendingNewBatch) {
             batchIndex += 1;
@@ -1401,11 +1401,11 @@ export function createChatRouter({ chatService, backendRegistry, updateService, 
           memoryWatcher.unwatch(convId);
           memoryFingerprints.delete(convId);
           if (backendId === 'claude-code' || backendId === 'claude-code-interactive') {
-            claudePlanUsageService.maybeRefresh('turn-done', runtime.profile);
+            void claudePlanUsageService.maybeRefresh('turn-done', runtime.profile);
           } else if (backendId === 'kiro') {
-            kiroPlanUsageService.maybeRefresh('turn-done');
+            void kiroPlanUsageService.maybeRefresh('turn-done');
           } else if (backendId === 'codex') {
-            codexPlanUsageService.maybeRefresh('turn-done', runtime.profile);
+            void codexPlanUsageService.maybeRefresh('turn-done', runtime.profile);
           }
         },
         { chatService, streamSupervisor, jobId },
@@ -1459,7 +1459,7 @@ export function createChatRouter({ chatService, backendRegistry, updateService, 
       const memoryMcpAddendum = needsMemoryMcp ? buildMemoryMcpAddendum() : '';
       const kbMcpAddendum = needsKbMcp
         ? (() => {
-            const kbPath = path.resolve(chatService.getKbKnowledgeDir(wsHash!));
+            const kbPath = path.resolve(chatService.getKbKnowledgeDir(wsHash));
             return [
               '# Knowledge Base',
               'You have access to a workspace knowledge base via MCP tools (from the `agent-cockpit-kb-search` server) and the local filesystem.',

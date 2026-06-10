@@ -243,7 +243,7 @@ export function validateRoutineUpdateRequest(body: unknown): RoutineUpdateReques
   if (routineContent !== undefined) out.routineContent = routineContent;
   if (record.manifest !== undefined) {
     const manifestRecord = asRecord(record.manifest, 'manifest must be an object');
-    out.manifest = manifestRecord as Partial<RoutineManifest>;
+    out.manifest = manifestRecord;
   }
   return out;
 }

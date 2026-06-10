@@ -258,7 +258,7 @@ describe('Tool activity forwarding', () => {
     const conv = await env.chatService.createConversation('Plan Content');
 
     env.mockBackend.setMockEvents([
-      { type: 'text', content: '## Proposed plan\n\n1. First step\n2. Second step' } as StreamEvent,
+      { type: 'text', content: '## Proposed plan\n\n1. First step\n2. Second step' },
       { type: 'tool_activity', tool: 'ExitPlanMode', isPlanMode: true, planAction: 'exit', description: 'Plan ready for approval' },
       { type: 'done' },
     ] as StreamEvent[]);
@@ -977,10 +977,10 @@ describe('Turn boundary intermediate messages', () => {
     const conv = await env.chatService.createConversation('Test');
 
     env.mockBackend.setMockEvents([
-      { type: 'text', content: 'Whole-block pre-tool content' } as StreamEvent,
+      { type: 'text', content: 'Whole-block pre-tool content' },
       { type: 'tool_activity', tool: 'Read', description: 'Reading file', id: 'tool_1' },
       { type: 'turn_boundary' },
-      { type: 'text', content: 'Post-tool content' } as StreamEvent,
+      { type: 'text', content: 'Post-tool content' },
       { type: 'done' },
     ] as StreamEvent[]);
 
@@ -1105,7 +1105,7 @@ describe('Turn boundary intermediate messages', () => {
     const conv = await env.chatService.createConversation('Test');
 
     env.mockBackend.setMockEvents([
-      { type: 'text', content: 'Whole block' } as StreamEvent,
+      { type: 'text', content: 'Whole block' },
       { type: 'done' },
     ] as StreamEvent[]);
 
@@ -1127,8 +1127,8 @@ describe('Turn boundary intermediate messages', () => {
     const conv = await env.chatService.createConversation('Test');
 
     env.mockBackend.setMockEvents([
-      { type: 'thinking', content: 'Whole-block reasoning' } as StreamEvent,
-      { type: 'text', content: 'Answer' } as StreamEvent,
+      { type: 'thinking', content: 'Whole-block reasoning' },
+      { type: 'text', content: 'Answer' },
       { type: 'done' },
     ] as StreamEvent[]);
 

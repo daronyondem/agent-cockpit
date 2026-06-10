@@ -118,7 +118,7 @@ export function extractToolOutcome(toolName: string | undefined, content: unknow
 
 export function extractToolDetails(block: CliToolUseBlock): ToolDetail {
   const name = block.name;
-  const input = (block.input || {}) as Record<string, unknown>;
+  const input = (block.input || {});
   const detail: ToolDetail = { tool: name, id: block.id || null, description: '' };
 
   switch (name) {

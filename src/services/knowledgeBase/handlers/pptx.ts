@@ -409,7 +409,7 @@ export const pptxHandler: Handler = async ({
     }
 
     // slideItem is non-null here because imageRel was non-null above.
-    const absImagePath = slideItem!.absLinkPath;
+    const absImagePath = slideItem.absLinkPath;
     const startedAt = Date.now();
     let aiMarkdown: string | null = null;
     let aiRetried = false;

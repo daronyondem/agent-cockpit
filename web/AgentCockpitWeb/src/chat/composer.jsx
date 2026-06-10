@@ -73,12 +73,11 @@ function goalCapabilityForBackend(backends, backendId){
 }
 
 function GoalStrip({ convId, goal, streaming, sending }){
-  if (!goal) return null;
-  const status = goal.status || 'active';
-  const canPause = status === 'active' && goalSupportsAction(goal, 'pause');
-  const canResume = status === 'paused' && !streaming && goalSupportsAction(goal, 'resume');
-  const canClear = goalSupportsAction(goal, 'clear');
-  const claudeGoal = goal.backend === 'claude-code' || goal.backend === CLAUDE_CODE_INTERACTIVE_BACKEND_ID;
+  const status = goal?.status || 'active';
+  const canPause = !!goal && status === 'active' && goalSupportsAction(goal, 'pause');
+  const canResume = !!goal && status === 'paused' && !streaming && goalSupportsAction(goal, 'resume');
+  const canClear = !!goal && goalSupportsAction(goal, 'clear');
+  const claudeGoal = goal?.backend === 'claude-code' || goal?.backend === CLAUDE_CODE_INTERACTIVE_BACKEND_ID;
   const clearDisabled = sending || (claudeGoal && streaming);
   const [nowMs, setNowMs] = React.useState(() => Date.now());
   React.useEffect(() => {
@@ -96,6 +95,7 @@ function GoalStrip({ convId, goal, streaming, sending }){
     const tick = setInterval(() => setNowMs(Date.now()), 1000);
     return () => clearInterval(tick);
   }, [status, goal?.updatedAt, goal?.timeUsedSeconds]);
+  if (!goal) return null;
   const elapsed = compactDuration(goalElapsedSeconds(goal, nowMs));
   const objective = typeof goal.objective === 'string' ? goal.objective : '';
   return (

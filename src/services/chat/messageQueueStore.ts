@@ -68,7 +68,7 @@ export function normalizeMessageQueue(raw: unknown): QueuedMessage[] {
             name: a.name,
             path: a.path,
             size: typeof a.size === 'number' ? a.size : undefined,
-            kind: (typeof a.kind === 'string' ? a.kind : attachmentKindFromPath(a.path)) as AttachmentKind,
+            kind: (typeof a.kind === 'string' ? a.kind : attachmentKindFromPath(a.path)),
             meta: typeof a.meta === 'string' ? a.meta : formatAttachmentSize(typeof a.size === 'number' ? a.size : undefined),
           }));
       }
