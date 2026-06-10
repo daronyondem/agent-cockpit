@@ -172,6 +172,14 @@ tool is unavailable.
   compatibility checks when protocol behavior changes.
 - Do not auto-update Claude Code CLI as part of Claude Code Interactive
   compatibility work unless explicitly requested.
+- Codex App Server compatibility work spans `src/services/backends/codex.ts`,
+  `codexRuntime.ts`, `codexProtocol.ts`, `codexEvents.ts`,
+  `codexStreamDispatch.ts`, `codexArtifacts.ts`, `codexUsage.ts`,
+  `codexModels.ts`, `codexExec.ts`, and `codexProcess.ts`. Review and extend
+  `test/codexBackend.test.ts` when touching those modules, and use the
+  `codex app-server --enable goals generate-ts --out <DIR>` drift-diff
+  procedure from `docs/spec-backend-services.md` for hand-typed protocol shape
+  changes. No real-CLI Codex e2e suite exists today.
 - The Claude Interactive Version GitHub Actions monitor should keep only the
   latest open support-validation issue for a newer Claude Code CLI version. When
   a newer issue exists, lower-version open support-validation issues should be
