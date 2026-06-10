@@ -1,37 +1,7 @@
-import fs from 'fs';
-import path from 'path';
-import vm from 'vm';
-import ts from 'typescript';
-
-const ROOT = path.resolve(__dirname, '..');
-
-function loadMobileAppModel(): Record<string, any> {
-  const sourcePath = path.join(ROOT, 'mobile/AgentCockpitPWA/src/appModel.ts');
-  const source = fs.readFileSync(sourcePath, 'utf8');
-  const transformed = ts.transpileModule(source, {
-    compilerOptions: {
-      target: ts.ScriptTarget.ES2022,
-      module: ts.ModuleKind.CommonJS,
-      isolatedModules: true,
-    },
-    fileName: sourcePath,
-  }).outputText;
-  const module = { exports: {} as Record<string, any> };
-  const sandbox = {
-    exports: module.exports,
-    module,
-    URL,
-    document: {
-      createElement: jest.fn(),
-      body: { append: jest.fn() },
-    },
-  };
-  vm.runInNewContext(transformed, sandbox, { filename: sourcePath });
-  return module.exports;
-}
+import { loadMobileModule } from './mobileModuleLoader';
 
 describe('mobile app model helpers', () => {
-  const model = loadMobileAppModel();
+  const model = loadMobileModule('appModel.ts');
 
   test('parses uploaded and delivered file markers without leaking marker text into previews', () => {
     const parsed = model.parseMessageFiles([
@@ -259,6 +229,46 @@ describe('mobile app model helpers', () => {
     expect(model.modelDisplayLabel('deepseek/deepseek-chat')).toBe('deepseek/deepseek-chat');
   });
 
+  test('parses mobile goal slash commands without mutating composer state', () => {
+    expect(model.parseGoalSlashCommand('hello')).toBeNull();
+    expect(model.parseGoalSlashCommand('/goal')).toEqual({ kind: 'enter-goal-mode' });
+    expect(model.parseGoalSlashCommand('/GOAL   ')).toEqual({ kind: 'enter-goal-mode' });
+    expect(model.parseGoalSlashCommand('/goal pause')).toEqual({ kind: 'pause' });
+    expect(model.parseGoalSlashCommand('/Goal RESUME')).toEqual({ kind: 'resume' });
+    expect(model.parseGoalSlashCommand('/goal clear')).toEqual({ kind: 'clear' });
+    expect(model.parseGoalSlashCommand('/goal Ship the mobile split')).toEqual({
+      kind: 'set',
+      objective: 'Ship the mobile split',
+    });
+    expect(model.parseGoalSlashCommand('/goal paused but still text')).toEqual({
+      kind: 'set',
+      objective: 'paused but still text',
+    });
+  });
+
+  test('chooses mobile reset profile repair using selected, backend match, sole profile, then none', () => {
+    const codex = { id: 'codex-profile', name: 'Codex', harness: 'codex' };
+    const claude = { id: 'claude-profile', name: 'Claude', harness: 'claude-code' };
+    const interactive = { id: 'interactive-profile', name: 'Claude Interactive', harness: 'claude-code', protocol: 'interactive' };
+    const staleConversation = { cliProfileId: 'missing-profile', backend: 'codex' };
+
+    expect(model.chooseResetProfileRepair([codex, claude], staleConversation, 'claude-profile')).toBe(claude);
+    expect(model.chooseResetProfileRepair([codex, claude], staleConversation, undefined)).toBe(codex);
+    expect(model.chooseResetProfileRepair([interactive], { ...staleConversation, backend: 'claude-code-interactive' }, undefined)).toBe(interactive);
+    expect(model.chooseResetProfileRepair([claude], staleConversation, undefined)).toBe(claude);
+    expect(model.chooseResetProfileRepair([codex, claude], { ...staleConversation, backend: 'opencode' }, undefined)).toBeNull();
+    expect(model.chooseResetProfileRepair([codex], { cliProfileId: 'codex-profile', backend: 'codex' }, undefined)).toBeNull();
+  });
+
+  test('caps mobile stream reconnect backoff at fifteen seconds', () => {
+    expect(model.streamReconnectDelayMs(0)).toBe(1_000);
+    expect(model.streamReconnectDelayMs(1)).toBe(2_000);
+    expect(model.streamReconnectDelayMs(2)).toBe(4_000);
+    expect(model.streamReconnectDelayMs(3)).toBe(8_000);
+    expect(model.streamReconnectDelayMs(4)).toBe(15_000);
+    expect(model.streamReconnectDelayMs(8)).toBe(15_000);
+  });
+
   test('keeps mobile transcript pin patching and scroll threshold deterministic', () => {
     const first = { id: 'm1', role: 'assistant', content: 'First', timestamp: '2026-05-01T00:00:00.000Z' };
     const second = { id: 'm2', role: 'assistant', content: 'Second', pinned: true, timestamp: '2026-05-01T00:00:01.000Z' };
@@ -400,5 +410,17 @@ describe('mobile app model helpers', () => {
     expect(model.shouldApplyGoalSnapshot(2_000_000, olderGoal)).toBe(false);
     expect(model.shouldApplyGoalSnapshot(999_000, olderGoal)).toBe(true);
     expect(model.shouldApplyGoalSnapshot(2_000_000, null)).toBe(true);
+    expect(model.shouldPreserveLocalRuntimeGoal({
+      conversationID: 'conv-1',
+      goal: { ...olderGoal, source: 'runtime' },
+    }, 'conv-1')).toBe(true);
+    expect(model.shouldPreserveLocalRuntimeGoal({
+      conversationID: 'conv-2',
+      goal: { ...olderGoal, source: 'runtime' },
+    }, 'conv-1')).toBe(false);
+    expect(model.shouldPreserveLocalRuntimeGoal({
+      conversationID: 'conv-1',
+      goal: { ...olderGoal, source: 'server' },
+    }, 'conv-1')).toBe(false);
   });
 });
