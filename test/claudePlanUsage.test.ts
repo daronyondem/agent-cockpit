@@ -16,6 +16,7 @@ import {
   parseClaudeCliUsageOutput,
   type ClaudeCliUsageProbeResult,
 } from '../src/services/claudePlanUsageService';
+import type { CliProfile } from '../src/types';
 
 const CREDENTIALS_PATH = path.join(homedir(), '.claude', '.credentials.json');
 
@@ -92,6 +93,20 @@ const USAGE_BODY = {
   extra_usage: { is_enabled: false, monthly_limit: null, used_credits: null, utilization: null, currency: null },
 };
 
+function makeClaudeProfile(overrides: Partial<CliProfile> = {}): CliProfile {
+  return {
+    id: 'profile-claude-work',
+    name: 'Claude Work',
+    harness: 'claude-code',
+    command: '/opt/claude/bin/claude',
+    authMode: 'account',
+    configDir: '/tmp/claude-work-home',
+    createdAt: '2026-04-29T00:00:00.000Z',
+    updatedAt: '2026-04-29T00:00:00.000Z',
+    ...overrides,
+  };
+}
+
 // ── Tests ──────────────────────────────────────────────────────────────────
 
 describe('ClaudePlanUsageService', () => {
@@ -166,6 +181,32 @@ describe('ClaudePlanUsageService', () => {
       expect(cached.stale).toBe(false);
     });
 
+    test('loads persisted per-profile snapshots from disk', async () => {
+      const profile = makeClaudeProfile({ id: 'profile/claude work' });
+      const profileCacheDir = path.join(tmpDir, 'data', 'claude-plan-usage');
+      const profileCacheFile = path.join(profileCacheDir, `${encodeURIComponent(profile.id)}.json`);
+      fs.mkdirSync(profileCacheDir, { recursive: true });
+      fs.writeFileSync(profileCacheFile, JSON.stringify({
+        fetchedAt: new Date().toISOString(),
+        planTier: 'work_20x',
+        subscriptionType: 'team',
+        rateLimits: { five_hour: { utilization: 42, resets_at: null } },
+        source: 'cli-usage',
+        identity: { email: 'work@example.test', organization: 'Work Org', loginMethod: null },
+        attempts: [{ at: new Date().toISOString(), source: 'cli-usage', ok: true, error: null }],
+        lastError: null,
+      }), 'utf8');
+
+      await service.init();
+
+      const cached = service.getCached(profile);
+      expect(cached.planTier).toBe('work_20x');
+      expect(cached.subscriptionType).toBe('team');
+      expect(cached.rateLimits?.five_hour?.utilization).toBe(42);
+      expect(cached.identity?.email).toBe('work@example.test');
+      expect(service.getCached().rateLimits).toBeNull();
+    });
+
     test('tolerates corrupt cache file without throwing', async () => {
       const cacheFile = path.join(tmpDir, 'data', 'claude-plan-usage.json');
       fs.mkdirSync(path.dirname(cacheFile), { recursive: true });
@@ -201,6 +242,37 @@ describe('ClaudePlanUsageService', () => {
       }), 'utf8');
       await service.init();
       expect(service.getCached().stale).toBe(false);
+    });
+
+    test('returns an empty stale snapshot for unknown profile caches without touching the default cache', async () => {
+      const cacheFile = path.join(tmpDir, 'data', 'claude-plan-usage.json');
+      fs.mkdirSync(path.dirname(cacheFile), { recursive: true });
+      fs.writeFileSync(cacheFile, JSON.stringify({
+        fetchedAt: new Date(Date.now() - 30_000).toISOString(),
+        planTier: 'max_20x',
+        subscriptionType: 'max',
+        rateLimits: USAGE_BODY,
+        source: 'oauth-file',
+        identity: null,
+        attempts: [],
+        lastError: null,
+      }), 'utf8');
+      await service.init();
+
+      const profileCached = service.getCached(makeClaudeProfile({ id: 'profile-new' }));
+
+      expect(profileCached).toMatchObject({
+        fetchedAt: null,
+        planTier: null,
+        subscriptionType: null,
+        rateLimits: null,
+        source: null,
+        identity: null,
+        attempts: [],
+        lastError: null,
+        stale: true,
+      });
+      expect(service.getCached().planTier).toBe('max_20x');
     });
   });
 
@@ -404,6 +476,57 @@ describe('ClaudePlanUsageService', () => {
       expect(fetchFn).toHaveBeenCalledTimes(1);
     });
 
+    test('keeps per-profile throttle independent from the default cache', async () => {
+      const profileConfigDir = path.join(tmpDir, 'profile-home');
+      const profile = makeClaudeProfile({ id: 'profile-independent', configDir: profileConfigDir });
+      readSpy = mockReadFile([
+        { path: CREDENTIALS_PATH, content: validCredsJson({ accessToken: 'server-token', rateLimitTier: 'server' }) },
+        { path: path.join(profileConfigDir, '.credentials.json'), content: validCredsJson({ accessToken: 'profile-token', rateLimitTier: 'profile' }) },
+      ]);
+      const fetchFn = mockFetchOk(USAGE_BODY);
+
+      await service.maybeRefresh('default');
+      await service.maybeRefresh('profile', profile);
+      await service.maybeRefresh('profile-throttled', profile);
+
+      expect(fetchFn).toHaveBeenCalledTimes(2);
+      expect(fetchFn.mock.calls[0][1].headers.Authorization).toBe('Bearer server-token');
+      expect(fetchFn.mock.calls[1][1].headers.Authorization).toBe('Bearer profile-token');
+      expect(service.getCached().planTier).toBe('server');
+      expect(service.getCached(profile).planTier).toBe('profile');
+    });
+
+    test('coalesces concurrent per-profile refreshes through the profile in-flight map', async () => {
+      const profileConfigDir = path.join(tmpDir, 'profile-home');
+      const profile = makeClaudeProfile({ id: 'profile-coalesced', configDir: profileConfigDir });
+      readSpy = mockReadFile([
+        { path: path.join(profileConfigDir, '.credentials.json'), content: validCredsJson({ accessToken: 'profile-token' }) },
+      ]);
+      let resolveFetch: ((value: unknown) => void) | null = null;
+      const fetchFn = jest.fn().mockImplementation(() => new Promise(resolve => {
+        resolveFetch = resolve;
+      }));
+      (global as any).fetch = fetchFn;
+
+      const refreshes = Promise.all([
+        service.maybeRefresh('profile-a', profile),
+        service.maybeRefresh('profile-b', profile),
+        service.maybeRefresh('profile-c', profile),
+      ]);
+      await new Promise(resolve => setImmediate(resolve));
+      expect(fetchFn).toHaveBeenCalledTimes(1);
+
+      resolveFetch!({
+        ok: true,
+        status: 200,
+        json: async () => USAGE_BODY,
+        text: async () => JSON.stringify(USAGE_BODY),
+      });
+      await refreshes;
+
+      expect(service.getCached(profile).rateLimits).toEqual(USAGE_BODY);
+    });
+
     test('marks token-expired without calling fetch', async () => {
       const expired = Date.now() - 1000;
       readSpy = mockReadFile([{ path: CREDENTIALS_PATH, content: validCredsJson({ expiresAt: expired }) }]);
@@ -436,6 +559,32 @@ describe('ClaudePlanUsageService', () => {
       expect(secondFetch).toHaveBeenCalledTimes(1);
       expect(service.getCached().lastError).toBeNull();
       expect(service.getCached().rateLimits?.five_hour?.utilization).toBe(18);
+    });
+
+    test('caps attempt history at eight entries across repeated failures', async () => {
+      const expired = Date.now() - 1000;
+      readSpy = mockReadFile([{ path: CREDENTIALS_PATH, content: validCredsJson({ expiresAt: expired }) }]);
+      const warn = jest.spyOn(console, 'warn').mockImplementation(() => {});
+
+      for (let index = 0; index < 5; index += 1) {
+        await service.maybeRefresh(`expired-${index}`);
+      }
+
+      const cached = service.getCached();
+      expect(cached.attempts).toHaveLength(8);
+      expect(cached.attempts.every(attempt => attempt.ok === false)).toBe(true);
+      expect(cached.attempts.map(attempt => attempt.source)).toEqual([
+        'oauth-file',
+        'cli-usage',
+        'oauth-file',
+        'cli-usage',
+        'oauth-file',
+        'cli-usage',
+        'oauth-file',
+        'cli-usage',
+      ]);
+      expect(cached.lastError).toContain('token-expired');
+      warn.mockRestore();
     });
 
     test('records lastError on HTTP 401, preserves prior snapshot', async () => {
@@ -586,6 +735,68 @@ describe('ClaudePlanUsageService', () => {
       expect(parsed.rateLimits?.five_hour?.resets_at).toBe('2026-05-17T22:40:00.000Z');
       expect(parsed.rateLimits?.seven_day?.utilization).toBe(2);
       expect(parsed.rateLimits?.seven_day?.resets_at).toBe('2026-05-19T19:00:00.000Z');
+    });
+
+    test('extracts Sonnet weekly windows and minute-relative reset descriptions', () => {
+      const now = new Date('2026-05-17T12:00:00.000Z');
+      const parsed = parseClaudeCliUsageOutput(`
+        Current week Sonnet
+        40% used
+        Resets in 15 minutes
+      `, now);
+
+      expect(parsed.rateLimits?.seven_day_sonnet).toEqual({
+        utilization: 40,
+        resets_at: '2026-05-17T12:15:00.000Z',
+      });
+    });
+
+    test('rolls past month/day and time-only reset descriptions forward', () => {
+      const monthReset = parseClaudeCliUsageOutput(`
+        Current week
+        50% used
+        Resets Jan 1 at 5am (America/Los_Angeles)
+      `, new Date('2026-12-01T12:00:00.000Z'));
+      const timeReset = parseClaudeCliUsageOutput(`
+        Current session
+        25% used
+        Resets 4am (America/Los_Angeles)
+      `, new Date('2026-05-17T12:00:00.000Z'));
+
+      expect(monthReset.rateLimits?.seven_day?.resets_at).toBe('2027-01-01T13:00:00.000Z');
+      expect(timeReset.rateLimits?.five_hour?.resets_at).toBe('2026-05-18T11:00:00.000Z');
+    });
+
+    test('returns null usage data when no usage or identity is present', () => {
+      const parsed = parseClaudeCliUsageOutput('Welcome to Claude Code\nNo usage information here');
+
+      expect(parsed).toEqual({ rateLimits: null, identity: null });
+    });
+
+    test('keeps utilization while leaving unparseable resets null', () => {
+      const parsed = parseClaudeCliUsageOutput(`
+        Current session
+        50% used
+        Resets eventually
+      `);
+
+      expect(parsed.rateLimits?.five_hour).toEqual({
+        utilization: 50,
+        resets_at: null,
+      });
+    });
+
+    test('inverts percent-left values and clamps utilization to 0..100', () => {
+      const parsed = parseClaudeCliUsageOutput(`
+        Current session
+        120% remaining
+
+        Current week
+        150% used
+      `);
+
+      expect(parsed.rateLimits?.five_hour?.utilization).toBe(0);
+      expect(parsed.rateLimits?.seven_day?.utilization).toBe(100);
     });
   });
 });
