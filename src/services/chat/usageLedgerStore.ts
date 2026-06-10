@@ -52,15 +52,19 @@ export class UsageLedgerStore {
   }
 
   async record(backendId: string, model: string, usage: Usage, context?: UsagePricingContext): Promise<void> {
+    await this.recordForDate(new Date().toISOString().slice(0, 10), backendId, model, usage, context);
+  }
+
+  async recordForDate(date: string, backendId: string, model: string, usage: Usage, context?: UsagePricingContext): Promise<void> {
+    const day = /^\d{4}-\d{2}-\d{2}$/.test(date) ? date : new Date().toISOString().slice(0, 10);
     await this.lock.run(LEDGER_LOCK_KEY, async () => {
       const ledger = await this.read();
-      const today = new Date().toISOString().slice(0, 10);
       const pricingTier = context?.pricingTier || usage.pricingTier;
       const pricingContext = pricingTier ? { pricingTier } : undefined;
 
-      let dayEntry = ledger.days.find(d => d.date === today);
+      let dayEntry = ledger.days.find(d => d.date === day);
       if (!dayEntry) {
-        dayEntry = { date: today, records: [] };
+        dayEntry = { date: day, records: [] };
         ledger.days.push(dayEntry);
       }
 

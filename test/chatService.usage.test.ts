@@ -378,6 +378,70 @@ describe('usage stats ledger', () => {
     expect(ledger.days).toEqual([]);
   });
 
+  test('getUsageStats imports Claude transcript usage only for sessions not owned by Agent Cockpit', async () => {
+    const configRoot = path.join(tmpDir, 'claude-home');
+    const projectDir = path.join(configRoot, 'projects', '-tmp-test-workspace');
+    fs.mkdirSync(projectDir, { recursive: true });
+    const settings = await service.getSettings();
+    const now = new Date().toISOString();
+    await service.saveSettings({
+      ...settings,
+      cliProfiles: [
+        ...(settings.cliProfiles || []),
+        {
+          id: 'claude-import-profile',
+          name: 'Claude Import Profile',
+          harness: 'claude-code',
+          authMode: 'account',
+          configDir: configRoot,
+          createdAt: now,
+          updatedAt: now,
+        },
+      ],
+    });
+    const conv = await service.createConversation('Owned Claude Session');
+
+    fs.writeFileSync(path.join(projectDir, 'outside-claude-session.jsonl'), `${JSON.stringify({
+      uuid: 'outside-usage',
+      type: 'assistant',
+      timestamp: '2026-06-02T03:04:05.000Z',
+      message: {
+        model: 'claude-sonnet-4-6',
+        usage: {
+          input_tokens: 42,
+          output_tokens: 7,
+          cache_read_input_tokens: 5,
+          cache_creation_input_tokens: 3,
+        },
+      },
+    })}\n`, 'utf8');
+    fs.writeFileSync(path.join(projectDir, `${conv.currentSessionId}.jsonl`), `${JSON.stringify({
+      uuid: 'owned-usage',
+      type: 'assistant',
+      timestamp: '2026-06-02T03:04:05.000Z',
+      message: {
+        model: 'claude-sonnet-4-6',
+        usage: {
+          input_tokens: 999,
+          output_tokens: 999,
+        },
+      },
+    })}\n`, 'utf8');
+
+    const ledger = await service.getUsageStats();
+    const dayEntry = ledger.days.find((d: any) => d.date === '2026-06-02');
+    expect(dayEntry).toBeDefined();
+    expect(dayEntry!.records).toHaveLength(1);
+    expect(dayEntry!.records[0]).toEqual(expect.objectContaining({
+      backend: 'claude-code',
+      model: 'claude-sonnet-4-6',
+    }));
+    expect(dayEntry!.records[0].usage.inputTokens).toBe(42);
+    expect(dayEntry!.records[0].usage.outputTokens).toBe(7);
+    expect(dayEntry!.records[0].usage.cacheReadTokens).toBe(5);
+    expect(dayEntry!.records[0].usage.cacheWriteTokens).toBe(3);
+  });
+
   test('clearUsageStats resets ledger', async () => {
     const conv = await service.createConversation('Ledger Clear');
     await service.addUsage(conv.id, { inputTokens: 100, outputTokens: 50, cacheReadTokens: 0, cacheWriteTokens: 0, costUsd: 0.01 }, 'claude-code');

@@ -23,6 +23,7 @@ data/
 │   ├── restored-workspaces/   # Default extraction root for snapshot restores
 │   ├── stream-jobs.json
 │   ├── usage-ledger.json
+│   ├── claude-transcript-usage-import.json
 │   ├── artifacts/
 │   └── settings.json
 └── sessions/              # Express session files

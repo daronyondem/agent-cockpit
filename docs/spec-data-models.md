@@ -186,6 +186,7 @@ agent-cockpit/
     │   ├── artifacts/{convId}/         # Per-conversation uploaded files and generated assistant artifacts
     │   ├── settings.json               # User settings, including CLI profile definitions
     │   ├── usage-ledger.json           # Daily per-backend token usage ledger
+    │   ├── claude-transcript-usage-import.json # Checkpoint for external Claude transcript usage imports
     │   └── usage-pricing-overrides.json # User-owned pricing overrides, never replaced by releases
     ├── sessions/                       # Express session JSON files (24h TTL)
     ├── auth/                           # First-party owner auth state unless AUTH_DATA_DIR overrides it
@@ -1526,6 +1527,33 @@ Built-in pricing defaults are release-owned JSON at
 `src/services/usagePricing/catalog.default.json`. They are validated at server
 startup and stamped into every estimate through `costSnapshot`, so a later
 release changing token/credit prices does not alter historical rows.
+
+## Claude Transcript Usage Import Checkpoint (`data/chat/claude-transcript-usage-import.json`)
+
+Usage Stats imports Claude Code transcript usage from Claude session IDs that
+Agent Cockpit did not create or persist. The checkpoint file prevents repeated
+Stats refreshes from double-counting the same outside Claude transcript entry:
+
+```javascript
+{
+  imported: {
+    "<claudeSessionId>:<transcriptEntryUuidOrLineHash>": "2026-06-02T03:04:05.000Z"
+  },
+  updatedAt: string
+}
+```
+
+The import reads Claude transcript JSONL files under `~/.claude/projects/*/*.jsonl`
+and under enabled Claude Code CLI profile `configDir` / `CLAUDE_CONFIG_DIR`
+roots. A transcript file is skipped completely when its basename session ID is
+present in any workspace `ConversationEntry.sessions[].sessionId` or
+`sessions[].externalSessionId`; those sessions are Agent Cockpit-owned and are
+already counted through live backend `usage` events. Imported outside sessions
+write only to the global usage ledger with backend `claude-code`, transcript
+date, transcript model, and normalized input/output/cache/cost usage. They do
+not mutate conversation or active-session usage totals. Clearing Usage Stats
+clears `usage-ledger.json` but does not clear this checkpoint, so already
+imported outside Claude sessions do not immediately reappear after a clear.
 
 ## Usage Pricing Overrides (`data/chat/usage-pricing-overrides.json`)
 
