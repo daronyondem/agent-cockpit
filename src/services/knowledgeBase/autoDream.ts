@@ -180,7 +180,7 @@ export class KbDreamScheduler {
 
   constructor(opts: KbDreamSchedulerOptions) {
     this.chatService = opts.chatService;
-    this.kbDreaming = opts.kbDreaming as KbDreamSchedulerDreaming;
+    this.kbDreaming = opts.kbDreaming;
     this.now = opts.now ?? (() => new Date());
     this.logger = opts.logger ?? console;
   }

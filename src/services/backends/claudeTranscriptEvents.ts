@@ -98,7 +98,7 @@ export function mapClaudeTranscriptEntryToStreamEvents(
     }
 
     const usageEvent = extractUsage({
-      usage: (entry.message?.usage || entry.usage) as Record<string, number> | undefined,
+      usage: (entry.message?.usage || entry.usage),
       cost_usd: typeof entry.cost_usd === 'number'
         ? entry.cost_usd
         : (typeof entry.costUSD === 'number' ? entry.costUSD : undefined),

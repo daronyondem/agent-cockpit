@@ -209,7 +209,7 @@ export function createKbRouter(opts: KbRoutesOptions): express.Router {
           typeof body.folder === 'string'
             ? body.folder
             : typeof (req.query.folder) === 'string'
-              ? (req.query.folder as string)
+              ? (req.query.folder)
               : '';
 
         // Multer gives us the raw bytes on `file.buffer` when using memoryStorage.

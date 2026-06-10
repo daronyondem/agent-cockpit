@@ -366,7 +366,7 @@ describe('extractUsage', () => {
         cache_creation_input_tokens: 100,
       },
     };
-    const result = extractUsage(event as any);
+    const result = extractUsage(event);
     expect(result).toEqual({
       type: 'usage',
       usage: {

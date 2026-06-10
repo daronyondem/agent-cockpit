@@ -324,7 +324,7 @@ export function createStreamRouter(opts: StreamRoutesOptions): express.Router {
       const memoryMcpAddendum = needsMemoryMcp ? buildMemoryMcpAddendum() : '';
       const kbMcpAddendum = needsKbMcp
         ? (() => {
-            const kbPath = path.resolve(chatService.getKbKnowledgeDir(workspaceIdForSend!));
+            const kbPath = path.resolve(chatService.getKbKnowledgeDir(workspaceIdForSend));
             return [
               '# Knowledge Base',
               'You have access to a workspace knowledge base via MCP tools (from the `agent-cockpit-kb-search` server) and the local filesystem.',

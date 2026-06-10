@@ -647,7 +647,7 @@ describe('KbDreamService', () => {
     mockAdapter = createMockAdapter();
     mockBackendRegistry = createMockBackendRegistry(mockAdapter);
     service = new KbDreamService({
-      chatService: mockChatService as any,
+      chatService: mockChatService,
       backendRegistry: mockBackendRegistry as any,
       kbSearchMcp: mockKbSearchMcp as any,
     });
@@ -849,7 +849,7 @@ describe('KbDreamService', () => {
   test('dream emits synthesis change events via emit callback', async () => {
     const emitFn = jest.fn();
     const serviceWithEmit = new KbDreamService({
-      chatService: mockChatService as any,
+      chatService: mockChatService,
       backendRegistry: mockBackendRegistry as any,
       kbSearchMcp: mockKbSearchMcp as any,
       emit: emitFn,
@@ -923,7 +923,7 @@ describe('KbDreamService', () => {
   test('requestStop sets flag and emits WS frame while a run is in progress', async () => {
     const emitFn = jest.fn();
     const svc = new KbDreamService({
-      chatService: mockChatService as any,
+      chatService: mockChatService,
       backendRegistry: mockBackendRegistry as any,
       kbSearchMcp: mockKbSearchMcp as any,
       emit: emitFn,

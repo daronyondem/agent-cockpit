@@ -109,7 +109,7 @@ describe('tab-indicator state machine', () => {
 
   it('stays running while any of multiple concurrent streams is active', () => {
     const streaming = new Set<string>();
-    let hidden = true;
+    const hidden = true;
     const ti = createTabIndicator({ streamingConvs: streaming, isHidden: () => hidden });
     streaming.add('c1');
     ti.onStreamChange();
@@ -125,7 +125,7 @@ describe('tab-indicator state machine', () => {
 
   it('preserves an error from an earlier stream until all streams end', () => {
     const streaming = new Set<string>();
-    let hidden = true;
+    const hidden = true;
     const ti = createTabIndicator({ streamingConvs: streaming, isHidden: () => hidden });
     streaming.add('c1');
     ti.onStreamChange();

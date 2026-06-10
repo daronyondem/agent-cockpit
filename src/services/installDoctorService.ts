@@ -461,7 +461,7 @@ export class InstallDoctorService {
   }
 
   private checkUpdateChannel(install: InstallStatus): InstallDoctorCheck {
-    const updateStatus = this.updateService?.getStatus() as UpdateStatus | undefined;
+    const updateStatus = this.updateService?.getStatus();
     const detail = updateStatus
       ? `local=${updateStatus.localVersion}; remote=${updateStatus.remoteVersion || 'unknown'}; available=${updateStatus.updateAvailable ? 'yes' : 'no'}`
       : undefined;

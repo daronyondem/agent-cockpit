@@ -98,7 +98,7 @@ export class WorkspaceTaskQueue {
     return new Promise<T>((resolve, reject) => {
       this.items.push({
         kind,
-        task: task as () => Promise<unknown>,
+        task: task,
         resolve: resolve as Resolver<unknown>,
         reject,
       });

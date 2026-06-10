@@ -235,7 +235,7 @@ export class SessionFinalizerQueue {
 
     return this.lock.run(bestHash, async () => {
       const store = await this.readStore(bestHash);
-      const job = store.jobs.find((candidate) => candidate.id === best!.id);
+      const job = store.jobs.find((candidate) => candidate.id === best.id);
       if (!job || (job.status !== 'pending' && job.status !== 'retrying')) {
         return { job: null, nextDelayMs: 0 };
       }

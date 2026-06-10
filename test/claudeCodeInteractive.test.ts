@@ -130,7 +130,7 @@ describe('ClaudeCodeInteractiveAdapter', () => {
         role: 'assistant',
         content: [{ type: 'text', text: 'No response requested.' }],
       },
-    } as any);
+    });
 
     expect(events).toEqual([]);
   });
@@ -150,7 +150,7 @@ describe('ClaudeCodeInteractiveAdapter', () => {
         },
       },
       cost_usd: 0,
-    } as any);
+    });
     expect(synthetic).toEqual([{ type: 'text', content: 'Partial local output' }]);
 
     const zeroRealModel = mapClaudeTranscriptEntryToStreamEvents({
@@ -167,7 +167,7 @@ describe('ClaudeCodeInteractiveAdapter', () => {
         },
       },
       cost_usd: 0,
-    } as any);
+    });
     expect(zeroRealModel).toEqual([]);
   });
 

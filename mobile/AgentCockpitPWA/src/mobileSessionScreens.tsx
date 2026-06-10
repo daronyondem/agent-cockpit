@@ -128,8 +128,8 @@ function ReadOnlySessionMessage(props: {
   function copy(mode: 'text' | 'md') {
     const text = mode === 'md' ? props.message.content : (contentRef.current?.textContent || props.message.content);
     if (!text) return;
-    const write = navigator.clipboard?.writeText(text);
-    if (!write) return;
+    if (!navigator.clipboard?.writeText) return;
+    const write = navigator.clipboard.writeText(text);
     void write.then(() => {
       setCopied(mode);
       window.setTimeout(() => setCopied(null), 1400);

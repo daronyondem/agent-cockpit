@@ -141,7 +141,7 @@ export function FilePreviewModal(props: {
 
 function MarkdownPreview(props: { content: string }) {
   const html = useMemo(() => {
-    const raw = marked.parse(props.content || '', { breaks: true, gfm: true, async: false }) as string;
+    const raw = marked.parse(props.content || '', { breaks: true, gfm: true, async: false });
     return DOMPurify.sanitize(raw);
   }, [props.content]);
   return <div className="markdown-body file-preview-markdown" dangerouslySetInnerHTML={{ __html: html }} />;

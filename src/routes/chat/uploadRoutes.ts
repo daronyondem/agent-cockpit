@@ -34,11 +34,12 @@ export function createUploadRouter(opts: UploadRoutesOptions): express.Router {
 
   const upload = multer({
     storage: multer.diskStorage({
-      destination: async (_req, _file, cb) => {
-        const id = (_req as Request).params.id;
+      destination: (_req, _file, cb) => {
+        const id = (_req).params.id;
         const dir = path.join(chatService.artifactsDir, Array.isArray(id) ? id[0] : id);
-        await fs.promises.mkdir(dir, { recursive: true });
-        cb(null, dir);
+        fs.promises.mkdir(dir, { recursive: true })
+          .then(() => cb(null, dir))
+          .catch((err: unknown) => cb(err as Error, dir));
       },
       filename: (_req, file, cb) => {
         const safe = file.originalname.replace(/[\/\\]/g, '_');

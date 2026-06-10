@@ -554,7 +554,7 @@ describe('OpenCode backend helpers', () => {
       },
     });
 
-    const events = __opencodeTestUtils.translateOpenCodeLine(line) as StreamEvent[];
+    const events = __opencodeTestUtils.translateOpenCodeLine(line);
     expect(events[0]).toEqual({ type: 'external_session', sessionId: 'ses_abc' });
     expect(events[1]).toEqual({
       type: 'usage',
@@ -580,7 +580,7 @@ describe('OpenCode backend helpers', () => {
       },
     });
 
-    const events = __opencodeTestUtils.translateOpenCodeLine(line) as StreamEvent[];
+    const events = __opencodeTestUtils.translateOpenCodeLine(line);
     expect(events).toEqual([
       { type: 'external_session', sessionId: 'ses_abc' },
       { type: 'thinking', content: 'Considering the answer.', streaming: true },
@@ -604,7 +604,7 @@ describe('OpenCode backend helpers', () => {
       },
     });
 
-    const events = __opencodeTestUtils.translateOpenCodeLine(line) as StreamEvent[];
+    const events = __opencodeTestUtils.translateOpenCodeLine(line);
     expect(events).toEqual([
       { type: 'external_session', sessionId: 'ses_abc' },
       {
@@ -641,7 +641,7 @@ describe('OpenCode backend helpers', () => {
       },
     });
 
-    const events = __opencodeTestUtils.translateOpenCodeLine(line) as StreamEvent[];
+    const events = __opencodeTestUtils.translateOpenCodeLine(line);
     expect(events[1]).toEqual({
       type: 'tool_activity',
       tool: 'search_topics',
@@ -674,7 +674,7 @@ describe('OpenCode backend helpers', () => {
       },
     });
 
-    const events = __opencodeTestUtils.translateOpenCodeLine(line) as StreamEvent[];
+    const events = __opencodeTestUtils.translateOpenCodeLine(line);
     expect(events).toEqual([
       { type: 'external_session', sessionId: 'ses_abc' },
       {
@@ -701,7 +701,7 @@ describe('OpenCode backend helpers', () => {
       },
     });
 
-    const events = __opencodeTestUtils.translateOpenCodeLine(line) as StreamEvent[];
+    const events = __opencodeTestUtils.translateOpenCodeLine(line);
     expect(events).toEqual([
       { type: 'external_session', sessionId: 'ses_abc' },
       {

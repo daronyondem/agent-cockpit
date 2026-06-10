@@ -224,7 +224,7 @@ chatService.initialize().then(async () => {
   // the first refresh. Further refreshes happen opportunistically after
   // each Claude Code assistant turn; both paths respect a 10-min floor.
   claudePlanUsageService.init().then(() => {
-    claudePlanUsageService.maybeRefresh('server-start');
+    void claudePlanUsageService.maybeRefresh('server-start');
   }).catch((err: unknown) => {
     console.warn('[claudePlanUsage] init failed:', (err as Error).message);
   });
@@ -234,7 +234,7 @@ chatService.initialize().then(async () => {
   // AmazonCodeWhispererService.GetUsageLimits directly. Skipped silently
   // if kiro-cli isn't installed or the access token has rotated out.
   kiroPlanUsageService.init().then(() => {
-    kiroPlanUsageService.maybeRefresh('server-start');
+    void kiroPlanUsageService.maybeRefresh('server-start');
   }).catch((err: unknown) => {
     console.warn('[kiroPlanUsage] init failed:', (err as Error).message);
   });
@@ -243,7 +243,7 @@ chatService.initialize().then(async () => {
   // calls `account/read` + `account/rateLimits/read` over JSON-RPC,
   // then kills the process. Skipped silently if `codex` isn't on PATH.
   codexPlanUsageService.init().then(() => {
-    codexPlanUsageService.maybeRefresh('server-start');
+    void codexPlanUsageService.maybeRefresh('server-start');
   }).catch((err: unknown) => {
     console.warn('[codexPlanUsage] init failed:', (err as Error).message);
   });
@@ -313,8 +313,8 @@ chatService.initialize().then(async () => {
     });
   }
 
-  process.on('SIGTERM', () => shutdown('SIGTERM'));
-  process.on('SIGINT', () => shutdown('SIGINT'));
+  process.on('SIGTERM', () => { void shutdown('SIGTERM'); });
+  process.on('SIGINT', () => { void shutdown('SIGINT'); });
 }).catch(err => {
   console.error('[startup] Fatal initialization error:', err);
   process.exit(1);

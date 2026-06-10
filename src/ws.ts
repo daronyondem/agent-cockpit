@@ -368,7 +368,7 @@ export function attachWebSocket(
   /** Buffer replayable stream events and send to WS if connected. */
   function send(convId: string, frame: WsServerFrame): boolean {
     const replayable = shouldBufferFrame(frame);
-    let buf = replayable ? getOrCreateBuffer(convId) : convBuffers.get(convId);
+    const buf = replayable ? getOrCreateBuffer(convId) : convBuffers.get(convId);
 
     if (replayable && buf) {
       // Append to buffer (ring buffer: drop oldest if at cap)

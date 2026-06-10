@@ -160,7 +160,7 @@ describe('WorkspaceContextService', () => {
 
     now = new Date('2026-05-18T00:06:00.000Z');
     const scheduler = new WorkspaceContextScheduler({
-      chatService: chatService as any,
+      chatService: chatService,
       processor: workspaceContextService,
       now: () => now,
     });
@@ -572,7 +572,7 @@ describe('WorkspaceContextService', () => {
       releaseMaintenance.current = () => resolve('Maintenance complete.');
     }));
     const scheduler = new WorkspaceContextScheduler({
-      chatService: chatService as any,
+      chatService: chatService,
       processor: workspaceContextService,
       now: () => now,
     });
@@ -642,7 +642,7 @@ describe('WorkspaceContextService', () => {
       releaseMaintenance.current = () => resolve('Maintenance complete.');
     }));
     const scheduler = new WorkspaceContextScheduler({
-      chatService: chatService as any,
+      chatService: chatService,
       processor: workspaceContextService,
       now: () => now,
     });

@@ -367,7 +367,7 @@ export class RoutinesService {
     const next = { ...manifest, state };
     await this.writeManifest(workspaceRef, next);
     await this.refreshIndex(workspaceRef);
-    return (await this.getRoutine(workspaceRef, routineId)) as RoutineListItem | null;
+    return (await this.getRoutine(workspaceRef, routineId));
   }
 
   async updateRoutine(
@@ -391,7 +391,7 @@ export class RoutinesService {
       await this.writeRoutineContent(workspaceRef, current.id, current.routineFile, patch.routineContent);
     }
     await this.refreshIndex(workspaceRef);
-    return (await this.getRoutine(workspaceRef, routineId)) as RoutineListItem | null;
+    return (await this.getRoutine(workspaceRef, routineId));
   }
 
   async deleteRoutine(workspaceRef: string, routineId: string): Promise<boolean> {

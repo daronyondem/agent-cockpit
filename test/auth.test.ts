@@ -767,8 +767,8 @@ describe('setupAuth — /auth/logout', () => {
     // Session middleware that provides a session whose destroy always errors
     app.use(session({ secret: 'test', resave: false, saveUninitialized: false }));
     app.use((req, _res, next) => {
-      const origDestroy = req.session!.destroy.bind(req.session!);
-      (req.session!.destroy as any) = (cb?: (err?: unknown) => void) => {
+      const origDestroy = req.session.destroy.bind(req.session);
+      (req.session.destroy as any) = (cb?: (err?: unknown) => void) => {
         // Simulate a destroy error — the logout handler should still redirect
         origDestroy((/* _err */) => {
           if (cb) cb(new Error('simulated destroy error'));

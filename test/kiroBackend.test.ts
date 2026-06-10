@@ -258,7 +258,7 @@ describe('KiroAdapter', () => {
 
     jest.isolateModules(() => {
       const { EventEmitter } = require('events');
-      const proc = new EventEmitter() as any;
+      const proc = new EventEmitter();
       proc.pid = 5152;
       proc.stdout = new EventEmitter();
       proc.stderr = new EventEmitter();
@@ -377,7 +377,7 @@ describe('KiroAdapter', () => {
 
     jest.isolateModules(() => {
       const { EventEmitter } = require('events');
-      const proc = new EventEmitter() as any;
+      const proc = new EventEmitter();
       proc.pid = 5153;
       proc.stdout = new EventEmitter();
       proc.stderr = new EventEmitter();
@@ -497,7 +497,7 @@ describe('KiroAdapter', () => {
 
     function createSimulator(pid: number) {
       const { EventEmitter } = require('events');
-      const proc = new EventEmitter() as any;
+      const proc = new EventEmitter();
       proc.pid = pid;
       proc.stdout = new EventEmitter();
       proc.stderr = new EventEmitter();
@@ -874,7 +874,7 @@ describe('KiroAdapter.runOneShot', () => {
   // `respond` / `notify` / `sessionUpdate` to drive the JSON-RPC exchange.
   function createKiroSimulator() {
     const { EventEmitter } = require('events');
-    const proc = new EventEmitter() as any;
+    const proc = new EventEmitter();
     proc.stdout = new EventEmitter();
     proc.stderr = new EventEmitter();
 
@@ -1460,7 +1460,7 @@ describe('reencodeForKiro', () => {
 describe('KiroAdapter.runOneShot image attachment', () => {
   function createKiroSimulator() {
     const { EventEmitter } = require('events');
-    const proc = new EventEmitter() as any;
+    const proc = new EventEmitter();
     proc.stdout = new EventEmitter();
     proc.stderr = new EventEmitter();
 

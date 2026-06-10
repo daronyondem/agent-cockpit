@@ -19,8 +19,8 @@ tool is unavailable.
   asks for a draft.
 - Do not use auto-closing issue keywords in commits or PR bodies unless the user
   explicitly says the PR fully resolves the issue.
-- PR readiness includes tests, behavior/spec updates, ADR evaluation, mobile PWA
-  impact evaluation, and `AGENTS.md` evaluation.
+- PR readiness includes tests, `npm run lint`, behavior/spec updates, ADR
+  evaluation, mobile PWA impact evaluation, and `AGENTS.md` evaluation.
 - ADR lint validates `affects:` paths unless the ADR is tagged `historical` or
   the path is under a retired prefix listed in `scripts/adr-lint.js`.
 - Public docs and issue/PR text should avoid leaking private workspace context.

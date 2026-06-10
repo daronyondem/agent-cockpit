@@ -7,6 +7,7 @@ real-CLI compatibility checks.
 
 ```bash
 npm run typecheck
+npm run lint
 npm test
 npm run maintainability:check
 npm run spec:drift

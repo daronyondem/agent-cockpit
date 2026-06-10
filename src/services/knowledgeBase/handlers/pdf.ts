@@ -73,7 +73,7 @@ export const pdfHandler: Handler = async ({
 
   const canvasImport = async () => napiCanvas;
   const CanvasFactory = await createIsomorphicCanvasFactory(canvasImport);
-  const pdf = await getDocumentProxy(data, { CanvasFactory } as unknown as Parameters<typeof getDocumentProxy>[1]);
+  const pdf = await getDocumentProxy(data, { CanvasFactory });
   const totalPages = pdf.numPages;
   const ops = (await getResolvedPDFJS()).OPS as unknown as OpsEnum;
 

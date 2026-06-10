@@ -702,7 +702,7 @@ export class DataMigrationService {
   private async collectWorkspaceRecords(): Promise<DataExportWorkspaceRecord[]> {
     const registryPath = path.join(this.dataRoot, 'chat', 'workspaces.json');
     const registry = readJsonIfExists(registryPath) as { workspaces?: unknown[] } | null;
-    const records = Array.isArray(registry?.workspaces) ? registry!.workspaces : [];
+    const records = Array.isArray(registry?.workspaces) ? registry.workspaces : [];
     const result: DataExportWorkspaceRecord[] = [];
     for (const raw of records) {
       if (!raw || typeof raw !== 'object') continue;
@@ -798,7 +798,7 @@ export class DataMigrationService {
   private async checkCliProfiles(): Promise<CheckStatus[]> {
     const settingsPath = path.join(this.dataRoot, 'chat', 'settings.json');
     const settings = readJsonIfExists(settingsPath) as Settings | null;
-    const profiles = Array.isArray(settings?.cliProfiles) ? settings!.cliProfiles as PersistedCliProfile[] : [];
+    const profiles = Array.isArray(settings?.cliProfiles) ? settings.cliProfiles as PersistedCliProfile[] : [];
     if (profiles.length === 0) return [skipped('No CLI profiles configured')];
     return profiles.map(profile => checkCliProfile(profile, this.dataRoot));
   }
