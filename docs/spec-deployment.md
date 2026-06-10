@@ -188,7 +188,10 @@ The final step creates GitHub Release `v<version>` with title
 requires `docs/releases/v<version>.md` to exist in the checked-out source ref.
 That source-controlled release document is produced during release preparation
 using `docs/release-notes-prompt.md` and reviewed before the manual workflow is
-triggered. The renderer validates that the document has non-empty
+triggered. Release preparation also runs `npm audit` at the repository root and
+`npm audit --prefix mobile/AgentCockpitPWA`; moderate-or-higher findings must be
+fixed before release or linked to a documented exposure analysis and follow-up
+issue. The renderer validates that the document has non-empty
 `## Shipped For Users` and `## Developer Details` sections, rejects TODO/TBD
 placeholder text, requires at least one shipped-user bullet, and writes a GitHub
 Release body that includes the user-facing shipped list plus a link to

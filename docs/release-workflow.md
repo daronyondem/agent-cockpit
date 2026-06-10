@@ -40,17 +40,22 @@ developer detail document.
    merged PRs, closed issues, merge commits, `git diff --stat`,
    `git diff --name-status`, and targeted code/spec/test reads for changed
    subsystems.
-4. Generate `docs/releases/v<version>.md` using
+4. Run dependency audit checks for both package roots:
+   `npm audit` and `npm audit --prefix mobile/AgentCockpitPWA`. Do not proceed
+   with undocumented moderate-or-higher findings; either remediate them or link
+   the release notes/prep record to the issue that documents the accepted
+   exposure and follow-up plan.
+5. Generate `docs/releases/v<version>.md` using
    [release-notes-prompt.md](release-notes-prompt.md).
-5. Validate the GitHub Release body locally:
+6. Validate the GitHub Release body locally:
 
 ```bash
 npm run release:notes -- --version <version> --out /tmp/agent-cockpit-release-notes.md
 ```
 
-6. Commit the release document and any release-workflow changes before triggering
+7. Commit the release document and any release-workflow changes before triggering
    the GitHub Actions release workflow.
-7. Share the generated document with the human for review. Apply requested edits
+8. Share the generated document with the human for review. Apply requested edits
    before running the release workflow.
 
 ## Publishing

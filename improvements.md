@@ -146,6 +146,14 @@ Verification:
 
 Objective: resolve or explicitly document dependency vulnerabilities.
 
+Status: completed for issue #421 on 2026-06-10. `npm audit fix` updated the
+root lockfile for the `qs` advisory by moving Express to `4.22.2`,
+`body-parser` to `1.20.5`, and `qs` to `6.15.2`. The mobile PWA audit still
+reports zero findings. The only remaining root audit findings are the two
+moderate PM2 nested `ws` entries tracked in #346; `pm2@7.0.1` is still the
+latest npm release and still pins `ws@8.20.0`, while npm's available force fix
+is a PM2 7-to-6 downgrade.
+
 Work plan:
 
 1. Run current audit:
