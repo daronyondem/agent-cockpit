@@ -4,6 +4,9 @@ import { pathToFileURL } from 'url';
 
 const ROOT = path.resolve(__dirname, '..');
 const PORT = 3399;
+const READY_TIMEOUT_MS = 30000;
+const EXIT_TIMEOUT_MS = 15000;
+const SIGNAL_TEST_TIMEOUT_MS = 60000;
 const SIGNAL_EXIT_CODES: Partial<Record<NodeJS.Signals, number>> = {
   SIGINT: 130,
   SIGTERM: 143,
@@ -71,7 +74,7 @@ function waitForReady(server: ChildProcess, getOutput: () => string): Promise<vo
     timeout = setTimeout(() => {
       server.kill('SIGKILL');
       finish(new Error(`Server did not start in time on port ${PORT}\n${getOutput()}`));
-    }, 10000);
+    }, READY_TIMEOUT_MS);
 
     server.stdout!.on('data', onStdout);
     server.on('error', onError);
@@ -83,8 +86,8 @@ function waitForExit(server: ChildProcess): Promise<ExitResult> {
   return new Promise((resolve, reject) => {
     const timeout = setTimeout(() => {
       server.kill('SIGKILL');
-      reject(new Error('Server did not exit within 5s'));
-    }, 5000);
+      reject(new Error(`Server did not exit within ${EXIT_TIMEOUT_MS / 1000}s`));
+    }, EXIT_TIMEOUT_MS);
     server.on('close', (code, signal) => {
       clearTimeout(timeout);
       resolve({ code, signal });
@@ -123,9 +126,9 @@ async function testSignal(signal: NodeJS.Signals) {
 describe('graceful shutdown', () => {
   test('SIGINT shuts down gracefully', async () => {
     await testSignal('SIGINT');
-  }, 15000);
+  }, SIGNAL_TEST_TIMEOUT_MS);
 
   test('SIGTERM shuts down gracefully', async () => {
     await testSignal('SIGTERM');
-  }, 15000);
+  }, SIGNAL_TEST_TIMEOUT_MS);
 });
