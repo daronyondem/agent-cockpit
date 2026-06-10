@@ -6,12 +6,10 @@ import type { BackendRegistry } from './backends/registry';
 import { SettingsService } from './settingsService';
 import {
   backendForCliProfile,
-  cliHarnessForBackend,
   cliProfileIdForBackend,
   type CliProfileRuntime,
   ensureServerConfiguredCliProfiles,
   resolveCliProfileRuntime,
-  serverConfiguredCliProfileId,
 } from './cliProfiles';
 import { parseFrontmatter as parseMemoryFrontmatter } from './backends/claudeCode';
 import type {
@@ -29,15 +27,11 @@ import type {
   ConversationListItem,
   Settings,
   MemorySnapshot,
-  MemoryFile,
   MemoryEntryMetadata,
-  MemoryMetadataIndex,
   MemorySearchOptions,
   MemorySearchResult,
   MemoryScope,
-  MemorySource,
   MemoryStatus,
-  MemoryType,
   MemoryRedaction,
   MemoryConsolidationAudit,
   ConversationWorkspaceContextStatus,
@@ -45,8 +39,6 @@ import type {
   ClaudeCodeMode,
   ServiceTier,
   KbState,
-  KbCounters,
-  KbRawStatus,
   KbAutoDreamConfig,
   ConversationArtifact,
   QueuedMessage,
@@ -57,17 +49,10 @@ import type {
   WorkspaceInstructionPointerResult,
   WorkspaceContextWorkspaceSettings,
   ConversationCheckout,
-  WorktreeIsolationSettings,
 } from '../types';
-import {
-  normalizeFolderPath,
-  KbDatabase,
-} from './knowledgeBase/db';
-import { computeDigestProgress } from './knowledgeBase/digest';
-import { DEFAULT_KB_AUTO_DREAM_CONFIG, normalizeKbAutoDreamConfig } from './knowledgeBase/autoDream';
-import { KbVectorStore } from './knowledgeBase/vectorStore';
-import { resolveConfig, type EmbeddingConfig } from './knowledgeBase/embeddings';
-import { atomicWriteFile } from '../utils/atomicWrite';
+import type { KbDatabase } from './knowledgeBase/db';
+import type { KbVectorStore } from './knowledgeBase/vectorStore';
+import type { EmbeddingConfig } from './knowledgeBase/embeddings';
 import { KeyedMutex } from '../utils/keyedMutex';
 import { logger } from '../utils/logger';
 import {
@@ -106,6 +91,26 @@ import {
   WorktreeIsolationError,
   normalizeCheckout,
 } from './chat/worktreeIsolationService';
+import { WorkspaceMemoryService } from './chat/workspaceMemoryService';
+import {
+  effectiveClaudeCodeMode,
+  effectiveEffort,
+  effectiveServiceTier,
+  hardCutTitle,
+  titleFallbackFromMessage,
+} from './chat/conversationPolicy';
+import {
+  conversationToMarkdown as renderConversationToMarkdown,
+  messagesToMarkdown,
+} from './chat/transcriptMarkdown';
+import { advanceConversationSession } from './chat/sessionTransition';
+import { WorkspaceContextStatusService } from './chat/workspaceContextStatus';
+import { KbStateSnapshotService } from './chat/kbStateSnapshot';
+import { LegacyMigrations } from './chat/legacyMigrations';
+import {
+  disableWorktreeIsolation,
+  enableWorktreeIsolation,
+} from './chat/worktreeIsolationToggle';
 import type { WorktreeIsolationStatusResponse } from '../contracts/worktreeIsolation';
 import type {
   WorkspaceArchiveRequest,
@@ -144,199 +149,7 @@ export class WorkspaceArchiveError extends Error {
   }
 }
 
-/**
- * Schema version of the `state.json` envelope itself. Bumped only when
- * we change the top-level shape (e.g. add a new top-level map). Distinct
- * from `entrySchemaVersion`, which tracks the digestion output format.
- */
-const KB_STATE_VERSION = 1;
-
-/**
- * Current digestion entry schema version. Bumped when the digestion
- * prompt or the entry YAML frontmatter format changes. When bumped,
- * existing entries in `state.json` get `staleSchema: true` and are
- * surfaced in the KB Browser as "needs re-digestion".
- */
-const KB_ENTRY_SCHEMA_VERSION = 1;
-
 const DEFAULT_WORKSPACE_FALLBACK = '/tmp/default-workspace';
-
-function isPlainObject(value: unknown): value is Record<string, unknown> {
-  return Boolean(value && typeof value === 'object' && !Array.isArray(value));
-}
-
-interface ConversationWorkspaceContextStatusRun {
-  runId: string;
-  source: ConversationWorkspaceContextStatus['latestRunSource'];
-  status: ConversationWorkspaceContextStatus['latestRunStatus'];
-  startedAt: string;
-  completedAt?: string;
-}
-
-function normalizeWorkspaceContextStatusRun(value: unknown): ConversationWorkspaceContextStatusRun | undefined {
-  if (!value || typeof value !== 'object') return undefined;
-  const record = value as Record<string, unknown>;
-  if (typeof record.runId !== 'string' || typeof record.startedAt !== 'string') return undefined;
-  const status = record.status === 'running' || record.status === 'completed' || record.status === 'failed' || record.status === 'stopped' || record.status === 'skipped'
-    ? record.status
-    : undefined;
-  const source = record.source === 'initial_scan' || record.source === 'scheduled' || record.source === 'session_reset' || record.source === 'archive' || record.source === 'manual_catchup' || record.source === 'maintenance'
-    ? record.source
-    : undefined;
-  if (!status || !source) return undefined;
-  return {
-    runId: record.runId,
-    source,
-    status,
-    startedAt: record.startedAt,
-    completedAt: typeof record.completedAt === 'string' ? record.completedAt : undefined,
-  };
-}
-
-/**
- * Turn an arbitrary string into a short, filesystem-safe slug. Used to
- * build memory-note filenames like `note_<timestamp>_<slug>.md`.
- */
-function slugify(input: string): string {
-  const cleaned = (input || '')
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-+|-+$/g, '')
-    .slice(0, 40);
-  return cleaned || 'note';
-}
-
-function memoryEntryId(filename: string): string {
-  const digest = crypto.createHash('sha256').update(filename).digest('hex').slice(0, 16);
-  return `mem_${digest}`;
-}
-
-function normalizeMemorySource(value: unknown, fallback: MemorySource): MemorySource {
-  if (value === 'cli-capture' || value === 'memory-note' || value === 'session-extraction') return value;
-  return fallback;
-}
-
-function memorySourceFromFilename(filename: string): MemorySource {
-  if (filename.startsWith('notes/session_')) return 'session-extraction';
-  if (filename.startsWith('notes/')) return 'memory-note';
-  return 'cli-capture';
-}
-
-function normalizeMemoryStatus(value: unknown): MemoryStatus {
-  if (value === 'active' || value === 'superseded' || value === 'redacted' || value === 'deleted') return value;
-  return 'active';
-}
-
-function normalizeMemoryScope(value: unknown): MemoryScope {
-  if (value === 'user') return 'user';
-  return 'workspace';
-}
-
-function normalizeStringArray(value: unknown): string[] | undefined {
-  if (!Array.isArray(value)) return undefined;
-  const strings = value.filter((item): item is string => typeof item === 'string' && item.length > 0);
-  return strings.length ? strings : undefined;
-}
-
-function normalizeMemoryRedaction(value: unknown): Array<{ kind: string; reason: string }> | undefined {
-  if (!Array.isArray(value)) return undefined;
-  const redaction = value
-    .filter((item): item is { kind: string; reason: string } =>
-      !!item
-      && typeof item === 'object'
-      && typeof (item as { kind?: unknown }).kind === 'string'
-      && typeof (item as { reason?: unknown }).reason === 'string',
-    )
-    .map((item) => ({ kind: item.kind, reason: item.reason }));
-  return redaction.length ? redaction : undefined;
-}
-
-const MEMORY_SEARCH_STOPWORDS = new Set([
-  'a', 'an', 'and', 'are', 'as', 'at', 'be', 'by', 'for', 'from', 'has', 'have',
-  'in', 'is', 'it', 'of', 'on', 'or', 'that', 'the', 'this', 'to', 'was', 'with',
-]);
-
-function tokenizeMemorySearch(value: string): string[] {
-  const matches = value.toLowerCase().match(/[a-z0-9][a-z0-9_-]*/g) || [];
-  return matches
-    .map((token) => token.replace(/^_+|_+$/g, ''))
-    .filter((token) => token.length >= 2 && !MEMORY_SEARCH_STOPWORDS.has(token));
-}
-
-function memorySearchText(file: MemoryFile): string {
-  return [
-    file.name || '',
-    file.name || '',
-    file.description || '',
-    file.description || '',
-    file.description || '',
-    file.type,
-    file.filename,
-    file.content || '',
-  ].join('\n');
-}
-
-function normalizeMemorySearchField(value: string | null | undefined): string {
-  return tokenizeMemorySearch(value || '').join(' ');
-}
-
-function memorySearchExactBoost(file: MemoryFile, normalizedQuery: string, queryTerms: string[]): number {
-  if (!normalizedQuery) return 0;
-  let boost = 0;
-  const fields = [
-    { value: file.name, exact: 6, contains: 3, term: 0.5 },
-    { value: file.description, exact: 4, contains: 2, term: 0.35 },
-    { value: file.filename, exact: 3, contains: 1.5, term: 0.25 },
-  ];
-
-  for (const field of fields) {
-    const normalized = normalizeMemorySearchField(field.value);
-    if (!normalized) continue;
-    if (normalized === normalizedQuery) {
-      boost += field.exact;
-    } else if (normalized.includes(normalizedQuery)) {
-      boost += field.contains;
-    }
-    const tokens = new Set(normalized.split(' ').filter(Boolean));
-    const matchedTerms = queryTerms.filter((term) => tokens.has(term)).length;
-    boost += matchedTerms * field.term;
-  }
-
-  return boost;
-}
-
-function memorySearchTypeBoost(
-  file: MemoryFile,
-  queryTerms: string[],
-  allowedTypes: Set<MemoryType> | null,
-): number {
-  let boost = 0;
-  if (allowedTypes?.has(file.type)) boost += 0.75;
-  if (queryTerms.includes(file.type)) boost += 2;
-  return boost;
-}
-
-function memorySearchTimestamp(file: MemoryFile): number {
-  const raw = file.metadata?.updatedAt || file.metadata?.createdAt || '';
-  const value = Date.parse(raw);
-  return Number.isFinite(value) ? value : 0;
-}
-
-function memorySearchSnippet(content: string, queryTerms: string[]): string {
-  const compact = content.replace(/\s+/g, ' ').trim();
-  if (!compact) return '';
-  const lower = compact.toLowerCase();
-  let index = -1;
-  for (const term of queryTerms) {
-    const found = lower.indexOf(term.toLowerCase());
-    if (found !== -1 && (index === -1 || found < index)) index = found;
-  }
-  const start = index === -1 ? 0 : Math.max(0, index - 90);
-  const end = Math.min(compact.length, start + 260);
-  const prefix = start > 0 ? '...' : '';
-  const suffix = end < compact.length ? '...' : '';
-  return `${prefix}${compact.slice(start, end)}${suffix}`;
-}
 
 interface ConvLookupResult {
   hash: string;
@@ -380,6 +193,7 @@ export class ChatService {
   private _conversationLifecycleStore: ConversationLifecycleStore;
   private _conversationMessageStore: ConversationMessageStore;
   private _workspaceMemoryStore: WorkspaceMemoryStore;
+  private _workspaceMemoryService: WorkspaceMemoryService;
   private _messageQueueStore: MessageQueueStore;
   private _workspaceInstructionStore: WorkspaceInstructionStore;
   private _usageLedgerStore: UsageLedgerStore;
@@ -392,6 +206,9 @@ export class ChatService {
   private _workspaceArchiveStore: WorkspaceArchiveStore;
   private _workspaceSnapshotService: WorkspaceSnapshotService;
   private _worktreeIsolation: WorktreeIsolationService;
+  private _workspaceContextStatus: WorkspaceContextStatusService;
+  private _kbStateSnapshot: KbStateSnapshotService;
+  private _legacyMigrations: LegacyMigrations;
   private _defaultWorkspace: string;
   private _backendRegistry: BackendRegistry | null;
   private _convWorkspaceMap: Map<string, string>;
@@ -465,6 +282,12 @@ export class ChatService {
     this._workspaceMemoryStore = new WorkspaceMemoryStore({
       getWorkspaceDir: (hash) => this._workspaceDir(hash),
     });
+    this._workspaceMemoryService = new WorkspaceMemoryService({
+      store: this._workspaceMemoryStore,
+      parseMemoryFrontmatter,
+      getWorkspaceMemoryEnabled: (hash) => this.getWorkspaceMemoryEnabled(hash),
+      log,
+    });
     this._workspaceKnowledgeStore = new WorkspaceKnowledgeStore({
       getWorkspaceDir: (hash) => this._workspaceDir(hash),
       resolveWorkspaceId: (ref) => this._workspaceIdentityStore.resolveWorkspaceId(ref),
@@ -486,6 +309,9 @@ export class ChatService {
       hasConversation: (convId) => this._convWorkspaceMap.has(convId),
     });
     this._worktreeIsolation = new WorktreeIsolationService();
+    this._kbStateSnapshot = new KbStateSnapshotService({
+      getKbVectorStore: (hash, dimensions) => this.getKbVectorStore(hash, dimensions),
+    });
     this._featureSettingsStore = new WorkspaceFeatureSettingsStore({
       workspacesDir: this.workspacesDir,
       getWorkspaceDir: (hash) => this._workspaceDir(hash),
@@ -493,6 +319,11 @@ export class ChatService {
       readWorkspaceIndex: (hash) => this._readWorkspaceIndex(hash),
       writeWorkspaceIndex: (hash, index) => this._writeWorkspaceIndex(hash, index),
       getSettings: () => this.getSettings(),
+    });
+    this._workspaceContextStatus = new WorkspaceContextStatusService({
+      getWorkspaceContextDir: (hash) => this.getWorkspaceContextDir(hash),
+      getWorkspaceContextEnabled: (hash) => this.getWorkspaceContextEnabled(hash),
+      log,
     });
     this._workspaceArchiveStore = new WorkspaceArchiveStore({
       workspacesDir: this.workspacesDir,
@@ -512,6 +343,19 @@ export class ChatService {
 
     this._legacyConversationsDir = path.join(this.baseDir, 'conversations');
     this._legacyArchivesDir = path.join(this.baseDir, 'archives');
+    this._legacyMigrations = new LegacyMigrations({
+      workspacesDir: this.workspacesDir,
+      legacyConversationsDir: this._legacyConversationsDir,
+      legacyArchivesDir: this._legacyArchivesDir,
+      defaultWorkspace: this._defaultWorkspace,
+      workspaceHash: (workspacePath) => this._workspaceHash(workspacePath),
+      newId: () => this._newId(),
+      readWorkspaceIndex: (hash) => this._readWorkspaceIndex(hash),
+      writeWorkspaceIndex: (hash, index) => this._writeWorkspaceIndex(hash, index),
+      writeSessionFile: (hash, convId, sessionNumber, data) => this._writeSessionFile(hash, convId, sessionNumber, data),
+      ensureServerConfiguredCliProfiles: (harnesses) => this._ensureServerConfiguredCliProfiles(harnesses),
+      log,
+    });
 
     for (const dir of [this.workspacesDir, this.artifactsDir]) {
       if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
@@ -522,11 +366,11 @@ export class ChatService {
 
   async initialize(): Promise<void> {
     if (fs.existsSync(this._legacyConversationsDir)) {
-      await this._migrateToWorkspaces();
+      await this._legacyMigrations.migrateToWorkspaces();
     }
     await this._workspaceIdentityStore.initialize();
     await this._usagePricingStore.readOverrides();
-    await this._migrateCliProfiles();
+    await this._legacyMigrations.migrateCliProfiles();
     await this._buildLookupMap();
   }
 
@@ -535,40 +379,6 @@ export class ChatService {
     input: CreateConversationArtifactInput,
   ): Promise<ConversationArtifact | null> {
     return this._artifactStore.createConversationArtifact(convId, input);
-  }
-
-  private async _migrateCliProfiles(): Promise<void> {
-    const usedHarnesses = new Set<string>();
-    let dirs: string[];
-    try {
-      dirs = await fsp.readdir(this.workspacesDir);
-    } catch (err: unknown) {
-      if ((err as NodeJS.ErrnoException).code === 'ENOENT') return;
-      throw err;
-    }
-
-    for (const hash of dirs) {
-      if (hash.startsWith('.')) continue;
-      const index = await this._readWorkspaceIndex(hash);
-      if (!index || !Array.isArray(index.conversations)) continue;
-
-      let changed = false;
-      for (const conv of index.conversations) {
-        const harness = cliHarnessForBackend(conv.backend);
-        if (!harness) continue;
-        if (!conv.cliProfileId) {
-          usedHarnesses.add(harness);
-          conv.cliProfileId = serverConfiguredCliProfileId(harness);
-          changed = true;
-        }
-      }
-
-      if (changed) {
-        await this._writeWorkspaceIndex(hash, index);
-      }
-    }
-
-    await this._ensureServerConfiguredCliProfiles(usedHarnesses);
   }
 
   private async _ensureServerConfiguredCliProfiles(harnesses: Iterable<string | undefined | null>): Promise<void> {
@@ -661,7 +471,7 @@ export class ChatService {
   }
 
   getWorkspaceMemoryFilesDir(hash: string): string {
-    return this._memoryFilesDir(this._workspaceIdForRef(hash));
+    return this._workspaceMemoryStore.filesDir(this._workspaceIdForRef(hash));
   }
 
   getConversationSessionFilePath(hash: string, convId: string, sessionNumber: number): string {
@@ -712,65 +522,11 @@ export class ChatService {
     now: Date,
     opts: { branchName?: string; baseRef?: string } = {},
   ): Promise<ResetSessionResult['archivedSession'] | null> {
-    const activeSession = convEntry.sessions.find(s => s.active);
-    if (!activeSession) return null;
-
-    const currentSessionNumber = activeSession.number;
-    const sessionFile = await this._readSessionFile(hash, convEntry.id, currentSessionNumber);
-    const currentMessages = sessionFile ? sessionFile.messages : [];
-    const summary = `Session ${currentSessionNumber} (${currentMessages.length} messages)`;
-
-    activeSession.active = false;
-    activeSession.summary = summary;
-    activeSession.endedAt = now.toISOString();
-    activeSession.messageCount = currentMessages.length;
-
-    if (sessionFile) {
-      sessionFile.endedAt = now.toISOString();
-      await this._writeSessionFile(hash, convEntry.id, currentSessionNumber, sessionFile);
-    }
-
-    const newSessionNumber = currentSessionNumber + 1;
-    const newSessionId = this._newId();
-
-    delete convEntry.messageQueue;
-    delete convEntry.claudeCodeMode;
-    if (convEntry.usage) convEntry.usage.contextUsagePercentage = undefined;
-    convEntry.currentSessionId = newSessionId;
-    if (!convEntry.titleManuallySet) {
-      convEntry.title = 'New Chat';
-    }
-    convEntry.lastActivity = now.toISOString();
-    convEntry.lastMessage = null;
-    delete convEntry.unread;
-    convEntry.sessions.push({
-      number: newSessionNumber,
-      sessionId: newSessionId,
-      summary: null,
-      active: true,
-      messageCount: 0,
-      startedAt: now.toISOString(),
-      endedAt: null,
-      ...(opts.branchName ? { branchName: opts.branchName } : {}),
-      ...(opts.baseRef ? { baseRef: opts.baseRef } : {}),
-    });
-
-    await this._writeSessionFile(hash, convEntry.id, newSessionNumber, {
-      sessionNumber: newSessionNumber,
-      sessionId: newSessionId,
-      startedAt: now.toISOString(),
-      endedAt: null,
-      messages: [],
-    });
-
-    return {
-      number: currentSessionNumber,
-      sessionId: activeSession.sessionId || null,
-      startedAt: activeSession.startedAt,
-      endedAt: now.toISOString(),
-      messageCount: currentMessages.length,
-      summary,
-    };
+    return advanceConversationSession({
+      readSessionFile: (workspaceHash, convId, sessionNumber) => this._readSessionFile(workspaceHash, convId, sessionNumber),
+      writeSessionFile: (workspaceHash, convId, sessionNumber, data) => this._writeSessionFile(workspaceHash, convId, sessionNumber, data),
+      newId: () => this._newId(),
+    }, hash, convEntry, now, opts);
   }
 
   private async _generateSessionSummary(
@@ -919,27 +675,19 @@ export class ChatService {
    * available, then the first supported level, or clears if nothing matches.
    */
   private _effectiveEffort(backend: string, model: string | undefined, requested: EffortLevel | undefined): EffortLevel | undefined {
-    if (!requested || !model) return undefined;
     const adapter = this._backendRegistry?.get(backend);
     const modelOption = adapter?.metadata.models?.find(m => m.id === model);
-    const supported = modelOption?.supportedEffortLevels;
-    if (!supported || supported.length === 0) return undefined;
-    if (supported.includes(requested)) return requested;
-    if (supported.includes('high')) return 'high';
-    return supported[0];
+    return effectiveEffort(model, requested, modelOption);
   }
 
   private _effectiveServiceTier(backend: string, requested: ServiceTier | undefined): ServiceTier | undefined {
-    if (backend !== 'codex') return undefined;
-    return requested === 'fast' ? 'fast' : undefined;
+    return effectiveServiceTier(backend, requested);
   }
 
   private _effectiveClaudeCodeMode(backend: string, model: string | undefined, requested: ClaudeCodeMode | undefined): ClaudeCodeMode | undefined {
-    if (requested !== 'ultracode' || !model) return undefined;
-    if (cliHarnessForBackend(backend) !== 'claude-code') return undefined;
     const adapter = this._backendRegistry?.get(backend);
     const modelOption = adapter?.metadata.models?.find(m => m.id === model);
-    return modelOption?.supportedEffortLevels?.includes('xhigh') ? 'ultracode' : undefined;
+    return effectiveClaudeCodeMode(backend, model, requested, modelOption);
   }
 
   async getConversation(id: string): Promise<Conversation | null> {
@@ -1329,7 +1077,7 @@ export class ChatService {
     if (conv.convEntry.titleManuallySet) return conv.convEntry.title;
     const runtime = await this._resolveRuntimeForConversation(conv.convEntry);
     const adapter = this._backendRegistry?.get(runtime.backendId);
-    const fallback = userMessage.substring(0, 80).replace(/\n/g, ' ').trim() || 'New Chat';
+    const fallback = titleFallbackFromMessage(userMessage);
     let newTitle: string;
     if (adapter && typeof adapter.generateTitle === 'function') {
       newTitle = await adapter.generateTitle(userMessage, fallback, { cliProfile: runtime.profile });
@@ -1339,10 +1087,7 @@ export class ChatService {
 
     // Hard-cut titles to 8 words regardless of adapter output or fallback,
     // so sidebar/header entries don't wrap or crowd out sibling controls.
-    const words = newTitle.trim().split(/\s+/);
-    if (words.length > 8) {
-      newTitle = words.slice(0, 8).join(' ');
-    }
+    newTitle = hardCutTitle(newTitle);
 
     return this._indexLock.run(hash, async () => {
       const result = await this._getConvFromIndex(convId);
@@ -1500,41 +1245,7 @@ export class ChatService {
     if (!sessionFile) return null;
 
     const sessionMeta = { number: sessionNumber, startedAt: sessionFile.startedAt };
-    return this._messagesToMarkdown(convEntry.title, convId, sessionMeta, sessionFile.messages);
-  }
-
-  private _messagesToMarkdown(
-    title: string,
-    convId: string,
-    sessionMeta: { number: number; startedAt: string },
-    messages: Message[],
-  ): string {
-    const lines = [
-      `# ${title}`,
-      ``,
-      `**Session ${sessionMeta.number}** | Started: ${sessionMeta.startedAt}`,
-      `**Conversation ID:** ${convId}`,
-      ``,
-      `---`,
-      ``,
-    ];
-
-    for (const msg of messages) {
-      const role = msg.role === 'user' ? 'User' : 'Assistant';
-      const time = new Date(msg.timestamp).toLocaleString();
-      lines.push(`### ${role} — ${time}`);
-      if (msg.backend) lines.push(`*Backend: ${msg.backend}*`);
-      if (msg.streamError) {
-        lines.push(`*Stream error${msg.streamError.source ? ` (${msg.streamError.source})` : ''}: ${msg.streamError.message}*`);
-      }
-      lines.push(``);
-      lines.push(msg.content);
-      lines.push(``);
-      lines.push(`---`);
-      lines.push(``);
-    }
-
-    return lines.join('\n');
+    return messagesToMarkdown(convEntry.title, convId, sessionMeta, sessionFile.messages);
   }
 
   async conversationToMarkdown(convId: string): Promise<string | null> {
@@ -1542,45 +1253,15 @@ export class ChatService {
     if (!result) return null;
     const { hash, convEntry } = result;
 
-    const lines = [
-      `# ${convEntry.title}`,
-      ``,
-      `**Backend:** ${convEntry.backend}`,
-      ``,
-      `---`,
-      ``,
-    ];
+    const sessions: Array<{ session: SessionEntry; messages: Message[] }> = [];
 
     for (const session of convEntry.sessions) {
       const sessionFile = await this._readSessionFile(hash, convId, session.number);
       if (!sessionFile || !sessionFile.messages.length) continue;
-
-      const label = session.active ? `Session ${session.number} (current)` : `Session ${session.number}`;
-      lines.push(`## ${label}`);
-      lines.push(``);
-
-      for (const msg of sessionFile.messages) {
-        const role = msg.role === 'user' ? 'User' : 'Assistant';
-        const time = new Date(msg.timestamp).toLocaleString();
-        lines.push(`### ${role} — ${time}`);
-        if (msg.backend) lines.push(`*Backend: ${msg.backend}*`);
-        if (msg.streamError) {
-          lines.push(`*Stream error${msg.streamError.source ? ` (${msg.streamError.source})` : ''}: ${msg.streamError.message}*`);
-        }
-        lines.push(``);
-        lines.push(msg.content);
-        lines.push(``);
-      }
-
-      if (!session.active) {
-        lines.push(`---`);
-        lines.push(`*Session reset — ${new Date(session.endedAt!).toLocaleString()}*`);
-        lines.push(`---`);
-        lines.push(``);
-      }
+      sessions.push({ session, messages: sessionFile.messages });
     }
 
-    return lines.join('\n');
+    return renderConversationToMarkdown(convEntry.title, convEntry.backend, sessions);
   }
 
   // ── Workspace Instructions ──────────────────────────────────────────────────
@@ -1906,519 +1587,46 @@ export class ChatService {
   }
 
   private async _enableWorktreeIsolation(hash: string, index: WorkspaceIndex): Promise<void> {
-    if (index.worktreeIsolation?.enabled) return;
-    const settings = await this._worktreeIsolation.buildSettings(hash, index.workspacePath);
-    await this._worktreeIsolation.assertBaseReady(settings);
-    const now = new Date();
-    const created: ConversationCheckout[] = [];
-    const migrations: Array<{
-      convEntry: ConversationEntry;
-      checkout: ConversationCheckout;
-      branchName: string;
-    }> = [];
-    try {
-      for (const convEntry of index.conversations) {
-        const activeSession = convEntry.sessions.find((session) => session.active);
-        if (!activeSession) continue;
-        const newSessionNumber = activeSession.number + 1;
-        const branchName = this._sessionBranchName(convEntry.id, newSessionNumber);
-        const checkout = await this._worktreeIsolation.createConversationWorktree(settings, convEntry.id, branchName);
-        created.push(checkout);
-        migrations.push({ convEntry, checkout, branchName });
-      }
-
-      index.worktreeIsolation = settings;
-      for (const migration of migrations) {
-        migration.convEntry.checkout = migration.checkout;
-        await this._advanceConversationSession(hash, migration.convEntry, now, {
-          branchName: migration.branchName,
-          baseRef: settings.remoteBaseRef,
-        });
-      }
-      await this._writeWorkspaceIndex(hash, index);
-    } catch (err) {
-      for (const checkout of created.reverse()) {
-        try {
-          await this._worktreeIsolation.removeConversationWorktree(settings, checkout, { id: 'rollback', title: 'rollback' });
-        } catch {
-          // Best-effort cleanup; preserve the original enablement failure.
-        }
-      }
-      delete index.worktreeIsolation;
-      throw err;
-    }
+    await enableWorktreeIsolation({
+      worktreeIsolation: this._worktreeIsolation,
+      readSessionFile: (workspaceHash, convId, sessionNumber) => this._readSessionFile(workspaceHash, convId, sessionNumber),
+      writeSessionFile: (workspaceHash, convId, sessionNumber, data) => this._writeSessionFile(workspaceHash, convId, sessionNumber, data),
+      writeWorkspaceIndex: (workspaceHash, nextIndex) => this._writeWorkspaceIndex(workspaceHash, nextIndex),
+      newId: () => this._newId(),
+    }, hash, index);
   }
 
   private async _disableWorktreeIsolation(hash: string, index: WorkspaceIndex): Promise<void> {
-    const settings = index.worktreeIsolation;
-    if (!settings?.enabled) return;
-    const blockers: Array<{ code: string; message: string; conversationId?: string; path?: string; files?: string[] }> = [];
-    const baseDirty = await this._worktreeIsolation.changedFiles(settings.repoRoot);
-    if (baseDirty.length > 0) {
-      blockers.push({
-        code: 'base_dirty',
-        message: 'Base checkout has uncommitted changes',
-        path: settings.repoRoot,
-        files: baseDirty,
-      });
-    }
-
-    for (const convEntry of index.conversations) {
-      const checkout = normalizeCheckout(convEntry.checkout);
-      if (checkout.mode === 'worktree') {
-        if (!checkout.worktreeRoot || !fs.existsSync(checkout.worktreeRoot)) {
-          blockers.push({
-            code: 'worktree_missing',
-            message: 'Conversation worktree is missing',
-            conversationId: convEntry.id,
-            path: checkout.worktreeRoot,
-          });
-          continue;
-        }
-        const dirtyFiles = await this._worktreeIsolation.changedFiles(checkout.worktreeRoot);
-        if (dirtyFiles.length > 0) {
-          blockers.push({
-            code: 'worktree_dirty',
-            message: 'Conversation worktree has uncommitted changes',
-            conversationId: convEntry.id,
-            path: checkout.worktreeRoot,
-            files: dirtyFiles,
-          });
-        }
-      }
-    }
-    if (blockers.length > 0) {
-      throw new WorktreeIsolationError(
-        blockers.some((blocker) => blocker.code === 'worktree_dirty') ? 'worktree_dirty' : blockers[0].code,
-        'Cannot disable worktree mode until dirty or missing checkouts are resolved',
-        blockers,
-      );
-    }
-
-    const now = new Date();
-    for (const convEntry of index.conversations) {
-      const checkout = normalizeCheckout(convEntry.checkout);
-      if (checkout.mode === 'worktree') {
-        await this._worktreeIsolation.removeConversationWorktree(settings, checkout, convEntry);
-      }
-      delete convEntry.checkout;
-      await this._advanceConversationSession(hash, convEntry, now);
-    }
-    delete index.worktreeIsolation;
-    await this._writeWorkspaceIndex(hash, index);
+    await disableWorktreeIsolation({
+      worktreeIsolation: this._worktreeIsolation,
+      readSessionFile: (workspaceHash, convId, sessionNumber) => this._readSessionFile(workspaceHash, convId, sessionNumber),
+      writeSessionFile: (workspaceHash, convId, sessionNumber, data) => this._writeSessionFile(workspaceHash, convId, sessionNumber, data),
+      writeWorkspaceIndex: (workspaceHash, nextIndex) => this._writeWorkspaceIndex(workspaceHash, nextIndex),
+      newId: () => this._newId(),
+    }, hash, index);
   }
 
   // ── Workspace Memory ───────────────────────────────────────────────────────
   //
-  // Memory is stored per-workspace under `memory/` with this layout:
-  //
-  //   memory/
-  //     snapshot.json     — canonical parsed index (merged view of all files)
-  //     files/
-  //       claude/         — Claude Code native captures; wiped+rewritten on each capture
-  //       notes/          — memory_note MCP writes + post-session extractions; preserved across captures
-  //
-  // This split is what prevents a Claude Code re-capture from clobbering
-  // entries written by the MCP `memory_note` tool or by post-session
-  // extraction. `saveWorkspaceMemory()` only wipes `files/claude/`; the
-  // notes subtree is left untouched and merged back into the snapshot.
+  // Memory is stored per-workspace under `memory/`. ChatService keeps the
+  // public facade and backend-capture orchestration; WorkspaceMemoryService owns
+  // sidecar metadata, notes, snapshots, and lexical search.
 
-  private _memoryDir(hash: string): string {
-    return this._workspaceMemoryStore.memoryDir(hash);
-  }
-
-  private _memoryFilesDir(hash: string): string {
-    return this._workspaceMemoryStore.filesDir(hash);
-  }
-
-  private _memoryClaudeDir(hash: string): string {
-    return this._workspaceMemoryStore.claudeDir(hash);
-  }
-
-  private _memoryNotesDir(hash: string): string {
-    return this._workspaceMemoryStore.notesDir(hash);
-  }
-
-  private _emptyMemoryMetadataIndex(): MemoryMetadataIndex {
-    return {
-      version: 1,
-      updatedAt: new Date().toISOString(),
-      entries: {},
-    };
-  }
-
-  private _normalizeMemoryMetadata(
-    raw: unknown,
-    fallbackFilename: string,
-    fallbackSource: MemorySource,
-    now: string,
-  ): MemoryEntryMetadata {
-    const candidate = raw && typeof raw === 'object'
-      ? raw as Partial<MemoryEntryMetadata>
-      : {};
-    const filename = typeof candidate.filename === 'string' && candidate.filename
-      ? candidate.filename
-      : fallbackFilename;
-    const createdAt = typeof candidate.createdAt === 'string' && candidate.createdAt
-      ? candidate.createdAt
-      : now;
-    const updatedAt = typeof candidate.updatedAt === 'string' && candidate.updatedAt
-      ? candidate.updatedAt
-      : createdAt;
-    const confidence = typeof candidate.confidence === 'number' && Number.isFinite(candidate.confidence)
-      ? candidate.confidence
-      : undefined;
-    return {
-      entryId: typeof candidate.entryId === 'string' && candidate.entryId
-        ? candidate.entryId
-        : memoryEntryId(filename),
-      filename,
-      status: normalizeMemoryStatus(candidate.status),
-      scope: normalizeMemoryScope(candidate.scope),
-      source: normalizeMemorySource(candidate.source, fallbackSource),
-      createdAt,
-      updatedAt,
-      ...(typeof candidate.sourceConversationId === 'string' && candidate.sourceConversationId
-        ? { sourceConversationId: candidate.sourceConversationId }
-        : {}),
-      ...(normalizeStringArray(candidate.supersedes) ? { supersedes: normalizeStringArray(candidate.supersedes) } : {}),
-      ...(typeof candidate.supersededBy === 'string' && candidate.supersededBy
-        ? { supersededBy: candidate.supersededBy }
-        : {}),
-      ...(confidence !== undefined ? { confidence } : {}),
-      ...(normalizeMemoryRedaction(candidate.redaction) ? { redaction: normalizeMemoryRedaction(candidate.redaction) } : {}),
-    };
-  }
-
-  private async _readMemoryMetadataIndex(hash: string): Promise<MemoryMetadataIndex> {
-    const raw = await this._workspaceMemoryStore.readMetadataIndexFile(hash);
-    if (!raw) return this._emptyMemoryMetadataIndex();
-
-    const now = new Date().toISOString();
-    const entries: Record<string, MemoryEntryMetadata> = {};
-    const rawEntries = raw && typeof raw === 'object'
-      ? (raw as { entries?: unknown }).entries
-      : null;
-    if (rawEntries && typeof rawEntries === 'object') {
-      for (const [filename, entry] of Object.entries(rawEntries as Record<string, unknown>)) {
-        const normalized = this._normalizeMemoryMetadata(entry, filename, memorySourceFromFilename(filename), now);
-        entries[normalized.filename] = normalized;
-      }
-    }
-
-    return {
-      version: 1,
-      updatedAt: raw && typeof raw === 'object' && typeof (raw as { updatedAt?: unknown }).updatedAt === 'string'
-        ? (raw as { updatedAt: string }).updatedAt
-        : now,
-      entries,
-    };
-  }
-
-  private async _writeMemoryMetadataIndex(hash: string, index: MemoryMetadataIndex): Promise<void> {
-    await this._workspaceMemoryStore.writeMetadataIndex(hash, index);
-  }
-
-  private async _attachMemoryMetadata(
-    hash: string,
-    files: MemoryFile[],
-    persist: boolean,
-  ): Promise<MemoryFile[]> {
-    if (files.length === 0) {
-      if (persist) {
-        const existing = await this._readMemoryMetadataIndex(hash);
-        const deletedEntries = Object.fromEntries(
-          Object.entries(existing.entries).filter(([, entry]) => entry.status === 'deleted'),
-        );
-        await this._writeMemoryMetadataIndex(hash, {
-          version: 1,
-          updatedAt: new Date().toISOString(),
-          entries: deletedEntries,
-        });
-      }
-      return files;
-    }
-
-    const existing = await this._readMemoryMetadataIndex(hash);
-    const now = new Date().toISOString();
-    const entries: Record<string, MemoryEntryMetadata> = {};
-    for (const entry of Object.values(existing.entries)) {
-      if (entry.status === 'deleted') entries[entry.filename] = entry;
-    }
-
-    const enriched: MemoryFile[] = [];
-    for (const file of files) {
-      const source = normalizeMemorySource(file.source, 'cli-capture');
-      const previous = existing.entries[file.filename] || file.metadata;
-      const metadata = this._normalizeMemoryMetadata(previous, file.filename, source, now);
-      const nextMetadata: MemoryEntryMetadata = {
-        ...metadata,
-        filename: file.filename,
-        source,
-      };
-      if (nextMetadata.status === 'deleted') {
-        entries[file.filename] = nextMetadata;
-        continue;
-      }
-      entries[file.filename] = nextMetadata;
-      enriched.push({
-        ...file,
-        source,
-        metadata: nextMetadata,
-      });
-    }
-
-    if (persist) {
-      await this._writeMemoryMetadataIndex(hash, {
-        version: 1,
-        updatedAt: now,
-        entries,
-      });
-    }
-
-    return enriched;
-  }
-
-  /**
-   * Migrate legacy `memory/files/*.md` (flat layout from before this feature)
-   * into `memory/files/claude/*.md`.  Idempotent and silent if there's
-   * nothing to migrate.
-   */
-  private async _migrateLegacyMemoryLayout(hash: string): Promise<void> {
-    const filesDir = this._memoryFilesDir(hash);
-    let entries: string[];
-    try {
-      entries = await fsp.readdir(filesDir);
-    } catch {
-      return;
-    }
-    const loose = entries.filter((e) => e.endsWith('.md'));
-    if (loose.length === 0) return;
-
-    const claudeDir = this._memoryClaudeDir(hash);
-    await fsp.mkdir(claudeDir, { recursive: true });
-    for (const name of loose) {
-      const from = path.join(filesDir, name);
-      const to = path.join(claudeDir, name);
-      try {
-        await fsp.rename(from, to);
-      } catch (err: unknown) {
-        log.warn('Legacy memory migration could not move file', { from, to, error: err });
-      }
-    }
-    log.info('Migrated legacy memory files', { count: loose.length, destination: claudeDir });
-  }
-
-  /**
-   * Enumerate notes stored under `files/notes/` and return them as
-   * MemoryFile entries. Returns an empty array if the notes dir doesn't
-   * exist yet.
-   */
-  private async _readNotesFromDisk(hash: string): Promise<MemoryFile[]> {
-    const notesDir = this._memoryNotesDir(hash);
-    let names: string[];
-    try {
-      names = await fsp.readdir(notesDir);
-    } catch (err: unknown) {
-      if ((err as NodeJS.ErrnoException).code === 'ENOENT') return [];
-      throw err;
-    }
-    const files: MemoryFile[] = [];
-    for (const name of names.sort()) {
-      if (!name.endsWith('.md')) continue;
-      const full = path.join(notesDir, name);
-      let content: string;
-      try {
-        content = await fsp.readFile(full, 'utf8');
-      } catch (err: unknown) {
-        log.warn('Could not read memory note', { path: full, error: err });
-        continue;
-      }
-      const parsed = parseMemoryFrontmatter(content);
-      // Infer source from filename prefix if frontmatter didn't say.
-      let source: 'memory-note' | 'session-extraction' = 'memory-note';
-      if (name.startsWith('session_')) source = 'session-extraction';
-      files.push({
-        filename: `notes/${name}`,
-        name: parsed.name,
-        description: parsed.description,
-        type: parsed.type,
-        content,
-        source,
-      });
-    }
-    return files;
-  }
-
-  /**
-   * Persist a CLI-capture snapshot (e.g. from Claude Code) to the
-   * workspace's memory directory. Only the `files/claude/` subtree is
-   * wiped — any notes written via `memory_note` or post-session
-   * extraction in `files/notes/` are preserved and merged back into the
-   * canonical `snapshot.json`.
-   */
   async saveWorkspaceMemory(hash: string, snapshot: MemorySnapshot): Promise<void> {
-    const memDir = this._memoryDir(hash);
-    const filesDir = this._memoryFilesDir(hash);
-    const claudeDir = this._memoryClaudeDir(hash);
-
-    await fsp.mkdir(memDir, { recursive: true });
-    await fsp.mkdir(filesDir, { recursive: true });
-
-    // Migrate any legacy loose files before we touch things.
-    await this._migrateLegacyMemoryLayout(hash);
-
-    // Wipe ONLY the claude subdirectory — notes are preserved.
-    try {
-      await fsp.rm(claudeDir, { recursive: true, force: true });
-    } catch {
-      // ignore
-    }
-    await fsp.mkdir(claudeDir, { recursive: true });
-
-    if (snapshot.index) {
-      await fsp.writeFile(path.join(claudeDir, 'MEMORY.md'), snapshot.index, 'utf8');
-    }
-    const claudeFiles: MemoryFile[] = [];
-    for (const file of snapshot.files) {
-      // The adapter returns bare filenames; guard against path traversal
-      // and normalize them into `claude/<name>`.
-      const bareName = path.basename(file.filename);
-      if (!bareName || bareName === '.' || bareName === '..') continue;
-      await fsp.writeFile(path.join(claudeDir, bareName), file.content, 'utf8');
-      claudeFiles.push({
-        ...file,
-        filename: `claude/${bareName}`,
-        source: 'cli-capture',
-      });
-    }
-
-    // Merge preserved notes back into the snapshot.
-    const notes = await this._readNotesFromDisk(hash);
-
-    const mergedFiles = await this._attachMemoryMetadata(hash, [...claudeFiles, ...notes], true);
-    const merged: MemorySnapshot = {
-      ...snapshot,
-      files: mergedFiles,
-    };
-
-    await this._workspaceMemoryStore.writeSnapshot(hash, merged);
+    await this._workspaceMemoryService.saveWorkspaceMemory(this._workspaceIdForRef(hash), snapshot);
   }
 
-  /**
-   * Load the stored memory snapshot for a workspace, or `null` if none.
-   * Reconciles the on-disk snapshot with any notes that may have been
-   * written since the last CLI capture, so the caller always sees a
-   * fresh merged view.
-   */
   async getWorkspaceMemory(hash: string): Promise<MemorySnapshot | null> {
-    const snapshot = await this._workspaceMemoryStore.readSnapshot(hash);
-
-    // Even if there's no CLI-capture snapshot yet, notes alone can
-    // constitute a memory store (non-Claude workspace that only uses
-    // memory_note). Build a minimal snapshot in that case.
-    const notes = await this._readNotesFromDisk(hash);
-    if (!snapshot) {
-      if (notes.length === 0) return null;
-      const files = await this._attachMemoryMetadata(hash, notes, false);
-      return {
-        capturedAt: new Date().toISOString(),
-        sourceBackend: 'memory-note',
-        sourcePath: null,
-        index: '',
-        files,
-      };
-    }
-
-    // Rebuild: keep CLI-capture files as stored, but always re-read notes
-    // fresh from disk so post-snapshot writes are reflected.
-    const claudeFiles = (snapshot.files || []).filter(
-      (f) => (f.source || 'cli-capture') === 'cli-capture',
-    );
-    const files = await this._attachMemoryMetadata(hash, [...claudeFiles, ...notes], false);
-    return { ...snapshot, files };
+    return this._workspaceMemoryService.getWorkspaceMemory(this._workspaceIdForRef(hash));
   }
 
   async searchWorkspaceMemory(
     hash: string,
     options: MemorySearchOptions,
   ): Promise<MemorySearchResult[]> {
-    const query = typeof options.query === 'string' ? options.query.trim() : '';
-    const queryTerms = [...new Set(tokenizeMemorySearch(query))];
-    if (queryTerms.length === 0) return [];
-    const normalizedQuery = queryTerms.join(' ');
-
-    const limit = Number.isInteger(options.limit)
-      ? Math.max(1, Math.min(20, options.limit || 5))
-      : 5;
-    const allowedTypes: Set<MemoryType> | null = options.types && options.types.length
-      ? new Set(options.types)
-      : null;
-    const allowedStatuses = options.statuses && options.statuses.length
-      ? new Set(options.statuses)
-      : new Set<MemoryStatus>(['active', 'redacted']);
-
-    const snapshot = await this.getWorkspaceMemory(hash);
-    const files = (snapshot?.files || [])
-      .filter((file) => file.metadata)
-      .filter((file) => allowedStatuses.has(file.metadata!.status))
-      .filter((file) => !allowedTypes || allowedTypes.has(file.type));
-    if (files.length === 0) return [];
-
-    const docs = files.map((file) => {
-      const tokens = tokenizeMemorySearch(memorySearchText(file));
-      const counts = new Map<string, number>();
-      for (const token of tokens) {
-        counts.set(token, (counts.get(token) || 0) + 1);
-      }
-      return { file, tokens, counts };
-    });
-    const avgLen = docs.reduce((sum, doc) => sum + doc.tokens.length, 0) / Math.max(1, docs.length);
-    const k1 = 1.2;
-    const b = 0.75;
-
-    const scored = docs.map((doc) => {
-      let score = 0;
-      for (const term of queryTerms) {
-        const tf = doc.counts.get(term) || 0;
-        if (tf === 0) continue;
-        const df = docs.reduce((count, candidate) => count + (candidate.counts.has(term) ? 1 : 0), 0);
-        const idf = Math.log(1 + (docs.length - df + 0.5) / (df + 0.5));
-        const lenNorm = k1 * (1 - b + b * (doc.tokens.length / Math.max(1, avgLen)));
-        score += idf * ((tf * (k1 + 1)) / (tf + lenNorm));
-      }
-      score += memorySearchExactBoost(doc.file, normalizedQuery, queryTerms);
-      score += memorySearchTypeBoost(doc.file, queryTerms, allowedTypes);
-      return { ...doc, score, updatedAtMs: memorySearchTimestamp(doc.file) };
-    })
-      .filter((doc) => doc.score > 0)
-      .sort((a, b) => b.score - a.score || b.updatedAtMs - a.updatedAtMs || a.file.filename.localeCompare(b.file.filename))
-      .slice(0, limit);
-
-    return scored.map((doc) => {
-      const metadata = doc.file.metadata!;
-      return {
-        filename: doc.file.filename,
-        entryId: metadata.entryId,
-        name: doc.file.name,
-        description: doc.file.description,
-        type: doc.file.type,
-        source: normalizeMemorySource(doc.file.source, memorySourceFromFilename(doc.file.filename)),
-        status: metadata.status,
-        score: Math.round(doc.score * 1000) / 1000,
-        snippet: memorySearchSnippet(doc.file.content, queryTerms),
-        content: doc.file.content,
-        metadata,
-      };
-    });
+    return this._workspaceMemoryService.searchWorkspaceMemory(this._workspaceIdForRef(hash), options);
   }
 
-  /**
-   * Append a memory entry under `files/notes/`. Used by both the
-   * `memory_note` MCP tool and post-session extraction. Updates
-   * `snapshot.json` atomically so `getWorkspaceMemory()` reflects the
-   * write immediately. Returns the relative path (`notes/<name>`).
-   */
   async addMemoryNoteEntry(
     hash: string,
     args: {
@@ -2427,142 +1635,17 @@ export class ChatService {
       filenameHint?: string;
     },
   ): Promise<string> {
-    const notesDir = this._memoryNotesDir(hash);
-    await fsp.mkdir(notesDir, { recursive: true });
-
-    const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
-    const slugSource = args.filenameHint || 'note';
-    const slug = slugify(slugSource);
-    const prefix = args.source === 'session-extraction' ? 'session' : 'note';
-
-    // Pick a non-colliding filename.
-    let attempt = 0;
-    let name = `${prefix}_${timestamp}_${slug}.md`;
-    while (true) {
-      try {
-        await fsp.access(path.join(notesDir, name));
-        attempt++;
-        name = `${prefix}_${timestamp}_${slug}_${attempt}.md`;
-      } catch {
-        break;
-      }
-    }
-
-    await fsp.writeFile(path.join(notesDir, name), args.content, 'utf8');
-
-    // Rebuild snapshot.json so callers immediately see the new entry.
-    await this._refreshSnapshotIndex(hash);
-
-    return `notes/${name}`;
+    return this._workspaceMemoryService.addMemoryNoteEntry(this._workspaceIdForRef(hash), args);
   }
 
-  /**
-   * Replace an existing Agent Cockpit-owned note entry in place. Claude
-   * capture files are immutable from this path because the next native
-   * capture can rewrite that subtree.
-   */
   async replaceMemoryNoteEntry(hash: string, relPath: string, content: string): Promise<boolean> {
-    if (!relPath.startsWith('notes/')) {
-      throw new Error('Only notes entries can be replaced');
-    }
-    if (!relPath.endsWith('.md')) {
-      throw new Error('Only .md entries can be replaced');
-    }
-
-    const notesDir = this._memoryNotesDir(hash);
-    const resolved = path.resolve(this._memoryFilesDir(hash), relPath);
-    if (!resolved.startsWith(path.resolve(notesDir) + path.sep)) {
-      throw new Error('Path traversal rejected');
-    }
-
-    try {
-      await fsp.access(resolved);
-    } catch (err: unknown) {
-      if ((err as NodeJS.ErrnoException).code === 'ENOENT') return false;
-      throw err;
-    }
-
-    await atomicWriteFile(resolved, content);
-    await this._refreshSnapshotIndex(hash);
-    return true;
+    return this._workspaceMemoryService.replaceMemoryNoteEntry(this._workspaceIdForRef(hash), relPath, content);
   }
 
-  /**
-   * Restore a superseded entry to active state and remove its entry ID
-   * from replacement entries' `supersedes[]` lists.
-   */
   async restoreMemoryEntry(hash: string, relPath: string): Promise<MemoryEntryMetadata | null> {
-    const snapshot = await this.getWorkspaceMemory(hash);
-    if (!snapshot || !snapshot.files.length) return null;
-
-    const existing = await this._readMemoryMetadataIndex(hash);
-    const now = new Date().toISOString();
-    const entries: Record<string, MemoryEntryMetadata> = {};
-    for (const file of snapshot.files) {
-      const source = normalizeMemorySource(file.source, memorySourceFromFilename(file.filename));
-      const metadata = this._normalizeMemoryMetadata(
-        existing.entries[file.filename] || file.metadata,
-        file.filename,
-        source,
-        now,
-      );
-      entries[file.filename] = {
-        ...metadata,
-        filename: file.filename,
-        source,
-      };
-    }
-
-    const current = entries[relPath];
-    if (!current) return null;
-    if (current.status !== 'superseded') {
-      throw new Error('Only superseded memory entries can be restored');
-    }
-
-    const { supersededBy: _supersededBy, ...restoredBase } = current;
-    const restored = this._normalizeMemoryMetadata(
-      {
-        ...restoredBase,
-        status: 'active',
-        updatedAt: now,
-      },
-      current.filename,
-      current.source,
-      now,
-    );
-    entries[relPath] = restored;
-
-    for (const [filename, entry] of Object.entries(entries)) {
-      if (filename === relPath || !entry.supersedes?.includes(current.entryId)) continue;
-      const nextSupersedes = entry.supersedes.filter((entryId) => entryId !== current.entryId);
-      const { supersedes: _supersedes, ...entryBase } = entry;
-      entries[filename] = this._normalizeMemoryMetadata(
-        {
-          ...entryBase,
-          ...(nextSupersedes.length ? { supersedes: nextSupersedes } : {}),
-          updatedAt: now,
-        },
-        entry.filename,
-        entry.source,
-        now,
-      );
-    }
-
-    await this._writeMemoryMetadataIndex(hash, {
-      version: 1,
-      updatedAt: now,
-      entries,
-    });
-    await this._refreshSnapshotIndex(hash);
-
-    return restored;
+    return this._workspaceMemoryService.restoreMemoryEntry(this._workspaceIdForRef(hash), relPath);
   }
 
-  /**
-   * Patch Agent Cockpit-owned lifecycle metadata for existing memory files.
-   * The markdown files remain untouched; the sidecar and snapshot are
-   * reconciled so future reads expose the same metadata.
-   */
   async patchMemoryEntryMetadata(
     hash: string,
     updates: Array<{
@@ -2578,261 +1661,42 @@ export class ChatService {
       };
     }>,
   ): Promise<MemoryEntryMetadata[]> {
-    if (updates.length === 0) return [];
-
-    const snapshot = await this.getWorkspaceMemory(hash);
-    if (!snapshot || !snapshot.files.length) return [];
-
-    const existing = await this._readMemoryMetadataIndex(hash);
-    const now = new Date().toISOString();
-    const entries: Record<string, MemoryEntryMetadata> = {};
-    for (const file of snapshot.files) {
-      const source = normalizeMemorySource(file.source, memorySourceFromFilename(file.filename));
-      const metadata = this._normalizeMemoryMetadata(
-        existing.entries[file.filename] || file.metadata,
-        file.filename,
-        source,
-        now,
-      );
-      entries[file.filename] = {
-        ...metadata,
-        filename: file.filename,
-        source,
-      };
-    }
-
-    const patched: MemoryEntryMetadata[] = [];
-    for (const update of updates) {
-      const current = entries[update.filename];
-      if (!current) continue;
-      const next = this._normalizeMemoryMetadata(
-        {
-          ...current,
-          ...update.patch,
-          entryId: current.entryId,
-          filename: current.filename,
-          source: current.source,
-          createdAt: current.createdAt,
-          updatedAt: now,
-        },
-        current.filename,
-        current.source,
-        now,
-      );
-      entries[update.filename] = next;
-      patched.push(next);
-    }
-
-    if (patched.length === 0) return [];
-
-    await this._writeMemoryMetadataIndex(hash, {
-      version: 1,
-      updatedAt: now,
-      entries,
-    });
-    await this._refreshSnapshotIndex(hash);
-
-    return patched;
+    return this._workspaceMemoryService.patchMemoryEntryMetadata(this._workspaceIdForRef(hash), updates);
   }
 
-  /**
-   * Delete a single memory entry by its relative path (`claude/<name>`
-   * or `notes/<name>`). Path is validated to stay inside
-   * `files/`. Updates `snapshot.json` after deletion. Returns true if
-   * the file was deleted, false if it didn't exist.
-   */
   async deleteMemoryEntry(hash: string, relPath: string): Promise<boolean> {
-    const filesDir = this._memoryFilesDir(hash);
-    const resolved = path.resolve(filesDir, relPath);
-    if (!resolved.startsWith(path.resolve(filesDir) + path.sep)) {
-      throw new Error('Path traversal rejected');
-    }
-    if (!resolved.endsWith('.md')) {
-      throw new Error('Only .md entries can be deleted');
-    }
-    const existing = await this._readMemoryMetadataIndex(hash);
-    try {
-      await fsp.unlink(resolved);
-    } catch (err: unknown) {
-      if ((err as NodeJS.ErrnoException).code === 'ENOENT') return false;
-      throw err;
-    }
-
-    const now = new Date().toISOString();
-    const source = normalizeMemorySource(existing.entries[relPath]?.source, memorySourceFromFilename(relPath));
-    const entries = { ...existing.entries };
-    if (source === 'cli-capture') {
-      const deleted = this._normalizeMemoryMetadata(
-        {
-          ...existing.entries[relPath],
-          filename: relPath,
-          source,
-          status: 'deleted',
-          updatedAt: now,
-        },
-        relPath,
-        source,
-        now,
-      );
-      entries[relPath] = deleted;
-    } else {
-      delete entries[relPath];
-    }
-    await this._writeMemoryMetadataIndex(hash, {
-      version: 1,
-      updatedAt: now,
-      entries,
-    });
-
-    // Rebuild snapshot.json so the deletion is reflected.
-    await this._refreshSnapshotIndex(hash);
-    return true;
+    return this._workspaceMemoryService.deleteMemoryEntry(this._workspaceIdForRef(hash), relPath);
   }
 
-  /**
-   * Wipe all memory entries for a workspace. Removes every `.md` under
-   * `memory/files/claude/` and `memory/files/notes/`, then rewrites
-   * `snapshot.json` to reflect the empty state. Leaves the workspace's
-   * Memory-enabled flag untouched. Returns the number of files deleted.
-   */
   async clearWorkspaceMemory(hash: string): Promise<number> {
-    let deleted = 0;
-    for (const dir of [this._memoryClaudeDir(hash), this._memoryNotesDir(hash)]) {
-      let entries: string[];
-      try {
-        entries = await fsp.readdir(dir);
-      } catch (err: unknown) {
-        if ((err as NodeJS.ErrnoException).code === 'ENOENT') continue;
-        throw err;
-      }
-      for (const name of entries) {
-        if (!name.endsWith('.md')) continue;
-        try {
-          await fsp.unlink(path.join(dir, name));
-          deleted++;
-        } catch (err: unknown) {
-          if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err;
-        }
-      }
-    }
-
-    // Bulk clear is a complete reset, so it drops deleted tombstones too.
-    await this._writeMemoryMetadataIndex(hash, this._emptyMemoryMetadataIndex());
-
-    // Rebuild snapshot.json so getWorkspaceMemory() reflects the wipe
-    // immediately. Safe even if no prior snapshot existed.
-    await this._refreshSnapshotIndex(hash);
-    return deleted;
+    return this._workspaceMemoryService.clearWorkspaceMemory(this._workspaceIdForRef(hash));
   }
 
-  /**
-   * Persist a reviewable audit record for manual memory consolidation.
-   * Consolidation never deletes files; this file captures metadata-only
-   * supersession changes plus any advisory actions the user left unapplied.
-   */
   async saveMemoryConsolidationAudit(
     hash: string,
     audit: Omit<MemoryConsolidationAudit, 'version' | 'createdAt'> & { createdAt?: string },
   ): Promise<string> {
-    return this._workspaceMemoryStore.saveConsolidationAudit(hash, audit);
-  }
-
-  /**
-   * Rewrite `snapshot.json` from the current on-disk state without
-   * re-running capture. Used after note writes and deletions so
-   * `getWorkspaceMemory()` stays consistent.
-   */
-  private async _refreshSnapshotIndex(hash: string): Promise<void> {
-    let snapshot = await this._workspaceMemoryStore.readSnapshot(hash);
-    if (!snapshot) {
-      // No prior snapshot — synthesize a minimal one keyed on the notes.
-      snapshot = {
-        capturedAt: new Date().toISOString(),
-        sourceBackend: 'memory-note',
-        sourcePath: null,
-        index: '',
-        files: [],
-      };
-      await fsp.mkdir(this._memoryDir(hash), { recursive: true });
-    }
-
-    // Re-read the Claude subtree so deletions of claude/* also take effect.
-    const claudeDir = this._memoryClaudeDir(hash);
-    const claudeFiles: MemoryFile[] = [];
-    try {
-      const names = await fsp.readdir(claudeDir);
-      for (const name of names.sort()) {
-        if (!name.endsWith('.md') || name === 'MEMORY.md') continue;
-        const full = path.join(claudeDir, name);
-        const content = await fsp.readFile(full, 'utf8');
-        const parsed = parseMemoryFrontmatter(content);
-        claudeFiles.push({
-          filename: `claude/${name}`,
-          name: parsed.name,
-          description: parsed.description,
-          type: parsed.type,
-          content,
-          source: 'cli-capture',
-        });
-      }
-    } catch (err: unknown) {
-      if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err;
-    }
-
-    const notes = await this._readNotesFromDisk(hash);
-    const files = await this._attachMemoryMetadata(hash, [...claudeFiles, ...notes], true);
-    const next: MemorySnapshot = {
-      ...snapshot,
-      capturedAt: new Date().toISOString(),
-      files,
-    };
-    await this._workspaceMemoryStore.writeSnapshot(hash, next);
+    return this._workspaceMemoryService.saveMemoryConsolidationAudit(this._workspaceIdForRef(hash), audit);
   }
 
   /** Per-workspace Memory enable/disable (stored on the workspace index). */
   async getWorkspaceMemoryEnabled(hash: string): Promise<boolean> {
-    const workspaceId = this._workspaceIdForRef(hash);
-    const index = await this._readWorkspaceIndex(workspaceId);
-    if (!index) return false;
-    return Boolean(index.memoryEnabled);
+    return this._featureSettingsStore.getMemoryEnabled(this._workspaceIdForRef(hash));
   }
 
   async setWorkspaceMemoryEnabled(hash: string, enabled: boolean): Promise<boolean | null> {
-    const workspaceId = this._workspaceIdForRef(hash);
-    return this._indexLock.run(workspaceId, async () => {
-      const index = await this._readWorkspaceIndex(workspaceId);
-      if (!index) return null;
-      index.memoryEnabled = Boolean(enabled);
-      await this._writeWorkspaceIndex(workspaceId, index);
-      return index.memoryEnabled;
-    });
+    return this._featureSettingsStore.setMemoryEnabled(this._workspaceIdForRef(hash), enabled);
   }
 
   async listMemoryEnabledWorkspaceHashes(): Promise<string[]> {
-    let dirs: string[];
-    try {
-      dirs = await fsp.readdir(this.workspacesDir);
-    } catch (err: unknown) {
-      if ((err as NodeJS.ErrnoException).code === 'ENOENT') return [];
-      throw err;
-    }
-
-    const workspaceIds: string[] = [];
-    for (const storageKey of dirs) {
-      if (storageKey.startsWith('.')) continue;
-      const index = await this._readWorkspaceIndex(storageKey);
-      if (index?.memoryEnabled && !index.archive) {
-        workspaceIds.push(index.workspaceId || this._workspaceIdentityStore.resolveWorkspaceId(storageKey) || storageKey);
-      }
-    }
-    return workspaceIds;
+    return this._featureSettingsStore.listMemoryEnabledWorkspaceHashes();
   }
 
   /**
    * Capture memory from the given backend adapter for the workspace
-   * associated with `convId` and persist it.  Returns the snapshot or
+   * associated with `convId` and persist it. Returns the snapshot or
    * `null` if the backend doesn't support memory extraction or no
-   * memory exists.  Never throws — extraction failures are logged.
+   * memory exists. Never throws — extraction failures are logged.
    */
   async captureWorkspaceMemory(
     convId: string,
@@ -2920,21 +1784,7 @@ export class ChatService {
    * yet.
    */
   async getWorkspaceMemoryPointer(hash: string): Promise<string | null> {
-    if (!hash) return null;
-    const enabled = await this.getWorkspaceMemoryEnabled(hash);
-    if (!enabled) return null;
-    let filesDir = this._memoryFilesDir(hash);
-    try {
-      filesDir = await this._workspaceMemoryStore.ensureFilesDir(hash);
-    } catch (err: unknown) {
-      log.warn('Could not create workspace memory pointer directory', { path: filesDir, error: err });
-    }
-    const absPath = path.resolve(filesDir);
-    return [
-      `[Workspace memory is available at ${absPath}/`,
-      `Contains .md files with YAML frontmatter (type, name, description) followed by body text.`,
-      `Read these when the user references preferences, feedback, decisions, project context, or prior work style.]`,
-    ].join('\n');
+    return this._workspaceMemoryService.getWorkspaceMemoryPointer(this._workspaceIdForRef(hash));
   }
 
   // ── Workspace Knowledge Base ───────────────────────────────────────────────
@@ -3168,83 +2018,7 @@ export class ChatService {
   }
 
   async getWorkspaceContextStatus(hash: string): Promise<ConversationWorkspaceContextStatus> {
-    const enabled = await this.getWorkspaceContextEnabled(hash);
-    const contextDir = this.getWorkspaceContextDir(hash);
-    if (!enabled) {
-      return {
-        enabled: false,
-        pending: false,
-        runningRuns: 0,
-        failedRuns: 0,
-        contextDir,
-        fileCount: 0,
-      };
-    }
-
-    const state = await this.readWorkspaceContextState(hash);
-    const runs = state.runs || [];
-    const latest = state.lastRun || runs[0];
-    const failedRuns = runs.filter((run) => run.status === 'failed').length;
-    const runningRuns = runs.filter((run) => run.status === 'running').length;
-    const fileCount = await this.countWorkspaceContextFiles(hash);
-
-    return {
-      enabled: true,
-      pending: failedRuns + runningRuns > 0,
-      runningRuns,
-      failedRuns,
-      contextDir,
-      fileCount,
-      ...(latest ? {
-        latestRunId: latest.runId,
-        latestRunStatus: latest.status,
-        latestRunCreatedAt: latest.startedAt,
-        latestRunUpdatedAt: latest.completedAt || latest.startedAt,
-        latestRunSource: latest.source,
-        lastRunId: latest.runId,
-        lastRunStatus: latest.status,
-        lastRunCreatedAt: latest.startedAt,
-        lastRunUpdatedAt: latest.completedAt || latest.startedAt,
-        lastRunSource: latest.source,
-      } : {}),
-    };
-  }
-
-  private async readWorkspaceContextState(hash: string): Promise<{ lastRun?: ConversationWorkspaceContextStatusRun; runs: ConversationWorkspaceContextStatusRun[] }> {
-    try {
-      const state = JSON.parse(await fsp.readFile(path.join(this.getWorkspaceContextDir(hash), 'state.json'), 'utf8'));
-      return {
-        lastRun: normalizeWorkspaceContextStatusRun(state.lastRun),
-        runs: Array.isArray(state.runs) ? state.runs.map(normalizeWorkspaceContextStatusRun).filter(Boolean) : [],
-      };
-    } catch (err: unknown) {
-      if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
-        log.warn('Failed to read Workspace Context status state', { workspaceHash: hash, error: err });
-      }
-      return { runs: [] };
-    }
-  }
-
-  private async countWorkspaceContextFiles(hash: string): Promise<number> {
-    const root = path.join(this.getWorkspaceContextDir(hash), 'context');
-    let count = 0;
-    async function walk(dir: string): Promise<void> {
-      let entries: fs.Dirent[];
-      try {
-        entries = await fsp.readdir(dir, { withFileTypes: true });
-      } catch (err: unknown) {
-        if ((err as NodeJS.ErrnoException).code === 'ENOENT') return;
-        throw err;
-      }
-      for (const entry of entries) {
-        if (entry.name.startsWith('.')) continue;
-        const abs = path.join(dir, entry.name);
-        if (entry.isDirectory()) await walk(abs);
-        else if (entry.isFile() && entry.name.toLowerCase().endsWith('.md')) count += 1;
-      }
-    }
-    await walk(root);
-    return count;
+    return this._workspaceContextStatus.getStatus(this._workspaceIdForRef(hash));
   }
 
   /**
@@ -3271,119 +2045,17 @@ export class ChatService {
     if (!index) return null;
 
     if (!index.kbEnabled) {
-      return this._emptyKbSnapshot(Boolean(index.kbAutoDigest), index.kbAutoDream);
+      return this._kbStateSnapshot.emptySnapshot(Boolean(index.kbAutoDigest), index.kbAutoDream);
     }
 
     const db = this.getKbDb(hash);
-    if (!db) return this._emptyKbSnapshot(Boolean(index.kbAutoDigest), index.kbAutoDream);
+    if (!db) return this._kbStateSnapshot.emptySnapshot(Boolean(index.kbAutoDigest), index.kbAutoDream);
 
-    const folderPath = opts.folderPath !== undefined
-      ? normalizeFolderPath(opts.folderPath)
-      : '';
-
-    const sessionRow = db.getDigestSession();
-    const digestProgress = sessionRow ? computeDigestProgress(sessionRow) : null;
-    const synthesisSnapshot = db.getSynthesisSnapshot();
-    const counters = await this._withKbEmbeddingCounters(hash, db, index.kbEmbedding, db.getCounters());
-
-    return {
-      version: KB_STATE_VERSION,
-      entrySchemaVersion: KB_ENTRY_SCHEMA_VERSION,
+    return this._kbStateSnapshot.buildSnapshot(hash, db, opts, {
       autoDigest: Boolean(index.kbAutoDigest),
-      autoDream: normalizeKbAutoDreamConfig(index.kbAutoDream),
-      dreamingStatus: synthesisSnapshot.status,
-      dreamProgress: synthesisSnapshot.dreamProgress,
-      needsSynthesisCount: synthesisSnapshot.needsSynthesisCount,
-      counters,
-      folders: db.listFolders(),
-      raw: db.listRawInFolder(folderPath, {
-        limit: opts.limit,
-        offset: opts.offset,
-      }),
-      digestProgress,
-      updatedAt: new Date().toISOString(),
-    };
-  }
-
-  private async _withKbEmbeddingCounters(
-    hash: string,
-    db: KbDatabase,
-    cfg: EmbeddingConfig | undefined,
-    counters: KbCounters,
-  ): Promise<KbCounters> {
-    const enriched: KbCounters = {
-      ...counters,
-      embeddingConfigured: Boolean(cfg),
-      entryEmbeddedCount: null,
-      topicEmbeddedCount: null,
-      embeddingIndexError: null,
-    };
-    if (!cfg) return enriched;
-    try {
-      const resolved = resolveConfig(cfg);
-      const store = await this.getKbVectorStore(hash, resolved.dimensions);
-      if (!store) {
-        enriched.embeddingIndexError = 'Vector store unavailable';
-        return enriched;
-      }
-      const [embeddedEntryIds, embeddedTopicIds] = await Promise.all([
-        store.embeddedEntryIds(),
-        store.embeddedTopicIds(),
-      ]);
-      enriched.entryEmbeddedCount = db.listEntryIds().filter((entryId) => embeddedEntryIds.has(entryId)).length;
-      enriched.topicEmbeddedCount = db.listTopicIds().filter((topicId) => embeddedTopicIds.has(topicId)).length;
-    } catch (err: unknown) {
-      enriched.embeddingIndexError = (err as Error).message || 'Vector store unavailable';
-    }
-    return enriched;
-  }
-
-  /** Zero-value snapshot used when KB is disabled or not yet initialized. */
-  private _emptyKbSnapshot(autoDigest: boolean, autoDream?: KbAutoDreamConfig): KbState {
-    const zeroCounters: KbCounters = {
-      rawTotal: 0,
-      rawByStatus: {
-        ingesting: 0,
-        ingested: 0,
-        digesting: 0,
-        digested: 0,
-        failed: 0,
-        'pending-delete': 0,
-      },
-      failedByStage: {
-        conversion: 0,
-        digestion: 0,
-        unknown: 0,
-      },
-      entryCount: 0,
-      pendingCount: 0,
-      folderCount: 0,
-      documentCount: 0,
-      documentNodeCount: 0,
-      entrySourceCount: 0,
-      topicCount: 0,
-      connectionCount: 0,
-      reflectionCount: 0,
-      staleReflectionCount: 0,
-      embeddingConfigured: false,
-      entryEmbeddedCount: null,
-      topicEmbeddedCount: null,
-      embeddingIndexError: null,
-    };
-    return {
-      version: KB_STATE_VERSION,
-      entrySchemaVersion: KB_ENTRY_SCHEMA_VERSION,
-      autoDigest,
-      autoDream: normalizeKbAutoDreamConfig(autoDream),
-      dreamingStatus: 'idle',
-      dreamProgress: null,
-      needsSynthesisCount: 0,
-      counters: zeroCounters,
-      folders: [],
-      raw: [],
-      digestProgress: null,
-      updatedAt: new Date().toISOString(),
-    };
+      autoDream: index.kbAutoDream,
+      embedding: index.kbEmbedding,
+    });
   }
 
   /**
@@ -3445,204 +2117,6 @@ export class ChatService {
     }
 
     return results;
-  }
-
-  // ── Migration ──────────────────────────────────────────────────────────────
-
-  private async _migrateToWorkspaces(): Promise<void> {
-    let files: string[];
-    try {
-      files = await fsp.readdir(this._legacyConversationsDir);
-    } catch (err: unknown) {
-      if ((err as NodeJS.ErrnoException).code === 'ENOENT') return;
-      throw err;
-    }
-    files = files.filter(f => f.endsWith('.json'));
-    if (files.length === 0) {
-      await this._renameLegacyDirs();
-      return;
-    }
-
-    const workspaceGroups = new Map<string, { workspacePath: string; convs: LegacyConversation[] }>();
-
-    for (const f of files) {
-      const convId = f.replace('.json', '');
-      try {
-        const data = await fsp.readFile(path.join(this._legacyConversationsDir, f), 'utf8');
-        const conv = JSON.parse(data) as LegacyConversation;
-        const workspacePath = conv.workingDir || this._defaultWorkspace;
-        const hash = this._workspaceHash(workspacePath);
-
-        if (!workspaceGroups.has(hash)) {
-          workspaceGroups.set(hash, { workspacePath, convs: [] });
-        }
-        workspaceGroups.get(hash)!.convs.push(conv);
-      } catch (err: unknown) {
-        log.error('Failed to read legacy conversation during migration', { convId, error: err });
-      }
-    }
-
-    for (const [hash, group] of workspaceGroups) {
-      const index: WorkspaceIndex = {
-        workspaceId: this._newId(),
-        workspacePath: group.workspacePath,
-        conversations: [],
-      };
-
-      for (const conv of group.convs) {
-        const convId = conv.id;
-        const sessions: SessionEntry[] = [];
-
-        let oldArchiveIndex: { sessions: LegacyArchiveSession[] } = { sessions: [] };
-        try {
-          const archiveIndexPath = path.join(this._legacyArchivesDir, convId, 'index.json');
-          const data = await fsp.readFile(archiveIndexPath, 'utf8');
-          oldArchiveIndex = JSON.parse(data);
-        } catch {
-          // No archive
-        }
-
-        for (const oldSession of oldArchiveIndex.sessions) {
-          let sessionData: SessionFile;
-          try {
-            const oldPath = path.join(this._legacyArchivesDir, convId, `session-${oldSession.number}.json`);
-            const data = await fsp.readFile(oldPath, 'utf8');
-            sessionData = JSON.parse(data) as SessionFile;
-          } catch {
-            continue;
-          }
-
-          await this._writeSessionFile(hash, convId, oldSession.number, sessionData);
-
-          sessions.push({
-            number: oldSession.number,
-            sessionId: oldSession.sessionId || sessionData.sessionId || '',
-            summary: oldSession.summary || '(Migrated session)',
-            active: false,
-            messageCount: oldSession.messageCount || (sessionData.messages ? sessionData.messages.length : 0),
-            startedAt: oldSession.startedAt || sessionData.startedAt,
-            endedAt: oldSession.endedAt || sessionData.endedAt,
-          });
-        }
-
-        if (conv.sessions && conv.sessions.length > 0) {
-          const hasDividers = conv.messages.some(m => m.isSessionDivider);
-          if (hasDividers) {
-            const dividerIndices: number[] = [];
-            for (let i = 0; i < conv.messages.length; i++) {
-              if (conv.messages[i].isSessionDivider) dividerIndices.push(i);
-            }
-
-            for (const session of conv.sessions) {
-              if (!session.endedAt) continue;
-              if (sessions.some(s => s.number === session.number)) continue;
-
-              let start: number, end: number;
-              if (session.number === 1) {
-                start = 0;
-                end = dividerIndices.length > 0 ? dividerIndices[0] : conv.messages.length;
-              } else {
-                const divIdx = dividerIndices[session.number - 2];
-                if (divIdx === undefined) continue;
-                start = divIdx + 1;
-                const nextDiv = dividerIndices[session.number - 1];
-                end = nextDiv !== undefined ? nextDiv : conv.messages.length;
-              }
-
-              const sessionMessages = conv.messages.slice(start, end).filter(m => !m.isSessionDivider) as Message[];
-              const sessionData: SessionFile = {
-                sessionNumber: session.number,
-                sessionId: session.sessionId,
-                startedAt: session.startedAt,
-                endedAt: session.endedAt,
-                messages: sessionMessages,
-              };
-              await this._writeSessionFile(hash, convId, session.number, sessionData);
-
-              sessions.push({
-                number: session.number,
-                sessionId: session.sessionId || '',
-                summary: '(Migrated session)',
-                active: false,
-                messageCount: sessionMessages.length,
-                startedAt: session.startedAt,
-                endedAt: session.endedAt,
-              });
-            }
-          }
-        }
-
-        let currentMessages: Message[];
-        if (conv.sessions && conv.sessions.length > 0) {
-          const lastDividerIdx = conv.messages.reduce((acc: number, m: LegacyMessage, i: number) => m.isSessionDivider ? i : acc, -1);
-          currentMessages = lastDividerIdx >= 0
-            ? conv.messages.slice(lastDividerIdx + 1).filter(m => !m.isSessionDivider)
-            : conv.messages.filter(m => !m.isSessionDivider);
-        } else {
-          currentMessages = (conv.messages || []).filter(m => !m.isSessionDivider);
-        }
-
-        const sessionNumber = conv.sessionNumber || 1;
-        const currentSessionId = conv.currentSessionId || this._newId();
-
-        const currentStartedAt = currentMessages.length > 0
-          ? currentMessages[0].timestamp
-          : (conv.updatedAt || new Date().toISOString());
-        await this._writeSessionFile(hash, convId, sessionNumber, {
-          sessionNumber,
-          sessionId: currentSessionId,
-          startedAt: currentStartedAt,
-          endedAt: null,
-          messages: currentMessages,
-        });
-
-        sessions.push({
-          number: sessionNumber,
-          sessionId: currentSessionId,
-          summary: null,
-          active: true,
-          messageCount: currentMessages.length,
-          startedAt: currentStartedAt,
-          endedAt: null,
-        });
-
-        sessions.sort((a, b) => a.number - b.number);
-
-        const lastMsg = currentMessages.length > 0
-          ? currentMessages[currentMessages.length - 1].content.substring(0, 100)
-          : null;
-
-        index.conversations.push({
-          id: convId,
-          title: conv.title,
-          backend: conv.backend || 'claude-code',
-          currentSessionId,
-          lastActivity: conv.updatedAt || new Date().toISOString(),
-          lastMessage: lastMsg,
-          sessions,
-        });
-      }
-
-      await this._writeWorkspaceIndex(hash, index);
-    }
-
-    await this._renameLegacyDirs();
-    log.info('Migrated legacy conversations to workspace format', { count: files.length });
-  }
-
-  private async _renameLegacyDirs(): Promise<void> {
-    for (const [oldName, backupName] of [
-      [this._legacyConversationsDir, this._legacyConversationsDir + '_backup'],
-      [this._legacyArchivesDir, this._legacyArchivesDir + '_backup'],
-    ] as const) {
-      try {
-        if (fs.existsSync(oldName)) {
-          await fsp.rename(oldName, backupName);
-        }
-      } catch (err: unknown) {
-        log.error('Failed to rename legacy directory during migration', { path: oldName, backupPath: backupName, error: err });
-      }
-    }
   }
 
   // ── Usage Tracking ─────────────────────────────────────────────────────────
@@ -3758,38 +2232,4 @@ export class ChatService {
   async saveSettings(settings: Settings): Promise<Settings> {
     return this._settingsService.saveSettings(settings);
   }
-}
-
-// ── Legacy types for migration ───────────────────────────────────────────────
-
-interface LegacyMessage extends Message {
-  isSessionDivider?: boolean;
-}
-
-interface LegacySession {
-  number: number;
-  sessionId: string;
-  startedAt: string;
-  endedAt: string | null;
-}
-
-interface LegacyConversation {
-  id: string;
-  title: string;
-  backend: string;
-  workingDir?: string;
-  currentSessionId?: string;
-  sessionNumber?: number;
-  updatedAt?: string;
-  messages: LegacyMessage[];
-  sessions: LegacySession[];
-}
-
-interface LegacyArchiveSession {
-  number: number;
-  sessionId?: string;
-  summary?: string;
-  messageCount?: number;
-  startedAt: string;
-  endedAt: string | null;
 }

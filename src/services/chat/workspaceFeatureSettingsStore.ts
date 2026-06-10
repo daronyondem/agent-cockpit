@@ -133,6 +133,26 @@ export class WorkspaceFeatureSettingsStore {
     return this.listEnabledWorkspaceHashes((index) => Boolean(index.kbEnabled));
   }
 
+  async getMemoryEnabled(hash: string): Promise<boolean> {
+    const index = await this.readMigratedWorkspaceIndex(hash);
+    if (!index) return false;
+    return Boolean(index.memoryEnabled);
+  }
+
+  async setMemoryEnabled(hash: string, enabled: boolean): Promise<boolean | null> {
+    return this.deps.indexLock.run(hash, async () => {
+      const index = await this.readMigratedWorkspaceIndex(hash);
+      if (!index) return null;
+      index.memoryEnabled = Boolean(enabled);
+      await this.deps.writeWorkspaceIndex(hash, index);
+      return index.memoryEnabled;
+    });
+  }
+
+  async listMemoryEnabledWorkspaceHashes(): Promise<string[]> {
+    return this.listEnabledWorkspaceHashes((index) => Boolean(index.memoryEnabled));
+  }
+
   async getWorkspaceContextEnabled(hash: string): Promise<boolean> {
     const index = await this.readMigratedWorkspaceIndex(hash);
     if (!index) return false;
