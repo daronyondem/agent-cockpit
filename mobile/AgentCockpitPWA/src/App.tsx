@@ -1,39 +1,15 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { AgentAPIError, AgentCockpitAPI } from './api';
 import {
   ALL_WORKSPACES,
-  applyConversationRuntimeSelection,
   backendIdForProfile,
-  cleanGoalObjectiveText,
-  completedAttachmentMetas,
+  chooseResetProfileRepair,
   conversationListItemFromConversation,
-  downloadBlob,
-  goalActionUnsupportedMessage,
-  goalCapabilityForBackend,
-  goalSnapshotTimeMs,
-  goalSupportsAction,
-  isClaudeBackend,
-  joinExplorerPath,
-  isImageFileName,
-  isActiveGoal,
-  makeExplorerFileReference,
   modelDisplayLabel,
-  parentExplorerPath,
   patchConversationMessage,
-  reconcileEffort,
-  reconcileRecoveredSendConversation,
-  removeMessagesByID,
-  replaceMessageByID,
-  shouldApplyGoalSnapshot,
-  tryCreateWebSocket,
-  updateSessionsAfterReset,
   upsertMessage,
   userLabel,
-  wireContent,
   workspaceRef,
-  type ExplorerUpload,
-  type FilePreviewState,
-  type FileReference,
 } from './appModel';
 import {
   ActionsModal,
@@ -49,65 +25,39 @@ import {
   SessionsModal,
   type MarkdownShareScope,
 } from './mobileComponents';
-import { useVisibleIntervalRefresh, useVisibleStreamResume } from './useMobileLifecycle';
+import { useFilePreview } from './useFilePreview';
+import { useSessionHistory } from './useSessionHistory';
+import { useQueueEditor } from './useQueueEditor';
+import { usePendingAttachments } from './usePendingAttachments';
+import { useGoalState } from './useGoalState';
+import { useChatStreamConnection } from './useChatStreamConnection';
+import { useListStreamMonitor } from './useListStreamMonitor';
+import { useSendPipeline } from './useSendPipeline';
+import { useRunSelection } from './useRunSelection';
+import { useWorkspaceExplorer } from './useWorkspaceExplorer';
+import { useVisibleIntervalRefresh } from './useMobileLifecycle';
 import { useViewportHeightVar } from './useViewportHeightVar';
 import type {
-  AttachmentMeta,
   BackendMetadata,
-  ClaudeCodeMode,
   Conversation,
   ConversationListItem,
   CurrentUser,
-  EffortLevel,
-  ExplorerEntry,
-  ExplorerPreviewResponse,
   Message,
-  PendingAttachment,
   PendingInteraction,
-  QueuedMessage,
-  SessionHistoryItem,
-  ServiceTier,
   Settings,
-  StreamEvent,
   ThreadGoal,
 } from './types';
 
 const LIST_AUTO_REFRESH_MS = 15_000;
-const STREAM_RECONNECT_BASE_MS = 1_000;
-const STREAM_RECONNECT_MAX_MS = 15_000;
 
 type Screen = 'list' | 'chat';
-type SessionViewerState = { session: SessionHistoryItem; messages: Message[] };
-type SendMessageResult =
-  | { ok: true }
-  | { ok: false; reason: 'busy' | 'failed' | 'active-stream-recovered'; error?: unknown };
-
-function isAlreadyStreamingError(error: unknown): error is AgentAPIError {
-  return error instanceof AgentAPIError
-    && error.status === 409
-    && /conversation is already streaming/i.test(error.message);
-}
 
 export default function App() {
   useViewportHeightVar();
 
   const clientRef = useRef(new AgentCockpitAPI());
-  const socketRef = useRef<WebSocket | null>(null);
-  const listStreamSocketsRef = useRef<Map<string, WebSocket>>(new Map());
-  const streamReconnectTimerRef = useRef<number | null>(null);
-  const streamReconnectAttemptsRef = useRef(0);
   const activeConversationRef = useRef<Conversation | null>(null);
-  const isStreamingRef = useRef(false);
-  const sendInFlightRef = useRef(false);
-  const goalUpdatedAtByConversationRef = useRef<Map<string, number>>(new Map());
-  const goalStateRef = useRef<{ conversationID: string | null; goal: ThreadGoal | null; updatedAtMs: number | null }>({
-    conversationID: null,
-    goal: null,
-    updatedAtMs: null,
-  });
-  const resumeStreamConnectionRef = useRef<(conversationID: string, force?: boolean) => Promise<void> | void>(() => undefined);
-  const attachInputRef = useRef<HTMLInputElement | null>(null);
-  const explorerUploadInputRef = useRef<HTMLInputElement | null>(null);
+  const applyGoalSnapshotRef = useRef<(conversationID: string, nextGoal: ThreadGoal | null) => boolean>(() => false);
 
   const [screen, setScreen] = useState<Screen>('list');
   const [loading, setLoading] = useState(true);
@@ -115,30 +65,190 @@ export default function App() {
   const [currentUser, setCurrentUser] = useState<CurrentUser | null>(null);
   const [settings, setSettings] = useState<Settings | null>(null);
   const [backends, setBackends] = useState<BackendMetadata[]>([]);
-  const [profileMetadata, setProfileMetadata] = useState<Record<string, BackendMetadata>>({});
   const [conversations, setConversations] = useState<ConversationListItem[]>([]);
   const [activeStreamIDs, setActiveStreamIDs] = useState<Set<string>>(new Set());
-  const [activeGoalIDs, setActiveGoalIDs] = useState<Set<string>>(new Set());
   const [listArchived, setListArchived] = useState(false);
   const [workspaceFilter, setWorkspaceFilter] = useState(ALL_WORKSPACES);
   const [activeConversation, setActiveConversation] = useState<Conversation | null>(null);
-  const [goal, setGoal] = useState<ThreadGoal | null>(null);
-  const [goalUpdatedAtMs, setGoalUpdatedAtMs] = useState<number | null>(null);
-  const [goalMode, setGoalMode] = useState(false);
   const [draft, setDraft] = useState('');
-  const [streamText, setStreamText] = useState('');
-  const [showStreamPlaceholder, setShowStreamPlaceholder] = useState(false);
-  const [isStreaming, setIsStreaming] = useState(false);
-  const [isSending, setIsSending] = useState(false);
   const [pendingInteraction, setPendingInteraction] = useState<PendingInteraction | null>(null);
   const [interactionAnswer, setInteractionAnswer] = useState('');
-  const [pendingAttachments, setPendingAttachments] = useState<PendingAttachment[]>([]);
-  const [selectedCliProfileId, setSelectedCliProfileId] = useState<string | undefined>();
-  const [selectedBackend, setSelectedBackend] = useState<string | undefined>();
-  const [selectedModel, setSelectedModel] = useState<string | undefined>();
-  const [selectedEffort, setSelectedEffort] = useState<EffortLevel | undefined>();
-  const [selectedClaudeCodeMode, setSelectedClaudeCodeMode] = useState<ClaudeCodeMode | 'default' | undefined>();
-  const [selectedServiceTier, setSelectedServiceTier] = useState<ServiceTier | 'default' | undefined>();
+  const {
+    availableProfiles,
+    selectedProfile,
+    profileSelectionLocked,
+    profileMetadata,
+    selectedCliProfileId,
+    selectedBackend,
+    selectedModel,
+    selectedEffort,
+    selectedClaudeCodeMode,
+    selectedServiceTier,
+    selectedBackendMetadata,
+    selectedModelMetadata,
+    supportedEfforts,
+    selectedBackendID,
+    selectedGoalCapability,
+    goalCapable,
+    serviceTierEnabled,
+    claudeCodeModeEnabled,
+    claudeCodeModeForRequest,
+    claudeCodeModeForSelection,
+    setSelectedModel,
+    setSelectedEffort,
+    setSelectedClaudeCodeMode,
+    setSelectedServiceTier,
+    hydrateSelectionDefaults,
+    hydrateSelectionFromConversation,
+    chooseProfile,
+  } = useRunSelection({
+    activeConversation,
+    backends,
+    clientRef,
+    settings,
+    onError: handleError,
+  });
+  const {
+    attachInputRef,
+    pendingAttachments,
+    setPendingAttachments,
+    hasUploadingAttachments,
+    handleAttachmentFiles,
+    removePendingAttachment,
+    ocrPendingAttachment,
+  } = usePendingAttachments({
+    activeConversation,
+    activeConversationRef,
+    clientRef,
+    selectedBackend,
+    selectedCliProfileId,
+    setActiveConversation,
+    applyServerMessage,
+    appendToDraft,
+  });
+  const {
+    streamText,
+    setStreamText,
+    showStreamPlaceholder,
+    setShowStreamPlaceholder,
+    isStreaming,
+    setIsStreaming,
+    closeStreamSocket,
+    startStream,
+    clearStreamReconnectTimer,
+    recoverActiveStream,
+    markStreamFinished,
+  } = useChatStreamConnection({
+    activeConversationRef,
+    clientRef,
+    setActiveConversation,
+    setActiveStreamIDs,
+    setConversations,
+    setErrorMessage,
+    setPendingInteraction,
+    applyGoalSnapshot: (conversationID, nextGoal) => applyGoalSnapshotRef.current(conversationID, nextGoal),
+    refreshAfterStream,
+    notify,
+  });
+  const {
+    activeGoalIDs,
+    goal,
+    goalUpdatedAtMs,
+    goalMode,
+    setGoalMode,
+    clearOpenGoalState,
+    applyGoalSnapshot,
+    refreshGoalState,
+    setGoalNow,
+    pauseGoalNow,
+    resumeGoalNow,
+    clearGoalNow,
+  } = useGoalState({
+    activeConversation,
+    activeConversationRef,
+    backends,
+    clientRef,
+    profileMetadata,
+    selectedBackend,
+    selectedBackendID,
+    selectedCliProfileId,
+    selectedModel,
+    selectedEffort,
+    claudeCodeModeForRequest,
+    claudeCodeModeForSelection,
+    selectedServiceTier,
+    selectedGoalCapability,
+    goalCapable,
+    serviceTierEnabled,
+    isStreaming,
+    startStream,
+    setDraft,
+    setPendingAttachments,
+    setPendingInteraction,
+    setActiveConversation,
+    setErrorMessage,
+    applyServerMessage,
+    onError: handleError,
+  });
+  applyGoalSnapshotRef.current = applyGoalSnapshot;
+  const { closeListStreamSockets } = useListStreamMonitor({
+    activeStreamIDs,
+    clientRef,
+    enabled: screen === 'list',
+    setActiveStreamIDs,
+    setConversations,
+    applyGoalSnapshot,
+    refreshConversationList,
+    notify,
+  });
+  const {
+    isSending,
+    sendDraft,
+    drainNextQueuedMessage,
+    submitInteraction,
+  } = useSendPipeline({
+    activeConversation,
+    activeConversationRef,
+    clientRef,
+    draft,
+    setDraft,
+    pendingAttachments,
+    setPendingAttachments,
+    hasUploadingAttachments,
+    pendingInteraction,
+    setPendingInteraction,
+    interactionAnswer,
+    setInteractionAnswer,
+    loading,
+    goalMode,
+    setGoalMode,
+    goalCapable,
+    selectedGoalCapability,
+    selectedBackendID,
+    selectedBackend,
+    selectedCliProfileId,
+    selectedModel,
+    selectedEffort,
+    claudeCodeModeForRequest,
+    claudeCodeModeForSelection,
+    selectedServiceTier,
+    serviceTierEnabled,
+    isStreaming,
+    startStream,
+    markStreamFinished,
+    recoverActiveStream,
+    setStreamText,
+    setShowStreamPlaceholder,
+    setIsStreaming,
+    setActiveStreamIDs,
+    setActiveConversation,
+    setErrorMessage,
+    setGoalNow,
+    pauseGoalNow,
+    resumeGoalNow,
+    clearGoalNow,
+    onError: handleError,
+  });
 
   const [newConversationVisible, setNewConversationVisible] = useState(false);
   const [newTitle, setNewTitle] = useState('');
@@ -148,85 +258,80 @@ export default function App() {
   const [renameTitle, setRenameTitle] = useState('');
   const [settingsVisible, setSettingsVisible] = useState(false);
 
-  const [sessionsVisible, setSessionsVisible] = useState(false);
-  const [sessions, setSessions] = useState<SessionHistoryItem[]>([]);
-  const [sessionViewer, setSessionViewer] = useState<SessionViewerState | null>(null);
-
-  const [filesVisible, setFilesVisible] = useState(false);
-  const [explorerPath, setExplorerPath] = useState('');
-  const [explorerParent, setExplorerParent] = useState<string | null>(null);
-  const [explorerEntries, setExplorerEntries] = useState<ExplorerEntry[]>([]);
-  const [explorerPreview, setExplorerPreview] = useState<ExplorerPreviewResponse | null>(null);
-  const [explorerEditContent, setExplorerEditContent] = useState('');
-  const [explorerUploads, setExplorerUploads] = useState<ExplorerUpload[]>([]);
-
-  const [filePreview, setFilePreview] = useState<FilePreviewState | null>(null);
-  const [filePreviewLoading, setFilePreviewLoading] = useState(false);
-  const [queueEditorIndex, setQueueEditorIndex] = useState<number | null>(null);
-  const [queueEditorContent, setQueueEditorContent] = useState('');
-  const [queueEditorAttachments, setQueueEditorAttachments] = useState<AttachmentMeta[]>([]);
-
-  const availableProfiles = useMemo(() => (settings?.cliProfiles || []).filter((profile) => profile.disabled !== true), [settings]);
-  const selectedProfile = useMemo(
-    () => availableProfiles.find((profile) => profile.id === selectedCliProfileId),
-    [availableProfiles, selectedCliProfileId],
-  );
-  const profileSelectionLocked = (activeConversation?.messages.length || 0) > 0;
-  const selectedProfileBackendID = selectedProfile ? backendIdForProfile(selectedProfile) : undefined;
-  const selectedBackendMetadata = useMemo(() => {
-    if (selectedProfile) {
-      const profileBackendID = profileSelectionLocked ? selectedBackend : selectedProfileBackendID;
-      const providerMetadata = backends.find((backend) => backend.id === profileBackendID);
-      const selectedProfileMetadata = profileMetadata[selectedCliProfileId || ''];
-      if (providerMetadata && selectedProfileMetadata && providerMetadata.id !== selectedProfileMetadata.id) {
-        return {
-          ...providerMetadata,
-          models: selectedProfileMetadata.models || providerMetadata.models,
-        };
-      }
-      return selectedProfileMetadata || providerMetadata;
-    }
-    if (selectedCliProfileId && profileMetadata[selectedCliProfileId]) {
-      return profileMetadata[selectedCliProfileId];
-    }
-    return backends.find((backend) => backend.id === selectedBackend);
-  }, [backends, profileMetadata, profileSelectionLocked, selectedBackend, selectedCliProfileId, selectedProfile, selectedProfileBackendID]);
-  const selectedModelMetadata = useMemo(
-    () => selectedBackendMetadata?.models?.find((model) => model.id === selectedModel),
-    [selectedBackendMetadata, selectedModel],
-  );
-  const supportedEfforts = selectedModelMetadata?.supportedEffortLevels || [];
-  const selectedBackendID = selectedProfile
-    ? (profileSelectionLocked ? selectedBackend : selectedProfileBackendID)
-    : selectedBackendMetadata?.id || selectedBackend;
-  const selectedGoalCapability = useMemo(
-    () => goalCapabilityForBackend(backends, selectedBackendID, selectedBackendMetadata),
-    [backends, selectedBackendID, selectedBackendMetadata],
-  );
-  const goalCapable = selectedGoalCapability.set === true;
-  const serviceTierEnabled = selectedBackendID === 'codex';
-  const claudeCodeModeEnabled = isClaudeBackend(selectedBackendID) && supportedEfforts.includes('xhigh');
-  const claudeCodeModeForRequest: ClaudeCodeMode | null | undefined = claudeCodeModeEnabled
-    ? selectedClaudeCodeMode === 'ultracode'
-      ? 'ultracode'
-      : selectedClaudeCodeMode === 'default'
-        ? null
-        : undefined
-    : undefined;
-  const claudeCodeModeForSelection: ClaudeCodeMode | null | undefined = claudeCodeModeEnabled
-    ? selectedClaudeCodeMode === 'ultracode'
-      ? 'ultracode'
-      : selectedClaudeCodeMode === 'default'
-        ? null
-        : undefined
-    : undefined;
-  const hasUploadingAttachments = pendingAttachments.some((attachment) => attachment.status === 'uploading');
-
-  useEffect(() => {
-    if (!profileSelectionLocked && selectedProfileBackendID && selectedBackend !== selectedProfileBackendID) {
-      setSelectedBackend(selectedProfileBackendID);
-    }
-  }, [profileSelectionLocked, selectedBackend, selectedProfileBackendID]);
+  const {
+    filePreview,
+    filePreviewLoading,
+    openFileReference,
+    shareFileReference,
+    copyFilePreview,
+    closeFilePreview,
+  } = useFilePreview({ onError: handleError });
+  const {
+    sessionsVisible,
+    sessions,
+    sessionViewer,
+    openSessions,
+    viewSession,
+    applySessionReset,
+    closeSessions,
+    closeSessionSurfaces,
+    backToSessions,
+  } = useSessionHistory({
+    clientRef,
+    getActiveConversation: () => activeConversation,
+    onError: handleError,
+  });
+  const {
+    queueEditorIndex,
+    queueEditorContent,
+    queueEditorAttachments,
+    setQueueEditorContent,
+    removeQueueEditorAttachment,
+    removeQueuedMessage,
+    moveQueuedMessage,
+    openQueueEditor,
+    saveQueueEditor,
+    closeQueueEditor,
+    clearQueue,
+  } = useQueueEditor({
+    activeConversation,
+    clientRef,
+    setActiveConversation,
+    onError: handleError,
+  });
+  const {
+    filesVisible,
+    explorerPath,
+    explorerParent,
+    explorerEntries,
+    explorerPreview,
+    explorerEditContent,
+    explorerUploads,
+    explorerUploadInputRef,
+    setExplorerEditContent,
+    openFiles,
+    closeFiles,
+    loadParent,
+    refreshExplorer,
+    openExplorerEntry,
+    createExplorerFolder,
+    createExplorerFile,
+    uploadExplorerFiles,
+    renameExplorerEntry,
+    deleteExplorerEntry,
+    saveExplorerPreview,
+    renameExplorerPreview,
+    deleteExplorerPreview,
+    openExplorerPreviewFile,
+    shareExplorerPreviewFile,
+    clearOrCancelExplorerUpload,
+  } = useWorkspaceExplorer({
+    activeConversation,
+    clientRef,
+    onError: handleError,
+    openFileReference,
+    shareFileReference,
+  });
 
   useEffect(() => {
     void loadDashboard();
@@ -242,57 +347,12 @@ export default function App() {
   }, [activeConversation]);
 
   useEffect(() => {
-    isStreamingRef.current = isStreaming;
-  }, [isStreaming]);
-
-  useEffect(() => {
-    if (!goalCapable && goalMode) {
-      setGoalMode(false);
-    }
-  }, [goalCapable, goalMode]);
-
-  useEffect(() => {
-    if (!claudeCodeModeEnabled && selectedClaudeCodeMode) {
-      setSelectedClaudeCodeMode(undefined);
-    }
-  }, [claudeCodeModeEnabled, selectedClaudeCodeMode]);
-
-  useEffect(() => {
-    resumeStreamConnectionRef.current = resumeStreamConnection;
-  });
-
-  useVisibleStreamResume(() => {
-    const conversationID = activeConversationRef.current?.id;
-    if (conversationID && isStreamingRef.current) {
-      void resumeStreamConnectionRef.current(conversationID, true);
-    }
-  });
-
-  useEffect(() => {
     if (workspaceFilter !== ALL_WORKSPACES && conversations.every((conversation) => workspaceRef(conversation) !== workspaceFilter)) {
       setWorkspaceFilter(ALL_WORKSPACES);
     }
   }, [conversations, workspaceFilter]);
 
-  useEffect(() => {
-    if (screen !== 'list') {
-      closeListStreamSockets();
-      return;
-    }
-    syncListStreamSockets(activeStreamIDs);
-  }, [screen, activeStreamIDs]);
-
   useVisibleIntervalRefresh(screen === 'list', () => void refreshConversationList(), LIST_AUTO_REFRESH_MS);
-
-  useEffect(() => {
-    if (selectedCliProfileId) {
-      void loadProfileMetadata(selectedCliProfileId);
-    }
-  }, [selectedCliProfileId]);
-
-  useEffect(() => {
-    setSelectedEffort((current) => reconcileEffort(current, supportedEfforts));
-  }, [supportedEfforts.join('|')]);
 
   async function loadDashboard(archived = listArchived) {
     const client = clientRef.current;
@@ -320,34 +380,6 @@ export default function App() {
     }
   }
 
-  function hydrateSelectionDefaults(loadedSettings: Settings) {
-    const profiles = (loadedSettings.cliProfiles || []).filter((profile) => profile.disabled !== true);
-    const profileID = loadedSettings.defaultCliProfileId;
-    const profile = profiles.find((item) => item.id === profileID);
-    const backendID = loadedSettings.defaultBackend;
-    setSelectedCliProfileId(profileID);
-    setSelectedBackend(backendIdForProfile(profile) || backendID);
-    setSelectedModel(loadedSettings.defaultModel);
-    setSelectedEffort(loadedSettings.defaultEffort);
-    setSelectedClaudeCodeMode(undefined);
-    setSelectedServiceTier(loadedSettings.defaultBackend === 'codex' ? loadedSettings.defaultServiceTier : undefined);
-    if (profileID) {
-      void loadProfileMetadata(profileID);
-    }
-  }
-
-  async function loadProfileMetadata(profileID: string) {
-    if (profileMetadata[profileID]) {
-      return;
-    }
-    try {
-      const metadata = await clientRef.current.getCliProfileMetadata(profileID);
-      setProfileMetadata((current) => ({ ...current, [profileID]: metadata }));
-    } catch (error) {
-      handleError(error);
-    }
-  }
-
   async function refreshConversationList() {
     try {
       const [streamIDs, loadedConversations] = await Promise.all([
@@ -359,54 +391,6 @@ export default function App() {
     } catch (error) {
       handleError(error);
     }
-  }
-
-  function clearOpenGoalState(conversationID: string | null = activeConversationRef.current?.id || null) {
-    goalStateRef.current = { conversationID, goal: null, updatedAtMs: null };
-    setGoal(null);
-    setGoalUpdatedAtMs(null);
-  }
-
-  function commitGoalSnapshot(conversationID: string, nextGoal: ThreadGoal | null, timestampMs: number | null) {
-    if (timestampMs) {
-      goalUpdatedAtByConversationRef.current.set(conversationID, timestampMs);
-    } else {
-      goalUpdatedAtByConversationRef.current.delete(conversationID);
-    }
-
-    setActiveGoalIDs((current) => {
-      const next = new Set(current);
-      if (isActiveGoal(nextGoal)) next.add(conversationID);
-      else next.delete(conversationID);
-      return next;
-    });
-
-    if (activeConversationRef.current?.id === conversationID) {
-      goalStateRef.current = {
-        conversationID,
-        goal: nextGoal,
-        updatedAtMs: timestampMs,
-      };
-      setGoal(nextGoal);
-      setGoalUpdatedAtMs(timestampMs);
-    }
-  }
-
-  function applyGoalSnapshot(conversationID: string, nextGoal: ThreadGoal | null): boolean {
-    const currentTimestamp = goalUpdatedAtByConversationRef.current.get(conversationID) || null;
-    if (!shouldApplyGoalSnapshot(currentTimestamp, nextGoal)) {
-      return false;
-    }
-
-    const nextTimestamp = nextGoal ? goalSnapshotTimeMs(nextGoal) || currentTimestamp : Date.now();
-    commitGoalSnapshot(conversationID, nextGoal, nextTimestamp || null);
-    return true;
-  }
-
-  function shouldPreserveLocalRuntimeGoalOnNull(conversationID: string): boolean {
-    if (goalStateRef.current.conversationID !== conversationID) return false;
-    const currentGoal = goalStateRef.current.goal;
-    return !!currentGoal && currentGoal.status === 'active' && currentGoal.source === 'runtime';
   }
 
   function applyServerMessage(conversationID: string, message: Message | null | undefined) {
@@ -425,36 +409,6 @@ export default function App() {
           : item,
       ),
     );
-  }
-
-  async function refreshGoalState(conversationID = activeConversationRef.current?.id) {
-    const conversation = activeConversationRef.current;
-    if (!conversationID || !conversation || conversation.id !== conversationID) {
-      return null;
-    }
-    const conversationGoalCapability = goalCapabilityForBackend(
-      backends,
-      conversation.backend,
-      conversation.cliProfileId ? profileMetadata[conversation.cliProfileId] : undefined,
-    );
-    if (conversationGoalCapability.status === 'none') {
-      applyGoalSnapshot(conversationID, null);
-      return null;
-    }
-    if (!conversation.externalSessionId && conversation.backend === 'codex') {
-      if (!goalStateRef.current.goal) applyGoalSnapshot(conversationID, null);
-      return goalStateRef.current.goal;
-    }
-    try {
-      const response = await clientRef.current.getGoal(conversationID);
-      if (!response.goal && shouldPreserveLocalRuntimeGoalOnNull(conversationID)) {
-        return goalStateRef.current.goal;
-      }
-      applyGoalSnapshot(conversationID, response.goal || null);
-      return response.goal || null;
-    } catch {
-      return null;
-    }
   }
 
   async function openConversation(id: string) {
@@ -479,7 +433,6 @@ export default function App() {
       setGoalMode(false);
       hydrateSelectionFromConversation(conversation);
       setIsStreaming(streamActive);
-      isStreamingRef.current = streamActive;
       setScreen('chat');
       clearOpenGoalState(id);
       void refreshGoalState(id);
@@ -491,15 +444,6 @@ export default function App() {
     } finally {
       setLoading(false);
     }
-  }
-
-  function hydrateSelectionFromConversation(conversation: Conversation) {
-    setSelectedCliProfileId(conversation.cliProfileId || settings?.defaultCliProfileId);
-    setSelectedBackend(conversation.backend || settings?.defaultBackend);
-    setSelectedModel(conversation.model || settings?.defaultModel);
-    setSelectedEffort(conversation.effort || settings?.defaultEffort);
-    setSelectedClaudeCodeMode(conversation.claudeCodeMode || undefined);
-    setSelectedServiceTier(conversation.backend === 'codex' ? (conversation.serviceTier || 'default') : undefined);
   }
 
   async function createConversation() {
@@ -529,725 +473,6 @@ export default function App() {
     }
   }
 
-  async function sendDraft() {
-    if (sendInFlightRef.current) {
-      return;
-    }
-    const content = draft.trim();
-    const attachments = completedAttachmentMetas(pendingAttachments);
-    if (pendingInteraction) {
-      setErrorMessage('Answer the prompt above to continue.');
-      return;
-    }
-    if (hasUploadingAttachments) {
-      return;
-    }
-    if (handleGoalSlash(content, attachments)) {
-      return;
-    }
-    if (!content && !attachments.length) {
-      return;
-    }
-    if (goalMode) {
-      if (isStreaming) {
-        setErrorMessage('Wait for the current stream to finish before setting a goal.');
-        return;
-      }
-      await setGoalNow({ content, attachments: attachments.length ? attachments : undefined });
-      return;
-    }
-    if (isStreaming) {
-      await enqueueDraft();
-      return;
-    }
-    await sendMessageNow({ content, attachments: attachments.length ? attachments : undefined });
-  }
-
-  function handleGoalSlash(content: string, attachments: AttachmentMeta[]): boolean {
-    if (!content || !/^\/goal(?:\s|$)/i.test(content)) {
-      return false;
-    }
-    if (!goalCapable) {
-      setErrorMessage('Goals are not available for this backend.');
-      return true;
-    }
-    const arg = content.replace(/^\/goal\b/i, '').trim();
-    if (!arg) {
-      setDraft('');
-      setGoalMode(true);
-      setErrorMessage(null);
-      return true;
-    }
-    const command = arg.toLowerCase();
-    setDraft('');
-    if (command === 'pause') {
-      if (!selectedGoalCapability.pause) {
-        setErrorMessage(goalActionUnsupportedMessage('pause', selectedBackendID));
-        return true;
-      }
-      void pauseGoalNow();
-      return true;
-    }
-    if (command === 'resume') {
-      if (!selectedGoalCapability.resume) {
-        setErrorMessage(goalActionUnsupportedMessage('resume', selectedBackendID));
-        return true;
-      }
-      void resumeGoalNow();
-      return true;
-    }
-    if (command === 'clear') {
-      if (!selectedGoalCapability.clear) {
-        setErrorMessage(goalActionUnsupportedMessage('clear', selectedBackendID));
-        return true;
-      }
-      void clearGoalNow();
-      return true;
-    }
-    if (isStreaming) {
-      setErrorMessage('Wait for the current stream to finish before setting a goal.');
-      return true;
-    }
-    void setGoalNow({ content: arg, attachments: attachments.length ? attachments : undefined });
-    return true;
-  }
-
-  async function sendMessageNow(
-    message: QueuedMessage,
-    options: { clearComposer?: boolean; restoreDraftOnFailure?: boolean } = {},
-  ): Promise<SendMessageResult> {
-    const conversation = activeConversation;
-    if (!conversation) {
-      return { ok: false, reason: 'busy' };
-    }
-    if (sendInFlightRef.current) {
-      return { ok: false, reason: 'busy' };
-    }
-    sendInFlightRef.current = true;
-    setIsSending(true);
-    const content = wireContent(message);
-    const attachmentsSnapshot = pendingAttachments;
-    const clearComposer = options.clearComposer !== false;
-    const restoreDraftOnFailure = options.restoreDraftOnFailure !== false;
-    const runtimeSelection = {
-      backend: selectedBackendID || selectedBackend || conversation.backend || '',
-      cliProfileId: selectedCliProfileId,
-      model: selectedModel,
-      effort: selectedEffort,
-      claudeCodeMode: claudeCodeModeForSelection,
-      serviceTier: serviceTierEnabled ? selectedServiceTier : undefined,
-    };
-    const optimisticID = `${Date.now()}-${Math.random().toString(16).slice(2, 8)}`;
-    const optimisticUserID = `pending-user-${optimisticID}`;
-    const optimisticUserMessage: Message = {
-      id: optimisticUserID,
-      role: 'user',
-      content,
-      backend: runtimeSelection.backend || '',
-      timestamp: new Date().toISOString(),
-    };
-    try {
-      if (clearComposer) {
-        setDraft('');
-        setPendingAttachments([]);
-      }
-      setErrorMessage(null);
-      setPendingInteraction(null);
-      setStreamText('');
-      setShowStreamPlaceholder(true);
-      setIsStreaming(true);
-      isStreamingRef.current = true;
-      setActiveStreamIDs((current) => new Set(current).add(conversation.id));
-      setActiveConversation((current) => {
-        if (!current || current.id !== conversation.id) return current;
-        const next = applyConversationRuntimeSelection(
-          { ...current, messages: [...current.messages, optimisticUserMessage] },
-          runtimeSelection,
-        );
-        activeConversationRef.current = next;
-        return next;
-      });
-      const response = await clientRef.current.sendMessage(conversation.id, {
-        content,
-        backend: selectedBackend,
-        cliProfileId: selectedCliProfileId,
-        model: selectedModel,
-        effort: selectedEffort,
-        claudeCodeMode: claudeCodeModeForRequest,
-        serviceTier: serviceTierEnabled ? selectedServiceTier : undefined,
-      });
-      setActiveConversation((current) => {
-        if (!current || current.id !== conversation.id) return current;
-        const next = applyConversationRuntimeSelection(
-          { ...current, messages: replaceMessageByID(current.messages, optimisticUserID, response.userMessage) },
-          runtimeSelection,
-        );
-        activeConversationRef.current = next;
-        return next;
-      });
-      if (response.streamReady) {
-        startStream(conversation.id);
-      } else {
-        markStreamFinished(conversation.id);
-      }
-      return { ok: true };
-    } catch (error) {
-      if (isAlreadyStreamingError(error)) {
-        rollbackOptimisticSend(conversation, optimisticUserID, message, attachmentsSnapshot, restoreDraftOnFailure);
-        await recoverActiveStream(conversation.id);
-        return { ok: false, reason: 'active-stream-recovered', error };
-      }
-      if (await recoverActiveStream(conversation.id, { onlyIfServerActive: true })) {
-        await reconcileRecoveredActiveSend(conversation.id, conversation.messages.length, content);
-        return { ok: true };
-      }
-      rollbackOptimisticSend(conversation, optimisticUserID, message, attachmentsSnapshot, restoreDraftOnFailure);
-      markStreamFinished(conversation.id);
-      handleError(error);
-      return { ok: false, reason: 'failed', error };
-    } finally {
-      sendInFlightRef.current = false;
-      setIsSending(false);
-    }
-  }
-
-  function rollbackOptimisticSend(
-    conversation: Conversation,
-    optimisticUserID: string,
-    message: QueuedMessage,
-    attachmentsSnapshot: PendingAttachment[],
-    restoreDraftOnFailure: boolean,
-  ) {
-    if (restoreDraftOnFailure) {
-      setDraft(message.content);
-      setPendingAttachments(attachmentsSnapshot);
-    }
-    setActiveConversation((current) => {
-      if (!current || current.id !== conversation.id) return current;
-      const next = {
-        ...current,
-        backend: conversation.backend,
-        cliProfileId: conversation.cliProfileId,
-        model: conversation.model,
-        effort: conversation.effort,
-        serviceTier: conversation.serviceTier,
-        messages: removeMessagesByID(current.messages, [optimisticUserID]),
-      };
-      activeConversationRef.current = next;
-      return next;
-    });
-  }
-
-  async function reconcileRecoveredActiveSend(
-    conversationID: string,
-    previousMessageCount: number,
-    content: string,
-  ) {
-    try {
-      const serverConversation = await clientRef.current.getConversation(conversationID);
-      setActiveConversation((current) => {
-        if (!current || current.id !== conversationID) return current;
-        const next = reconcileRecoveredSendConversation(
-          current,
-          serverConversation,
-          previousMessageCount,
-          content,
-        );
-        activeConversationRef.current = next;
-        return next;
-      });
-    } catch {
-      // Keep the optimistic user bubble visible until the post-stream refresh.
-    }
-  }
-
-  async function setGoalNow(message: QueuedMessage) {
-    const conversation = activeConversation;
-    if (!conversation) {
-      return;
-    }
-    if (!goalCapable) {
-      setErrorMessage('Goals are not available for this backend.');
-      return;
-    }
-    const objective = cleanGoalObjectiveText(wireContent(message));
-    if (!objective) {
-      return;
-    }
-    const previousGoal = goalStateRef.current.conversationID === conversation.id ? goalStateRef.current.goal : null;
-    const previousGoalUpdatedAtMs = goalStateRef.current.conversationID === conversation.id ? goalStateRef.current.updatedAtMs : null;
-    const goalStartedAtMs = Date.now();
-    const runtimeSelection = {
-      backend: selectedBackendID || selectedBackend || conversation.backend || '',
-      cliProfileId: selectedCliProfileId,
-      model: selectedModel,
-      effort: selectedEffort,
-      claudeCodeMode: claudeCodeModeForSelection,
-      serviceTier: serviceTierEnabled ? selectedServiceTier : undefined,
-    };
-    const optimisticBackend = selectedBackendID === 'codex' || isClaudeBackend(selectedBackendID)
-      ? selectedBackendID as ThreadGoal['backend']
-      : undefined;
-    const optimisticGoal: ThreadGoal = {
-      backend: optimisticBackend,
-      objective,
-      status: 'active',
-      supportedActions: {
-        clear: true,
-        stopTurn: true,
-        pause: selectedGoalCapability.pause,
-        resume: selectedGoalCapability.resume,
-      },
-      tokenBudget: null,
-      tokensUsed: null,
-      timeUsedSeconds: 0,
-      createdAt: goalStartedAtMs,
-      updatedAt: goalStartedAtMs,
-      source: 'runtime',
-    };
-    try {
-      setDraft('');
-      setPendingAttachments([]);
-      setPendingInteraction(null);
-      commitGoalSnapshot(conversation.id, optimisticGoal, goalStartedAtMs);
-      const response = await clientRef.current.setGoal(conversation.id, {
-        objective,
-        backend: selectedBackend,
-        cliProfileId: selectedCliProfileId,
-        model: selectedModel,
-        effort: selectedEffort,
-        claudeCodeMode: claudeCodeModeForRequest,
-        serviceTier: serviceTierEnabled ? selectedServiceTier : undefined,
-      });
-      if (response.goal) applyGoalSnapshot(conversation.id, response.goal);
-      applyServerMessage(conversation.id, response.message);
-      setGoalMode(false);
-      setActiveConversation((current) => {
-        if (!current || current.id !== conversation.id) return current;
-        const next = applyConversationRuntimeSelection(current, runtimeSelection);
-        activeConversationRef.current = next;
-        return next;
-      });
-      if (response.streamReady !== false) {
-        startStream(conversation.id);
-      }
-    } catch (error) {
-      setDraft(message.content);
-      commitGoalSnapshot(conversation.id, previousGoal, previousGoalUpdatedAtMs);
-      if (error instanceof AgentAPIError && error.status === 409) {
-        startStream(conversation.id);
-        return;
-      }
-      handleError(error);
-    }
-  }
-
-  async function pauseGoalNow() {
-    const conversation = activeConversation;
-    if (!conversation || !goal) {
-      return;
-    }
-    if (!goalSupportsAction(goal, 'pause')) {
-      setErrorMessage(goalActionUnsupportedMessage('pause', goal.backend || conversation.backend));
-      return;
-    }
-    try {
-      const response = await clientRef.current.pauseGoal(conversation.id);
-      applyGoalSnapshot(conversation.id, response.goal || null);
-      applyServerMessage(conversation.id, response.message);
-    } catch (error) {
-      handleError(error);
-    }
-  }
-
-  async function resumeGoalNow() {
-    const conversation = activeConversation;
-    if (!conversation || !goal || isStreaming) {
-      return;
-    }
-    if (!goalSupportsAction(goal, 'resume')) {
-      setErrorMessage(goalActionUnsupportedMessage('resume', goal.backend || conversation.backend));
-      return;
-    }
-    const previousGoal = goal;
-    commitGoalSnapshot(conversation.id, { ...goal, status: 'active', updatedAt: Date.now() }, goalSnapshotTimeMs(goal) || Date.now());
-    try {
-      const response = await clientRef.current.resumeGoal(conversation.id);
-      if (response.goal) applyGoalSnapshot(conversation.id, response.goal);
-      applyServerMessage(conversation.id, response.message);
-      if (response.streamReady !== false) {
-        startStream(conversation.id);
-      }
-    } catch (error) {
-      commitGoalSnapshot(conversation.id, previousGoal, Date.now());
-      if (error instanceof AgentAPIError && error.status === 409) {
-        startStream(conversation.id);
-        return;
-      }
-      handleError(error);
-    }
-  }
-
-  async function clearGoalNow() {
-    const conversation = activeConversation;
-    if (!conversation || !goal) {
-      return;
-    }
-    if (!goalSupportsAction(goal, 'clear')) {
-      setErrorMessage(goalActionUnsupportedMessage('clear', goal.backend || conversation.backend));
-      return;
-    }
-    if (isClaudeBackend(goal.backend) && isStreaming) {
-      setErrorMessage('Wait for the current stream to finish before clearing this Claude Code goal.');
-      return;
-    }
-    const previousGoal = goal;
-    applyGoalSnapshot(conversation.id, null);
-    try {
-      const response = await clientRef.current.clearGoal(conversation.id);
-      applyServerMessage(conversation.id, response.message);
-    } catch (error) {
-      commitGoalSnapshot(conversation.id, previousGoal, Date.now());
-      handleError(error);
-    }
-  }
-
-  async function enqueueDraft() {
-    const conversation = activeConversation;
-    const content = draft.trim();
-    const attachments = completedAttachmentMetas(pendingAttachments);
-    if (!conversation || (!content && !attachments.length)) {
-      return;
-    }
-    try {
-      const queue = [...(conversation.messageQueue || []), { content, attachments: attachments.length ? attachments : undefined }];
-      const saved = await clientRef.current.saveQueue(conversation.id, queue);
-      setActiveConversation({ ...conversation, messageQueue: saved });
-      setDraft('');
-      setPendingAttachments([]);
-    } catch (error) {
-      handleError(error);
-    }
-  }
-
-  function setActiveConversationQueue(conversationID: string, queue: QueuedMessage[]) {
-    setActiveConversation((current) => {
-      if (!current || current.id !== conversationID) return current;
-      const next = { ...current, messageQueue: queue };
-      activeConversationRef.current = next;
-      return next;
-    });
-  }
-
-  function closeStreamSocket() {
-    const socket = socketRef.current;
-    socketRef.current = null;
-    socket?.close();
-  }
-
-  function startStream(conversationID: string) {
-    closeStreamSocket();
-    setShowStreamPlaceholder(true);
-    setIsStreaming(true);
-    isStreamingRef.current = true;
-    setActiveStreamIDs((current) => new Set(current).add(conversationID));
-    const socket = tryCreateWebSocket(clientRef.current.websocketURL(conversationID));
-    if (!socket) {
-      scheduleStreamReconnect(conversationID);
-      return;
-    }
-    socketRef.current = socket;
-    socket.onopen = () => {
-      clearStreamReconnectTimer();
-      streamReconnectAttemptsRef.current = 0;
-      setErrorMessage((current) => (current === 'Stream connection failed.' ? null : current));
-      socket.send(JSON.stringify({ type: 'reconnect' }));
-    };
-    socket.onmessage = (event) => {
-      try {
-        handleStreamEvent(conversationID, JSON.parse(event.data) as StreamEvent);
-      } catch {
-        setErrorMessage('The stream returned an invalid event.');
-      }
-    };
-    socket.onerror = () => {
-      if (socketRef.current === socket) {
-        socketRef.current = null;
-        socket.close();
-      }
-      scheduleStreamReconnect(conversationID);
-    };
-    socket.onclose = () => {
-      if (socketRef.current === socket) {
-        socketRef.current = null;
-        scheduleStreamReconnect(conversationID);
-      }
-    };
-  }
-
-  function clearStreamReconnectTimer() {
-    if (streamReconnectTimerRef.current !== null) {
-      window.clearTimeout(streamReconnectTimerRef.current);
-      streamReconnectTimerRef.current = null;
-    }
-  }
-
-  function scheduleStreamReconnect(conversationID: string) {
-    if (!isStreamingRef.current || activeConversationRef.current?.id !== conversationID || streamReconnectTimerRef.current !== null) {
-      return;
-    }
-    const attempts = streamReconnectAttemptsRef.current;
-    const delay = Math.min(STREAM_RECONNECT_BASE_MS * Math.pow(2, attempts), STREAM_RECONNECT_MAX_MS);
-    streamReconnectTimerRef.current = window.setTimeout(() => {
-      streamReconnectTimerRef.current = null;
-      streamReconnectAttemptsRef.current = attempts + 1;
-      void resumeStreamConnectionRef.current(conversationID);
-    }, delay);
-  }
-
-  async function resumeStreamConnection(conversationID: string, force = false) {
-    if (!isStreamingRef.current || activeConversationRef.current?.id !== conversationID) {
-      return;
-    }
-    const currentSocket = socketRef.current;
-    if (!force && currentSocket && (currentSocket.readyState === WebSocket.OPEN || currentSocket.readyState === WebSocket.CONNECTING)) {
-      return;
-    }
-    try {
-      const streamIDs = await clientRef.current.getActiveStreams();
-      setActiveStreamIDs(streamIDs);
-      if (streamIDs.has(conversationID)) {
-        clearStreamReconnectTimer();
-        if (force && socketRef.current) {
-          const staleSocket = socketRef.current;
-          socketRef.current = null;
-          staleSocket.close();
-        }
-        startStream(conversationID);
-        return;
-      }
-      clearStreamReconnectTimer();
-      streamReconnectAttemptsRef.current = 0;
-      setIsStreaming(false);
-      isStreamingRef.current = false;
-      setShowStreamPlaceholder(false);
-      closeStreamSocket();
-      await refreshAfterStream(conversationID);
-    } catch {
-      scheduleStreamReconnect(conversationID);
-    }
-  }
-
-  async function recoverActiveStream(conversationID: string, options: { onlyIfServerActive?: boolean } = {}): Promise<boolean> {
-    try {
-      const streamIDs = await clientRef.current.getActiveStreams();
-      setActiveStreamIDs(streamIDs);
-      if (streamIDs.has(conversationID)) {
-        setErrorMessage(null);
-        startStream(conversationID);
-        return true;
-      }
-      if (!options.onlyIfServerActive) {
-        await refreshAfterStream(conversationID);
-      }
-      return false;
-    } catch {
-      if (options.onlyIfServerActive) {
-        return false;
-      }
-      setErrorMessage(null);
-      startStream(conversationID);
-      return true;
-    }
-  }
-
-  function syncListStreamSockets(streamIDs: Set<string>) {
-    const sockets = listStreamSocketsRef.current;
-    for (const [conversationID, socket] of sockets) {
-      if (!streamIDs.has(conversationID)) {
-        socket.close();
-        sockets.delete(conversationID);
-      }
-    }
-    for (const conversationID of streamIDs) {
-      const existing = sockets.get(conversationID);
-      if (existing && existing.readyState !== WebSocket.CLOSED && existing.readyState !== WebSocket.CLOSING) {
-        continue;
-      }
-      const socket = tryCreateWebSocket(clientRef.current.websocketURL(conversationID));
-      if (!socket) {
-        continue;
-      }
-      sockets.set(conversationID, socket);
-      socket.onopen = () => socket.send(JSON.stringify({ type: 'reconnect' }));
-      socket.onmessage = (event) => {
-        try {
-          handleListStreamEvent(conversationID, JSON.parse(event.data) as StreamEvent);
-        } catch {
-          // List monitoring is best-effort; the periodic REST refresh remains authoritative.
-        }
-      };
-      socket.onclose = () => {
-        if (listStreamSocketsRef.current.get(conversationID) === socket) {
-          listStreamSocketsRef.current.delete(conversationID);
-        }
-      };
-    }
-  }
-
-  function closeListStreamSockets() {
-    for (const socket of listStreamSocketsRef.current.values()) {
-      socket.close();
-    }
-    listStreamSocketsRef.current.clear();
-  }
-
-  function handleListStreamEvent(conversationID: string, event: StreamEvent) {
-    switch (event.type) {
-      case 'assistant_message':
-        if (event.message) {
-          const message = event.message;
-          setConversations((items) =>
-            items.map((item) =>
-              item.id === conversationID
-                ? {
-                    ...item,
-                    lastMessage: message.content || item.lastMessage,
-                    updatedAt: message.timestamp || item.updatedAt,
-                  }
-                : item,
-            ),
-          );
-        }
-        void refreshConversationList();
-        break;
-      case 'title_updated':
-        if (event.title) {
-          setConversations((items) => items.map((item) => (item.id === conversationID ? { ...item, title: event.title || item.title } : item)));
-        }
-        break;
-      case 'goal_updated':
-        applyGoalSnapshot(conversationID, event.goal);
-        break;
-      case 'goal_cleared':
-        applyGoalSnapshot(conversationID, null);
-        break;
-      case 'error':
-        if (event.terminal !== false) {
-          markListStreamFinished(conversationID);
-          notify('Agent Cockpit stream failed', event.error || 'The stream ended with an error.');
-        }
-        break;
-      case 'done':
-        markListStreamFinished(conversationID);
-        notify('Agent Cockpit stream finished', 'The latest response is ready.');
-        break;
-      case 'tool_activity':
-        if (event.isPlanMode && event.planContent && event.planAction !== 'exit') {
-          notify('Agent Cockpit needs approval', event.planContent);
-        } else if (event.isQuestion && event.questions?.length) {
-          notify('Agent Cockpit has a question', event.questions[0].question);
-        }
-        break;
-      default:
-        break;
-    }
-  }
-
-  function markListStreamFinished(conversationID: string) {
-    setActiveStreamIDs((current) => {
-      const next = new Set(current);
-      next.delete(conversationID);
-      return next;
-    });
-    const socket = listStreamSocketsRef.current.get(conversationID);
-    if (socket) {
-      listStreamSocketsRef.current.delete(conversationID);
-      socket.close();
-    }
-    void refreshConversationList();
-  }
-
-  function handleStreamEvent(conversationID: string, event: StreamEvent) {
-    switch (event.type) {
-      case 'text':
-      case 'thinking':
-        setShowStreamPlaceholder(false);
-        setStreamText((current) => current + (event.content || ''));
-        break;
-      case 'assistant_message':
-        if (event.message) {
-          setActiveConversation((current) =>
-            current && current.id === conversationID ? { ...current, messages: upsertMessage(current.messages, event.message) } : current,
-          );
-        }
-        setStreamText('');
-        setShowStreamPlaceholder(false);
-        break;
-      case 'tool_activity':
-        if (event.isPlanMode && event.planContent && event.planAction !== 'exit') {
-          setPendingInteraction({ kind: 'plan', prompt: event.planContent });
-          notify('Agent Cockpit needs approval', event.planContent);
-        } else if (event.isQuestion && event.questions?.length) {
-          const question = event.questions[0];
-          setPendingInteraction({ kind: 'question', prompt: question.question, options: question.options || [] });
-          notify('Agent Cockpit has a question', question.question);
-        }
-        break;
-      case 'title_updated':
-        if (event.title) {
-          setActiveConversation((current) => (current && current.id === conversationID ? { ...current, title: event.title || current.title } : current));
-          setConversations((items) => items.map((item) => (item.id === conversationID ? { ...item, title: event.title || item.title } : item)));
-        }
-        break;
-      case 'usage':
-        setActiveConversation((current) =>
-          current && current.id === conversationID ? { ...current, usage: event.usage, sessionUsage: event.sessionUsage || current.sessionUsage } : current,
-        );
-        break;
-      case 'goal_updated':
-        applyGoalSnapshot(conversationID, event.goal);
-        break;
-      case 'goal_cleared':
-        applyGoalSnapshot(conversationID, null);
-        break;
-      case 'error':
-        setErrorMessage(event.error || 'The stream ended with an error.');
-        if (event.terminal !== false) {
-          markStreamFinished(conversationID);
-          notify('Agent Cockpit stream failed', event.error || 'The stream ended with an error.');
-        }
-        break;
-      case 'done':
-        setStreamText('');
-        setShowStreamPlaceholder(false);
-        markStreamFinished(conversationID);
-        notify('Agent Cockpit stream finished', 'The latest response is ready.');
-        void refreshAfterStream(conversationID);
-        break;
-      case 'replay_start':
-        setStreamText('');
-        setShowStreamPlaceholder(true);
-        break;
-      default:
-        break;
-    }
-  }
-
-  function markStreamFinished(conversationID: string) {
-    clearStreamReconnectTimer();
-    streamReconnectAttemptsRef.current = 0;
-    setIsStreaming(false);
-    isStreamingRef.current = false;
-    setShowStreamPlaceholder(false);
-    setActiveStreamIDs((current) => {
-      const next = new Set(current);
-      next.delete(conversationID);
-      return next;
-    });
-    closeStreamSocket();
-  }
-
   async function refreshAfterStream(conversationID: string) {
     try {
       const [conversation, streamIDs, loadedConversations] = await Promise.all([
@@ -1275,27 +500,6 @@ export default function App() {
     }
   }
 
-  async function drainNextQueuedMessage(conversation: Conversation) {
-    const queue = conversation.messageQueue || [];
-    if (isStreaming || pendingInteraction || sendInFlightRef.current || !queue.length) {
-      return;
-    }
-    const [nextMessage, ...remaining] = queue;
-    try {
-      const savedQueue = await clientRef.current.saveQueue(conversation.id, remaining);
-      setActiveConversationQueue(conversation.id, savedQueue);
-      const result = await sendMessageNow(nextMessage, { clearComposer: false, restoreDraftOnFailure: false });
-      if (!result.ok) {
-        await clientRef.current.saveQueue(conversation.id, queue).catch(() => undefined);
-        setActiveConversationQueue(conversation.id, queue);
-      }
-    } catch (error) {
-      await clientRef.current.saveQueue(conversation.id, queue).catch(() => undefined);
-      setActiveConversationQueue(conversation.id, queue);
-      handleError(error);
-    }
-  }
-
   async function stopStream() {
     const conversation = activeConversation;
     if (!conversation) {
@@ -1305,7 +509,6 @@ export default function App() {
       clearStreamReconnectTimer();
       closeStreamSocket();
       setIsStreaming(false);
-      isStreamingRef.current = false;
       setShowStreamPlaceholder(false);
       setPendingInteraction(null);
       await clientRef.current.abortConversation(conversation.id);
@@ -1319,202 +522,10 @@ export default function App() {
     }
   }
 
-  async function submitInteraction() {
-    const conversation = activeConversation;
-    const answer = interactionAnswer.trim();
-    if (!conversation || !pendingInteraction || !answer) {
-      return;
-    }
-    try {
-      const response = await clientRef.current.sendInput(conversation.id, answer, isStreaming || loading);
-      setPendingInteraction(null);
-      setInteractionAnswer('');
-      if (response.mode === 'message') {
-        await sendMessageNow({ content: answer });
-      }
-    } catch (error) {
-      handleError(error);
-    }
-  }
-
-  async function handleAttachmentFiles(files: FileList | null) {
-    const conversation = activeConversation;
-    if (!conversation || !files?.length) {
-      return;
-    }
-    for (const file of Array.from(files)) {
-      const attachmentID = `${Date.now()}-${file.name}-${Math.random().toString(16).slice(2)}`;
-      setPendingAttachments((current) => [...current, { id: attachmentID, fileName: file.name, status: 'uploading', progress: 0 }]);
-      clientRef.current
-        .uploadFile(conversation.id, file, {
-          onProgress: (progress) => {
-            setPendingAttachments((current) => current.map((item) => (item.id === attachmentID ? { ...item, progress } : item)));
-          },
-          onXhr: (xhr) => {
-            setPendingAttachments((current) => current.map((item) => (item.id === attachmentID ? { ...item, xhr } : item)));
-          },
-        })
-        .then((uploaded) => {
-          setPendingAttachments((current) =>
-            current.map((item) => (item.id === attachmentID ? { ...item, status: 'done', progress: 100, result: uploaded, xhr: undefined } : item)),
-          );
-        })
-        .catch((error: unknown) => {
-          const message = error instanceof Error ? error.message : 'Upload failed.';
-          setPendingAttachments((current) =>
-            current.map((item) => (item.id === attachmentID ? { ...item, status: 'error', error: message, xhr: undefined } : item)),
-          );
-        });
-    }
-    if (attachInputRef.current) {
-      attachInputRef.current.value = '';
-    }
-  }
-
-  async function removePendingAttachment(id: string) {
-    const conversation = activeConversation;
-    const attachment = pendingAttachments.find((item) => item.id === id);
-    attachment?.xhr?.abort();
-    setPendingAttachments((current) => current.filter((item) => item.id !== id));
-    if (conversation && !attachment?.xhr && attachment?.result?.name) {
-      await clientRef.current.deleteUpload(conversation.id, attachment.result.name).catch(() => undefined);
-    }
-  }
-
-  async function ocrPendingAttachment(id: string) {
-    const conversation = activeConversation;
-    const attachment = pendingAttachments.find((item) => item.id === id);
-    const path = attachment?.result?.path;
-    if (!conversation || !attachment || !path) {
-      return;
-    }
-    if (attachment.ocrMarkdown) {
-      appendToDraft(attachment.ocrMarkdown);
-      return;
-    }
-    setPendingAttachments((current) =>
-      current.map((item) => (item.id === id ? { ...item, ocrStatus: 'running', ocrError: undefined } : item)),
-    );
-    try {
-      const ocrResponse = await clientRef.current.ocrAttachment(conversation.id, path, {
-        backend: selectedBackend,
-        cliProfileId: selectedCliProfileId,
-      });
-      const markdown = ocrResponse.markdown || '';
-      applyServerMessage(conversation.id, ocrResponse.recoveryMessage);
-      setActiveConversation((current) => {
-        if (!current || current.id !== conversation.id) return current;
-        const next = applyConversationRuntimeSelection(current, {
-          backend: selectedBackend,
-          cliProfileId: selectedCliProfileId,
-        });
-        activeConversationRef.current = next;
-        return next;
-      });
-      setPendingAttachments((current) =>
-        current.map((item) => (item.id === id ? { ...item, ocrStatus: 'done', ocrMarkdown: markdown } : item)),
-      );
-      appendToDraft(markdown);
-    } catch (error) {
-      const message = error instanceof Error ? error.message : 'OCR failed.';
-      setPendingAttachments((current) =>
-        current.map((item) => (item.id === id ? { ...item, ocrStatus: 'error', ocrError: message } : item)),
-      );
-    }
-  }
-
   function appendToDraft(text: string) {
     const trimmed = text.trim();
     if (trimmed) {
       setDraft((current) => (current.trim() ? `${current.trimEnd()}\n\n${trimmed}` : trimmed));
-    }
-  }
-
-  async function removeQueuedMessage(index: number) {
-    const conversation = activeConversation;
-    if (!conversation) {
-      return;
-    }
-    try {
-      const queue = [...(conversation.messageQueue || [])];
-      queue.splice(index, 1);
-      const saved = await clientRef.current.saveQueue(conversation.id, queue);
-      setActiveConversation({ ...conversation, messageQueue: saved });
-    } catch (error) {
-      handleError(error);
-    }
-  }
-
-  async function moveQueuedMessage(index: number, direction: -1 | 1) {
-    const conversation = activeConversation;
-    if (!conversation) {
-      return;
-    }
-    const queue = [...(conversation.messageQueue || [])];
-    const target = index + direction;
-    if (target < 0 || target >= queue.length) {
-      return;
-    }
-    [queue[index], queue[target]] = [queue[target], queue[index]];
-    try {
-      const saved = await clientRef.current.saveQueue(conversation.id, queue);
-      setActiveConversation({ ...conversation, messageQueue: saved });
-    } catch (error) {
-      handleError(error);
-    }
-  }
-
-  function openQueueEditor(index: number) {
-    const item = activeConversation?.messageQueue?.[index];
-    if (!item) {
-      return;
-    }
-    setQueueEditorIndex(index);
-    setQueueEditorContent(item.content || '');
-    setQueueEditorAttachments(item.attachments || []);
-  }
-
-  async function saveQueueEditor() {
-    const conversation = activeConversation;
-    if (!conversation || queueEditorIndex === null) {
-      return;
-    }
-    const content = queueEditorContent.trim();
-    if (!content && !queueEditorAttachments.length) {
-      await removeQueuedMessage(queueEditorIndex);
-      closeQueueEditor();
-      return;
-    }
-    try {
-      const queue = [...(conversation.messageQueue || [])];
-      queue[queueEditorIndex] = {
-        content,
-        attachments: queueEditorAttachments.length ? queueEditorAttachments : undefined,
-      };
-      const saved = await clientRef.current.saveQueue(conversation.id, queue);
-      setActiveConversation({ ...conversation, messageQueue: saved });
-      closeQueueEditor();
-    } catch (error) {
-      handleError(error);
-    }
-  }
-
-  function closeQueueEditor() {
-    setQueueEditorIndex(null);
-    setQueueEditorContent('');
-    setQueueEditorAttachments([]);
-  }
-
-  async function clearQueue() {
-    const conversation = activeConversation;
-    if (!conversation) {
-      return;
-    }
-    try {
-      await clientRef.current.clearQueue(conversation.id);
-      setActiveConversation({ ...conversation, messageQueue: [] });
-    } catch (error) {
-      handleError(error);
     }
   }
 
@@ -1579,12 +590,8 @@ export default function App() {
     }
     const storedProfileMissing = !!conversation.cliProfileId
       && !availableProfiles.some((profile) => profile.id === conversation.cliProfileId);
-    let resetProfile = null;
+    const resetProfile = chooseResetProfileRepair(availableProfiles, conversation, selectedCliProfileId);
     if (storedProfileMissing) {
-      const backendMatches = availableProfiles.filter((profile) => backendIdForProfile(profile) === conversation.backend);
-      resetProfile = availableProfiles.find((profile) => profile.id === selectedCliProfileId)
-        || (backendMatches.length === 1 ? backendMatches[0] : null)
-        || (availableProfiles.length === 1 ? availableProfiles[0] : null);
       if (!resetProfile) {
         setErrorMessage('Choose a replacement CLI profile before resetting this conversation.');
         return;
@@ -1621,12 +628,7 @@ export default function App() {
       setStreamText('');
       setPendingInteraction(null);
       setPendingAttachments([]);
-      setSessions((current) => (
-        current.length
-          ? updateSessionsAfterReset(current, response)
-          : current
-      ));
-      setSessionViewer(null);
+      applySessionReset(response);
       await refreshConversationList();
     } catch (error) {
       handleError(error);
@@ -1681,294 +683,6 @@ export default function App() {
       });
       handleError(error);
     }
-  }
-
-  async function openSessions() {
-    const conversation = activeConversation;
-    if (!conversation) {
-      return;
-    }
-    try {
-      const loaded = await clientRef.current.getSessions(conversation.id);
-      setSessions(loaded);
-      setSessionViewer(null);
-      setSessionsVisible(true);
-    } catch (error) {
-      handleError(error);
-    }
-  }
-
-  async function viewSession(session: SessionHistoryItem) {
-    const conversation = activeConversation;
-    if (!conversation) {
-      return;
-    }
-    try {
-      let messages: Message[];
-      if (session.isCurrent) {
-        messages = conversation.messages;
-      } else {
-        const response = await clientRef.current.getSessionMessages(conversation.id, session.number);
-        messages = response.messages || [];
-      }
-      setSessionViewer({ session, messages });
-      setSessionsVisible(false);
-    } catch (error) {
-      handleError(error);
-    }
-  }
-
-  async function openFiles() {
-    setFilesVisible(true);
-    setExplorerEditContent('');
-    await loadExplorer('');
-  }
-
-  async function loadExplorer(path: string) {
-    const conversation = activeConversation;
-    if (!conversation) {
-      return;
-    }
-    try {
-      const tree = await clientRef.current.getExplorerTree(workspaceRef(conversation), path);
-      setExplorerPath(tree.path || '');
-      setExplorerParent(tree.parent ?? null);
-      setExplorerEntries(tree.entries || []);
-      setExplorerPreview(null);
-      setExplorerEditContent('');
-    } catch (error) {
-      handleError(error);
-    }
-  }
-
-  async function openExplorerEntry(entry: ExplorerEntry) {
-    const conversation = activeConversation;
-    if (!conversation) {
-      return;
-    }
-    const entryPath = joinExplorerPath(explorerPath, entry.name);
-    if (entry.type === 'dir') {
-      await loadExplorer(entryPath);
-      return;
-    }
-    if (isImageFileName(entry.name)) {
-      await openFileReference(makeExplorerFileReference(clientRef.current, workspaceRef(conversation), entryPath));
-      return;
-    }
-    try {
-      const preview = await clientRef.current.getExplorerPreview(workspaceRef(conversation), entryPath);
-      setExplorerPreview(preview);
-      setExplorerEditContent(preview.content);
-    } catch (error) {
-      if (error instanceof AgentAPIError && (error.status === 413 || error.status === 415)) {
-        await openFileReference(makeExplorerFileReference(clientRef.current, workspaceRef(conversation), entryPath));
-        return;
-      }
-      handleError(error);
-    }
-  }
-
-  async function createExplorerFolder() {
-    const conversation = activeConversation;
-    const name = window.prompt('Folder name');
-    if (!conversation || !name?.trim()) {
-      return;
-    }
-    try {
-      await clientRef.current.createExplorerFolder(workspaceRef(conversation), explorerPath, name.trim());
-      await loadExplorer(explorerPath);
-    } catch (error) {
-      handleError(error);
-    }
-  }
-
-  async function createExplorerFile() {
-    const conversation = activeConversation;
-    const name = window.prompt('File name');
-    if (!conversation || !name?.trim()) {
-      return;
-    }
-    try {
-      const created = await clientRef.current.createExplorerFile(workspaceRef(conversation), explorerPath, name.trim());
-      await loadExplorer(explorerPath);
-      if (created.path) {
-        const preview = await clientRef.current.getExplorerPreview(workspaceRef(conversation), created.path);
-        setExplorerPreview(preview);
-        setExplorerEditContent(preview.content);
-      }
-    } catch (error) {
-      handleError(error);
-    }
-  }
-
-  async function saveExplorerPreview() {
-    const conversation = activeConversation;
-    if (!conversation || !explorerPreview) {
-      return;
-    }
-    try {
-      await clientRef.current.saveExplorerFile(workspaceRef(conversation), explorerPreview.path, explorerEditContent);
-      const preview = await clientRef.current.getExplorerPreview(workspaceRef(conversation), explorerPreview.path);
-      setExplorerPreview(preview);
-      setExplorerEditContent(preview.content);
-      await loadExplorer(explorerPath);
-    } catch (error) {
-      handleError(error);
-    }
-  }
-
-  async function renameExplorerPath(fromPath: string) {
-    const conversation = activeConversation;
-    const nextPath = window.prompt('New workspace-relative path', fromPath);
-    if (!conversation || !nextPath?.trim() || nextPath.trim() === fromPath) {
-      return;
-    }
-    try {
-      await clientRef.current.renameExplorerEntry(workspaceRef(conversation), fromPath, nextPath.trim());
-      await loadExplorer(parentExplorerPath(nextPath.trim()));
-    } catch (error) {
-      if (error instanceof AgentAPIError && error.status === 409 && window.confirm('Destination exists. Overwrite it?')) {
-        await clientRef.current.renameExplorerEntry(workspaceRef(conversation), fromPath, nextPath.trim(), true);
-        await loadExplorer(parentExplorerPath(nextPath.trim()));
-        return;
-      }
-      handleError(error);
-    }
-  }
-
-  async function deleteExplorerPath(path: string) {
-    const conversation = activeConversation;
-    if (!conversation || !window.confirm(`Delete ${path}?`)) {
-      return;
-    }
-    try {
-      await clientRef.current.deleteExplorerEntry(workspaceRef(conversation), path);
-      await loadExplorer(explorerPath);
-    } catch (error) {
-      handleError(error);
-    }
-  }
-
-  async function uploadExplorerFiles(files: FileList | null) {
-    const conversation = activeConversation;
-    if (!conversation || !files?.length) {
-      return;
-    }
-    for (const file of Array.from(files)) {
-      void uploadExplorerFile(file);
-    }
-    if (explorerUploadInputRef.current) {
-      explorerUploadInputRef.current.value = '';
-    }
-  }
-
-  async function uploadExplorerFile(file: File, overwrite = false, existingID?: string) {
-    const conversation = activeConversation;
-    if (!conversation) {
-      return;
-    }
-    const id = existingID || `${Date.now()}-${file.name}-${Math.random().toString(16).slice(2)}`;
-    if (!existingID) {
-      setExplorerUploads((current) => [...current, { id, fileName: file.name, status: 'uploading', progress: 0 }]);
-    } else {
-      setExplorerUploads((current) => current.map((item) => (item.id === id ? { ...item, status: 'uploading', progress: 0, error: undefined } : item)));
-    }
-    try {
-      await clientRef.current.uploadExplorerFile(workspaceRef(conversation), explorerPath, file, overwrite, {
-        onProgress: (progress) => setExplorerUploads((current) => current.map((item) => (item.id === id ? { ...item, progress } : item))),
-        onXhr: (xhr) => setExplorerUploads((current) => current.map((item) => (item.id === id ? { ...item, xhr } : item))),
-      });
-      setExplorerUploads((current) => current.map((item) => (item.id === id ? { ...item, status: 'done', progress: 100, xhr: undefined } : item)));
-      await loadExplorer(explorerPath);
-    } catch (error) {
-      if (error instanceof AgentAPIError && error.status === 409 && !overwrite) {
-        setExplorerUploads((current) => current.map((item) => (item.id === id ? { ...item, status: 'error', error: 'File exists', xhr: undefined } : item)));
-        if (window.confirm(`${file.name} already exists. Overwrite it?`)) {
-          await uploadExplorerFile(file, true, id);
-        }
-        return;
-      }
-      const message = error instanceof Error ? error.message : 'Upload failed.';
-      setExplorerUploads((current) => current.map((item) => (item.id === id ? { ...item, status: 'error', error: message, xhr: undefined } : item)));
-    }
-  }
-
-  function clearOrCancelExplorerUpload(upload: ExplorerUpload) {
-    upload.xhr?.abort();
-    setExplorerUploads((current) => current.filter((item) => item.id !== upload.id));
-  }
-
-  async function openFileReference(reference: FileReference) {
-    setFilePreview({ title: reference.title, path: reference.path, downloadURL: reference.downloadURL, mimeType: reference.mimeType });
-    setFilePreviewLoading(true);
-    try {
-      if (reference.isImage) {
-        setFilePreview({
-          title: reference.title,
-          path: reference.path,
-          downloadURL: reference.downloadURL,
-          imageURL: reference.downloadURL,
-          mimeType: reference.mimeType,
-        });
-        return;
-      }
-      if (reference.fetchPreview) {
-        const preview = await reference.fetchPreview();
-        setFilePreview({
-          title: reference.title,
-          path: preview.path || reference.path,
-          downloadURL: reference.downloadURL,
-          content: preview.content,
-          language: preview.language,
-          mimeType: preview.mimeType || reference.mimeType,
-          truncated: preview.truncated,
-        });
-        return;
-      }
-      setFilePreview({ title: reference.title, path: reference.path, downloadURL: reference.downloadURL, error: 'Preview unavailable.' });
-    } catch (error) {
-      const message = error instanceof Error ? error.message : 'Preview failed.';
-      setFilePreview({ title: reference.title, path: reference.path, downloadURL: reference.downloadURL, error: message });
-    } finally {
-      setFilePreviewLoading(false);
-    }
-  }
-
-  async function shareFileReference(reference: FileReference) {
-    try {
-      const response = await fetch(reference.downloadURL, { credentials: 'same-origin' });
-      if (!response.ok) {
-        throw new AgentAPIError(`File download failed with HTTP ${response.status}.`, response.status);
-      }
-      const blob = await response.blob();
-      const file = new File([blob], reference.title, { type: blob.type || reference.mimeType || 'application/octet-stream' });
-      if (navigator.canShare?.({ files: [file] }) && navigator.share) {
-        await navigator.share({ title: reference.title, files: [file] });
-        return;
-      }
-      downloadBlob(blob, reference.title);
-    } catch (error) {
-      handleError(error);
-    }
-  }
-
-  function copyFilePreview() {
-    if (filePreview?.content) {
-      void navigator.clipboard.writeText(filePreview.content);
-    }
-  }
-
-  function chooseProfile(profileID: string) {
-    if (profileSelectionLocked) {
-      return;
-    }
-    const profile = availableProfiles.find((item) => item.id === profileID);
-    setSelectedCliProfileId(profileID);
-    setSelectedBackend(backendIdForProfile(profile));
-    setSelectedModel(undefined);
-    setSelectedEffort(undefined);
-    setSelectedClaudeCodeMode(undefined);
-    setSelectedServiceTier(profile?.harness === 'codex' ? (selectedServiceTier || settings?.defaultServiceTier) : undefined);
   }
 
   function handleError(error: unknown) {
@@ -2050,8 +764,7 @@ export default function App() {
           onBack={() => {
             clearStreamReconnectTimer();
             closeStreamSocket();
-            setSessionsVisible(false);
-            setSessionViewer(null);
+            closeSessionSurfaces();
             setScreen('list');
             void refreshConversationList();
           }}
@@ -2147,7 +860,7 @@ export default function App() {
         <SessionsModal
           conversation={activeConversation}
           sessions={sessions}
-          onClose={() => setSessionsVisible(false)}
+          onClose={closeSessions}
           onView={(session) => void viewSession(session)}
           onShare={(session) => {
             if (activeConversation) window.open(clientRef.current.sessionMarkdownURL(activeConversation.id, session.number), '_blank');
@@ -2162,10 +875,7 @@ export default function App() {
           conversation={activeConversation}
           session={sessionViewer.session}
           messages={sessionViewer.messages}
-          onBack={() => {
-            setSessionViewer(null);
-            setSessionsVisible(true);
-          }}
+          onBack={backToSessions}
           onShare={() => window.open(clientRef.current.sessionMarkdownURL(activeConversation.id, sessionViewer.session.number), '_blank')}
           onOpenFile={(reference) => void openFileReference(reference)}
           onShareFile={(reference) => void shareFileReference(reference)}
@@ -2182,28 +892,20 @@ export default function App() {
           uploads={explorerUploads}
           uploadInputRef={explorerUploadInputRef}
           onEditContent={setExplorerEditContent}
-          onClose={() => setFilesVisible(false)}
-          onParent={() => void loadExplorer(explorerParent ?? '')}
-          onRefresh={() => void loadExplorer(explorerPath)}
+          onClose={closeFiles}
+          onParent={loadParent}
+          onRefresh={refreshExplorer}
           onEntry={(entry) => void openExplorerEntry(entry)}
           onNewFolder={() => void createExplorerFolder()}
           onNewFile={() => void createExplorerFile()}
           onUploadFiles={(files) => void uploadExplorerFiles(files)}
-          onRenameEntry={(entry) => void renameExplorerPath(joinExplorerPath(explorerPath, entry.name))}
-          onDeleteEntry={(entry) => void deleteExplorerPath(joinExplorerPath(explorerPath, entry.name))}
+          onRenameEntry={renameExplorerEntry}
+          onDeleteEntry={deleteExplorerEntry}
           onSavePreview={() => void saveExplorerPreview()}
-          onRenamePreview={() => (explorerPreview ? void renameExplorerPath(explorerPreview.path) : undefined)}
-          onDeletePreview={() => (explorerPreview ? void deleteExplorerPath(explorerPreview.path) : undefined)}
-          onOpenPreviewFile={() => {
-            if (activeConversation && explorerPreview) {
-              void openFileReference(makeExplorerFileReference(clientRef.current, workspaceRef(activeConversation), explorerPreview.path));
-            }
-          }}
-          onSharePreviewFile={() => {
-            if (activeConversation && explorerPreview) {
-              void shareFileReference(makeExplorerFileReference(clientRef.current, workspaceRef(activeConversation), explorerPreview.path));
-            }
-          }}
+          onRenamePreview={renameExplorerPreview}
+          onDeletePreview={deleteExplorerPreview}
+          onOpenPreviewFile={openExplorerPreviewFile}
+          onSharePreviewFile={shareExplorerPreviewFile}
           onCancelUpload={clearOrCancelExplorerUpload}
         />
       ) : null}
@@ -2212,7 +914,7 @@ export default function App() {
         <FilePreviewModal
           preview={filePreview}
           loading={filePreviewLoading}
-          onClose={() => setFilePreview(null)}
+          onClose={closeFilePreview}
           onCopy={copyFilePreview}
           onShare={() => void shareFileReference({
             id: filePreview.path,
@@ -2229,7 +931,7 @@ export default function App() {
           content={queueEditorContent}
           attachments={queueEditorAttachments}
           onContentChange={setQueueEditorContent}
-          onRemoveAttachment={(path) => setQueueEditorAttachments((items) => items.filter((attachment) => attachment.path !== path))}
+          onRemoveAttachment={removeQueueEditorAttachment}
           onCancel={closeQueueEditor}
           onSave={() => void saveQueueEditor()}
         />

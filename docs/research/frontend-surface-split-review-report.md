@@ -849,3 +849,113 @@ The existing Vite runtime asset warnings for `/icons/deepseek-logo.svg`,
   `shell.jsx` as bootstrap, desktop chat/app shell modules bounded, `App.tsx`
   at 2,050 lines, and mobile render/CSS modules split by ownership.
 - Implemented: No change required.
+
+## Phase 8 Review Cycles
+
+Phase 8 finished the mobile PWA `App.tsx` composition split from issue #430.
+The phase moved pure mobile helpers and stream-event projection into direct
+testable modules, moved state/provider ownership into focused flat `src/use*.ts`
+hooks, and left `App.tsx` as the API/client wiring, route, modal visibility,
+high-level conversation action, and render composition layer.
+
+Verification run during the phase:
+
+- `npm run typecheck`
+- `npm run lint`
+- `npm run web:typecheck`
+- `npm run web:build`
+- `npm run web:budget`
+- `npm run mobile:typecheck`
+- `npm run mobile:build`
+- `npm run maintainability:check`
+- `npm run spec:drift`
+- `npm run adr:lint`
+- `npm test -- --runTestsByPath test/frontendRoutes.test.ts test/mobileAppModel.test.ts test/mobileChatStreamEvents.test.ts`
+- `npm test -- --runInBand`
+
+The default worker-parallel `npm test` command timed out in unrelated
+data-migration, CLI-auth, web-build, and shutdown suites on this machine. Those
+same failed suites passed with `--runInBand`, and the full in-band suite passed.
+`npm run mobile:visual:capture` was not run because the harness requires an
+already served/authenticated PWA target; no mobile metadata, manifest, Vite
+config, package file, or entrypoint changed in this phase.
+
+### Cycle 1
+
+- Finding: Medium impact. Goal slash parsing, reset-profile repair selection,
+  reconnect backoff, and local runtime-goal preservation were deterministic
+  model logic still embedded in the large component.
+- Implemented: Moved them to `mobile/AgentCockpitPWA/src/appModel.ts` and added
+  direct `test/mobileAppModel.test.ts` coverage, including a discriminated
+  union for `/goal` command variants.
+
+### Cycle 2
+
+- Finding: Medium impact. Chat/list stream event handling was still only
+  testable through `App.tsx` source-string guards.
+- Implemented: Added `chatStreamEvents.ts` with pure action projection for open
+  chat and list monitors, plus `test/mobileChatStreamEvents.test.ts`.
+
+### Cycle 3
+
+- Finding: No high- or medium-impact issue. The lowest-coupling UI slices moved
+  into `useFilePreview.ts`, `useSessionHistory.ts`, `useQueueEditor.ts`, and
+  `useWorkspaceExplorer.ts`; queue editor kept the existing direct
+  `setActiveConversation({ ...conversation, messageQueue: saved })` timing.
+- Implemented: No follow-up change required.
+
+### Cycle 4
+
+- Finding: No high- or medium-impact issue. Run-selection ownership moved to
+  `useRunSelection.ts` while preserving the `supportedEfforts.join('|')`
+  dependency idiom and profile metadata cache behavior.
+- Implemented: No follow-up change required.
+
+### Cycle 5
+
+- Finding: No high- or medium-impact issue. Attachment/OCR ownership moved to
+  `usePendingAttachments.ts` while keeping server recovery-message application
+  on the existing `applyServerMessage` path.
+- Implemented: No follow-up change required.
+
+### Cycle 6
+
+- Finding: Medium impact. Static guards still asserted stream reconnect, send
+  recovery, and goal slash implementation bodies inside `App.tsx` after the
+  code moved.
+- Implemented: Retargeted `test/frontendRoutes.test.ts` to
+  `useChatStreamConnection.ts`, `useSendPipeline.ts`, `useGoalState.ts`,
+  `useListStreamMonitor.ts`, `chatStreamEvents.ts`, and `appModel.ts`, while
+  keeping `App.tsx` hook-consumption assertions.
+
+### Cycle 7
+
+- Finding: No high- or medium-impact issue. Stream ownership moved to
+  `useChatStreamConnection.ts` with the render-time
+  `resumeStreamConnectionRef.current = resumeStreamConnection` assignment
+  preserved; list monitor ownership moved to `useListStreamMonitor.ts`.
+- Implemented: No follow-up change required.
+
+### Cycle 8
+
+- Finding: Low impact. `App.tsx` destructured `isStreamingRef` from the stream
+  hook even though no caller used it.
+- Implemented: Removed that unused return/destructure; the ref remains private
+  to `useChatStreamConnection.ts`.
+
+### Cycle 9
+
+- Finding: Medium impact. Specs still described `App.tsx` as the mobile state
+  machine and omitted the extracted owner modules.
+- Implemented: Updated `docs/spec-mobile-pwa.md`, `docs/spec-coverage.md`, and
+  `docs/spec-testing.md` with the new composition-layer and test ownership.
+
+### Cycle 10
+
+- Finding: No high- or medium-impact issue. The final ownership scan found no
+  stream socket, reconnect, goal snapshot, send recovery, explorer, attachment,
+  file-preview, session-history, or queue-editor implementation bodies left in
+  `App.tsx`. `App.tsx` is 941 lines after the split; reducing it further would
+  move high-level conversation CRUD or render wiring that this issue explicitly
+  left in the shell.
+- Implemented: No follow-up change required.

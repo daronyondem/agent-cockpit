@@ -23,6 +23,8 @@ import type {
 export const ALL_WORKSPACES = 'all';
 export const CLAUDE_CODE_INTERACTIVE_BACKEND_ID = 'claude-code-interactive';
 export const CHAT_SCROLL_BOTTOM_THRESHOLD_PX = 48;
+const STREAM_RECONNECT_BASE_MS = 1_000;
+const STREAM_RECONNECT_MAX_MS = 15_000;
 
 const effortOrder: EffortLevel[] = ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'];
 
@@ -76,6 +78,13 @@ export type FilePreviewState = {
   truncated?: boolean;
   error?: string;
 };
+
+export type GoalSlashCommand =
+  | { kind: 'enter-goal-mode' }
+  | { kind: 'pause' }
+  | { kind: 'resume' }
+  | { kind: 'clear' }
+  | { kind: 'set'; objective: string };
 
 export function workspaceRef(
   conversation: Pick<Conversation, 'workspaceId' | 'workspaceHash'> | Pick<ConversationListItem, 'workspaceId' | 'workspaceHash'>,
@@ -140,6 +149,41 @@ export function backendIdForProfile(profile?: { harness: string; protocol?: stri
   if (!profile) return undefined;
   if (profile.harness === 'claude-code' && profile.protocol === 'interactive') return CLAUDE_CODE_INTERACTIVE_BACKEND_ID;
   return profile.harness;
+}
+
+export function parseGoalSlashCommand(content: string): GoalSlashCommand | null {
+  if (!content || !/^\/goal(?:\s|$)/i.test(content)) {
+    return null;
+  }
+  const arg = content.replace(/^\/goal\b/i, '').trim();
+  if (!arg) {
+    return { kind: 'enter-goal-mode' };
+  }
+  const command = arg.toLowerCase();
+  if (command === 'pause' || command === 'resume' || command === 'clear') {
+    return { kind: command };
+  }
+  return { kind: 'set', objective: arg };
+}
+
+export function chooseResetProfileRepair<T extends { id: string; harness: string; protocol?: string }>(
+  availableProfiles: T[],
+  conversation: Pick<Conversation, 'cliProfileId' | 'backend'>,
+  selectedCliProfileId?: string,
+): T | null {
+  const storedProfileMissing = !!conversation.cliProfileId
+    && !availableProfiles.some((profile) => profile.id === conversation.cliProfileId);
+  if (!storedProfileMissing) {
+    return null;
+  }
+  const backendMatches = availableProfiles.filter((profile) => backendIdForProfile(profile) === conversation.backend);
+  return availableProfiles.find((profile) => profile.id === selectedCliProfileId)
+    || (backendMatches.length === 1 ? backendMatches[0] : null)
+    || (availableProfiles.length === 1 ? availableProfiles[0] : null);
+}
+
+export function streamReconnectDelayMs(attempts: number): number {
+  return Math.min(STREAM_RECONNECT_BASE_MS * Math.pow(2, attempts), STREAM_RECONNECT_MAX_MS);
 }
 
 const OPENCODE_PROVIDER_LABELS: Record<string, string> = {
@@ -625,6 +669,15 @@ export function shouldApplyGoalSnapshot(currentUpdatedAtMs: number | null, incom
   if (!incomingGoal) return true;
   const incomingAt = goalSnapshotTimeMs(incomingGoal);
   return !(incomingAt && currentUpdatedAtMs && incomingAt < currentUpdatedAtMs);
+}
+
+export function shouldPreserveLocalRuntimeGoal(
+  goalState: { conversationID: string | null; goal: ThreadGoal | null },
+  conversationID: string,
+): boolean {
+  if (goalState.conversationID !== conversationID) return false;
+  const currentGoal = goalState.goal;
+  return !!currentGoal && currentGoal.status === 'active' && currentGoal.source === 'runtime';
 }
 
 export function isActiveGoal(goal: Pick<ThreadGoal, 'status'> | null | undefined): boolean {

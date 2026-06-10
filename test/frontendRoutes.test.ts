@@ -421,6 +421,7 @@ describe('frontend routes', () => {
     const storeSrc = fs.readFileSync(path.join(ROOT, 'web/AgentCockpitWeb/src/streamStore.js'), 'utf8');
     const chatLiveSrc = fs.readFileSync(path.join(ROOT, 'web/AgentCockpitWeb/src/chat/chatLive.jsx'), 'utf8');
     const mobileAppSrc = fs.readFileSync(path.join(ROOT, 'mobile/AgentCockpitPWA/src/App.tsx'), 'utf8');
+    const mobileModelSrc = fs.readFileSync(path.join(ROOT, 'mobile/AgentCockpitPWA/src/appModel.ts'), 'utf8');
     const mobileApiSrc = fs.readFileSync(path.join(ROOT, 'mobile/AgentCockpitPWA/src/api.ts'), 'utf8');
 
     expect(storeSrc).toContain('composerCliProfileId: freshSession ? (data.cliProfileId || null) : next.composerCliProfileId');
@@ -437,7 +438,9 @@ describe('frontend routes', () => {
     expect(chatLiveSrc).toContain('const storedProfileMissing = profileLocked');
     expect(chatLiveSrc).toContain('const success = await StreamStore.reset(convId, resetProfile ? {');
     expect(mobileApiSrc).toContain('async resetConversation(conversationID: string, input: ResetConversationRequest = {})');
+    expect(mobileModelSrc).toContain('function chooseResetProfileRepair');
     expect(mobileAppSrc).toContain('const storedProfileMissing = !!conversation.cliProfileId');
+    expect(mobileAppSrc).toContain('chooseResetProfileRepair(availableProfiles, conversation, selectedCliProfileId)');
     expect(mobileAppSrc).toContain('const response = await clientRef.current.resetConversation(conversation.id, resetProfile ? {');
   });
 
@@ -495,43 +498,49 @@ describe('frontend routes', () => {
 
   test('mobile PWA treats stream socket loss as reconnectable', () => {
     const appSrc = fs.readFileSync(path.join(ROOT, 'mobile/AgentCockpitPWA/src/App.tsx'), 'utf8');
+    const modelSrc = fs.readFileSync(path.join(ROOT, 'mobile/AgentCockpitPWA/src/appModel.ts'), 'utf8');
+    const streamHookSrc = fs.readFileSync(path.join(ROOT, 'mobile/AgentCockpitPWA/src/useChatStreamConnection.ts'), 'utf8');
     const lifecycleHookSrc = fs.readFileSync(path.join(ROOT, 'mobile/AgentCockpitPWA/src/useMobileLifecycle.ts'), 'utf8');
 
-    expect(appSrc).toContain('const STREAM_RECONNECT_BASE_MS');
-    expect(appSrc).toContain('const STREAM_RECONNECT_MAX_MS');
-    expect(appSrc).toContain('streamReconnectTimerRef');
-    expect(appSrc).toContain('resumeStreamConnectionRef');
-    expect(appSrc).toContain('function scheduleStreamReconnect');
-    expect(appSrc).toContain('async function resumeStreamConnection');
-    expect(appSrc).toContain('useVisibleStreamResume(() =>');
+    expect(modelSrc).toContain('const STREAM_RECONNECT_BASE_MS');
+    expect(modelSrc).toContain('const STREAM_RECONNECT_MAX_MS');
+    expect(modelSrc).toContain('function streamReconnectDelayMs');
+    expect(appSrc).toContain('useChatStreamConnection({');
+    expect(streamHookSrc).toContain('streamReconnectTimerRef');
+    expect(streamHookSrc).toContain('resumeStreamConnectionRef');
+    expect(streamHookSrc).toContain('function scheduleStreamReconnect');
+    expect(streamHookSrc).toContain('async function resumeStreamConnection');
+    expect(streamHookSrc).toContain('useVisibleStreamResume(() =>');
     expect(lifecycleHookSrc).toContain("window.addEventListener('online', resumeVisibleStream)");
     expect(lifecycleHookSrc).toContain("document.addEventListener('visibilitychange', resumeVisibleStream)");
     expect(lifecycleHookSrc).toContain('function useVisibleIntervalRefresh');
-    expect(appSrc).toContain('void resumeStreamConnectionRef.current(conversationID, true)');
-    expect(appSrc).toContain('void resumeStreamConnectionRef.current(conversationID)');
-    expect(appSrc).toContain('const socket = tryCreateWebSocket(clientRef.current.websocketURL(conversationID));');
-    expect(appSrc).toContain('if (!socket) {');
-    expect(appSrc).toContain('socket.onerror = () =>');
-    expect(appSrc).toContain('scheduleStreamReconnect(conversationID)');
-    expect(appSrc).toContain('clientRef.current.getActiveStreams()');
-    expect(appSrc).not.toContain("socket.onerror = () => setErrorMessage('Stream connection failed.')");
+    expect(streamHookSrc).toContain('void resumeStreamConnectionRef.current(conversationID, true)');
+    expect(streamHookSrc).toContain('void resumeStreamConnectionRef.current(conversationID)');
+    expect(streamHookSrc).toContain('const socket = tryCreateWebSocket(options.clientRef.current.websocketURL(conversationID));');
+    expect(streamHookSrc).toContain('if (!socket) {');
+    expect(streamHookSrc).toContain('socket.onerror = () =>');
+    expect(streamHookSrc).toContain('scheduleStreamReconnect(conversationID)');
+    expect(streamHookSrc).toContain('options.clientRef.current.getActiveStreams()');
+    expect(streamHookSrc).not.toContain("socket.onerror = () => setErrorMessage('Stream connection failed.')");
   });
 
   test('mobile PWA recovers normal sends that race an active stream', () => {
     const appSrc = fs.readFileSync(path.join(ROOT, 'mobile/AgentCockpitPWA/src/App.tsx'), 'utf8');
+    const sendPipelineSrc = fs.readFileSync(path.join(ROOT, 'mobile/AgentCockpitPWA/src/useSendPipeline.ts'), 'utf8');
     const mobileChatScreenSrc = readMobileChatScreen();
 
-    expect(appSrc).toContain('const sendInFlightRef = useRef(false)');
-    expect(appSrc).toContain('sendInFlightRef.current = true;');
-    expect(appSrc).toContain('sendInFlightRef.current = false;');
-    expect(appSrc).toContain('function isAlreadyStreamingError');
-    expect(appSrc).toContain('function rollbackOptimisticSend');
-    expect(appSrc).toContain('function reconcileRecoveredActiveSend');
-    expect(appSrc).toMatch(/if \(isAlreadyStreamingError\(error\)\) \{\s*rollbackOptimisticSend\(conversation, optimisticUserID, message, attachmentsSnapshot, restoreDraftOnFailure\);\s*await recoverActiveStream\(conversation\.id\);\s*return \{ ok: false, reason: 'active-stream-recovered', error \};\s*\}/);
-    expect(appSrc).toContain('if (await recoverActiveStream(conversation.id, { onlyIfServerActive: true }))');
-    expect(appSrc).toContain('await reconcileRecoveredActiveSend(conversation.id, conversation.messages.length, content);');
-    expect(appSrc).toContain('return { ok: true };');
-    expect(appSrc).toContain('sendMessageNow(nextMessage, { clearComposer: false, restoreDraftOnFailure: false })');
+    expect(appSrc).toContain('useSendPipeline({');
+    expect(sendPipelineSrc).toContain('const sendInFlightRef = useRef(false)');
+    expect(sendPipelineSrc).toContain('sendInFlightRef.current = true;');
+    expect(sendPipelineSrc).toContain('sendInFlightRef.current = false;');
+    expect(sendPipelineSrc).toContain('function isAlreadyStreamingError');
+    expect(sendPipelineSrc).toContain('function rollbackOptimisticSend');
+    expect(sendPipelineSrc).toContain('function reconcileRecoveredActiveSend');
+    expect(sendPipelineSrc).toMatch(/if \(isAlreadyStreamingError\(error\)\) \{\s*rollbackOptimisticSend\(conversation, optimisticUserID, message, attachmentsSnapshot, restoreDraftOnFailure\);\s*await options\.recoverActiveStream\(conversation\.id\);\s*return \{ ok: false, reason: 'active-stream-recovered', error \};\s*\}/);
+    expect(sendPipelineSrc).toContain('if (await options.recoverActiveStream(conversation.id, { onlyIfServerActive: true }))');
+    expect(sendPipelineSrc).toContain('await reconcileRecoveredActiveSend(conversation.id, conversation.messages.length, content);');
+    expect(sendPipelineSrc).toContain('return { ok: true };');
+    expect(sendPipelineSrc).toContain('sendMessageNow(nextMessage, { clearComposer: false, restoreDraftOnFailure: false })');
     expect(mobileChatScreenSrc).toContain('isSending: boolean;');
     expect(mobileChatScreenSrc).toContain('props.isSending');
   });
@@ -646,6 +655,11 @@ describe('frontend routes', () => {
     const componentsSrc = readMobileChatScreen();
     const apiSrc = fs.readFileSync(path.join(ROOT, 'mobile/AgentCockpitPWA/src/api.ts'), 'utf8');
     const modelSrc = fs.readFileSync(path.join(ROOT, 'mobile/AgentCockpitPWA/src/appModel.ts'), 'utf8');
+    const streamEventsSrc = fs.readFileSync(path.join(ROOT, 'mobile/AgentCockpitPWA/src/chatStreamEvents.ts'), 'utf8');
+    const streamHookSrc = fs.readFileSync(path.join(ROOT, 'mobile/AgentCockpitPWA/src/useChatStreamConnection.ts'), 'utf8');
+    const listStreamHookSrc = fs.readFileSync(path.join(ROOT, 'mobile/AgentCockpitPWA/src/useListStreamMonitor.ts'), 'utf8');
+    const goalHookSrc = fs.readFileSync(path.join(ROOT, 'mobile/AgentCockpitPWA/src/useGoalState.ts'), 'utf8');
+    const sendPipelineSrc = fs.readFileSync(path.join(ROOT, 'mobile/AgentCockpitPWA/src/useSendPipeline.ts'), 'utf8');
     const cssSrc = readMobileCss();
 
     expect(apiSrc).toContain('async getGoal');
@@ -660,11 +674,16 @@ describe('frontend routes', () => {
     expect(modelSrc).toContain('function goalCapabilityForBackend');
     expect(componentsSrc).toContain('function GoalStrip');
     expect(componentsSrc).toContain('function GoalEventView');
-    expect(appSrc).toContain('applyServerMessage(conversation.id, response.message)');
-    expect(appSrc).toContain('function handleGoalSlash');
+    expect(appSrc).toContain('useGoalState({');
+    expect(appSrc).toContain('useSendPipeline({');
+    expect(goalHookSrc).toContain('options.applyServerMessage(conversation.id, response.message)');
+    expect(sendPipelineSrc).toContain('function handleGoalSlash');
+    expect(modelSrc).toContain('function parseGoalSlashCommand');
     expect(modelSrc).toContain("backendID === 'claude-code'");
-    expect(appSrc).toContain("case 'goal_updated'");
-    expect(appSrc).toContain("case 'goal_cleared'");
+    expect(streamHookSrc).toContain('chatStreamEventActions(event)');
+    expect(listStreamHookSrc).toContain('listStreamEventActions(event)');
+    expect(streamEventsSrc).toContain("case 'goal_updated'");
+    expect(streamEventsSrc).toContain("case 'goal_cleared'");
     expect(appSrc).toContain('activeGoalIDs');
     expect(componentsSrc).toContain('aria-pressed={props.goalMode}');
     expect(componentsSrc).toContain('Set a goal');
