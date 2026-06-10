@@ -1,5 +1,10 @@
 # Windows Installer Implementation Plan
 
+> Archived status (2026-06-10): implemented in the v0.4.x release line. The
+> current installer, release, and update contracts live in
+> [spec-deployment.md](../spec-deployment.md) and related deployment specs; this
+> file is retained as historical implementation context.
+
 ## Objective
 
 Build a first-class Windows installer path for Agent Cockpit that prioritizes end-user quality over reusing macOS-specific mechanics.

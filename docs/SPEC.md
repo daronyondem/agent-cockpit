@@ -30,6 +30,19 @@ Design and planning documents that preserve product intent, implementation plans
 | [design/knowledge-base/ingestion-hybrid.md](design/knowledge-base/ingestion-hybrid.md) | Implemented | Hybrid AI-assisted KB ingestion (PDF/DOCX/PPTX/image conversion at ingest time) — shipped across PRs #213–#228 |
 | [design/knowledge-base/vnext-implementation-plan.md](design/knowledge-base/vnext-implementation-plan.md) | Implemented | Phased Knowledge Base vNext plan: document structure, chunked digestion, gleaning, glossary expansion, graph retrieval, synthesis history, and pipeline visualization |
 
+### Archived Documents
+
+Historical plans and superseded specifications live under `docs/archive/`.
+They are retained for context and ADR/path compatibility, but current behavior
+is defined by the canonical specs above.
+
+| Document | Status | Description |
+|----------|--------|-------------|
+| [archive/cli-profiles-multi-account-plan.md](archive/cli-profiles-multi-account-plan.md) | Historical | Completed CLI Profiles multi-account implementation plan; current CLI profile behavior uses `harness` as the canonical runtime identity |
+| [archive/context-map-spec.md](archive/context-map-spec.md) | Historical | Superseded Context Map specification retained for historical compatibility; Workspace Context is the current markdown-first feature |
+| [archive/post-issue-290-improvement-plan.md](archive/post-issue-290-improvement-plan.md) | Historical | Completed post-issue-290 cleanup plan for frontend modules, public/v2 removal, audit remediation, and mobile self-update builds |
+| [archive/windows-installer-implementation-plan.md](archive/windows-installer-implementation-plan.md) | Historical | Completed Windows installer implementation plan; current release and installer behavior is specified in deployment specs |
+
 ### Public Documentation
 
 User-facing documentation explains how to install, configure, and operate Agent

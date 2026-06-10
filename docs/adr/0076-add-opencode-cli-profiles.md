@@ -60,7 +60,7 @@ affects:
   - docs/spec-testing.md
   - docs/spec-coverage.md
   - BACKENDS.md
-  - CLI_PROFILES_MULTI_ACCOUNT_PLAN.md
+  - docs/archive/cli-profiles-multi-account-plan.md
 ---
 
 ## Context

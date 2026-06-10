@@ -206,8 +206,9 @@ files plus `docs/`, `mobile/`, `public/`, `scripts/`, `src/`, and `web/`.
 
 The package script excludes mutable or local-only state from the artifact:
 `node_modules/`, `data/`, `.env`, `ecosystem.config.js`, `coverage/`, `plans/`,
-`plan.md`, release `dist/` output, PM2/local logs, and generated build staging
-directories such as `public/.v2-built-*` and `public/.mobile-built-*`.
+root-local `plan.md`, release `dist/` output, PM2/local logs, and generated
+build staging directories such as `public/.v2-built-*` and
+`public/.mobile-built-*`.
 
 `release-manifest.json` is an external installer/updater manifest with
 `schemaVersion: 1`, `channel: "production"`, `source: "github-release"`,
