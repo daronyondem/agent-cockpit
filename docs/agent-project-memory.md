@@ -35,6 +35,10 @@ tool is unavailable.
   frame union. Desktop stream-frame state transitions belong in the pure reducer
   under `web/AgentCockpitWeb/src/stream/`, with `streamStore.js` acting as the
   socket/API/timer effect adapter.
+- Server type definitions live in declaration-only domain modules under
+  `src/types/` and are re-exported through `src/types/index.ts`. Contracts
+  keep importing exactly `../types`; new server-only types should go in the
+  matching domain file rather than the barrel.
 
 ## Releases And Installers
 
