@@ -97,6 +97,14 @@ Claude Code Interactive depends on private Claude CLI terminal and transcript be
 - Keep the suites aligned with the behavior being changed. Add or adjust real-CLI scenarios when changing prompt submission, PTY lifecycle, hook handling, transcript parsing, tool mapping, goal handling, abort cleanup, browser composer/profile selection, reset, or version compatibility.
 - For Claude CLI version compatibility checks on a dev machine, run `npm run e2e:claude-interactive:report` and `npm run e2e:claude-interactive-ui:report` with an authenticated real `claude` CLI. These suites are intentionally not part of normal CI and should not be replaced with mocks for version-drift validation.
 
+# Codex Protocol Compatibility
+
+Codex App Server behavior is split across `src/services/backends/codex.ts`, `codexRuntime.ts`, `codexProtocol.ts`, `codexEvents.ts`, `codexStreamDispatch.ts`, `codexArtifacts.ts`, `codexUsage.ts`, `codexModels.ts`, `codexExec.ts`, and `codexProcess.ts`. `codex.ts` remains the public facade and compatibility re-export surface.
+
+- Review and extend `test/codexBackend.test.ts` whenever touching those Codex modules, especially protocol shapes, notification dispatch, turn ownership, subagent demux, usage accounting, process lifecycle, or `codex exec` invocation behavior.
+- When changing hand-typed Codex app-server protocol shapes, run or document the `codex app-server --enable goals generate-ts --out <DIR>` drift-diff procedure from `docs/spec-backend-services.md` and inspect `codexProtocol.ts`, `codexEvents.ts`, `codexModels.ts`, and `codexStreamDispatch.ts`.
+- No real-CLI Codex e2e suite exists today. Do not imply one is part of normal drift validation; creating one is separate scope unless a future issue or ADR adds that requirement.
+
 # Server Management
 
 NEVER run `node server.js` directly. This causes orphan processes and port conflicts.
