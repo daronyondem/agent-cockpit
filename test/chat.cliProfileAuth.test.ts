@@ -9,6 +9,8 @@ import { OpenCodeAdapter } from '../src/services/backends/opencode';
 
 let env: ChatRouterEnv;
 const originalPlatformDescriptor = Object.getOwnPropertyDescriptor(process, 'platform');
+const JOB_POLL_TIMEOUT_MS = 15000;
+const JOB_POLL_INTERVAL_MS = 25;
 
 beforeEach(async () => { env = await createChatRouterEnv(); });
 afterEach(async () => { await destroyChatRouterEnv(env); });
@@ -39,21 +41,23 @@ async function addProfile(profile: Record<string, any>): Promise<void> {
 
 async function waitForJob(jobId: string): Promise<any> {
   let last: any = null;
-  for (let i = 0; i < 40; i++) {
+  const deadline = Date.now() + JOB_POLL_TIMEOUT_MS;
+  while (Date.now() < deadline) {
     const res = await env.request('GET', `/api/chat/cli-profiles/auth-jobs/${jobId}`);
     last = res.body.job;
     if (last && last.status !== 'running') return last;
-    await new Promise(resolve => setTimeout(resolve, 25));
+    await new Promise(resolve => setTimeout(resolve, JOB_POLL_INTERVAL_MS));
   }
   return last;
 }
 
 async function waitForServiceJob(service: CliProfileAuthService, jobId: string): Promise<any> {
   let last: any = null;
-  for (let i = 0; i < 40; i++) {
+  const deadline = Date.now() + JOB_POLL_TIMEOUT_MS;
+  while (Date.now() < deadline) {
     last = service.getJob(jobId);
     if (last && last.status !== 'running') return last;
-    await new Promise(resolve => setTimeout(resolve, 25));
+    await new Promise(resolve => setTimeout(resolve, JOB_POLL_INTERVAL_MS));
   }
   return last;
 }

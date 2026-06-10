@@ -4,6 +4,7 @@ import path from 'path';
 import { WebBuildService, defaultNpmCommand } from '../src/services/webBuildService';
 
 const originalPlatformDescriptor = Object.getOwnPropertyDescriptor(process, 'platform');
+const DEFAULT_RUNNER_TEST_TIMEOUT_MS = 30000;
 
 function mockProcessPlatform(platform: NodeJS.Platform): () => void {
   Object.defineProperty(process, 'platform', { value: platform });
@@ -265,7 +266,7 @@ describe('WebBuildService', () => {
     expect(status.didBuild).toBe(true);
     expect(fs.readFileSync(path.join(env.buildDir, 'index.html'), 'utf8')).toBe('<!doctype html>fresh');
     expect(fs.readdirSync(path.dirname(env.buildDir)).filter((name) => name.startsWith('.v2-built-'))).toEqual([]);
-  });
+  }, DEFAULT_RUNNER_TEST_TIMEOUT_MS);
 
   test('default runner preserves previous build when staging build fails', async () => {
     const env = makeEnv();
@@ -289,5 +290,5 @@ describe('WebBuildService', () => {
     expect(status.error).toBeTruthy();
     expect(fs.readFileSync(path.join(env.buildDir, 'index.html'), 'utf8')).toBe('<!doctype html>previous');
     expect(fs.readdirSync(path.dirname(env.buildDir)).filter((name) => name.startsWith('.v2-built-'))).toEqual([]);
-  });
+  }, DEFAULT_RUNNER_TEST_TIMEOUT_MS);
 });

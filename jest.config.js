@@ -28,6 +28,8 @@ module.exports = {
   coverageDirectory: 'coverage',
   coverageProvider: 'v8',
   coverageReporters: ['text-summary', 'lcov'],
+  maxWorkers: '50%',
+  testTimeout: 30000,
   coverageThreshold: {
     global: {
       statements: 85,

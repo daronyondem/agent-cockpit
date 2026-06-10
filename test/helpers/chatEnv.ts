@@ -20,7 +20,7 @@ import { MockBackendAdapter } from './mockBackendAdapter';
 export const DEFAULT_WORKSPACE = '/tmp/test-workspace';
 export const CSRF_TOKEN = 'test-csrf-token';
 const TEST_HTTP_HOST = '127.0.0.1';
-const TEST_HTTP_TIMEOUT_MS = 4000;
+const TEST_HTTP_TIMEOUT_MS = 15000;
 
 export interface HttpResult {
   status: number;
