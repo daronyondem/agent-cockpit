@@ -38,6 +38,10 @@ diagrams line up so future changes can see what must be updated.
 
 ## Source Coverage Matrix
 
+Rows that cite `src/types/index.ts` cover the declaration-only server type
+surface re-exported by that barrel, including the focused domain modules under
+`src/types/`.
+
 | Feature or subsystem | Source evidence | Canonical docs | Test evidence | Diagram coverage |
 |---|---|---|---|---|
 | Server boot, config, sessions, security headers | `server.ts`, `src/config/index.ts`, `src/middleware/auth.ts`, `src/middleware/csrf.ts`, `src/middleware/security.ts`, `src/services/localAuthStore.ts`, `src/types/session-file-store.d.ts`, `src/utils/logger.ts` | `docs/spec-server-security.md`, `docs/spec-api-endpoints.md`, `docs/spec-deployment.md`, `README.md`, `ONBOARDING.md` | `test/auth.test.ts`, `test/localAuthStore.test.ts`, `test/graceful-shutdown.test.ts`, `test/frontendRoutes.test.ts`, `test/logger.test.ts` | Auth/session flow below; startup sequence in `docs/spec-server-security.md`. |

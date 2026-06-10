@@ -10,6 +10,13 @@ const CONTRACT_ALLOWED_IMPORTS = [
   /^\.\.\/types$/,
 ];
 
+const TYPES_ALLOWED_IMPORTS = [
+  /^\.\//,
+  /^express$/,
+  /^express-session$/,
+  /^\.\.\/contracts\//,
+];
+
 const LEGACY_BACKEND_CONSOLE_ALLOWLIST = new Set([
   'src/config/index.ts',
   'src/middleware/auth.ts',
@@ -37,6 +44,8 @@ const LEGACY_BACKEND_CONSOLE_ALLOWLIST = new Set([
 
 const FRONTEND_IMPORT_RE = /(?:import(?:\s+type)?[\s\S]*?\sfrom\s*|import\s*\()\s*['"]([^'"]+)['"]/g;
 const CONTRACT_IMPORT_RE = /import(?:\s+type)?[\s\S]*?\sfrom\s*['"]([^'"]+)['"]/g;
+const TYPES_IMPORT_RE = /import(?:\s+type)?[\s\S]*?\sfrom\s*['"]([^'"]+)['"]/g;
+const TYPES_RUNTIME_DECL_RE = /^\s*(?:export\s+)?(?:const|let|var|function|class)\s/gm;
 const CONSOLE_RE = /\bconsole\.(log|warn|error|info|debug)\s*\(/g;
 
 function walk(dir, predicate, out = []) {
@@ -70,6 +79,23 @@ function checkContractImports(violations) {
       if (!CONTRACT_ALLOWED_IMPORTS.some((allowed) => allowed.test(specifier))) {
         violations.push(`${rel(file)}:${lineNumber(source, match.index)} imports ${specifier}; contracts must stay browser-safe`);
       }
+    }
+  }
+}
+
+function checkTypesImports(violations) {
+  const files = walk(path.join(ROOT, 'src', 'types'), (file) => file.endsWith('.ts') && !file.endsWith('.d.ts'));
+  for (const file of files) {
+    const source = fs.readFileSync(file, 'utf8');
+    let match;
+    while ((match = TYPES_IMPORT_RE.exec(source))) {
+      const specifier = match[1];
+      if (!TYPES_ALLOWED_IMPORTS.some((allowed) => allowed.test(specifier))) {
+        violations.push(`${rel(file)}:${lineNumber(source, match.index)} imports ${specifier}; src/types must stay declaration-only and depend only on sibling types, Express, or contracts`);
+      }
+    }
+    while ((match = TYPES_RUNTIME_DECL_RE.exec(source))) {
+      violations.push(`${rel(file)}:${lineNumber(source, match.index)} declares runtime code; src/types must stay declaration-only`);
     }
   }
 }
@@ -117,6 +143,7 @@ function checkBackendConsole(violations) {
 function main() {
   const violations = [];
   checkContractImports(violations);
+  checkTypesImports(violations);
   checkFrontendImports(violations);
   checkBackendConsole(violations);
 
@@ -135,4 +162,5 @@ module.exports = {
   checkBackendConsole,
   checkContractImports,
   checkFrontendImports,
+  checkTypesImports,
 };

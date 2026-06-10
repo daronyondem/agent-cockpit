@@ -44,7 +44,27 @@ agent-cockpit/
 │   │   ├── serviceTier.ts             # Browser-safe service-tier input normalization
 │   │   └── validation.ts              # Shared object/string/boolean/number/array validation helpers
 │   ├── types/
-│   │   └── index.ts                    # Shared type definitions (models, events, adapters)
+│   │   ├── index.ts                    # Pure type barrel; re-exports the domain modules below
+│   │   ├── attachments.ts              # Attachment metadata, queued uploads, and generated artifacts
+│   │   ├── backends.ts                 # Backend adapter capabilities, metadata, and send-message contracts
+│   │   ├── chat.ts                     # Message/session/window shapes
+│   │   ├── cliEvents.ts                # Raw Claude CLI stream-json event shapes
+│   │   ├── cliProfiles.ts              # CLI profile primitives, harness IDs, effort, and service tier knobs
+│   │   ├── config.ts                   # App configuration and Codex policy enums
+│   │   ├── conversations.ts            # Conversation records, checkout/worktree state, and sidebar summaries
+│   │   ├── goals.ts                    # Thread goal state and goal lifecycle events
+│   │   ├── http.ts                     # Express type re-exports and express-session augmentation
+│   │   ├── install.ts                  # Install doctor, self-update, and CLI update status shapes
+│   │   ├── knowledgeBase.ts            # KB state, entries, synthesis, reflection, and KB stream updates
+│   │   ├── memory.ts                   # Workspace Memory entries, snapshots, consolidation, and updates
+│   │   ├── sessionRecovery.ts          # Backend native-session recovery metadata and events
+│   │   ├── settings.ts                 # Global settings shape and legacy settings fields
+│   │   ├── streams.ts                  # Server-side stream events, durable jobs, and active stream registry
+│   │   ├── tools.ts                    # Tool activity, question/outcome, and extracted tool details
+│   │   ├── usage.ts                    # Usage totals and daily usage ledger records
+│   │   ├── workspaceContext.ts         # Workspace Context settings, run state, and update events
+│   │   ├── workspaces.ts               # Workspace indexes, identities, and instruction compatibility
+│   │   └── wsFrames.ts                 # WebSocket client/server frame unions
 │   ├── config/index.ts                 # Loads env vars with defaults
 │   ├── middleware/
 │   │   ├── auth.ts                     # Passport strategies, login page, routes
@@ -2065,7 +2085,7 @@ Dimension mismatch handling: if configured dimensions differ from stored value, 
 
 ## KB TypeScript Types
 
-Types defined in `src/types/index.ts`:
+Types defined in `src/types/knowledgeBase.ts` and re-exported by `src/types/index.ts`:
 
 ```typescript
 type KbRawStatus = 'ingesting' | 'ingested' | 'digesting' | 'digested' | 'failed' | 'pending-delete';
