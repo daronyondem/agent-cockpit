@@ -542,8 +542,8 @@ Linux tarball entries currently refer to the same physical tarball bytes because
 the packaged source and built web/mobile assets are platform-neutral. `files[]`
 contains every regular file copied into the app archives, with paths relative to the package root.
 It excludes mutable/local-only state such as `node_modules/`, `data/`, `.env`,
-`ecosystem.config.js`, `coverage/`, `plans/`, `plan.md`, release `dist/` output,
-and generated build staging directories. `SHA256SUMS` currently contains
+`ecosystem.config.js`, `coverage/`, `plans/`, root-local `plan.md`, release
+`dist/` output, and generated build staging directories. `SHA256SUMS` currently contains
 checksums for the tarball, ZIP, this external manifest, `install-macos.sh`,
 `install-linux.sh`, and `install-windows.ps1`.
 `requiredRuntime.node` is derived from root `package.json` `engines.node`.

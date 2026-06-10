@@ -1,5 +1,12 @@
 # CLI Profiles Multi-Account Plan
 
+> Archived status (2026-06-10): implemented. Current CLI profile behavior lives
+> in [spec-data-models.md](../spec-data-models.md),
+> [spec-api-endpoints.md](../spec-api-endpoints.md), and
+> [spec-backend-services.md](../spec-backend-services.md). The canonical runtime
+> identity is now `harness`; older `vendor` terminology in this plan is
+> historical only.
+
 Tracking issue: https://github.com/daronyondem/agent-cockpit/issues/243
 
 Status: Final implementation pass complete locally; not committed or pushed.

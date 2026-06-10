@@ -36,7 +36,7 @@ affects:
   - docs/spec-testing.md
   - docs/spec-coverage.md
   - docs/agent-project-memory.md
-  - CLI_PROFILES_MULTI_ACCOUNT_PLAN.md
+  - docs/archive/cli-profiles-multi-account-plan.md
   - AGENTS.md
 ---
 

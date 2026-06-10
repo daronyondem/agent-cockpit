@@ -11,7 +11,7 @@ tags:
   - update
   - macos
 affects:
-  - plan.md
+  - docs/archive/windows-installer-implementation-plan.md
   - package.json
   - .github/workflows/release.yml
   - .github/workflows/version-bump.yml

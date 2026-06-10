@@ -1,5 +1,10 @@
 # Post-Issue 290 Improvement Plan
 
+> Archived status (2026-06-10): completed or issue-tracked. Phases 1, 2, 3, 4,
+> and 5 are complete in the working tree, with the public/v2 cleanup tracked in
+> issue #420 until that issue is closed. This file is retained as historical
+> planning context.
+
 ## Goal
 
 Move the V2 web app from "Vite-built but still global-compatible" to a proper module-based frontend, reduce bundle size, remove archived runtime confusion, address dependency security, and decide whether self-update should also build mobile assets.

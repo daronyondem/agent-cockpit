@@ -14,7 +14,7 @@ affects:
   - docs/spec-testing.md
   - AGENTS.md
   - docs/agent-project-memory.md
-  - improvements.md
+  - docs/archive/post-issue-290-improvement-plan.md
 ---
 
 ## Context
