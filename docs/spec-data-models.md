@@ -96,7 +96,21 @@ agent-cockpit/
 │       │   ├── libreOffice.ts          # LibreOffice (soffice) detection cache
 │       │   ├── pandoc.ts               # Pandoc detection + `runPandoc` subprocess helper
 │       │   ├── ingestion.ts            # KbIngestionService: per-workspace FIFO queue, enqueueUpload, deleteRaw, waitForIdle
-│       │   ├── db.ts                   # KbDatabase: per-workspace SQLite layer (better-sqlite3, WAL mode)
+│       │   ├── db.ts                   # KbDatabase facade and sole SQLite connection owner (open/migrate/transaction/lifecycle)
+│       │   ├── db/                     # Focused DB modules used only behind the db.ts facade
+│       │   │   ├── types.ts            # KB SQLite row/domain types re-exported by db.ts
+│       │   │   ├── rowMappers.ts       # Row-to-domain mapping helpers
+│       │   │   ├── schema.ts           # Schema DDL, migrations, root folder bootstrap, crash recovery
+│       │   │   ├── folders.ts          # Folder path normalization and folder/raw-location mutations
+│       │   │   ├── raw.ts              # Raw file CRUD, status updates, pending-delete queries
+│       │   │   ├── documents.ts        # Document structure roots/nodes and source lineage lookups
+│       │   │   ├── glossary.ts         # Workspace glossary CRUD
+│       │   │   ├── entries.ts          # Entry CRUD, tags, filters, stale co-topic marking
+│       │   │   ├── synthesis.ts        # Synthesis meta, runs, history, topics, assignments, snapshots
+│       │   │   ├── synthesisGraph.ts   # Connections, graph discovery queries, god-node/orphan cleanup
+│       │   │   ├── reflections.ts      # Reflection rows, citations, stale detection
+│       │   │   ├── digestSession.ts    # Digest session progress persistence
+│       │   │   └── stats.ts            # Counter aggregations and stale reflection counts
 │       │   ├── digest.ts              # KbDigestionService: per-raw CLI digestion, entry parsing, stringifyEntry
 │       │   ├── ingestion/
 │       │   │   ├── pageConversion.ts   # convertImageToMarkdown: shared per-image AI helper (PDF, DOCX, PPTX, passthrough)
@@ -1787,7 +1801,7 @@ only when `integrations.telegram.clearBotToken: true` is posted.
 
 ## KB SQLite Schema (Complete)
 
-Each workspace owns one `knowledge/state.db` (better-sqlite3, WAL mode, `foreign_keys = ON`). Schema version is tracked in the `meta` table and bumped on migrations. Current version: **8** (`KB_DB_SCHEMA_VERSION`).
+Each workspace owns one `knowledge/state.db` (better-sqlite3, WAL mode, `foreign_keys = ON`). `src/services/knowledgeBase/db.ts` owns the connection and exposes the `KbDatabase` facade; focused implementation modules live under `src/services/knowledgeBase/db/`. Schema version is tracked in the `meta` table and bumped on migrations. Current version: **8** (`KB_DB_SCHEMA_VERSION` in `db/schema.ts`, re-exported from `db.ts`).
 
 **Pragmas:** `journal_mode = WAL` (Write-Ahead Logging for concurrent reads), `foreign_keys = ON`.
 
@@ -1992,7 +2006,7 @@ CREATE INDEX IF NOT EXISTS idx_src_entry ON synthesis_reflection_citations(entry
 -- browser reload rehydrates the KB Browser toolbar's progress + ETA
 -- without losing accuracy. Upserted on every `total`/`done` change
 -- (cheap — sqlite, typically sub-ms) and deleted when the queue drains.
--- Cleared on KbDatabase construction via `_recoverFromCrash()` so a
+-- Cleared on KbDatabase construction via `recoverFromCrash()` in `db/schema.ts` so a
 -- server restart mid-session doesn't leave a phantom indicator forever.
 CREATE TABLE IF NOT EXISTS digest_session (
   id                INTEGER PRIMARY KEY CHECK (id = 1),
@@ -2028,15 +2042,15 @@ CREATE TABLE IF NOT EXISTS digest_session (
 
 ### Migrations
 
-Schema version is stored in `meta.schema_version`. Migrations are applied at DB open time by `_initSchema()`:
+Schema version is stored in `meta.schema_version`. Migrations are applied at DB open time by `initSchema()` in `src/services/knowledgeBase/db/schema.ts`, called by the `KbDatabase` constructor:
 
-- **V1 → V2** (`_migrateV2`): Adds `needs_synthesis INTEGER NOT NULL DEFAULT 1` column to `entries` table. All existing entries get `needs_synthesis = 1` (pending).
-- **V2 → V3** (`_migrateV3`): Adds `original_citation_count INTEGER NOT NULL DEFAULT 0` to `synthesis_reflections` table. Backfills existing reflections by counting their current citation rows and updates `meta.schema_version` to `3` even when the column already exists.
-- **V3 → V4** (`_migrateV4`): Adds `kb_documents` and `kb_document_nodes` through the idempotent schema DDL and updates `meta.schema_version` to `4`.
-- **V4 → V5** (`_migrateV5`): Adds `kb_entry_sources` through the idempotent schema DDL and updates `meta.schema_version` to `5`.
-- **V5 → V6** (`_migrateV6`): Adds `kb_glossary` through the idempotent schema DDL and updates `meta.schema_version` to `6`.
-- **V6 → V7** (`_migrateV7`): Adds `synthesis_runs` and `synthesis_topic_history` through the idempotent schema DDL and updates `meta.schema_version` to `7`.
-- **V7 → V8** (`_migrateV8`): Adds nullable `digest_session.chunk_progress_json` so live chunk planning/digestion progress can be persisted while a digest session is active, then updates `meta.schema_version` to `KB_DB_SCHEMA_VERSION`.
+- **V1 → V2** (`migrateV2` in `db/schema.ts`): Adds `needs_synthesis INTEGER NOT NULL DEFAULT 1` column to `entries` table. All existing entries get `needs_synthesis = 1` (pending).
+- **V2 → V3** (`migrateV3` in `db/schema.ts`): Adds `original_citation_count INTEGER NOT NULL DEFAULT 0` to `synthesis_reflections` table. Backfills existing reflections by counting their current citation rows and updates `meta.schema_version` to `3` even when the column already exists.
+- **V3 → V4** (`migrateV4` in `db/schema.ts`): Adds `kb_documents` and `kb_document_nodes` through the idempotent schema DDL and updates `meta.schema_version` to `4`.
+- **V4 → V5** (`migrateV5` in `db/schema.ts`): Adds `kb_entry_sources` through the idempotent schema DDL and updates `meta.schema_version` to `5`.
+- **V5 → V6** (`migrateV6` in `db/schema.ts`): Adds `kb_glossary` through the idempotent schema DDL and updates `meta.schema_version` to `6`.
+- **V6 → V7** (`migrateV7` in `db/schema.ts`): Adds `synthesis_runs` and `synthesis_topic_history` through the idempotent schema DDL and updates `meta.schema_version` to `7`.
+- **V7 → V8** (`migrateV8` in `db/schema.ts`): Adds nullable `digest_session.chunk_progress_json` so live chunk planning/digestion progress can be persisted while a digest session is active, then updates `meta.schema_version` to `KB_DB_SCHEMA_VERSION`.
 - **V1 → V8**: Runs V2, V3, V4, V5, V6, V7, then V8 sequentially.
 
 ### Legacy Migration (state.json → state.db)
@@ -2378,7 +2392,7 @@ interface BackendRuntimeEvent {
 
 | Constant | Value | File | Purpose |
 |----------|-------|------|---------|
-| `KB_DB_SCHEMA_VERSION` | 8 | db.ts | Current SQLite schema version |
+| `KB_DB_SCHEMA_VERSION` | 8 | db/schema.ts (re-exported by db.ts) | Current SQLite schema version |
 | `KB_ENTRY_SCHEMA_VERSION` | 1 | digest.ts | Entry markdown format version |
 | `SYNTHESIS_BATCH_SIZE` | 10 | dream.ts | Entries per synthesis CLI batch |
 | `EMBED_BATCH_SIZE` | 50 | dream.ts | Texts per Ollama embedding call |
@@ -2397,13 +2411,13 @@ interface BackendRuntimeEvent {
 | Default embedding model | `nomic-embed-text` | embeddings.ts | Ollama model name |
 | Default embedding host | `http://localhost:11434` | embeddings.ts | Ollama server URL |
 | Default embedding dimensions | 768 | embeddings.ts | Vector size |
-| Folder path max | 4096 chars | db.ts | Total path length limit |
-| Folder segment max | 128 chars | db.ts | Per-segment length limit |
+| Folder path max | 4096 chars | db/folders.ts (re-exported by db.ts) | Total path length limit |
+| Folder segment max | 128 chars | db/folders.ts (re-exported by db.ts) | Per-segment length limit |
 | Slug max | 80 chars | digest.ts | Entry slug max length |
 | Tag max | 40 chars | digest.ts | Tag max length |
 | Upload size limit | 1 GB | kbRoutes.ts (multer) | Per-file KB raw upload cap |
-| God node entry threshold | max(avg × 3, 10) | db.ts | Entries to flag as god node |
-| God node connection threshold | max(avg × 3, 3) | db.ts | Connections to flag as god node |
+| God node entry threshold | max(avg × 3, 10) | db/synthesisGraph.ts | Entries to flag as god node |
+| God node connection threshold | max(avg × 3, 3) | db/synthesisGraph.ts | Connections to flag as god node |
 
 ## KB Materialized Markdown Files
 

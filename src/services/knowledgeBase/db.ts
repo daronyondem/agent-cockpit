@@ -1,565 +1,71 @@
-// ─── Knowledge Base SQLite layer ────────────────────────────────────────────
-// Per-workspace state.db that owns the metadata index for the KB:
-//   - raw: one row per content-addressed raw file
-//   - folders: virtual folder tree (root = '')
-//   - raw_locations: (rawId, folder, filename) junction; same rawId can
-//     live in multiple folders (Option B multi-location)
-//   - entries: digested entries (metadata only; bodies live on disk)
-//   - entry_tags: tag index for search/browse
-//   - kb_entry_sources: source ranges that produced each digested entry
-//
-// All writes go through this class; no code outside `knowledgeBase/` should
-// talk to the DB directly. Concurrency is single-threaded per workspace —
-// the ingestion orchestrator funnels all work through a per-workspace FIFO,
-// so we never need in-DB locking beyond the default WAL mode.
-//
-// Migration from Phase 1/2 `state.json` is handled by `openKbDatabase`,
-// which is the only public entry point. It:
-//   1. Opens (or creates) `state.db`
-//   2. Runs the schema DDL (idempotent — CREATE TABLE IF NOT EXISTS)
-//   3. If the DB is brand-new AND a legacy `state.json` exists, reads the
-//      JSON, re-hashes each raw file from disk to populate the sha256
-//      column, and inserts raw + raw_locations rows in a single tx
-//   4. Renames the old JSON to `state.json.migrated` as a safety copy
-//   5. Returns a ready-to-use `KbDatabase` instance
+// Knowledge Base SQLite facade. KbDatabase owns one per-workspace
+// better-sqlite3 handle and delegates domain logic to ./db/* modules.
 
 import Database from 'better-sqlite3';
 import type { Database as BetterSqlite3Database } from 'better-sqlite3';
 import fs from 'fs';
 import path from 'path';
 import crypto from 'crypto';
+import * as digestSessionDb from './db/digestSession';
+import * as entriesDb from './db/entries';
+import * as documentsDb from './db/documents';
+import * as foldersDb from './db/folders';
+import * as glossaryDb from './db/glossary';
+import * as rawDb from './db/raw';
+import * as reflectionsDb from './db/reflections';
+import * as synthesisDb from './db/synthesis';
+import * as synthesisGraphDb from './db/synthesisGraph';
+import {
+  ensureRootFolder,
+  getSchemaVersion as readSchemaVersion,
+  initSchema,
+  recoverFromCrash,
+} from './db/schema';
+import * as statsDb from './db/stats';
+import type {
+  DigestSessionRow,
+  InsertConnectionParams,
+  InsertEntryParams,
+  InsertEntrySourceParams,
+  InsertLocationParams,
+  InsertReflectionParams,
+  InsertRawParams,
+  InsertTopicHistoryParams,
+  KbDocumentNodeRow,
+  KbDocumentRow,
+  KbEntrySourceRow,
+  KbGlossaryRow,
+  ListEntriesFilter,
+  LocationRow,
+  RawDbRow,
+  RawError,
+  ReplaceEntryParams,
+  SynthesisConnectionRow,
+  SynthesisReflectionRow,
+  SynthesisRunMode,
+  SynthesisRunRow,
+  SynthesisRunStatus,
+  SynthesisSnapshot,
+  SynthesisTopicHistoryRow,
+  SynthesisTopicRow,
+  UpsertDocumentStructureParams,
+  UpsertTopicParams,
+} from './db/types';
 import type {
   KbCounters,
-  KbDigestChunkProgress,
-  KbDreamProgress,
   KbEntry,
-  KbErrorClass,
   KbFolder,
   KbRawEntry,
   KbRawStatus,
 } from '../../types';
 
-/** Version of the DB's own schema. Bumped on destructive schema changes. */
-export const KB_DB_SCHEMA_VERSION = 8;
-
-/** Default page size for folder listings. */
-export const DEFAULT_RAW_PAGE_SIZE = 500;
-
-/**
- * Idempotent DDL — safe to run on every open. `CREATE TABLE IF NOT EXISTS`
- * keeps it a no-op on established DBs; fresh DBs get the full shape.
- */
-const SCHEMA_DDL = `
-  CREATE TABLE IF NOT EXISTS meta (
-    key   TEXT PRIMARY KEY,
-    value TEXT NOT NULL
-  );
-
-  CREATE TABLE IF NOT EXISTS raw (
-    raw_id        TEXT PRIMARY KEY,
-    sha256        TEXT NOT NULL,
-    status        TEXT NOT NULL,
-    byte_length   INTEGER NOT NULL,
-    mime_type     TEXT,
-    handler       TEXT,
-    uploaded_at   TEXT NOT NULL,
-    digested_at   TEXT,
-    error_class   TEXT,
-    error_message TEXT,
-    metadata_json TEXT
-  );
-  CREATE INDEX IF NOT EXISTS idx_raw_status ON raw(status);
-  CREATE INDEX IF NOT EXISTS idx_raw_sha256 ON raw(sha256);
-
-  CREATE TABLE IF NOT EXISTS folders (
-    folder_path TEXT PRIMARY KEY,
-    created_at  TEXT NOT NULL
-  );
-
-  CREATE TABLE IF NOT EXISTS raw_locations (
-    raw_id      TEXT NOT NULL REFERENCES raw(raw_id) ON DELETE CASCADE,
-    folder_path TEXT NOT NULL REFERENCES folders(folder_path) ON DELETE RESTRICT,
-    filename    TEXT NOT NULL,
-    uploaded_at TEXT NOT NULL,
-    PRIMARY KEY (raw_id, folder_path, filename)
-  );
-  CREATE INDEX IF NOT EXISTS idx_raw_loc_folder   ON raw_locations(folder_path);
-  CREATE INDEX IF NOT EXISTS idx_raw_loc_filename ON raw_locations(filename);
-
-  CREATE TABLE IF NOT EXISTS kb_documents (
-    raw_id           TEXT PRIMARY KEY REFERENCES raw(raw_id) ON DELETE CASCADE,
-    doc_name         TEXT NOT NULL,
-    doc_description  TEXT,
-    unit_type        TEXT NOT NULL,
-    unit_count       INTEGER NOT NULL DEFAULT 0,
-    structure_status TEXT NOT NULL DEFAULT 'ready',
-    structure_error  TEXT,
-    created_at       TEXT NOT NULL,
-    updated_at       TEXT NOT NULL
-  );
-
-  CREATE TABLE IF NOT EXISTS kb_document_nodes (
-    node_id        TEXT NOT NULL,
-    raw_id         TEXT NOT NULL REFERENCES kb_documents(raw_id) ON DELETE CASCADE,
-    parent_node_id TEXT,
-    title          TEXT NOT NULL,
-    summary        TEXT,
-    start_unit     INTEGER NOT NULL,
-    end_unit       INTEGER NOT NULL,
-    sort_order     INTEGER NOT NULL,
-    source         TEXT NOT NULL,
-    metadata_json  TEXT,
-    PRIMARY KEY (raw_id, node_id)
-  );
-  CREATE INDEX IF NOT EXISTS idx_kb_doc_nodes_raw_order ON kb_document_nodes(raw_id, sort_order);
-  CREATE INDEX IF NOT EXISTS idx_kb_doc_nodes_parent ON kb_document_nodes(raw_id, parent_node_id);
-
-  CREATE TABLE IF NOT EXISTS entries (
-    entry_id       TEXT PRIMARY KEY,
-    raw_id         TEXT NOT NULL REFERENCES raw(raw_id) ON DELETE CASCADE,
-    title          TEXT NOT NULL,
-    slug           TEXT NOT NULL,
-    summary        TEXT NOT NULL,
-    schema_version INTEGER NOT NULL,
-    stale_schema   INTEGER NOT NULL DEFAULT 0,
-    digested_at    TEXT NOT NULL,
-    needs_synthesis INTEGER NOT NULL DEFAULT 1
-  );
-  CREATE INDEX IF NOT EXISTS idx_entries_raw ON entries(raw_id);
-
-  CREATE TABLE IF NOT EXISTS entry_tags (
-    entry_id TEXT NOT NULL REFERENCES entries(entry_id) ON DELETE CASCADE,
-    tag      TEXT NOT NULL,
-    PRIMARY KEY (entry_id, tag)
-  );
-  CREATE INDEX IF NOT EXISTS idx_entry_tags_tag ON entry_tags(tag);
-
-  CREATE TABLE IF NOT EXISTS kb_entry_sources (
-    entry_id   TEXT NOT NULL REFERENCES entries(entry_id) ON DELETE CASCADE,
-    raw_id     TEXT NOT NULL REFERENCES raw(raw_id) ON DELETE CASCADE,
-    node_id    TEXT,
-    chunk_id   TEXT NOT NULL,
-    start_unit INTEGER NOT NULL,
-    end_unit   INTEGER NOT NULL,
-    PRIMARY KEY (entry_id, raw_id, chunk_id, start_unit, end_unit)
-  );
-  CREATE INDEX IF NOT EXISTS idx_kb_entry_sources_raw ON kb_entry_sources(raw_id);
-  CREATE INDEX IF NOT EXISTS idx_kb_entry_sources_entry ON kb_entry_sources(entry_id);
-
-  CREATE TABLE IF NOT EXISTS kb_glossary (
-    id         INTEGER PRIMARY KEY AUTOINCREMENT,
-    term       TEXT NOT NULL COLLATE NOCASE UNIQUE,
-    expansion  TEXT NOT NULL,
-    created_at TEXT NOT NULL,
-    updated_at TEXT NOT NULL
-  );
-
-  -- ── Synthesis (Dreaming) ──────────────────────────────────────────────────
-
-  CREATE TABLE IF NOT EXISTS synthesis_meta (
-    key   TEXT PRIMARY KEY,
-    value TEXT NOT NULL
-  );
-
-  CREATE TABLE IF NOT EXISTS synthesis_topics (
-    topic_id    TEXT PRIMARY KEY,
-    title       TEXT NOT NULL,
-    summary     TEXT,
-    content     TEXT,
-    updated_at  TEXT NOT NULL
-  );
-
-  CREATE TABLE IF NOT EXISTS synthesis_topic_entries (
-    topic_id TEXT NOT NULL REFERENCES synthesis_topics(topic_id) ON DELETE CASCADE,
-    entry_id TEXT NOT NULL REFERENCES entries(entry_id) ON DELETE CASCADE,
-    PRIMARY KEY (topic_id, entry_id)
-  );
-  CREATE INDEX IF NOT EXISTS idx_ste_entry ON synthesis_topic_entries(entry_id);
-
-  CREATE TABLE IF NOT EXISTS synthesis_connections (
-    source_topic TEXT NOT NULL REFERENCES synthesis_topics(topic_id) ON DELETE CASCADE,
-    target_topic TEXT NOT NULL REFERENCES synthesis_topics(topic_id) ON DELETE CASCADE,
-    relationship TEXT NOT NULL,
-    confidence   TEXT NOT NULL DEFAULT 'inferred',
-    evidence     TEXT,
-    PRIMARY KEY (source_topic, target_topic)
-  );
-  CREATE INDEX IF NOT EXISTS idx_conn_target ON synthesis_connections(target_topic);
-
-  CREATE TABLE IF NOT EXISTS synthesis_runs (
-    run_id        TEXT PRIMARY KEY,
-    mode          TEXT NOT NULL,
-    status        TEXT NOT NULL,
-    started_at    TEXT NOT NULL,
-    completed_at  TEXT,
-    error_message TEXT
-  );
-
-  CREATE TABLE IF NOT EXISTS synthesis_topic_history (
-    id          INTEGER PRIMARY KEY AUTOINCREMENT,
-    topic_id    TEXT NOT NULL,
-    change_type TEXT NOT NULL,
-    old_content TEXT,
-    new_content TEXT,
-    entry_ids   TEXT,
-    run_id      TEXT REFERENCES synthesis_runs(run_id),
-    changed_at  TEXT NOT NULL
-  );
-  CREATE INDEX IF NOT EXISTS idx_topic_history_topic ON synthesis_topic_history(topic_id);
-  CREATE INDEX IF NOT EXISTS idx_topic_history_run ON synthesis_topic_history(run_id);
-
-  -- ── Reflections (Phase E) ─────────────────────────────────────────────────
-
-  CREATE TABLE IF NOT EXISTS synthesis_reflections (
-    reflection_id  TEXT PRIMARY KEY,
-    title          TEXT NOT NULL,
-    type           TEXT NOT NULL,
-    summary        TEXT,
-    content        TEXT NOT NULL,
-    created_at     TEXT NOT NULL,
-    original_citation_count INTEGER NOT NULL DEFAULT 0
-  );
-
-  CREATE TABLE IF NOT EXISTS synthesis_reflection_citations (
-    reflection_id TEXT NOT NULL REFERENCES synthesis_reflections(reflection_id) ON DELETE CASCADE,
-    entry_id      TEXT NOT NULL REFERENCES entries(entry_id) ON DELETE CASCADE,
-    PRIMARY KEY (reflection_id, entry_id)
-  );
-  CREATE INDEX IF NOT EXISTS idx_src_entry ON synthesis_reflection_citations(entry_id);
-
-  -- ── Digestion session (issue #148) ────────────────────────────────────────
-  -- Singleton row (id = 1) tracking aggregate digest-queue progress so a
-  -- mid-flight page reload can rehydrate the toolbar progress + ETA.
-  -- Present only while the per-workspace queue is busy; deleted when the
-  -- last task settles. total_elapsed_ms sums per-file digestion durations
-  -- (avg = total_elapsed_ms / done).
-  CREATE TABLE IF NOT EXISTS digest_session (
-    id                INTEGER PRIMARY KEY CHECK (id = 1),
-    total             INTEGER NOT NULL,
-    done              INTEGER NOT NULL,
-    total_elapsed_ms  INTEGER NOT NULL,
-    started_at        TEXT NOT NULL,
-    chunk_progress_json TEXT
-  );
-`;
-
-/** Raw DB row shape for the `raw` table. */
-interface RawDbRow {
-  raw_id: string;
-  sha256: string;
-  status: string;
-  byte_length: number;
-  mime_type: string | null;
-  handler: string | null;
-  uploaded_at: string;
-  digested_at: string | null;
-  error_class: string | null;
-  error_message: string | null;
-  metadata_json: string | null;
-}
-
-/** Raw DB row shape for the joined `raw + raw_locations` result. */
-interface RawJoinRow extends RawDbRow {
-  location_folder_path: string;
-  location_filename: string;
-  location_uploaded_at: string;
-  entry_count: number;
-}
-
-/** Parameters for inserting a brand-new raw row. */
-export interface InsertRawParams {
-  rawId: string;
-  sha256: string;
-  status: KbRawStatus;
-  byteLength: number;
-  mimeType: string | null;
-  handler: string | null;
-  uploadedAt: string;
-  metadata: Record<string, unknown> | null;
-}
-
-/** Parameters for inserting a location for an existing raw. */
-export interface InsertLocationParams {
-  rawId: string;
-  folderPath: string;
-  filename: string;
-  uploadedAt: string;
-}
-
-/** Parameters for inserting a digested entry. */
-export interface InsertEntryParams {
-  entryId: string;
-  rawId: string;
-  title: string;
-  slug: string;
-  summary: string;
-  schemaVersion: number;
-  digestedAt: string;
-  tags: string[];
-}
-
-/** Parameters for inserting one source range that contributed to an entry. */
-export interface InsertEntrySourceParams {
-  entryId: string;
-  rawId: string;
-  nodeId?: string | null;
-  chunkId: string;
-  startUnit: number;
-  endUnit: number;
-}
-
-/** Parameters for atomically replacing one raw's digested entries. */
-export interface ReplaceEntryParams extends InsertEntryParams {
-  sources: Array<Omit<InsertEntrySourceParams, 'entryId'>>;
-}
-
-/** Stored error details for a raw row (when status === 'failed'). */
-export interface RawError {
-  errorClass: KbErrorClass;
-  errorMessage: string;
-}
-
-export type KbDocumentUnitType = 'page' | 'slide' | 'line' | 'section' | 'unknown';
-export type KbDocumentStructureStatus = 'ready' | 'failed';
-export type KbDocumentNodeSource = 'deterministic' | 'ai' | 'fallback';
-
-export interface KbDocumentRow {
-  rawId: string;
-  docName: string;
-  docDescription: string | null;
-  unitType: KbDocumentUnitType;
-  unitCount: number;
-  structureStatus: KbDocumentStructureStatus;
-  structureError: string | null;
-  createdAt: string;
-  updatedAt: string;
-}
-
-export interface KbDocumentNodeRow {
-  nodeId: string;
-  rawId: string;
-  parentNodeId: string | null;
-  title: string;
-  summary: string | null;
-  startUnit: number;
-  endUnit: number;
-  sortOrder: number;
-  source: KbDocumentNodeSource;
-  metadata?: Record<string, unknown>;
-}
-
-export interface KbEntrySourceRow {
-  entryId: string;
-  rawId: string;
-  nodeId: string | null;
-  chunkId: string;
-  startUnit: number;
-  endUnit: number;
-  docName: string | null;
-  unitType: KbDocumentUnitType | null;
-  nodeTitle: string | null;
-}
-
-export interface KbGlossaryRow {
-  id: number;
-  term: string;
-  expansion: string;
-  createdAt: string;
-  updatedAt: string;
-}
-
-export interface UpsertDocumentStructureParams {
-  document: KbDocumentRow;
-  nodes: KbDocumentNodeRow[];
-}
-
-// ── Synthesis types ─────────────────────────────────────────────────────────
-
-/** Parameters for inserting/updating a synthesis topic. */
-export interface UpsertTopicParams {
-  topicId: string;
-  title: string;
-  summary: string | null;
-  content: string | null;
-  updatedAt: string;
-}
-
-/** Parameters for inserting a synthesis connection. */
-export interface InsertConnectionParams {
-  sourceTopic: string;
-  targetTopic: string;
-  relationship: string;
-  confidence: string;
-  evidence: string | null;
-}
-
-/** DB row shape for synthesis_topics. */
-export interface SynthesisTopicRow {
-  topicId: string;
-  title: string;
-  summary: string | null;
-  content: string | null;
-  updatedAt: string;
-  entryCount: number;
-  connectionCount: number;
-}
-
-/** DB row shape for synthesis_connections. */
-export interface SynthesisConnectionRow {
-  sourceTopic: string;
-  targetTopic: string;
-  relationship: string;
-  confidence: string;
-  evidence: string | null;
-}
-
-export type SynthesisRunMode = 'incremental' | 'redream';
-export type SynthesisRunStatus = 'running' | 'completed' | 'failed' | 'stopped';
-
-export interface SynthesisRunRow {
-  runId: string;
-  mode: SynthesisRunMode;
-  status: SynthesisRunStatus;
-  startedAt: string;
-  completedAt: string | null;
-  errorMessage: string | null;
-}
-
-export interface InsertTopicHistoryParams {
-  topicId: string;
-  changeType: 'created' | 'updated' | 'merged_into' | 'split_from' | 'deleted';
-  oldContent: string | null;
-  newContent: string | null;
-  entryIds: string[];
-  runId?: string | null;
-  changedAt: string;
-}
-
-export interface SynthesisTopicHistoryRow extends InsertTopicHistoryParams {
-  id: number;
-  runId: string | null;
-}
-
-/** DB row shape for synthesis_reflections. */
-export interface SynthesisReflectionRow {
-  reflectionId: string;
-  title: string;
-  type: string;
-  summary: string | null;
-  content: string;
-  createdAt: string;
-  citationCount: number;
-}
-
-/** Parameters for inserting a reflection. */
-export interface InsertReflectionParams {
-  reflectionId: string;
-  title: string;
-  type: string;
-  summary: string | null;
-  content: string;
-  createdAt: string;
-  citedEntryIds: string[];
-}
-
-/** Synthesis status snapshot for API responses. */
-export interface SynthesisSnapshot {
-  status: string;
-  lastRunAt: string | null;
-  lastRunError: string | null;
-  topicCount: number;
-  connectionCount: number;
-  needsSynthesisCount: number;
-  godNodes: string[];
-  dreamProgress: KbDreamProgress | null;
-  reflectionCount: number;
-  staleReflectionCount: number;
-}
-
-/** One row in the raw_locations table, typed. */
-export interface LocationRow {
-  rawId: string;
-  folderPath: string;
-  filename: string;
-  uploadedAt: string;
-}
-
-/**
- * Singleton row persisted in `digest_session` so that mid-flight reloads
- * can rehydrate the workspace-level digestion progress (issue #148).
- * Present only while the per-workspace queue is busy.
- */
-export interface DigestSessionRow {
-  total: number;
-  done: number;
-  totalElapsedMs: number;
-  startedAt: string;
-  chunkProgress?: KbDigestChunkProgress | null;
-}
-
-function parseDigestChunkProgress(raw: string | null): KbDigestChunkProgress | null {
-  if (!raw) return null;
-  try {
-    const parsed = JSON.parse(raw) as Partial<KbDigestChunkProgress>;
-    if (!parsed || typeof parsed !== 'object') return null;
-    const phase = parsed.phase === 'digesting' ||
-      parsed.phase === 'parsing' ||
-      parsed.phase === 'committing' ||
-      parsed.phase === 'planning'
-      ? parsed.phase
-      : 'planning';
-    const progress: KbDigestChunkProgress = {
-      done: Math.max(0, Number(parsed.done) || 0),
-      total: Math.max(0, Number(parsed.total) || 0),
-      active: Math.max(0, Number(parsed.active) || 0),
-      phase,
-    };
-    if (parsed.current && typeof parsed.current === 'object' && typeof parsed.current.rawId === 'string') {
-      progress.current = {
-        rawId: parsed.current.rawId,
-        chunkId: typeof parsed.current.chunkId === 'string' ? parsed.current.chunkId : undefined,
-        index: typeof parsed.current.index === 'number' && Number.isFinite(parsed.current.index) ? parsed.current.index : undefined,
-        total: typeof parsed.current.total === 'number' && Number.isFinite(parsed.current.total) ? parsed.current.total : undefined,
-        startUnit: typeof parsed.current.startUnit === 'number' && Number.isFinite(parsed.current.startUnit) ? parsed.current.startUnit : undefined,
-        endUnit: typeof parsed.current.endUnit === 'number' && Number.isFinite(parsed.current.endUnit) ? parsed.current.endUnit : undefined,
-        unitType: typeof parsed.current.unitType === 'string' ? parsed.current.unitType : undefined,
-      };
-    }
-    return progress;
-  } catch {
-    return null;
-  }
-}
-
-/**
- * Filter options shared by `listEntries` and `countEntries`. All fields
- * are optional and combine with AND semantics (the multi-tag list is
- * itself an AND match — an entry must carry every listed tag).
- */
-export interface ListEntriesFilter {
-  folderPath?: string;
-  /** Legacy single-tag filter. Merged into `tags` when both are supplied. */
-  tag?: string;
-  /** Multi-tag filter with AND semantics (entry must have all tags). */
-  tags?: string[];
-  rawId?: string;
-  /** Case-insensitive substring match against entry title. */
-  search?: string;
-  /** ISO-8601 lower bound on `raw.uploaded_at` (inclusive). */
-  uploadedFrom?: string;
-  /** ISO-8601 upper bound on `raw.uploaded_at` (inclusive). */
-  uploadedTo?: string;
-  /** ISO-8601 lower bound on `entries.digested_at` (inclusive). */
-  digestedFrom?: string;
-  /** ISO-8601 upper bound on `entries.digested_at` (inclusive). */
-  digestedTo?: string;
-}
+export { KB_DB_SCHEMA_VERSION } from './db/schema';
+export { normalizeFolderPath } from './db/folders';
+export * from './db/types';
 
 /**
  * Wrapper over a per-workspace SQLite database. Owns one `Database`
- * handle and a set of prepared statements. All methods are synchronous
- * (better-sqlite3 style) — async wouldn't help because the DB lives on
- * the same thread as the caller.
+ * handle and delegates synchronous operations to focused DB modules.
  */
 export class KbDatabase {
   private readonly db: BetterSqlite3Database;
@@ -572,9 +78,9 @@ export class KbDatabase {
     // work on the raw → entries → entry_tags chain.
     this.db.pragma('journal_mode = WAL');
     this.db.pragma('foreign_keys = ON');
-    this._initSchema();
-    this._ensureRootFolder();
-    this._recoverFromCrash();
+    initSchema(this.db);
+    ensureRootFolder(this.db);
+    recoverFromCrash(this.db);
   }
 
   // ── Lifecycle ────────────────────────────────────────────────────────────
@@ -583,7 +89,6 @@ export class KbDatabase {
     this.db.close();
   }
 
-  /** Run `fn` inside a transaction. Rolls back on any throw. */
   transaction<T>(fn: () => T): T {
     return this.db.transaction(fn)();
   }
@@ -591,216 +96,47 @@ export class KbDatabase {
   // ── Meta ─────────────────────────────────────────────────────────────────
 
   getSchemaVersion(): number {
-    const row = this.db
-      .prepare<unknown[], { value: string }>(
-        'SELECT value FROM meta WHERE key = ?',
-      )
-      .get('schema_version');
-    return row ? Number(row.value) : KB_DB_SCHEMA_VERSION;
+    return readSchemaVersion(this.db);
   }
 
   // ── Folders ──────────────────────────────────────────────────────────────
 
   listFolders(): KbFolder[] {
-    const rows = this.db
-      .prepare<unknown[], { folder_path: string; created_at: string }>(
-        'SELECT folder_path, created_at FROM folders ORDER BY folder_path',
-      )
-      .all();
-    return rows.map((r) => ({ folderPath: r.folder_path, createdAt: r.created_at }));
+    return foldersDb.listFolders(this.db);
   }
 
   folderExists(folderPath: string): boolean {
-    const row = this.db
-      .prepare<unknown[], { folder_path: string }>(
-        'SELECT folder_path FROM folders WHERE folder_path = ?',
-      )
-      .get(folderPath);
-    return Boolean(row);
+    return foldersDb.folderExists(this.db, folderPath);
   }
 
-  /**
-   * Create `folderPath` and any missing ancestors. Idempotent — calling
-   * on an existing folder is a no-op. Root ('') is always present.
-   */
   createFolder(folderPath: string): void {
-    const normalized = normalizeFolderPath(folderPath);
-    if (normalized === '') return; // root always exists
-
-    // Build the ancestor chain: 'a/b/c' → ['a', 'a/b', 'a/b/c']
-    const segments = normalized.split('/');
-    const chain: string[] = [];
-    let acc = '';
-    for (const seg of segments) {
-      acc = acc ? `${acc}/${seg}` : seg;
-      chain.push(acc);
-    }
-    const now = new Date().toISOString();
-    const insert = this.db.prepare(
-      'INSERT OR IGNORE INTO folders (folder_path, created_at) VALUES (?, ?)',
-    );
-    this.transaction(() => {
-      for (const fp of chain) insert.run(fp, now);
-    });
+    foldersDb.createFolder(this.db, folderPath);
   }
 
-  /**
-   * Rename `fromPath` to `toPath`, cascading to all descendant folders
-   * and every `raw_locations` row in the subtree. Throws if `fromPath`
-   * doesn't exist or `toPath` (or any descendant target) already does.
-   */
   renameFolder(fromPath: string, toPath: string): void {
-    const from = normalizeFolderPath(fromPath);
-    const to = normalizeFolderPath(toPath);
-    if (from === '') throw new Error('Cannot rename root folder.');
-    if (to === '') throw new Error('Cannot rename folder to root.');
-    if (from === to) return;
-
-    this.transaction(() => {
-      if (!this.folderExists(from)) {
-        throw new Error(`Folder ${from} does not exist.`);
-      }
-      // Collision check: the new name itself + any descendant collisions.
-      // We check both the direct target and the prefix rewrite of every
-      // existing descendant under `from` against what would become their
-      // new path under `to`.
-      if (this.folderExists(to)) {
-        throw new Error(`Folder ${to} already exists.`);
-      }
-      const descendants = this.db
-        .prepare<unknown[], { folder_path: string }>(
-          "SELECT folder_path FROM folders WHERE folder_path LIKE ? || '/%' ORDER BY folder_path",
-        )
-        .all(from);
-      for (const d of descendants) {
-        const rewritten = to + d.folder_path.slice(from.length);
-        if (this.folderExists(rewritten)) {
-          throw new Error(`Folder ${rewritten} already exists (would collide on rename).`);
-        }
-      }
-
-      // Ensure every ancestor of `to` exists (same as createFolder on a
-      // missing parent chain). We need this because we're about to insert
-      // the rename target before deleting the old one, and it has a PK
-      // constraint on folder_path — we can't rename to a non-existent
-      // parent without creating the parent first.
-      const toSegments = to.split('/');
-      let acc = '';
-      const now = new Date().toISOString();
-      const insertFolder = this.db.prepare(
-        'INSERT OR IGNORE INTO folders (folder_path, created_at) VALUES (?, ?)',
-      );
-      // All ancestors of `to` except the target itself.
-      for (let i = 0; i < toSegments.length - 1; i += 1) {
-        acc = acc ? `${acc}/${toSegments[i]}` : toSegments[i];
-        insertFolder.run(acc, now);
-      }
-
-      // SQLite doesn't support UPDATE on a PK directly while a FK still
-      // references the old value — we'd hit an FK violation on
-      // raw_locations. Workaround: insert the new folder, re-parent the
-      // locations to the new folder, then delete the old folder.
-      //
-      // Do this in reverse depth order so children move before parents
-      // (parents are the PK the children reference).
-      const allFolders = [
-        { from, to },
-        ...descendants.map((d) => ({
-          from: d.folder_path,
-          to: to + d.folder_path.slice(from.length),
-        })),
-      ];
-      // Deepest first for INSERTs so children exist before their moves.
-      // Actually, INSERT order doesn't matter — no FK from folders to
-      // folders. But deleting in deepest-first order matters to avoid
-      // RESTRICT violations between raw_locations and folders.
-      for (const pair of allFolders) {
-        insertFolder.run(pair.to, now);
-      }
-      // Move raw_locations from each old folder to its new counterpart.
-      const moveLocations = this.db.prepare(
-        'UPDATE raw_locations SET folder_path = ? WHERE folder_path = ?',
-      );
-      for (const pair of allFolders) {
-        moveLocations.run(pair.to, pair.from);
-      }
-      // Delete deepest old folders first (they can't be referenced by
-      // raw_locations any more because we just moved them).
-      const deleteFolder = this.db.prepare(
-        'DELETE FROM folders WHERE folder_path = ?',
-      );
-      const sortedDeep = [...allFolders].sort(
-        (a, b) => b.from.length - a.from.length,
-      );
-      for (const pair of sortedDeep) {
-        deleteFolder.run(pair.from);
-      }
-    });
+    foldersDb.renameFolder(this.db, fromPath, toPath);
   }
 
-  /**
-   * Delete `folderPath`. Does NOT cascade to children. Callers that want
-   * to drop a non-empty folder must first transition every
-   * `raw_locations` row in the subtree out (either to another folder or
-   * via `removeLocation`). This keeps cascade semantics explicit in the
-   * orchestrator rather than hidden in the FK layer.
-   */
   deleteFolder(folderPath: string): void {
-    const normalized = normalizeFolderPath(folderPath);
-    if (normalized === '') throw new Error('Cannot delete root folder.');
-    this.db
-      .prepare('DELETE FROM folders WHERE folder_path = ?')
-      .run(normalized);
+    foldersDb.deleteFolder(this.db, folderPath);
   }
 
-  /**
-   * Find every folder whose path is `folderPath` itself or starts with
-   * `folderPath + '/'`. Used by the cascade-delete logic to enumerate
-   * the subtree.
-   */
   listFolderSubtree(folderPath: string): KbFolder[] {
-    const normalized = normalizeFolderPath(folderPath);
-    const rows = this.db
-      .prepare<unknown[], { folder_path: string; created_at: string }>(
-        "SELECT folder_path, created_at FROM folders WHERE folder_path = ? OR folder_path LIKE ? || '/%' ORDER BY LENGTH(folder_path) DESC",
-      )
-      .all(normalized, normalized);
-    return rows.map((r) => ({ folderPath: r.folder_path, createdAt: r.created_at }));
+    return foldersDb.listFolderSubtree(this.db, folderPath);
   }
 
   // ── Raw files ────────────────────────────────────────────────────────────
 
   getRawById(rawId: string): RawDbRow | null {
-    const row = this.db
-      .prepare<unknown[], RawDbRow>('SELECT * FROM raw WHERE raw_id = ?')
-      .get(rawId);
-    return row ?? null;
+    return rawDb.getRawById(this.db, rawId);
   }
 
   getRawBySha(sha256: string): RawDbRow | null {
-    const row = this.db
-      .prepare<unknown[], RawDbRow>('SELECT * FROM raw WHERE sha256 = ?')
-      .get(sha256);
-    return row ?? null;
+    return rawDb.getRawBySha(this.db, sha256);
   }
 
   insertRaw(params: InsertRawParams): void {
-    this.db
-      .prepare(
-        `INSERT INTO raw
-         (raw_id, sha256, status, byte_length, mime_type, handler, uploaded_at, digested_at, error_class, error_message, metadata_json)
-         VALUES (?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL, ?)`,
-      )
-      .run(
-        params.rawId,
-        params.sha256,
-        params.status,
-        params.byteLength,
-        params.mimeType,
-        params.handler,
-        params.uploadedAt,
-        params.metadata ? JSON.stringify(params.metadata) : null,
-      );
+    rawDb.insertRaw(this.db, params);
   }
 
   updateRawStatus(
@@ -808,938 +144,190 @@ export class KbDatabase {
     status: KbRawStatus,
     error: RawError | null = null,
   ): void {
-    this.db
-      .prepare(
-        'UPDATE raw SET status = ?, error_class = ?, error_message = ? WHERE raw_id = ?',
-      )
-      .run(status, error?.errorClass ?? null, error?.errorMessage ?? null, rawId);
+    rawDb.updateRawStatus(this.db, rawId, status, error);
   }
 
   setRawDigestedAt(rawId: string, digestedAt: string): void {
-    this.db
-      .prepare('UPDATE raw SET digested_at = ? WHERE raw_id = ?')
-      .run(digestedAt, rawId);
+    rawDb.setRawDigestedAt(this.db, rawId, digestedAt);
   }
 
   setRawHandler(rawId: string, handler: string): void {
-    this.db
-      .prepare('UPDATE raw SET handler = ? WHERE raw_id = ?')
-      .run(handler, rawId);
+    rawDb.setRawHandler(this.db, rawId, handler);
   }
 
   setRawMetadata(rawId: string, metadata: Record<string, unknown> | null): void {
-    this.db
-      .prepare('UPDATE raw SET metadata_json = ? WHERE raw_id = ?')
-      .run(metadata ? JSON.stringify(metadata) : null, rawId);
+    rawDb.setRawMetadata(this.db, rawId, metadata);
   }
 
-  /**
-   * Delete a raw row. Returns the list of entry IDs that were cascade
-   * deleted (so the caller can remove their on-disk directories). Does
-   * NOT delete the raw bytes on disk — that's the orchestrator's job.
-   */
   deleteRaw(rawId: string): string[] {
-    return this.transaction(() => {
-      const entries = this.db
-        .prepare<unknown[], { entry_id: string }>(
-          'SELECT entry_id FROM entries WHERE raw_id = ?',
-        )
-        .all(rawId)
-        .map((r) => r.entry_id);
-      this.markCoTopicEntriesStale(entries);
-      // raw cascades → entries + entry_tags; raw_locations cascades too.
-      // synthesis_topic_entries and synthesis_reflection_citations also
-      // cascade-delete, potentially leaving orphan topics.
-      this.db.prepare('DELETE FROM raw WHERE raw_id = ?').run(rawId);
-      this._deleteOrphanTopics();
-      return entries;
-    });
+    return rawDb.deleteRaw(this.db, rawId);
   }
 
   // ── Raw locations ────────────────────────────────────────────────────────
 
   addLocation(params: InsertLocationParams): void {
-    const folderPath = normalizeFolderPath(params.folderPath);
-    this.createFolder(folderPath); // idempotent
-    this.db
-      .prepare(
-        'INSERT INTO raw_locations (raw_id, folder_path, filename, uploaded_at) VALUES (?, ?, ?, ?)',
-      )
-      .run(params.rawId, folderPath, params.filename, params.uploadedAt);
+    rawDb.addLocation(this.db, params);
   }
 
   removeLocation(rawId: string, folderPath: string, filename: string): void {
-    this.db
-      .prepare(
-        'DELETE FROM raw_locations WHERE raw_id = ? AND folder_path = ? AND filename = ?',
-      )
-      .run(rawId, normalizeFolderPath(folderPath), filename);
+    rawDb.removeLocation(this.db, rawId, folderPath, filename);
   }
 
   countLocations(rawId: string): number {
-    const row = this.db
-      .prepare<unknown[], { n: number }>(
-        'SELECT COUNT(*) AS n FROM raw_locations WHERE raw_id = ?',
-      )
-      .get(rawId);
-    return row?.n ?? 0;
+    return rawDb.countLocations(this.db, rawId);
   }
 
   findLocation(folderPath: string, filename: string): LocationRow | null {
-    const row = this.db
-      .prepare<
-        unknown[],
-        {
-          raw_id: string;
-          folder_path: string;
-          filename: string;
-          uploaded_at: string;
-        }
-      >(
-        'SELECT raw_id, folder_path, filename, uploaded_at FROM raw_locations WHERE folder_path = ? AND filename = ?',
-      )
-      .get(normalizeFolderPath(folderPath), filename);
-    if (!row) return null;
-    return {
-      rawId: row.raw_id,
-      folderPath: row.folder_path,
-      filename: row.filename,
-      uploadedAt: row.uploaded_at,
-    };
+    return rawDb.findLocation(this.db, folderPath, filename);
   }
 
   listLocations(rawId: string): LocationRow[] {
-    const rows = this.db
-      .prepare<
-        unknown[],
-        {
-          raw_id: string;
-          folder_path: string;
-          filename: string;
-          uploaded_at: string;
-        }
-      >(
-        'SELECT raw_id, folder_path, filename, uploaded_at FROM raw_locations WHERE raw_id = ? ORDER BY folder_path, filename',
-      )
-      .all(rawId);
-    return rows.map((r) => ({
-      rawId: r.raw_id,
-      folderPath: r.folder_path,
-      filename: r.filename,
-      uploadedAt: r.uploaded_at,
-    }));
+    return rawDb.listLocations(this.db, rawId);
   }
 
-  /**
-   * List raw files in a specific folder (joined with their location
-   * filename). Returns one row per (rawId, filename) combination — same
-   * rawId listed twice if the same bytes were uploaded under two names
-   * in this folder (rare but legal).
-   */
   listRawInFolder(
     folderPath: string,
     opts: { limit?: number; offset?: number } = {},
   ): KbRawEntry[] {
-    const limit = opts.limit ?? DEFAULT_RAW_PAGE_SIZE;
-    const offset = opts.offset ?? 0;
-    const rows = this.db
-      .prepare<unknown[], RawJoinRow>(
-        `SELECT
-           r.raw_id, r.sha256, r.status, r.byte_length, r.mime_type, r.handler,
-           r.uploaded_at, r.digested_at, r.error_class, r.error_message, r.metadata_json,
-           l.folder_path AS location_folder_path,
-           l.filename    AS location_filename,
-           l.uploaded_at AS location_uploaded_at,
-           COUNT(e.entry_id) AS entry_count
-         FROM raw_locations l
-         JOIN raw r ON r.raw_id = l.raw_id
-         LEFT JOIN entries e ON e.raw_id = r.raw_id
-         WHERE l.folder_path = ?
-         GROUP BY r.raw_id, l.folder_path, l.filename, l.uploaded_at
-         ORDER BY l.filename
-         LIMIT ? OFFSET ?`,
-      )
-      .all(normalizeFolderPath(folderPath), limit, offset);
-    return rows.map(rawJoinRowToEntry);
+    return rawDb.listRawInFolder(this.db, folderPath, opts);
   }
 
-  /**
-   * List raw files with `status = 'pending-delete'` across the whole
-   * workspace. Used by the "Digest All Pending" batch runner. These
-   * rows have no raw_locations (that's what triggered the pending-delete
-   * transition) so they need their own listing path.
-   */
   listPendingDeleteRaw(): RawDbRow[] {
-    return this.db
-      .prepare<unknown[], RawDbRow>(
-        "SELECT * FROM raw WHERE status = 'pending-delete' ORDER BY raw_id",
-      )
-      .all();
+    return rawDb.listPendingDeleteRaw(this.db);
   }
 
-  /** List every raw row across the workspace. Used by maintenance jobs. */
   listAllRaw(): RawDbRow[] {
-    return this.db
-      .prepare<unknown[], RawDbRow>('SELECT * FROM raw ORDER BY uploaded_at, raw_id')
-      .all();
+    return rawDb.listAllRaw(this.db);
   }
 
-  /**
-   * List raw IDs with `status = 'ingested'` across the whole workspace
-   * (ready for digestion). Used by the "Digest All Pending" batch runner.
-   */
   listIngestedRawIds(): string[] {
-    return this.db
-      .prepare<unknown[], { raw_id: string }>(
-        "SELECT raw_id FROM raw WHERE status = 'ingested' ORDER BY raw_id",
-      )
-      .all()
-      .map((r) => r.raw_id);
+    return rawDb.listIngestedRawIds(this.db);
   }
 
   // ── Document structure ──────────────────────────────────────────────────
 
   upsertDocumentStructure(params: UpsertDocumentStructureParams): void {
-    this.transaction(() => {
-      const d = params.document;
-      this.db
-        .prepare(
-          `INSERT INTO kb_documents
-           (raw_id, doc_name, doc_description, unit_type, unit_count, structure_status, structure_error, created_at, updated_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-           ON CONFLICT(raw_id) DO UPDATE SET
-             doc_name = excluded.doc_name,
-             doc_description = excluded.doc_description,
-             unit_type = excluded.unit_type,
-             unit_count = excluded.unit_count,
-             structure_status = excluded.structure_status,
-             structure_error = excluded.structure_error,
-             updated_at = excluded.updated_at`,
-        )
-        .run(
-          d.rawId,
-          d.docName,
-          d.docDescription,
-          d.unitType,
-          d.unitCount,
-          d.structureStatus,
-          d.structureError,
-          d.createdAt,
-          d.updatedAt,
-        );
-
-      this.db.prepare('DELETE FROM kb_document_nodes WHERE raw_id = ?').run(d.rawId);
-      const insertNode = this.db.prepare(
-        `INSERT INTO kb_document_nodes
-         (node_id, raw_id, parent_node_id, title, summary, start_unit, end_unit, sort_order, source, metadata_json)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      );
-      for (const node of params.nodes) {
-        insertNode.run(
-          node.nodeId,
-          d.rawId,
-          node.parentNodeId,
-          node.title,
-          node.summary,
-          node.startUnit,
-          node.endUnit,
-          node.sortOrder,
-          node.source,
-          node.metadata ? JSON.stringify(node.metadata) : null,
-        );
-      }
-    });
+    documentsDb.upsertDocumentStructure(this.db, params);
   }
 
   getDocument(rawId: string): KbDocumentRow | null {
-    const row = this.db
-      .prepare<
-        unknown[],
-        {
-          raw_id: string;
-          doc_name: string;
-          doc_description: string | null;
-          unit_type: string;
-          unit_count: number;
-          structure_status: string;
-          structure_error: string | null;
-          created_at: string;
-          updated_at: string;
-        }
-      >('SELECT * FROM kb_documents WHERE raw_id = ?')
-      .get(rawId);
-    return row ? documentRowFromDb(row) : null;
+    return documentsDb.getDocument(this.db, rawId);
   }
 
   listDocumentNodes(rawId: string): KbDocumentNodeRow[] {
-    const rows = this.db
-      .prepare<
-        unknown[],
-        {
-          node_id: string;
-          raw_id: string;
-          parent_node_id: string | null;
-          title: string;
-          summary: string | null;
-          start_unit: number;
-          end_unit: number;
-          sort_order: number;
-          source: string;
-          metadata_json: string | null;
-        }
-      >('SELECT * FROM kb_document_nodes WHERE raw_id = ? ORDER BY sort_order, start_unit, node_id')
-      .all(rawId);
-    return rows.map(documentNodeRowFromDb);
+    return documentsDb.listDocumentNodes(this.db, rawId);
   }
 
   listDocuments(opts: { query?: string; limit?: number } = {}): KbDocumentRow[] {
-    const limit = opts.limit ?? 50;
-    const params: unknown[] = [];
-    let where = '';
-    if (opts.query && opts.query.trim() !== '') {
-      const needle = '%' + opts.query.trim().replace(/[\\%_]/g, (c) => '\\' + c) + '%';
-      where = "WHERE doc_name LIKE ? ESCAPE '\\' COLLATE NOCASE OR doc_description LIKE ? ESCAPE '\\' COLLATE NOCASE";
-      params.push(needle, needle);
-    }
-    const rows = this.db
-      .prepare<
-        unknown[],
-        {
-          raw_id: string;
-          doc_name: string;
-          doc_description: string | null;
-          unit_type: string;
-          unit_count: number;
-          structure_status: string;
-          structure_error: string | null;
-          created_at: string;
-          updated_at: string;
-        }
-      >(`SELECT * FROM kb_documents ${where} ORDER BY updated_at DESC, doc_name LIMIT ?`)
-      .all(...params, limit);
-    return rows.map(documentRowFromDb);
+    return documentsDb.listDocuments(this.db, opts);
   }
 
   deleteDocumentStructure(rawId: string): void {
-    this.db.prepare('DELETE FROM kb_documents WHERE raw_id = ?').run(rawId);
+    documentsDb.deleteDocumentStructure(this.db, rawId);
   }
 
   // ── Glossary ────────────────────────────────────────────────────────────
 
   listGlossary(): KbGlossaryRow[] {
-    const rows = this.db
-      .prepare<
-        unknown[],
-        {
-          id: number;
-          term: string;
-          expansion: string;
-          created_at: string;
-          updated_at: string;
-        }
-      >('SELECT id, term, expansion, created_at, updated_at FROM kb_glossary ORDER BY term COLLATE NOCASE')
-      .all();
-    return rows.map(glossaryRowFromDb);
+    return glossaryDb.listGlossary(this.db);
   }
 
   getGlossaryTerm(id: number): KbGlossaryRow | null {
-    const row = this.db
-      .prepare<
-        unknown[],
-        {
-          id: number;
-          term: string;
-          expansion: string;
-          created_at: string;
-          updated_at: string;
-        }
-      >('SELECT id, term, expansion, created_at, updated_at FROM kb_glossary WHERE id = ?')
-      .get(id);
-    return row ? glossaryRowFromDb(row) : null;
+    return glossaryDb.getGlossaryTerm(this.db, id);
   }
 
   addGlossaryTerm(term: string, expansion: string, now = new Date().toISOString()): KbGlossaryRow {
-    const info = this.db
-      .prepare(
-        `INSERT INTO kb_glossary (term, expansion, created_at, updated_at)
-         VALUES (?, ?, ?, ?)`,
-      )
-      .run(term.trim(), expansion.trim(), now, now);
-    return this.getGlossaryTerm(Number(info.lastInsertRowid))!;
+    return glossaryDb.addGlossaryTerm(this.db, term, expansion, now);
   }
 
   updateGlossaryTerm(id: number, term: string, expansion: string, now = new Date().toISOString()): KbGlossaryRow | null {
-    const info = this.db
-      .prepare(
-        `UPDATE kb_glossary
-         SET term = ?, expansion = ?, updated_at = ?
-         WHERE id = ?`,
-      )
-      .run(term.trim(), expansion.trim(), now, id);
-    if (info.changes === 0) return null;
-    return this.getGlossaryTerm(id);
+    return glossaryDb.updateGlossaryTerm(this.db, id, term, expansion, now);
   }
 
   deleteGlossaryTerm(id: number): boolean {
-    const info = this.db.prepare('DELETE FROM kb_glossary WHERE id = ?').run(id);
-    return info.changes > 0;
+    return glossaryDb.deleteGlossaryTerm(this.db, id);
   }
 
   // ── Counters ─────────────────────────────────────────────────────────────
 
   getCounters(): KbCounters {
-    const byStatusRows = this.db
-      .prepare<unknown[], { status: string; n: number }>(
-        'SELECT status, COUNT(*) AS n FROM raw GROUP BY status',
-      )
-      .all();
-    const rawByStatus: Record<KbRawStatus, number> = {
-      ingesting: 0,
-      ingested: 0,
-      digesting: 0,
-      digested: 0,
-      failed: 0,
-      'pending-delete': 0,
-    };
-    let rawTotal = 0;
-    for (const row of byStatusRows) {
-      if (row.status in rawByStatus) {
-        rawByStatus[row.status as KbRawStatus] = row.n;
-      }
-      rawTotal += row.n;
-    }
-    const failedByStageRow = this.db
-      .prepare<
-        unknown[],
-        {
-          conversion: number;
-          digestion: number;
-        }
-      >(
-        `SELECT
-           COALESCE(SUM(CASE WHEN r.status = 'failed' AND d.raw_id IS NULL THEN 1 ELSE 0 END), 0) AS conversion,
-           COALESCE(SUM(CASE WHEN r.status = 'failed' AND d.raw_id IS NOT NULL THEN 1 ELSE 0 END), 0) AS digestion
-         FROM raw r
-         LEFT JOIN kb_documents d ON d.raw_id = r.raw_id`,
-      )
-      .get();
-    const conversionFailedCount = failedByStageRow?.conversion ?? 0;
-    const digestionFailedCount = failedByStageRow?.digestion ?? 0;
-    const failedByStage = {
-      conversion: conversionFailedCount,
-      digestion: digestionFailedCount,
-      unknown: Math.max(0, rawByStatus.failed - conversionFailedCount - digestionFailedCount),
-    };
-    const entryCountRow = this.db
-      .prepare<unknown[], { n: number }>('SELECT COUNT(*) AS n FROM entries')
-      .get();
-    const folderCountRow = this.db
-      .prepare<unknown[], { n: number }>('SELECT COUNT(*) AS n FROM folders')
-      .get();
-    const documentCountRow = this.db
-      .prepare<unknown[], { n: number }>('SELECT COUNT(*) AS n FROM kb_documents')
-      .get();
-    const documentNodeCountRow = this.db
-      .prepare<unknown[], { n: number }>('SELECT COUNT(*) AS n FROM kb_document_nodes')
-      .get();
-    const entrySourceCountRow = this.db
-      .prepare<unknown[], { n: number }>('SELECT COUNT(*) AS n FROM kb_entry_sources')
-      .get();
-    const topicCountRow = this.db
-      .prepare<unknown[], { n: number }>('SELECT COUNT(*) AS n FROM synthesis_topics')
-      .get();
-    const connectionCountRow = this.db
-      .prepare<unknown[], { n: number }>('SELECT COUNT(*) AS n FROM synthesis_connections')
-      .get();
-    const reflectionCountRow = this.db
-      .prepare<unknown[], { n: number }>('SELECT COUNT(*) AS n FROM synthesis_reflections')
-      .get();
-    const staleReflectionCount = this._countStaleReflections();
-    return {
-      rawTotal,
-      rawByStatus,
-      failedByStage,
-      entryCount: entryCountRow?.n ?? 0,
-      pendingCount: rawByStatus.ingested + rawByStatus['pending-delete'],
-      folderCount: folderCountRow?.n ?? 0,
-      documentCount: documentCountRow?.n ?? 0,
-      documentNodeCount: documentNodeCountRow?.n ?? 0,
-      entrySourceCount: entrySourceCountRow?.n ?? 0,
-      topicCount: topicCountRow?.n ?? 0,
-      connectionCount: connectionCountRow?.n ?? 0,
-      reflectionCount: reflectionCountRow?.n ?? 0,
-      staleReflectionCount,
-    };
+    return statsDb.getCounters(this.db);
   }
 
   // ── Entries ──────────────────────────────────────────────────────────────
 
   insertEntry(params: InsertEntryParams): void {
-    this.transaction(() => {
-      this.db
-        .prepare(
-          `INSERT INTO entries
-           (entry_id, raw_id, title, slug, summary, schema_version, stale_schema, digested_at)
-           VALUES (?, ?, ?, ?, ?, ?, 0, ?)`,
-        )
-        .run(
-          params.entryId,
-          params.rawId,
-          params.title,
-          params.slug,
-          params.summary,
-          params.schemaVersion,
-          params.digestedAt,
-        );
-      const insertTag = this.db.prepare(
-        'INSERT OR IGNORE INTO entry_tags (entry_id, tag) VALUES (?, ?)',
-      );
-      for (const tag of params.tags) {
-        insertTag.run(params.entryId, tag);
-      }
-    });
+    entriesDb.insertEntry(this.db, params);
   }
 
   insertEntrySources(sources: InsertEntrySourceParams[]): void {
-    if (sources.length === 0) return;
-    const insert = this.db.prepare(
-      `INSERT OR IGNORE INTO kb_entry_sources
-       (entry_id, raw_id, node_id, chunk_id, start_unit, end_unit)
-       VALUES (?, ?, ?, ?, ?, ?)`,
-    );
-    this.transaction(() => {
-      for (const source of sources) {
-        insert.run(
-          source.entryId,
-          source.rawId,
-          source.nodeId ?? null,
-          source.chunkId,
-          source.startUnit,
-          source.endUnit,
-        );
-      }
-    });
+    entriesDb.insertEntrySources(this.db, sources);
   }
 
-  /**
-   * Replace every entry for `rawId` in one DB transaction. Used by redigest
-   * after the caller has staged entry files, so a DB insertion failure cannot
-   * leave the raw with stale rows deleted and only some replacements inserted.
-   */
   replaceEntriesForRawId(rawId: string, entries: ReplaceEntryParams[]): string[] {
-    return this.transaction(() => {
-      const staleIds = this.listEntryIdsByRawId(rawId);
-      this.markCoTopicEntriesStale(staleIds);
-      this.db.prepare('DELETE FROM entries WHERE raw_id = ?').run(rawId);
-
-      const insertEntry = this.db.prepare(
-        `INSERT INTO entries
-         (entry_id, raw_id, title, slug, summary, schema_version, stale_schema, digested_at)
-         VALUES (?, ?, ?, ?, ?, ?, 0, ?)`,
-      );
-      const insertTag = this.db.prepare(
-        'INSERT OR IGNORE INTO entry_tags (entry_id, tag) VALUES (?, ?)',
-      );
-      const insertSource = this.db.prepare(
-        `INSERT OR IGNORE INTO kb_entry_sources
-         (entry_id, raw_id, node_id, chunk_id, start_unit, end_unit)
-         VALUES (?, ?, ?, ?, ?, ?)`,
-      );
-
-      for (const entry of entries) {
-        if (entry.rawId !== rawId) {
-          throw new Error(`Entry ${entry.entryId} belongs to ${entry.rawId}, not ${rawId}.`);
-        }
-        insertEntry.run(
-          entry.entryId,
-          entry.rawId,
-          entry.title,
-          entry.slug,
-          entry.summary,
-          entry.schemaVersion,
-          entry.digestedAt,
-        );
-        for (const tag of entry.tags) {
-          insertTag.run(entry.entryId, tag);
-        }
-        for (const source of entry.sources) {
-          insertSource.run(
-            entry.entryId,
-            source.rawId,
-            source.nodeId ?? null,
-            source.chunkId,
-            source.startUnit,
-            source.endUnit,
-          );
-        }
-      }
-
-      return staleIds;
-    });
+    return entriesDb.replaceEntriesForRawId(this.db, rawId, entries);
   }
 
   listEntrySources(entryId: string): KbEntrySourceRow[] {
-    const rows = this.db
-      .prepare<
-        unknown[],
-        {
-          entry_id: string;
-          raw_id: string;
-          node_id: string | null;
-          chunk_id: string;
-          start_unit: number;
-          end_unit: number;
-          doc_name: string | null;
-          unit_type: string | null;
-          node_title: string | null;
-        }
-      >(
-        `SELECT
-           s.entry_id, s.raw_id, s.node_id, s.chunk_id, s.start_unit, s.end_unit,
-           d.doc_name, d.unit_type, n.title AS node_title
-         FROM kb_entry_sources s
-         LEFT JOIN kb_documents d ON d.raw_id = s.raw_id
-         LEFT JOIN kb_document_nodes n ON n.raw_id = s.raw_id AND n.node_id = s.node_id
-         WHERE s.entry_id = ?
-         ORDER BY s.start_unit, s.end_unit, s.chunk_id`,
-      )
-      .all(entryId);
-    return rows.map((r) => ({
-      entryId: r.entry_id,
-      rawId: r.raw_id,
-      nodeId: r.node_id,
-      chunkId: r.chunk_id,
-      startUnit: r.start_unit,
-      endUnit: r.end_unit,
-      docName: r.doc_name,
-      unitType: r.unit_type as KbDocumentUnitType | null,
-      nodeTitle: r.node_title,
-    }));
+    return entriesDb.listEntrySources(this.db, entryId);
   }
 
-  /**
-   * Delete all entries for a raw ID and return their entryIds so the
-   * caller can rm -rf `entries/<entryId>/` on disk. Used during redigest
-   * and during raw purge.
-   */
   deleteEntriesByRawId(rawId: string): string[] {
-    return this.transaction(() => {
-      const ids = this.listEntryIdsByRawId(rawId);
-      this.markCoTopicEntriesStale(ids);
-      // entry_tags cascades on entries delete.
-      this.db.prepare('DELETE FROM entries WHERE raw_id = ?').run(rawId);
-      return ids;
-    });
+    return entriesDb.deleteEntriesByRawId(this.db, rawId);
   }
 
   listEntryIdsByRawId(rawId: string): string[] {
-    return this.db
-      .prepare<unknown[], { entry_id: string }>(
-        'SELECT entry_id FROM entries WHERE raw_id = ? ORDER BY entry_id',
-      )
-      .all(rawId)
-      .map((r) => r.entry_id);
+    return entriesDb.listEntryIdsByRawId(this.db, rawId);
   }
 
   listEntryIds(): string[] {
-    return this.db
-      .prepare<unknown[], { entry_id: string }>(
-        'SELECT entry_id FROM entries ORDER BY entry_id',
-      )
-      .all()
-      .map((r) => r.entry_id);
+    return entriesDb.listEntryIds(this.db);
   }
 
   entryExists(entryId: string): boolean {
-    const row = this.db
-      .prepare<unknown[], { entry_id: string }>(
-        'SELECT entry_id FROM entries WHERE entry_id = ?',
-      )
-      .get(entryId);
-    return Boolean(row);
+    return entriesDb.entryExists(this.db, entryId);
   }
 
   countEntriesByRawId(rawId: string): number {
-    const row = this.db
-      .prepare<unknown[], { cnt: number }>(
-        'SELECT COUNT(*) AS cnt FROM entries WHERE raw_id = ?',
-      )
-      .get(rawId);
-    return row?.cnt ?? 0;
+    return entriesDb.countEntriesByRawId(this.db, rawId);
   }
 
   getEntry(entryId: string): KbEntry | null {
-    const row = this.db
-      .prepare<
-        unknown[],
-        {
-          entry_id: string;
-          raw_id: string;
-          title: string;
-          slug: string;
-          summary: string;
-          schema_version: number;
-          stale_schema: number;
-          digested_at: string;
-        }
-      >(
-        'SELECT entry_id, raw_id, title, slug, summary, schema_version, stale_schema, digested_at FROM entries WHERE entry_id = ?',
-      )
-      .get(entryId);
-    if (!row) return null;
-    return {
-      entryId: row.entry_id,
-      rawId: row.raw_id,
-      title: row.title,
-      slug: row.slug,
-      summary: row.summary,
-      schemaVersion: row.schema_version,
-      staleSchema: row.stale_schema === 1,
-      digestedAt: row.digested_at,
-      tags: this._listTagsForEntry(row.entry_id),
-    };
+    return entriesDb.getEntry(this.db, entryId);
   }
 
-  /**
-   * List entries, optionally scoped by folder (via raw_locations join),
-   * tag(s), rawId, title substring, uploaded date range (from the joined
-   * `raw` row), or digested date range. Results are ordered by title
-   * for a stable UI. The tags array on each entry is populated via a
-   * secondary query — not a JOIN — because multi-tag entries would
-   * otherwise duplicate rows. Multi-tag filtering uses AND semantics:
-   * an entry must carry every tag in `opts.tags` (legacy single `tag`
-   * is merged in).
-   */
   listEntries(opts: ListEntriesFilter & { limit?: number; offset?: number } = {}): KbEntry[] {
-    const limit = opts.limit ?? DEFAULT_RAW_PAGE_SIZE;
-    const offset = opts.offset ?? 0;
-    const { joinSql, whereSql, havingSql, params } = this._buildEntryFilter(opts);
-    const query = `SELECT e.entry_id, e.raw_id, e.title, e.slug, e.summary, e.schema_version, e.stale_schema, e.digested_at
-                   FROM entries e${joinSql}${whereSql}
-                   GROUP BY e.entry_id${havingSql}
-                   ORDER BY e.title
-                   LIMIT ? OFFSET ?`;
-    const rows = this.db
-      .prepare<
-        unknown[],
-        {
-          entry_id: string;
-          raw_id: string;
-          title: string;
-          slug: string;
-          summary: string;
-          schema_version: number;
-          stale_schema: number;
-          digested_at: string;
-        }
-      >(query)
-      .all(...params, limit, offset);
-    return rows.map((r) => ({
-      entryId: r.entry_id,
-      rawId: r.raw_id,
-      title: r.title,
-      slug: r.slug,
-      summary: r.summary,
-      schemaVersion: r.schema_version,
-      staleSchema: r.stale_schema === 1,
-      digestedAt: r.digested_at,
-      tags: this._listTagsForEntry(r.entry_id),
-    }));
+    return entriesDb.listEntries(this.db, opts);
   }
 
-  /**
-   * Count entries matching the same filter options as `listEntries`,
-   * without LIMIT/OFFSET. Used by the UI to render page counts.
-   */
   countEntries(opts: ListEntriesFilter = {}): number {
-    const { joinSql, whereSql, havingSql, params } = this._buildEntryFilter(opts);
-    const query = `SELECT COUNT(*) AS n FROM (
-                     SELECT e.entry_id FROM entries e${joinSql}${whereSql}
-                     GROUP BY e.entry_id${havingSql}
-                   ) AS t`;
-    const row = this.db.prepare<unknown[], { n: number }>(query).get(...params);
-    return row?.n ?? 0;
+    return entriesDb.countEntries(this.db, opts);
   }
 
-  /**
-   * Build the JOIN / WHERE / HAVING fragments shared by `listEntries`
-   * and `countEntries`. Keeping both on the same builder guarantees the
-   * filter set stays consistent — the pagination total can never
-   * disagree with the page contents.
-   */
-  private _buildEntryFilter(opts: ListEntriesFilter): {
-    joinSql: string;
-    whereSql: string;
-    havingSql: string;
-    params: Array<string | number>;
-  } {
-    const joins: string[] = [];
-    const clauses: string[] = [];
-    const params: Array<string | number> = [];
-    let havingSql = '';
-
-    if (opts.folderPath !== undefined) {
-      joins.push('JOIN raw_locations l ON l.raw_id = e.raw_id');
-      clauses.push('l.folder_path = ?');
-      params.push(normalizeFolderPath(opts.folderPath));
-    }
-
-    // Merge legacy single `tag` into multi-tag list, de-dupe, AND-match.
-    const tagList: string[] = [];
-    if (opts.tag !== undefined && opts.tag !== '') tagList.push(opts.tag);
-    if (Array.isArray(opts.tags)) {
-      for (const t of opts.tags) {
-        if (typeof t === 'string' && t.trim() !== '') tagList.push(t.trim());
-      }
-    }
-    const uniqueTags = Array.from(new Set(tagList));
-    if (uniqueTags.length > 0) {
-      joins.push('JOIN entry_tags et ON et.entry_id = e.entry_id');
-      clauses.push(`et.tag IN (${uniqueTags.map(() => '?').join(',')})`);
-      params.push(...uniqueTags);
-      havingSql = ` HAVING COUNT(DISTINCT et.tag) = ${uniqueTags.length}`;
-    }
-
-    if (opts.rawId !== undefined) {
-      clauses.push('e.raw_id = ?');
-      params.push(opts.rawId);
-    }
-
-    if (opts.search !== undefined && opts.search.trim() !== '') {
-      const needle = '%' + opts.search.trim().replace(/[\\%_]/g, (c) => '\\' + c) + '%';
-      clauses.push(
-        "(e.title LIKE ? ESCAPE '\\' COLLATE NOCASE"
-          + " OR EXISTS (SELECT 1 FROM raw_locations rl"
-          + " WHERE rl.raw_id = e.raw_id"
-          + " AND rl.filename LIKE ? ESCAPE '\\' COLLATE NOCASE))",
-      );
-      params.push(needle, needle);
-    }
-
-    if (opts.digestedFrom !== undefined && opts.digestedFrom !== '') {
-      clauses.push('e.digested_at >= ?');
-      params.push(opts.digestedFrom);
-    }
-    if (opts.digestedTo !== undefined && opts.digestedTo !== '') {
-      clauses.push('e.digested_at <= ?');
-      params.push(opts.digestedTo);
-    }
-
-    const hasUploadedFilter =
-      (opts.uploadedFrom !== undefined && opts.uploadedFrom !== '') ||
-      (opts.uploadedTo !== undefined && opts.uploadedTo !== '');
-    if (hasUploadedFilter) {
-      joins.push('JOIN raw r ON r.raw_id = e.raw_id');
-      if (opts.uploadedFrom !== undefined && opts.uploadedFrom !== '') {
-        clauses.push('r.uploaded_at >= ?');
-        params.push(opts.uploadedFrom);
-      }
-      if (opts.uploadedTo !== undefined && opts.uploadedTo !== '') {
-        clauses.push('r.uploaded_at <= ?');
-        params.push(opts.uploadedTo);
-      }
-    }
-
-    return {
-      joinSql: joins.length ? ' ' + joins.join(' ') : '',
-      whereSql: clauses.length ? ' WHERE ' + clauses.join(' AND ') : '',
-      havingSql,
-      params,
-    };
-  }
-
-  /**
-   * List every distinct tag in use across the KB with its entry count.
-   * Feeds the entries-tab tag picker. Ordered by most-used first, then
-   * alphabetically, so common tags surface at the top.
-   */
   listAllTags(): Array<{ tag: string; count: number }> {
-    return this.db
-      .prepare<unknown[], { tag: string; count: number }>(
-        'SELECT tag, COUNT(*) AS count FROM entry_tags GROUP BY tag ORDER BY count DESC, tag ASC',
-      )
-      .all();
+    return entriesDb.listAllTags(this.db);
   }
 
-  /**
-   * Return true if an entry with `entryId` exists. Used by the digest
-   * orchestrator to disambiguate slug collisions within one run by
-   * appending `-2`, `-3`, etc.
-   */
   entryIdTaken(entryId: string): boolean {
-    return this.entryExists(entryId);
+    return entriesDb.entryIdTaken(this.db, entryId);
   }
 
   // ── Synthesis (Dreaming) ──────────────────────────────────────────────────
 
-  /** Get a synthesis_meta value by key, or null if missing. */
   getSynthesisMeta(key: string): string | null {
-    const row = this.db
-      .prepare<unknown[], { value: string }>(
-        'SELECT value FROM synthesis_meta WHERE key = ?',
-      )
-      .get(key);
-    return row?.value ?? null;
+    return synthesisDb.getSynthesisMeta(this.db, key);
   }
 
-  /** Set a synthesis_meta value (upsert). */
   setSynthesisMeta(key: string, value: string): void {
-    this.db
-      .prepare(
-        'INSERT INTO synthesis_meta (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value',
-      )
-      .run(key, value);
+    synthesisDb.setSynthesisMeta(this.db, key, value);
   }
 
-  /** Get the full synthesis status snapshot for API responses. */
   getSynthesisSnapshot(): SynthesisSnapshot {
-    const status = this.getSynthesisMeta('status') ?? 'idle';
-    const lastRunAt = this.getSynthesisMeta('last_run_at');
-    const lastRunError = this.getSynthesisMeta('last_run_error');
-    const godNodesRaw = this.getSynthesisMeta('god_nodes');
-    const godNodes: string[] = godNodesRaw ? JSON.parse(godNodesRaw) : [];
-    const dreamProgressRaw = this.getSynthesisMeta('dream_progress');
-    let dreamProgress: SynthesisSnapshot['dreamProgress'] = null;
-    if (dreamProgressRaw) {
-      try { dreamProgress = JSON.parse(dreamProgressRaw); } catch { /* ignore */ }
-    }
-
-    const topicCountRow = this.db
-      .prepare<unknown[], { n: number }>('SELECT COUNT(*) AS n FROM synthesis_topics')
-      .get();
-    const connCountRow = this.db
-      .prepare<unknown[], { n: number }>('SELECT COUNT(*) AS n FROM synthesis_connections')
-      .get();
-    const needsRow = this.db
-      .prepare<unknown[], { n: number }>('SELECT COUNT(*) AS n FROM entries WHERE needs_synthesis = 1')
-      .get();
-
-    const reflectionCountRow = this.db
-      .prepare<unknown[], { n: number }>('SELECT COUNT(*) AS n FROM synthesis_reflections')
-      .get();
-    const staleReflectionCount = this._countStaleReflections();
-
-    return {
-      status,
-      lastRunAt,
-      lastRunError,
-      topicCount: topicCountRow?.n ?? 0,
-      connectionCount: connCountRow?.n ?? 0,
-      needsSynthesisCount: needsRow?.n ?? 0,
-      godNodes,
-      dreamProgress,
-      reflectionCount: reflectionCountRow?.n ?? 0,
-      staleReflectionCount,
-    };
+    return synthesisDb.getSynthesisSnapshot(this.db);
   }
 
   startSynthesisRun(runId: string, mode: SynthesisRunMode, startedAt: string): void {
-    this.db
-      .prepare(
-        `INSERT INTO synthesis_runs (run_id, mode, status, started_at, completed_at, error_message)
-         VALUES (?, ?, 'running', ?, NULL, NULL)`,
-      )
-      .run(runId, mode, startedAt);
+    synthesisDb.startSynthesisRun(this.db, runId, mode, startedAt);
   }
 
   finishSynthesisRun(
@@ -1748,405 +336,119 @@ export class KbDatabase {
     completedAt: string,
     errorMessage: string | null = null,
   ): void {
-    this.db
-      .prepare(
-        `UPDATE synthesis_runs
-         SET status = ?, completed_at = ?, error_message = ?
-         WHERE run_id = ?`,
-      )
-      .run(status, completedAt, errorMessage, runId);
+    synthesisDb.finishSynthesisRun(this.db, runId, status, completedAt, errorMessage);
   }
 
   getSynthesisRun(runId: string): SynthesisRunRow | null {
-    const row = this.db
-      .prepare<
-        unknown[],
-        { run_id: string; mode: SynthesisRunMode; status: SynthesisRunStatus; started_at: string; completed_at: string | null; error_message: string | null }
-      >(
-        `SELECT run_id, mode, status, started_at, completed_at, error_message
-         FROM synthesis_runs
-         WHERE run_id = ?`,
-      )
-      .get(runId);
-    return row ? this._mapSynthesisRun(row) : null;
+    return synthesisDb.getSynthesisRun(this.db, runId);
   }
 
   listSynthesisRuns(limit = 50): SynthesisRunRow[] {
-    const safeLimit = Math.max(1, Math.min(limit, 500));
-    const rows = this.db
-      .prepare<
-        unknown[],
-        { run_id: string; mode: SynthesisRunMode; status: SynthesisRunStatus; started_at: string; completed_at: string | null; error_message: string | null }
-      >(
-        `SELECT run_id, mode, status, started_at, completed_at, error_message
-         FROM synthesis_runs
-         ORDER BY started_at DESC
-         LIMIT ?`,
-      )
-      .all(safeLimit);
-    return rows.map((row) => this._mapSynthesisRun(row));
+    return synthesisDb.listSynthesisRuns(this.db, limit);
   }
 
   insertTopicHistory(params: InsertTopicHistoryParams): SynthesisTopicHistoryRow {
-    const entryIdsJson = JSON.stringify(params.entryIds);
-    const result = this.db
-      .prepare(
-        `INSERT INTO synthesis_topic_history
-           (topic_id, change_type, old_content, new_content, entry_ids, run_id, changed_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?)`,
-      )
-      .run(
-        params.topicId,
-        params.changeType,
-        params.oldContent,
-        params.newContent,
-        entryIdsJson,
-        params.runId ?? null,
-        params.changedAt,
-      );
-    return {
-      id: Number(result.lastInsertRowid),
-      ...params,
-      runId: params.runId ?? null,
-      entryIds: params.entryIds,
-    };
+    return synthesisDb.insertTopicHistory(this.db, params);
   }
 
   listTopicHistory(topicId?: string): SynthesisTopicHistoryRow[] {
-    const select =
-      `SELECT id, topic_id, change_type, old_content, new_content, entry_ids, run_id, changed_at
-       FROM synthesis_topic_history`;
-    const order = ' ORDER BY changed_at DESC, id DESC';
-    const rows = topicId
-      ? this.db
-        .prepare<
-          unknown[],
-          { id: number; topic_id: string; change_type: InsertTopicHistoryParams['changeType']; old_content: string | null; new_content: string | null; entry_ids: string | null; run_id: string | null; changed_at: string }
-        >(`${select} WHERE topic_id = ?${order}`)
-        .all(topicId)
-      : this.db
-        .prepare<
-          unknown[],
-          { id: number; topic_id: string; change_type: InsertTopicHistoryParams['changeType']; old_content: string | null; new_content: string | null; entry_ids: string | null; run_id: string | null; changed_at: string }
-        >(`${select}${order}`)
-        .all();
-    return rows.map((row) => this._mapTopicHistory(row));
+    return synthesisDb.listTopicHistory(this.db, topicId);
   }
 
-  /** Count entries that need synthesis. */
   countNeedsSynthesis(): number {
-    const row = this.db
-      .prepare<unknown[], { n: number }>('SELECT COUNT(*) AS n FROM entries WHERE needs_synthesis = 1')
-      .get();
-    return row?.n ?? 0;
+    return synthesisDb.countNeedsSynthesis(this.db);
   }
 
-  /** List entry IDs that need synthesis (for the dreaming pipeline). */
   listNeedsSynthesisEntryIds(): string[] {
-    return this.db
-      .prepare<unknown[], { entry_id: string }>(
-        'SELECT entry_id FROM entries WHERE needs_synthesis = 1 ORDER BY entry_id',
-      )
-      .all()
-      .map((r) => r.entry_id);
+    return synthesisDb.listNeedsSynthesisEntryIds(this.db);
   }
 
-  /** Mark entries as no longer needing synthesis. */
   clearNeedsSynthesis(entryIds: string[]): void {
-    if (entryIds.length === 0) return;
-    const placeholders = entryIds.map(() => '?').join(', ');
-    this.db
-      .prepare(`UPDATE entries SET needs_synthesis = 0 WHERE entry_id IN (${placeholders})`)
-      .run(...entryIds);
+    synthesisDb.clearNeedsSynthesis(this.db, entryIds);
   }
 
-  /** Mark all entries as needing synthesis (for full rebuild). */
   markAllNeedsSynthesis(): void {
-    this.db.exec('UPDATE entries SET needs_synthesis = 1');
+    synthesisDb.markAllNeedsSynthesis(this.db);
   }
 
-  /**
-   * When entries are deleted, mark remaining entries that shared a topic
-   * with the deleted ones as needing synthesis. This ensures topics
-   * referencing deleted content get updated on the next dream run.
-   */
   markCoTopicEntriesStale(deletedEntryIds: string[]): void {
-    if (deletedEntryIds.length === 0) return;
-    const placeholders = deletedEntryIds.map(() => '?').join(', ');
-    // Find all entries that share a topic with any of the deleted entries,
-    // excluding the deleted entries themselves.
-    this.db
-      .prepare(
-        `UPDATE entries SET needs_synthesis = 1
-         WHERE entry_id IN (
-           SELECT DISTINCT ste2.entry_id
-           FROM synthesis_topic_entries ste1
-           JOIN synthesis_topic_entries ste2 ON ste1.topic_id = ste2.topic_id
-           WHERE ste1.entry_id IN (${placeholders})
-             AND ste2.entry_id NOT IN (${placeholders})
-         )`,
-      )
-      .run(...deletedEntryIds, ...deletedEntryIds);
+    synthesisDb.markCoTopicEntriesStale(this.db, deletedEntryIds);
   }
 
   // ── Synthesis Topics ────────────────────────────────────────────────────
 
   upsertTopic(params: UpsertTopicParams): void {
-    this.db
-      .prepare(
-        `INSERT INTO synthesis_topics (topic_id, title, summary, content, updated_at)
-         VALUES (?, ?, ?, ?, ?)
-         ON CONFLICT(topic_id) DO UPDATE SET
-           title = excluded.title,
-           summary = excluded.summary,
-           content = excluded.content,
-           updated_at = excluded.updated_at`,
-      )
-      .run(params.topicId, params.title, params.summary, params.content, params.updatedAt);
+    synthesisGraphDb.upsertTopic(this.db, params);
   }
 
   deleteTopic(topicId: string): void {
-    // CASCADE deletes synthesis_topic_entries and synthesis_connections rows.
-    this.db
-      .prepare('DELETE FROM synthesis_topics WHERE topic_id = ?')
-      .run(topicId);
+    synthesisGraphDb.deleteTopic(this.db, topicId);
   }
 
-  /**
-   * Delete topics that have zero entries assigned. Called after entry
-   * cascade-deletes (e.g. raw file deletion) to clean up orphans.
-   */
   _deleteOrphanTopics(): void {
-    this.db.exec(
-      `DELETE FROM synthesis_topics WHERE topic_id NOT IN (
-         SELECT DISTINCT topic_id FROM synthesis_topic_entries
-       )`,
-    );
+    synthesisGraphDb.deleteOrphanTopics(this.db);
   }
 
   getTopic(topicId: string): SynthesisTopicRow | null {
-    const row = this.db
-      .prepare<
-        unknown[],
-        { topic_id: string; title: string; summary: string | null; content: string | null; updated_at: string }
-      >(
-        'SELECT topic_id, title, summary, content, updated_at FROM synthesis_topics WHERE topic_id = ?',
-      )
-      .get(topicId);
-    if (!row) return null;
-
-    const entryCount = this.db
-      .prepare<unknown[], { n: number }>(
-        'SELECT COUNT(*) AS n FROM synthesis_topic_entries WHERE topic_id = ?',
-      )
-      .get(topicId)?.n ?? 0;
-
-    const connectionCount = this.db
-      .prepare<unknown[], { n: number }>(
-        'SELECT COUNT(*) AS n FROM synthesis_connections WHERE source_topic = ? OR target_topic = ?',
-      )
-      .get(topicId, topicId)?.n ?? 0;
-
-    return {
-      topicId: row.topic_id,
-      title: row.title,
-      summary: row.summary,
-      content: row.content,
-      updatedAt: row.updated_at,
-      entryCount,
-      connectionCount,
-    };
+    return synthesisGraphDb.getTopic(this.db, topicId);
   }
 
-  /** List all topics with entry and connection counts. */
   listTopics(): SynthesisTopicRow[] {
-    const rows = this.db
-      .prepare<
-        unknown[],
-        { topic_id: string; title: string; summary: string | null; content: string | null; updated_at: string; entry_count: number; conn_count: number }
-      >(
-        `SELECT
-           t.topic_id, t.title, t.summary, t.content, t.updated_at,
-           (SELECT COUNT(*) FROM synthesis_topic_entries WHERE topic_id = t.topic_id) AS entry_count,
-           (SELECT COUNT(*) FROM synthesis_connections WHERE source_topic = t.topic_id OR target_topic = t.topic_id) AS conn_count
-         FROM synthesis_topics t
-         ORDER BY t.title`,
-      )
-      .all();
-    return rows.map((r) => ({
-      topicId: r.topic_id,
-      title: r.title,
-      summary: r.summary,
-      content: r.content,
-      updatedAt: r.updated_at,
-      entryCount: r.entry_count,
-      connectionCount: r.conn_count,
-    }));
+    return synthesisGraphDb.listTopics(this.db);
   }
 
-  /** List all topics as lightweight summaries (for the all-topics.txt file). */
   listTopicSummaries(): Array<{ topicId: string; title: string; summary: string | null }> {
-    return this.db
-      .prepare<unknown[], { topic_id: string; title: string; summary: string | null }>(
-        'SELECT topic_id, title, summary FROM synthesis_topics ORDER BY title',
-      )
-      .all()
-      .map((r) => ({ topicId: r.topic_id, title: r.title, summary: r.summary }));
+    return synthesisGraphDb.listTopicSummaries(this.db);
   }
 
   listTopicIds(): string[] {
-    return this.db
-      .prepare<unknown[], { topic_id: string }>(
-        'SELECT topic_id FROM synthesis_topics ORDER BY topic_id',
-      )
-      .all()
-      .map((r) => r.topic_id);
+    return synthesisGraphDb.listTopicIds(this.db);
   }
 
   // ── Synthesis Topic-Entry Membership ────────────────────────────────────
 
   assignEntries(topicId: string, entryIds: string[]): void {
-    if (entryIds.length === 0) return;
-    const stmt = this.db.prepare(
-      'INSERT OR IGNORE INTO synthesis_topic_entries (topic_id, entry_id) VALUES (?, ?)',
-    );
-    for (const eid of entryIds) {
-      stmt.run(topicId, eid);
-    }
+    synthesisGraphDb.assignEntries(this.db, topicId, entryIds);
   }
 
   unassignEntries(topicId: string, entryIds: string[]): void {
-    if (entryIds.length === 0) return;
-    const stmt = this.db.prepare(
-      'DELETE FROM synthesis_topic_entries WHERE topic_id = ? AND entry_id = ?',
-    );
-    for (const eid of entryIds) {
-      stmt.run(topicId, eid);
-    }
+    synthesisGraphDb.unassignEntries(this.db, topicId, entryIds);
   }
 
-  /** List entry IDs assigned to a topic. */
   listTopicEntryIds(topicId: string): string[] {
-    return this.db
-      .prepare<unknown[], { entry_id: string }>(
-        'SELECT entry_id FROM synthesis_topic_entries WHERE topic_id = ? ORDER BY entry_id',
-      )
-      .all(topicId)
-      .map((r) => r.entry_id);
+    return synthesisGraphDb.listTopicEntryIds(this.db, topicId);
   }
 
-  /** List topics an entry belongs to. */
   listEntryTopicIds(entryId: string): string[] {
-    return this.db
-      .prepare<unknown[], { topic_id: string }>(
-        'SELECT topic_id FROM synthesis_topic_entries WHERE entry_id = ? ORDER BY topic_id',
-      )
-      .all(entryId)
-      .map((r) => r.topic_id);
+    return synthesisGraphDb.listEntryTopicIds(this.db, entryId);
   }
 
   // ── Synthesis Connections ───────────────────────────────────────────────
 
   upsertConnection(params: InsertConnectionParams): void {
-    this.db
-      .prepare(
-        `INSERT INTO synthesis_connections (source_topic, target_topic, relationship, confidence, evidence)
-         VALUES (?, ?, ?, ?, ?)
-         ON CONFLICT(source_topic, target_topic) DO UPDATE SET
-           relationship = excluded.relationship,
-           confidence = excluded.confidence,
-           evidence = excluded.evidence`,
-      )
-      .run(params.sourceTopic, params.targetTopic, params.relationship, params.confidence, params.evidence);
+    synthesisGraphDb.upsertConnection(this.db, params);
   }
 
   removeConnection(sourceTopic: string, targetTopic: string): void {
-    this.db
-      .prepare('DELETE FROM synthesis_connections WHERE source_topic = ? AND target_topic = ?')
-      .run(sourceTopic, targetTopic);
+    synthesisGraphDb.removeConnection(this.db, sourceTopic, targetTopic);
   }
 
-  /** List connections for a topic (both directions). */
   listConnectionsForTopic(topicId: string): SynthesisConnectionRow[] {
-    const rows = this.db
-      .prepare<
-        unknown[],
-        { source_topic: string; target_topic: string; relationship: string; confidence: string; evidence: string | null }
-      >(
-        `SELECT source_topic, target_topic, relationship, confidence, evidence
-         FROM synthesis_connections
-         WHERE source_topic = ? OR target_topic = ?
-         ORDER BY source_topic, target_topic`,
-      )
-      .all(topicId, topicId);
-    return rows.map((r) => ({
-      sourceTopic: r.source_topic,
-      targetTopic: r.target_topic,
-      relationship: r.relationship,
-      confidence: r.confidence,
-      evidence: r.evidence,
-    }));
+    return synthesisGraphDb.listConnectionsForTopic(this.db, topicId);
   }
 
-  /** List all connections (for connections.md generation). */
   listAllConnections(): SynthesisConnectionRow[] {
-    const rows = this.db
-      .prepare<
-        unknown[],
-        { source_topic: string; target_topic: string; relationship: string; confidence: string; evidence: string | null }
-      >(
-        'SELECT source_topic, target_topic, relationship, confidence, evidence FROM synthesis_connections ORDER BY source_topic, target_topic',
-      )
-      .all();
-    return rows.map((r) => ({
-      sourceTopic: r.source_topic,
-      targetTopic: r.target_topic,
-      relationship: r.relationship,
-      confidence: r.confidence,
-      evidence: r.evidence,
-    }));
+    return synthesisGraphDb.listAllConnections(this.db);
   }
 
-  /**
-   * Find topic pairs that share assigned entries but have no existing
-   * connection (either direction). Returns pairs with shared entry count.
-   */
   listTopicPairsBySharedEntries(): Array<{
     topicA: string;
     topicB: string;
     sharedEntryCount: number;
   }> {
-    const rows = this.db
-      .prepare<
-        unknown[],
-        { topic_a: string; topic_b: string; shared_count: number }
-      >(
-        `SELECT ste1.topic_id AS topic_a, ste2.topic_id AS topic_b,
-                COUNT(*) AS shared_count
-         FROM synthesis_topic_entries ste1
-         JOIN synthesis_topic_entries ste2
-           ON ste1.entry_id = ste2.entry_id AND ste1.topic_id < ste2.topic_id
-         WHERE NOT EXISTS (
-           SELECT 1 FROM synthesis_connections
-           WHERE (source_topic = ste1.topic_id AND target_topic = ste2.topic_id)
-              OR (source_topic = ste2.topic_id AND target_topic = ste1.topic_id)
-         )
-         GROUP BY ste1.topic_id, ste2.topic_id
-         ORDER BY shared_count DESC`,
-      )
-      .all();
-    return rows.map((r) => ({
-      topicA: r.topic_a,
-      topicB: r.topic_b,
-      sharedEntryCount: r.shared_count,
-    }));
+    return synthesisGraphDb.listTopicPairsBySharedEntries(this.db);
   }
 
-  /**
-   * Find 2-hop transitive connection candidates: pairs (A, C) where A→B
-   * and B→C exist (in either direction) but A↔C has no direct connection.
-   * Returns the intermediate topic and both relationship labels.
-   */
   listTransitiveCandidates(): Array<{
     topicA: string;
     topicC: string;
@@ -2154,557 +456,63 @@ export class KbDatabase {
     relAB: string;
     relBC: string;
   }> {
-    const rows = this.db
-      .prepare<
-        unknown[],
-        { topic_a: string; topic_c: string; via_b: string; rel_ab: string; rel_bc: string }
-      >(
-        `WITH directed AS (
-           SELECT source_topic AS from_t, target_topic AS to_t, relationship
-           FROM synthesis_connections
-           UNION ALL
-           SELECT target_topic AS from_t, source_topic AS to_t, relationship
-           FROM synthesis_connections
-         )
-         SELECT d1.from_t AS topic_a, d2.to_t AS topic_c,
-                d1.to_t AS via_b, d1.relationship AS rel_ab, d2.relationship AS rel_bc
-         FROM directed d1
-         JOIN directed d2 ON d1.to_t = d2.from_t
-         WHERE d1.from_t < d2.to_t
-           AND d1.from_t != d2.to_t
-           AND NOT EXISTS (
-             SELECT 1 FROM synthesis_connections
-             WHERE (source_topic = d1.from_t AND target_topic = d2.to_t)
-                OR (source_topic = d2.to_t AND target_topic = d1.from_t)
-           )
-         GROUP BY d1.from_t, d2.to_t`,
-      )
-      .all();
-    return rows.map((r) => ({
-      topicA: r.topic_a,
-      topicC: r.topic_c,
-      viaTopicB: r.via_b,
-      relAB: r.rel_ab,
-      relBC: r.rel_bc,
-    }));
+    return synthesisGraphDb.listTransitiveCandidates(this.db);
   }
 
   // ── Synthesis Reflections ──────────────────────────────────────────────
 
-  /** Insert a reflection with its citation links. */
   insertReflection(params: InsertReflectionParams): void {
-    this.transaction(() => {
-      this.db
-        .prepare(
-          `INSERT INTO synthesis_reflections (reflection_id, title, type, summary, content, created_at, original_citation_count)
-           VALUES (?, ?, ?, ?, ?, ?, ?)`,
-        )
-        .run(params.reflectionId, params.title, params.type, params.summary, params.content, params.createdAt, params.citedEntryIds.length);
-      const insertCitation = this.db.prepare(
-        'INSERT OR IGNORE INTO synthesis_reflection_citations (reflection_id, entry_id) VALUES (?, ?)',
-      );
-      for (const eid of params.citedEntryIds) {
-        insertCitation.run(params.reflectionId, eid);
-      }
-    });
+    reflectionsDb.insertReflection(this.db, params);
   }
 
-  /** List all reflections with citation counts. */
   listReflections(): SynthesisReflectionRow[] {
-    const rows = this.db
-      .prepare<
-        unknown[],
-        { reflection_id: string; title: string; type: string; summary: string | null; content: string; created_at: string; citation_count: number }
-      >(
-        `SELECT r.reflection_id, r.title, r.type, r.summary, r.content, r.created_at,
-                (SELECT COUNT(*) FROM synthesis_reflection_citations WHERE reflection_id = r.reflection_id) AS citation_count
-         FROM synthesis_reflections r
-         ORDER BY r.created_at DESC`,
-      )
-      .all();
-    return rows.map((r) => ({
-      reflectionId: r.reflection_id,
-      title: r.title,
-      type: r.type,
-      summary: r.summary,
-      content: r.content,
-      createdAt: r.created_at,
-      citationCount: r.citation_count,
-    }));
+    return reflectionsDb.listReflections(this.db);
   }
 
-  /** Get a single reflection with its cited entry IDs. */
   getReflection(reflectionId: string): (SynthesisReflectionRow & { citedEntryIds: string[] }) | null {
-    const row = this.db
-      .prepare<
-        unknown[],
-        { reflection_id: string; title: string; type: string; summary: string | null; content: string; created_at: string }
-      >(
-        'SELECT reflection_id, title, type, summary, content, created_at FROM synthesis_reflections WHERE reflection_id = ?',
-      )
-      .get(reflectionId);
-    if (!row) return null;
-
-    const citationCount = this.db
-      .prepare<unknown[], { n: number }>(
-        'SELECT COUNT(*) AS n FROM synthesis_reflection_citations WHERE reflection_id = ?',
-      )
-      .get(reflectionId)?.n ?? 0;
-
-    const citedEntryIds = this.db
-      .prepare<unknown[], { entry_id: string }>(
-        'SELECT entry_id FROM synthesis_reflection_citations WHERE reflection_id = ? ORDER BY entry_id',
-      )
-      .all(reflectionId)
-      .map((r) => r.entry_id);
-
-    return {
-      reflectionId: row.reflection_id,
-      title: row.title,
-      type: row.type,
-      summary: row.summary,
-      content: row.content,
-      createdAt: row.created_at,
-      citationCount,
-      citedEntryIds,
-    };
+    return reflectionsDb.getReflection(this.db, reflectionId);
   }
 
-  /** Delete all reflections (called before regenerating). */
   wipeReflections(): void {
-    this.transaction(() => {
-      this.db.exec('DELETE FROM synthesis_reflection_citations');
-      this.db.exec('DELETE FROM synthesis_reflections');
-    });
+    reflectionsDb.wipeReflections(this.db);
   }
 
-  /**
-   * List IDs of stale reflections — reflections where any cited entry
-   * has been updated since the reflection was created, or where a cited
-   * entry has been deleted.
-   */
   listStaleReflectionIds(): string[] {
-    const rows = this.db
-      .prepare<unknown[], { reflection_id: string }>(
-        `SELECT r.reflection_id
-         FROM synthesis_reflections r
-         LEFT JOIN synthesis_reflection_citations c ON c.reflection_id = r.reflection_id
-         LEFT JOIN entries e ON e.entry_id = c.entry_id
-         GROUP BY r.reflection_id
-         HAVING COUNT(CASE WHEN c.entry_id IS NOT NULL AND e.entry_id IS NULL THEN 1 END) > 0
-             OR COUNT(CASE WHEN e.digested_at > r.created_at THEN 1 END) > 0
-             OR COUNT(c.entry_id) < r.original_citation_count`,
-      )
-      .all();
-    return rows.map((r) => r.reflection_id);
+    return reflectionsDb.listStaleReflectionIds(this.db);
   }
 
-  /** Delete specific reflections by ID. */
   deleteReflections(reflectionIds: string[]): void {
-    if (reflectionIds.length === 0) return;
-    const placeholders = reflectionIds.map(() => '?').join(', ');
-    this.transaction(() => {
-      this.db
-        .prepare(`DELETE FROM synthesis_reflection_citations WHERE reflection_id IN (${placeholders})`)
-        .run(...reflectionIds);
-      this.db
-        .prepare(`DELETE FROM synthesis_reflections WHERE reflection_id IN (${placeholders})`)
-        .run(...reflectionIds);
-    });
+    reflectionsDb.deleteReflections(this.db, reflectionIds);
   }
 
-  /** Count stale reflections. */
   private _countStaleReflections(): number {
-    const row = this.db
-      .prepare<unknown[], { n: number }>(
-        `SELECT COUNT(*) AS n FROM (
-           SELECT r.reflection_id
-           FROM synthesis_reflections r
-           LEFT JOIN synthesis_reflection_citations c ON c.reflection_id = r.reflection_id
-           LEFT JOIN entries e ON e.entry_id = c.entry_id
-           GROUP BY r.reflection_id
-           HAVING COUNT(CASE WHEN c.entry_id IS NOT NULL AND e.entry_id IS NULL THEN 1 END) > 0
-               OR COUNT(CASE WHEN e.digested_at > r.created_at THEN 1 END) > 0
-               OR COUNT(c.entry_id) < r.original_citation_count
-         )`,
-      )
-      .get();
-    return row?.n ?? 0;
+    return reflectionsDb.countStaleReflections(this.db);
   }
 
   // ── Synthesis Bulk Operations ──────────────────────────────────────────
 
-  /** Wipe all synthesis data (for Re-Dream full rebuild). */
   wipeSynthesis(): void {
-    this.transaction(() => {
-      this.db.exec('DELETE FROM synthesis_reflection_citations');
-      this.db.exec('DELETE FROM synthesis_reflections');
-      this.db.exec('DELETE FROM synthesis_connections');
-      this.db.exec('DELETE FROM synthesis_topic_entries');
-      this.db.exec('DELETE FROM synthesis_topics');
-      this.setSynthesisMeta('last_run_at', '');
-      this.setSynthesisMeta('last_run_error', '');
-      this.setSynthesisMeta('god_nodes', '[]');
-    });
+    synthesisGraphDb.wipeSynthesis(this.db);
   }
 
-  /**
-   * Detect god nodes: topics with disproportionately many entries or
-   * connections (> 3× average, minimum 10 entries). Returns topic IDs.
-   */
   detectGodNodes(): string[] {
-    const topics = this.listTopics();
-    if (topics.length === 0) return [];
-
-    const avgEntries = topics.reduce((sum, t) => sum + t.entryCount, 0) / topics.length;
-    const avgConns = topics.reduce((sum, t) => sum + t.connectionCount, 0) / topics.length;
-    const entryThreshold = Math.max(avgEntries * 3, 10);
-    const connThreshold = Math.max(avgConns * 3, 3);
-
-    return topics
-      .filter((t) => t.entryCount > entryThreshold || t.connectionCount > connThreshold)
-      .map((t) => t.topicId);
+    return synthesisGraphDb.detectGodNodes(this.db);
   }
 
   // ── Digestion session (issue #148) ───────────────────────────────────────
 
-  /**
-   * Read the persisted digestion-session snapshot, or `null` if the queue
-   * is idle. The digestion orchestrator rehydrates its in-memory session
-   * from this row on first access after a server restart.
-   */
   getDigestSession(): DigestSessionRow | null {
-    const row = this.db
-      .prepare<
-        unknown[],
-        {
-          total: number;
-          done: number;
-          total_elapsed_ms: number;
-          started_at: string;
-          chunk_progress_json: string | null;
-        }
-      >(
-        'SELECT total, done, total_elapsed_ms, started_at, chunk_progress_json FROM digest_session WHERE id = 1',
-      )
-      .get();
-    if (!row) return null;
-    return {
-      total: row.total,
-      done: row.done,
-      totalElapsedMs: row.total_elapsed_ms,
-      startedAt: row.started_at,
-      chunkProgress: parseDigestChunkProgress(row.chunk_progress_json),
-    };
+    return digestSessionDb.getDigestSession(this.db);
   }
 
-  /** Upsert the singleton digestion-session row. Called on every counter bump. */
   upsertDigestSession(row: DigestSessionRow): void {
-    this.db
-      .prepare(
-        `INSERT INTO digest_session (id, total, done, total_elapsed_ms, started_at, chunk_progress_json)
-         VALUES (1, ?, ?, ?, ?, ?)
-         ON CONFLICT(id) DO UPDATE SET
-           total = excluded.total,
-           done = excluded.done,
-           total_elapsed_ms = excluded.total_elapsed_ms,
-           started_at = excluded.started_at,
-           chunk_progress_json = excluded.chunk_progress_json`,
-      )
-      .run(
-        row.total,
-        row.done,
-        row.totalElapsedMs,
-        row.startedAt,
-        row.chunkProgress ? JSON.stringify(row.chunkProgress) : null,
-      );
+    digestSessionDb.upsertDigestSession(this.db, row);
   }
 
-  /** Delete the digestion-session row when the queue drains. */
   clearDigestSession(): void {
-    this.db.prepare('DELETE FROM digest_session').run();
+    digestSessionDb.clearDigestSession(this.db);
   }
 
-  // ── Internals ────────────────────────────────────────────────────────────
-
-  private _mapSynthesisRun(row: {
-    run_id: string;
-    mode: SynthesisRunMode;
-    status: SynthesisRunStatus;
-    started_at: string;
-    completed_at: string | null;
-    error_message: string | null;
-  }): SynthesisRunRow {
-    return {
-      runId: row.run_id,
-      mode: row.mode,
-      status: row.status,
-      startedAt: row.started_at,
-      completedAt: row.completed_at,
-      errorMessage: row.error_message,
-    };
-  }
-
-  private _mapTopicHistory(row: {
-    id: number;
-    topic_id: string;
-    change_type: InsertTopicHistoryParams['changeType'];
-    old_content: string | null;
-    new_content: string | null;
-    entry_ids: string | null;
-    run_id: string | null;
-    changed_at: string;
-  }): SynthesisTopicHistoryRow {
-    let entryIds: string[] = [];
-    if (row.entry_ids) {
-      try {
-        const parsed = JSON.parse(row.entry_ids);
-        if (Array.isArray(parsed)) {
-          entryIds = parsed.filter((id): id is string => typeof id === 'string');
-        }
-      } catch {
-        entryIds = [];
-      }
-    }
-    return {
-      id: row.id,
-      topicId: row.topic_id,
-      changeType: row.change_type,
-      oldContent: row.old_content,
-      newContent: row.new_content,
-      entryIds,
-      runId: row.run_id,
-      changedAt: row.changed_at,
-    };
-  }
-
-  private _initSchema(): void {
-    this.db.exec(SCHEMA_DDL);
-    // Seed schema_version + created_at in meta if this is a fresh DB.
-    const existing = this.db
-      .prepare<unknown[], { value: string }>(
-        'SELECT value FROM meta WHERE key = ?',
-      )
-      .get('schema_version');
-    if (!existing) {
-      const now = new Date().toISOString();
-      const insert = this.db.prepare(
-        'INSERT INTO meta (key, value) VALUES (?, ?)',
-      );
-      insert.run('schema_version', String(KB_DB_SCHEMA_VERSION));
-      insert.run('created_at', now);
-    }
-
-    // ── V2 migration: add needs_synthesis column to existing entries table ──
-    this._migrateV2();
-    // ── V3 migration: add original_citation_count to synthesis_reflections ──
-    this._migrateV3();
-    // ── V4 migration: add document structure tables ────────────────────────
-    this._migrateV4();
-    // ── V5 migration: add entry source lineage table ───────────────────────
-    this._migrateV5();
-    // ── V6 migration: add glossary query-expansion table ──────────────────
-    this._migrateV6();
-    // ── V7 migration: add synthesis run + topic history tables ────────────
-    this._migrateV7();
-    // ── V8 migration: add live chunk progress to digest_session ────────────
-    this._migrateV8();
-
-    // Create the needs_synthesis partial index AFTER the V2 migration so that
-    // V1 databases already have the column by the time we reference it.
-    this.db.exec(
-      `CREATE INDEX IF NOT EXISTS idx_entries_needs_synthesis ON entries(needs_synthesis)
-         WHERE needs_synthesis = 1`,
-    );
-
-    // ── Seed synthesis_meta defaults ──
-    this.db.exec(
-      `INSERT OR IGNORE INTO synthesis_meta (key, value) VALUES ('status', 'idle')`,
-    );
-
-    // If the server was killed mid-dream the status stays 'running' in the DB.
-    // Nothing can actually be running right after construction, so reset it.
-    this.db
-      .prepare(`UPDATE synthesis_meta SET value = 'idle' WHERE key = 'status' AND value = 'running'`)
-      .run();
-  }
-
-  /**
-   * V2 migration: add `needs_synthesis` column to the entries table for
-   * databases created at schema V1. Safe to call on V2+ DBs (no-op).
-   */
-  private _migrateV2(): void {
-    const cols = this.db
-      .prepare<unknown[], { name: string }>('PRAGMA table_info(entries)')
-      .all();
-    const hasColumn = cols.some((c) => c.name === 'needs_synthesis');
-    if (hasColumn) return;
-    this.db.exec(
-      'ALTER TABLE entries ADD COLUMN needs_synthesis INTEGER NOT NULL DEFAULT 1',
-    );
-    // Existing entries that were already digested before dreaming existed
-    // should default to needing synthesis.
-    this.db.exec('UPDATE entries SET needs_synthesis = 1');
-    // Update schema_version in meta.
-    this.db
-      .prepare('UPDATE meta SET value = ? WHERE key = ?')
-      .run('2', 'schema_version');
-  }
-
-  /**
-   * V3 migration: add `original_citation_count` column to synthesis_reflections
-   * so stale detection works when cited entries are cascade-deleted.
-   */
-  private _migrateV3(): void {
-    const cols = this.db
-      .prepare<unknown[], { name: string }>('PRAGMA table_info(synthesis_reflections)')
-      .all();
-    if (cols.length === 0) return;
-    const hasColumn = cols.some((c) => c.name === 'original_citation_count');
-    if (!hasColumn) {
-      this.db.exec(
-        'ALTER TABLE synthesis_reflections ADD COLUMN original_citation_count INTEGER NOT NULL DEFAULT 0',
-      );
-      // Backfill from current citation counts.
-      this.db.exec(
-        `UPDATE synthesis_reflections SET original_citation_count = (
-           SELECT COUNT(*) FROM synthesis_reflection_citations WHERE reflection_id = synthesis_reflections.reflection_id
-         )`,
-      );
-    }
-    this.db
-      .prepare('UPDATE meta SET value = ? WHERE key = ?')
-      .run('3', 'schema_version');
-  }
-
-  /**
-   * V4 migration: add document structure tables for range-aware retrieval.
-   * `SCHEMA_DDL` creates the tables and indexes idempotently before this
-   * runs, so the migration only records that the DB has reached V4.
-   */
-  private _migrateV4(): void {
-    this.db
-      .prepare('UPDATE meta SET value = ? WHERE key = ?')
-      .run('4', 'schema_version');
-  }
-
-  /**
-   * V5 migration: add entry source lineage table for chunked digestion.
-   * `SCHEMA_DDL` creates the table and indexes idempotently before this
-   * runs, so the migration only records that the DB has reached V5.
-   */
-  private _migrateV5(): void {
-    this.db
-      .prepare('UPDATE meta SET value = ? WHERE key = ?')
-      .run('5', 'schema_version');
-  }
-
-  /**
-   * V6 migration: add glossary query-expansion table.
-   * `SCHEMA_DDL` creates the table idempotently before this runs.
-   */
-  private _migrateV6(): void {
-    this.db
-      .prepare('UPDATE meta SET value = ? WHERE key = ?')
-      .run('6', 'schema_version');
-  }
-
-  /**
-   * V7 migration: add synthesis run tracking and topic history tables.
-   * `SCHEMA_DDL` creates the tables and indexes idempotently before this
-   * runs, so the migration only records that the DB has reached V7.
-   */
-  private _migrateV7(): void {
-    this.db
-      .prepare('UPDATE meta SET value = ? WHERE key = ?')
-      .run('7', 'schema_version');
-  }
-
-  /**
-   * V8 migration: add `chunk_progress_json` to digest_session so live
-   * planning/chunk counters survive KB Browser refetches during digestion.
-   */
-  private _migrateV8(): void {
-    const cols = this.db
-      .prepare<unknown[], { name: string }>('PRAGMA table_info(digest_session)')
-      .all();
-    const hasColumn = cols.some((c) => c.name === 'chunk_progress_json');
-    if (!hasColumn) {
-      this.db.exec('ALTER TABLE digest_session ADD COLUMN chunk_progress_json TEXT');
-    }
-    this.db
-      .prepare('UPDATE meta SET value = ? WHERE key = ?')
-      .run(String(KB_DB_SCHEMA_VERSION), 'schema_version');
-  }
-
-  /**
-   * One-shot crash recovery on DB open. The digestion orchestrator lives in
-   * memory, so nothing can actually be digesting at the moment we open the
-   * DB — any `status='digesting'` row is a left-over from a server crash.
-   * Flip those back to `ingested` so the user can retry them, and clear
-   * any stale `digest_session` row (the worker that would have finished
-   * it is gone).
-   */
-  private _recoverFromCrash(): void {
-    this.db
-      .prepare("UPDATE raw SET status = 'ingested' WHERE status = 'digesting'")
-      .run();
-    this.db.prepare('DELETE FROM digest_session').run();
-  }
-
-  private _ensureRootFolder(): void {
-    const row = this.db
-      .prepare<unknown[], { folder_path: string }>(
-        'SELECT folder_path FROM folders WHERE folder_path = ?',
-      )
-      .get('');
-    if (!row) {
-      this.db
-        .prepare('INSERT INTO folders (folder_path, created_at) VALUES (?, ?)')
-        .run('', new Date().toISOString());
-    }
-  }
-
-  private _listTagsForEntry(entryId: string): string[] {
-    return this.db
-      .prepare<unknown[], { tag: string }>(
-        'SELECT tag FROM entry_tags WHERE entry_id = ? ORDER BY tag',
-      )
-      .all(entryId)
-      .map((r) => r.tag);
-  }
-}
-
-// ─── Path helpers ────────────────────────────────────────────────────────────
-
-const FOLDER_SEGMENT_RE = /^[^/\x00-\x1f]+$/;
-
-/**
- * Validate and normalize a folder path. Strips leading/trailing slashes,
- * collapses repeated slashes, rejects `..`, control characters, empty
- * segments, and over-long paths. Returns '' for root.
- */
-export function normalizeFolderPath(input: string): string {
-  if (input === undefined || input === null) return '';
-  const raw = String(input).trim();
-  if (raw === '' || raw === '/') return '';
-  if (raw.length > 4096) {
-    throw new Error('Folder path is too long (max 4096 chars).');
-  }
-  const segments = raw.split('/').filter((s) => s !== '');
-  if (segments.length === 0) return '';
-  for (const seg of segments) {
-    if (seg === '.' || seg === '..') {
-      throw new Error(`Invalid folder segment: "${seg}"`);
-    }
-    if (seg.length > 128) {
-      throw new Error(`Folder segment too long (max 128 chars): "${seg}"`);
-    }
-    if (!FOLDER_SEGMENT_RE.test(seg)) {
-      throw new Error(`Invalid folder segment: "${seg}"`);
-    }
-  }
-  return segments.join('/');
 }
 
 // ─── Opener + migration ─────────────────────────────────────────────────────
@@ -2846,101 +654,5 @@ function safeRename(from: string, to: string): void {
     console.warn(
       `[kb:db] could not rename ${from} → ${to}: ${(err as Error).message}`,
     );
-  }
-}
-
-// ─── Internal helpers ───────────────────────────────────────────────────────
-
-function rawJoinRowToEntry(row: RawJoinRow): KbRawEntry {
-  return {
-    rawId: row.raw_id,
-    sha256: row.sha256,
-    filename: row.location_filename,
-    folderPath: row.location_folder_path,
-    mimeType: row.mime_type ?? 'application/octet-stream',
-    sizeBytes: row.byte_length,
-    handler: row.handler ?? undefined,
-    uploadedAt: row.location_uploaded_at,
-    digestedAt: row.digested_at,
-    status: row.status as KbRawStatus,
-    errorClass: (row.error_class as KbErrorClass | null) ?? null,
-    errorMessage: row.error_message,
-    metadata: row.metadata_json ? parseMetadata(row.metadata_json) : undefined,
-    entryCount: row.entry_count ?? 0,
-  };
-}
-
-function documentRowFromDb(row: {
-  raw_id: string;
-  doc_name: string;
-  doc_description: string | null;
-  unit_type: string;
-  unit_count: number;
-  structure_status: string;
-  structure_error: string | null;
-  created_at: string;
-  updated_at: string;
-}): KbDocumentRow {
-  return {
-    rawId: row.raw_id,
-    docName: row.doc_name,
-    docDescription: row.doc_description,
-    unitType: row.unit_type as KbDocumentUnitType,
-    unitCount: row.unit_count,
-    structureStatus: row.structure_status as KbDocumentStructureStatus,
-    structureError: row.structure_error,
-    createdAt: row.created_at,
-    updatedAt: row.updated_at,
-  };
-}
-
-function documentNodeRowFromDb(row: {
-  node_id: string;
-  raw_id: string;
-  parent_node_id: string | null;
-  title: string;
-  summary: string | null;
-  start_unit: number;
-  end_unit: number;
-  sort_order: number;
-  source: string;
-  metadata_json: string | null;
-}): KbDocumentNodeRow {
-  return {
-    nodeId: row.node_id,
-    rawId: row.raw_id,
-    parentNodeId: row.parent_node_id,
-    title: row.title,
-    summary: row.summary,
-    startUnit: row.start_unit,
-    endUnit: row.end_unit,
-    sortOrder: row.sort_order,
-    source: row.source as KbDocumentNodeSource,
-    metadata: row.metadata_json ? parseMetadata(row.metadata_json) : undefined,
-  };
-}
-
-function glossaryRowFromDb(row: {
-  id: number;
-  term: string;
-  expansion: string;
-  created_at: string;
-  updated_at: string;
-}): KbGlossaryRow {
-  return {
-    id: row.id,
-    term: row.term,
-    expansion: row.expansion,
-    createdAt: row.created_at,
-    updatedAt: row.updated_at,
-  };
-}
-
-function parseMetadata(json: string): Record<string, unknown> | undefined {
-  try {
-    const obj = JSON.parse(json);
-    return obj && typeof obj === 'object' ? (obj as Record<string, unknown>) : undefined;
-  } catch {
-    return undefined;
   }
 }
