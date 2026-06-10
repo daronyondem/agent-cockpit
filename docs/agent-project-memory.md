@@ -21,6 +21,9 @@ tool is unavailable.
   explicitly says the PR fully resolves the issue.
 - PR readiness includes tests, `npm run lint`, behavior/spec updates, ADR
   evaluation, mobile PWA impact evaluation, and `AGENTS.md` evaluation.
+- Jest coverage thresholds live in `jest.config.js`. When meaningful backend
+  coverage is added, raise thresholds toward the new baseline in the same PR;
+  do not lower thresholds just to merge a regression.
 - ADR lint validates `affects:` paths unless the ADR is tagged `historical` or
   the path is under a retired prefix listed in `scripts/adr-lint.js`.
 - Public docs and issue/PR text should avoid leaking private workspace context.

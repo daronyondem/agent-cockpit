@@ -19,4 +19,21 @@ module.exports = {
     }],
   },
   moduleFileExtensions: ['ts', 'tsx', 'js', 'jsx', 'json'],
+  collectCoverageFrom: [
+    'src/**/*.ts',
+    'server.ts',
+    '!src/types/**',
+    '!src/**/*.d.ts',
+  ],
+  coverageDirectory: 'coverage',
+  coverageProvider: 'v8',
+  coverageReporters: ['text-summary', 'lcov'],
+  coverageThreshold: {
+    global: {
+      statements: 85,
+      branches: 71,
+      functions: 91,
+      lines: 85,
+    },
+  },
 };
