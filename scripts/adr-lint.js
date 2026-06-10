@@ -11,6 +11,10 @@ const ADR_DIR = path.join(ROOT, 'docs', 'adr');
 const REQUIRED_FIELDS = ['id', 'title', 'status', 'date', 'supersedes', 'superseded-by', 'tags', 'affects'];
 const VALID_STATUS = ['Proposed', 'Accepted', 'Deprecated', 'Superseded'];
 const REQUIRED_SECTIONS = ['## Context', '## Decision', '## Alternatives Considered', '## Consequences', '## References'];
+// Trees deliberately removed by later accepted decisions (ADR-0086).
+// `affects:` entries under these prefixes are historical references and are
+// exempt from the existence check; every other path keeps validating.
+const RETIRED_PATH_PREFIXES = ['public/v2/'];
 
 function lintFile(file) {
   const errors = [];
@@ -58,6 +62,7 @@ function lintFile(file) {
   const isHistorical = Array.isArray(fm.tags) && fm.tags.includes('historical');
   if (Array.isArray(fm.affects) && !isHistorical) {
     for (const p of fm.affects) {
+      if (RETIRED_PATH_PREFIXES.some((prefix) => p.startsWith(prefix))) continue;
       const abs = path.join(ROOT, p);
       if (!fs.existsSync(abs)) errors.push(`affects: path does not exist: ${p}`);
     }

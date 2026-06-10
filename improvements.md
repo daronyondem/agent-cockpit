@@ -107,30 +107,24 @@ Verification:
 
 Objective: remove old Browser-Babel source without breaking ADR lint or historical documentation.
 
-Work plan:
+Status: completed for issue #420 on 2026-06-10. ADR-0086 records the decision
+to remove the archived `public/v2/` placeholder tree entirely and to preserve
+immutable older ADR records through a per-path retired-prefix allowance in
+`scripts/adr-lint.js`.
 
-1. Audit ADR lint behavior:
-   - Confirm how historical ADRs can retain removed paths.
-   - Identify ADRs that reference `public/v2/src/*`.
+Completed work:
 
-2. Mark old ADRs appropriately:
-   - Do not rewrite accepted ADR content.
-   - Use the repo's supported historical tagging mechanism if existing lint rules allow it.
-   - If the current lint model does not support this cleanly, first add a small ADR-lint enhancement to distinguish historical archived paths.
-
-3. Remove old runtime tree:
-   - Delete `public/v2/index.html`.
-   - Delete `public/v2/src/**`.
-   - Keep or remove `public/v2/README.md` depending on whether an empty marker is useful.
-   - Confirm `/v2/src/*` remains 404.
-
-4. Update docs:
-   - Specs should say the Browser-Babel tree was removed.
-   - Coverage docs should point only to `web/AgentCockpitWeb` and `public/v2-built`.
+1. Added ADR-0086 and the `scripts/adr-lint.js` retired-prefix allowance for
+   immutable historical `affects:` entries under the removed tree.
+2. Removed the archived `public/v2/` placeholder tree.
+3. Updated the frontend route regression to assert the tree stays absent while
+   keeping `/v2/src/*` unavailable.
+4. Updated specs and agent guidance to describe the removed tree and ADR lint
+   exemptions.
 
 Acceptance criteria:
 
-- `public/v2/src` no longer exists.
+- `public/v2` no longer exists.
 - ADR lint still passes.
 - `/v2/` still serves built assets.
 - `/v2/src/shell.jsx` returns 404.

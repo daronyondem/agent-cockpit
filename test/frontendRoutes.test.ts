@@ -1141,32 +1141,8 @@ describe('frontend routes', () => {
     expect(viteConfig).toContain('markdown-vendor');
   });
 
-  test('retired public/v2 tree keeps only ADR placeholder paths', () => {
-    const publicV2Files: string[] = [];
-    const visit = (dir: string) => {
-      for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
-        const abs = path.join(dir, entry.name);
-        if (entry.isDirectory()) visit(abs);
-        else if (entry.isFile()) publicV2Files.push(path.relative(ROOT, abs).split(path.sep).join('/'));
-      }
-    };
-    visit(path.join(ROOT, 'public/v2'));
-
-    expect(publicV2Files.sort()).toEqual([
-      'public/v2/README.md',
-      'public/v2/index.html',
-      'public/v2/src/api.js',
-      'public/v2/src/app.css',
-      'public/v2/src/cliUpdateStore.js',
-      'public/v2/src/screens/kbBrowser.jsx',
-      'public/v2/src/screens/memoryReview.jsx',
-      'public/v2/src/screens/settingsScreen.jsx',
-      'public/v2/src/shell.jsx',
-      'public/v2/src/streamStore.js',
-      'public/v2/src/synthesisAtlas.js',
-      'public/v2/src/workspaceSettings.jsx',
-    ]);
-    expect(fs.readFileSync(path.join(ROOT, 'public/v2/src/shell.jsx'), 'utf8')).toContain('Path retained for historical ADR affects validation');
+  test('retired public/v2 tree is fully removed', () => {
+    expect(fs.existsSync(path.join(ROOT, 'public/v2'))).toBe(false);
   });
 
   test('kb raw tab explains structure backfill and exposes bulk redigest controls', () => {

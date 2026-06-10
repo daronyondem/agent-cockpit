@@ -21,6 +21,8 @@ tool is unavailable.
   explicitly says the PR fully resolves the issue.
 - PR readiness includes tests, behavior/spec updates, ADR evaluation, mobile PWA
   impact evaluation, and `AGENTS.md` evaluation.
+- ADR lint validates `affects:` paths unless the ADR is tagged `historical` or
+  the path is under a retired prefix listed in `scripts/adr-lint.js`.
 - Public docs and issue/PR text should avoid leaking private workspace context.
 - If `memory_note` fails, do not create or edit local memory fallback files.
   Report the failure instead.
