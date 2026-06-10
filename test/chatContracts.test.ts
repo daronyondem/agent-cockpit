@@ -83,11 +83,13 @@ describe('chat API contracts', () => {
       title: 'T',
       workingDir: '/tmp/ac',
       backend: 'codex',
+      claudeCodeMode: 'ultracode',
       serviceTier: 'default',
     })).toMatchObject({
       title: 'T',
       workingDir: '/tmp/ac',
       backend: 'codex',
+      claudeCodeMode: 'ultracode',
       serviceTier: null,
     });
     expect(validateSetUnreadRequest({ unread: true })).toEqual({ unread: true });
@@ -97,6 +99,10 @@ describe('chat API contracts', () => {
     expect(validateSendMessageRequest({ content: 'hello', serviceTier: 'fast' })).toMatchObject({
       content: 'hello',
       serviceTier: 'fast',
+    });
+    expect(validateSendMessageRequest({ content: 'hello', claudeCodeMode: null })).toMatchObject({
+      content: 'hello',
+      claudeCodeMode: null,
     });
     expect(validateConversationInputRequest({ text: 'answer', streamActive: false })).toEqual({
       text: 'answer',
@@ -130,6 +136,7 @@ describe('chat API contracts', () => {
     for (const fn of [
       () => validateSendMessageRequest({ content: '' }),
       () => validateSendMessageRequest({ content: 'hello', effort: 'extreme' }),
+      () => validateSendMessageRequest({ content: 'hello', claudeCodeMode: 'ultra' }),
       () => validateConversationInputRequest({ text: 1 }),
       () => validateExplorerSaveFileRequest({ path: 'a.txt' }),
       () => validateAttachmentOcrRequest({ path: '' }),

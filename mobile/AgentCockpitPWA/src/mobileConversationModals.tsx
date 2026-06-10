@@ -18,6 +18,7 @@ import {
 import { Button, Choice, Modal } from './mobilePrimitives';
 import type {
   BackendMetadata,
+  ClaudeCodeMode,
   Conversation,
   DirectoryBrowseResponse,
   EffortLevel,
@@ -375,7 +376,9 @@ export function RunSettingsModal(props: {
   selectedBackendMetadata?: BackendMetadata;
   selectedModel?: string;
   selectedEffort?: EffortLevel;
+  selectedClaudeCodeMode?: ClaudeCodeMode | 'default';
   selectedServiceTier?: ServiceTier | 'default';
+  claudeCodeModeEnabled: boolean;
   serviceTierEnabled: boolean;
   supportedEfforts: EffortLevel[];
   locked: boolean;
@@ -383,6 +386,7 @@ export function RunSettingsModal(props: {
   onProfile: (id: string) => void;
   onModel: (id: string | undefined) => void;
   onEffort: (effort: EffortLevel | undefined) => void;
+  onClaudeCodeMode: (mode: ClaudeCodeMode | 'default' | undefined) => void;
   onServiceTier: (serviceTier: ServiceTier | 'default' | undefined) => void;
 }) {
   return (
@@ -402,6 +406,15 @@ export function RunSettingsModal(props: {
             <strong>Effort</strong>
             <div className="choice-grid">
               {props.supportedEfforts.map((effort) => <Choice key={effort} label={effort} selected={props.selectedEffort === effort} onClick={() => props.onEffort(effort)} />)}
+            </div>
+          </>
+        ) : null}
+        {props.claudeCodeModeEnabled ? (
+          <>
+            <strong>Mode</strong>
+            <div className="choice-grid">
+              <Choice label="Default" selected={!props.selectedClaudeCodeMode || props.selectedClaudeCodeMode === 'default'} onClick={() => props.onClaudeCodeMode('default')} />
+              <Choice label="Ultracode" selected={props.selectedClaudeCodeMode === 'ultracode'} onClick={() => props.onClaudeCodeMode('ultracode')} />
             </div>
           </>
         ) : null}

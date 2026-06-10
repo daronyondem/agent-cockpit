@@ -4,6 +4,7 @@ import type {
   BasicOKResponse,
   Conversation,
   ConversationListItem,
+  ClaudeCodeMode,
   CurrentUser,
   DirectoryBrowseResponse,
   EffortLevel,
@@ -48,6 +49,7 @@ export type SetGoalRequest = {
   cliProfileId?: string;
   model?: string;
   effort?: EffortLevel;
+  claudeCodeMode?: ClaudeCodeMode | null;
   serviceTier?: ServiceTier | 'default';
 };
 

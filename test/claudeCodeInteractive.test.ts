@@ -325,6 +325,77 @@ describe('ClaudeCodeInteractiveAdapter', () => {
     fs.rmSync(tmp, { recursive: true, force: true });
   });
 
+  test('merges Ultracode into interactive hook settings for xhigh-capable models', async () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'claude-interactive-ultracode-'));
+    const workspace = path.join(tmp, 'workspace');
+    const configDir = path.join(tmp, 'claude');
+    fs.mkdirSync(workspace, { recursive: true });
+    const transcriptDir = resolveClaudeProjectDir(workspace, configDir)!;
+    fs.mkdirSync(transcriptDir, { recursive: true });
+    const transcriptPath = path.join(transcriptDir, 'session-1.jsonl');
+
+    let capturedArgs: string[] = [];
+    let onExit: ((event: { exitCode: number; signal?: number }) => void) | null = null;
+    let wrotePrompt = false;
+    const hookHarness = new FakeHookHarness();
+    const factory: ClaudeInteractivePtyFactory = (_command, args) => {
+      capturedArgs = args;
+      return {
+        pid: 9876,
+        write(data: string | Buffer) {
+          const value = String(data);
+          if (!wrotePrompt && value === '\x1b[200~Hello\x1b[201~') {
+            wrotePrompt = true;
+            setTimeout(() => {
+              fs.writeFileSync(transcriptPath, JSON.stringify({
+                uuid: 'done-1',
+                type: 'system',
+                subtype: 'turn_duration',
+                sessionId: 'session-1',
+                entrypoint: 'cli',
+              }) + '\n');
+              onExit?.({ exitCode: 0 });
+            }, 10);
+          }
+        },
+        kill() {},
+        onData() { return { dispose() {} }; },
+        onExit(listener) {
+          onExit = listener;
+          return { dispose() {} };
+        },
+      };
+    };
+
+    const adapter = new ClaudeCodeInteractiveAdapter({
+      workingDir: workspace,
+      ptyFactory: factory,
+      hookFactory: async () => hookHarness,
+      pollIntervalMs: 5,
+      exitGraceMs: 0,
+      exitSettleMs: 0,
+      promptReadyDelayMs: 0,
+      promptEnterDelayMs: 1,
+    });
+    const result = adapter.sendMessage('Hello', {
+      ...sendOptions(workspace, claudeProfile(configDir)),
+      model: 'claude-opus-4-8',
+      claudeCodeMode: 'ultracode',
+    });
+    for await (const event of result.stream) {
+      if (event.type === 'done') break;
+    }
+
+    const idx = capturedArgs.indexOf('--settings');
+    expect(idx).toBeGreaterThan(-1);
+    expect(JSON.parse(capturedArgs[idx + 1])).toMatchObject({
+      hooks: { SessionStart: [], Stop: [] },
+      ultracode: true,
+    });
+
+    fs.rmSync(tmp, { recursive: true, force: true });
+  });
+
   test('clearGoal returns after Claude writes local goal clear output', async () => {
     const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'claude-interactive-clear-goal-'));
     const workspace = path.join(tmp, 'workspace');

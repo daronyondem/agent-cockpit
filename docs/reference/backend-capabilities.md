@@ -11,6 +11,8 @@ page summarizes the user-facing shape.
 
 - direct CLI spawn per message;
 - plan mode support;
+- Ultracode runtime mode for xhigh-capable Claude models in both standard and
+  interactive profiles;
 - token and cost reporting when exposed by the CLI;
 - subagent and tool visualization;
 - mid-turn user input;

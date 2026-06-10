@@ -226,6 +226,7 @@ export function createConversationRouter(opts: ConversationRoutesOptions): expre
         body.effort,
         body.cliProfileId,
         body.serviceTier,
+        body.claudeCodeMode,
       );
       res.json(conv);
     } catch (err: unknown) {

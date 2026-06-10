@@ -1,11 +1,12 @@
 import express from 'express';
 import { csrfGuard } from '../../middleware/csrf';
+import { parseClaudeCodeModeInput } from '../../contracts/claudeCodeMode';
 import { parseServiceTierInput } from '../../contracts/chat';
 import type { ChatService } from '../../services/chatService';
 import type { BackendRegistry } from '../../services/backends/registry';
 import type { BaseBackendAdapter } from '../../services/backends/base';
 import { StreamJobSupervisor, type PendingMessageSend } from '../../services/streamJobSupervisor';
-import type { BackendGoalCapability, EffortLevel, GoalEvent, McpServerConfig, Request, Response, SendMessageResult, ServiceTier, ThreadGoal, WsServerFrame } from '../../types';
+import type { BackendGoalCapability, ClaudeCodeMode, EffortLevel, GoalEvent, McpServerConfig, Request, Response, SendMessageResult, ServiceTier, ThreadGoal, WsServerFrame } from '../../types';
 import { logger } from '../../utils/logger';
 import {
   cleanGoalObjectiveText,
@@ -41,6 +42,7 @@ export interface AttachAndPipeStreamArgs {
   titleUpdateMessage: string | null;
   model: string | null;
   effort: EffortLevel | null;
+  claudeCodeMode?: ClaudeCodeMode | null;
   serviceTier?: ServiceTier | null;
 }
 
@@ -163,6 +165,7 @@ export function createGoalRouter(opts: GoalRoutesOptions): express.Router {
         externalSessionId: conv.externalSessionId || null,
         model: conv.model || undefined,
         effort: conv.effort || undefined,
+        claudeCodeMode: conv.claudeCodeMode || undefined,
         serviceTier: conv.serviceTier || undefined,
       });
       const goal = rawGoal ? normalizeGoalSnapshot(rawGoal) : null;
@@ -188,8 +191,10 @@ export function createGoalRouter(opts: GoalRoutesOptions): express.Router {
       effort?: EffortLevel;
       cliProfileId?: string;
     };
+    let claudeCodeMode: ClaudeCodeMode | null | undefined;
     let serviceTier: ServiceTier | null | undefined;
     try {
+      claudeCodeMode = parseClaudeCodeModeInput(req.body?.claudeCodeMode) as ClaudeCodeMode | null | undefined;
       serviceTier = parseServiceTierInput(req.body.serviceTier);
     } catch (err: unknown) {
       return res.status(400).json({ error: (err as Error).message });
@@ -219,6 +224,7 @@ export function createGoalRouter(opts: GoalRoutesOptions): express.Router {
         cliProfileId: conv.cliProfileId || cliProfileId || null,
         model: model !== undefined ? (model || null) : (conv.model || null),
         effort: effort !== undefined ? (effort || null) : (conv.effort || null),
+        claudeCodeMode: claudeCodeMode !== undefined ? claudeCodeMode : (conv.claudeCodeMode || null),
         serviceTier: serviceTier !== undefined ? serviceTier : (conv.serviceTier || null),
         workingDir: executionDir,
       });
@@ -250,6 +256,9 @@ export function createGoalRouter(opts: GoalRoutesOptions): express.Router {
       }
       if (effort !== undefined && effort !== (conv.effort || undefined)) {
         await chatService.updateConversationEffort(convId, effort || null);
+      }
+      if (claudeCodeMode !== undefined && claudeCodeMode !== (conv.claudeCodeMode || null)) {
+        await chatService.updateConversationClaudeCodeMode(convId, claudeCodeMode || null);
       }
       if (serviceTier !== undefined && serviceTier !== (conv.serviceTier || null)) {
         await chatService.updateConversationServiceTier(convId, serviceTier);
@@ -284,6 +293,7 @@ export function createGoalRouter(opts: GoalRoutesOptions): express.Router {
         cliProfileId: runtime.cliProfileId || conv.cliProfileId || null,
         model: conv.model || null,
         effort: conv.effort || null,
+        claudeCodeMode: conv.claudeCodeMode || null,
         serviceTier: conv.serviceTier || null,
         workingDir: executionDir,
       });
@@ -301,6 +311,7 @@ export function createGoalRouter(opts: GoalRoutesOptions): express.Router {
       const effectiveEffort = effort !== undefined
         ? (refreshedConv?.effort || undefined)
         : (conv.effort || undefined);
+      const effectiveClaudeCodeMode = refreshedConv?.claudeCodeMode || undefined;
       const effectiveServiceTier = serviceTier !== undefined
         ? (refreshedConv?.serviceTier || undefined)
         : (conv.serviceTier || undefined);
@@ -316,6 +327,7 @@ export function createGoalRouter(opts: GoalRoutesOptions): express.Router {
         sessionRecovery: !isNewSession ? recoveryOptions(convId, backendId, recoveryMessageLimit) : undefined,
         model: model || conv.model || undefined,
         effort: effectiveEffort,
+        claudeCodeMode: effectiveClaudeCodeMode,
         serviceTier: effectiveServiceTier,
         mcpServers,
       });
@@ -340,6 +352,7 @@ export function createGoalRouter(opts: GoalRoutesOptions): express.Router {
         titleUpdateMessage: cleanObjective,
         model: model || conv.model || null,
         effort: effectiveEffort || null,
+        claudeCodeMode: effectiveClaudeCodeMode || null,
         serviceTier: effectiveServiceTier || null,
       });
       jobHandedOff = true;
@@ -379,6 +392,7 @@ export function createGoalRouter(opts: GoalRoutesOptions): express.Router {
         cliProfileId: runtime.cliProfileId || conv.cliProfileId || null,
         model: conv.model || null,
         effort: conv.effort || null,
+        claudeCodeMode: conv.claudeCodeMode || null,
         serviceTier: conv.serviceTier || null,
         workingDir: executionDir,
       });
@@ -389,6 +403,7 @@ export function createGoalRouter(opts: GoalRoutesOptions): express.Router {
         cliProfileId: runtime.cliProfileId || conv.cliProfileId || null,
         model: conv.model || null,
         effort: conv.effort || null,
+        claudeCodeMode: conv.claudeCodeMode || null,
         serviceTier: conv.serviceTier || null,
         workingDir: executionDir,
       });
@@ -412,6 +427,7 @@ export function createGoalRouter(opts: GoalRoutesOptions): express.Router {
           externalSessionId: conv.externalSessionId || null,
           model: conv.model || undefined,
           effort: conv.effort || undefined,
+          claudeCodeMode: conv.claudeCodeMode || undefined,
           serviceTier: conv.serviceTier || undefined,
         });
         resumedGoal = currentGoal
@@ -432,6 +448,7 @@ export function createGoalRouter(opts: GoalRoutesOptions): express.Router {
         sessionRecovery: recoveryOptions(convId, backendId, recoveryMessageLimit),
         model: conv.model || undefined,
         effort: conv.effort || undefined,
+        claudeCodeMode: conv.claudeCodeMode || undefined,
         serviceTier: conv.serviceTier || undefined,
         mcpServers,
       });
@@ -451,6 +468,7 @@ export function createGoalRouter(opts: GoalRoutesOptions): express.Router {
         titleUpdateMessage: null,
         model: conv.model || null,
         effort: conv.effort || null,
+        claudeCodeMode: conv.claudeCodeMode || null,
         serviceTier: conv.serviceTier || null,
       });
       jobHandedOff = true;
@@ -492,6 +510,7 @@ export function createGoalRouter(opts: GoalRoutesOptions): express.Router {
         externalSessionId: conv.externalSessionId || null,
         model: conv.model || undefined,
         effort: conv.effort || undefined,
+        claudeCodeMode: conv.claudeCodeMode || undefined,
         serviceTier: conv.serviceTier || undefined,
       });
       const goal = rawGoal ? normalizeGoalSnapshot(rawGoal) : null;
@@ -529,6 +548,7 @@ export function createGoalRouter(opts: GoalRoutesOptions): express.Router {
         externalSessionId: conv.externalSessionId || null,
         model: conv.model || undefined,
         effort: conv.effort || undefined,
+        claudeCodeMode: conv.claudeCodeMode || undefined,
         serviceTier: conv.serviceTier || undefined,
       });
       const goalMessage = await persistGoalEventMessage(convId, backendId, clearGoalEvent(backendId));

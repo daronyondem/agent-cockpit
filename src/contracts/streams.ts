@@ -1,4 +1,5 @@
 import { parseServiceTierInput, type ContractServiceTier, type ServiceTierInput } from './serviceTier';
+import { parseClaudeCodeModeInput, type ClaudeCodeModeInput, type ContractClaudeCodeMode } from './claudeCodeMode';
 import { asRecord, optionalBoolean, optionalString, optionalStringEnum, requiredNonEmptyString } from './validation';
 import type { Message, StreamJobRuntimeInfo } from './responses';
 import { CONTRACT_EFFORT_LEVELS, type ContractEffortLevel } from './conversations';
@@ -8,11 +9,13 @@ export interface SendMessageRequest {
   backend?: string;
   model?: string;
   effort?: ContractEffortLevel;
+  claudeCodeMode?: ClaudeCodeModeInput;
   cliProfileId?: string;
   serviceTier?: ServiceTierInput;
 }
 
-export interface ValidatedSendMessageRequest extends Omit<SendMessageRequest, 'serviceTier'> {
+export interface ValidatedSendMessageRequest extends Omit<SendMessageRequest, 'claudeCodeMode' | 'serviceTier'> {
+  claudeCodeMode?: ContractClaudeCodeMode | null;
   serviceTier?: ContractServiceTier | null;
 }
 
@@ -55,6 +58,7 @@ export function validateSendMessageRequest(body: unknown): ValidatedSendMessageR
     backend: optionalString(record, 'backend'),
     model: optionalString(record, 'model'),
     effort: optionalStringEnum(record, 'effort', CONTRACT_EFFORT_LEVELS),
+    claudeCodeMode: parseClaudeCodeModeInput(record.claudeCodeMode),
     cliProfileId: optionalString(record, 'cliProfileId'),
     serviceTier: parseServiceTierInput(record.serviceTier),
   };

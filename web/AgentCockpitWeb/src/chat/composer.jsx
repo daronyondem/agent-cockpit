@@ -9,7 +9,7 @@ import { BackendInlineIcon, modelDisplayLabel, useBackendList, useCliProfileSett
 import { goalElapsedSeconds, goalStatusLabel, goalSupportsAction } from '../goalState.js';
 import { AttTray } from './attachments.jsx';
 import { QueueStack, SuspendedQueueBanner } from './queue.jsx';
-import { backendIdForProfile, CLAUDE_CODE_INTERACTIVE_BACKEND_ID, cliHarnessForBackend, workspaceRefForConv } from './chatHelpers.js';
+import { backendIdForProfile, CLAUDE_CODE_INTERACTIVE_BACKEND_ID, cliHarnessForBackend, isClaudeBackend, workspaceRefForConv } from './chatHelpers.js';
 import {
   ComposerCliUpdateIcon,
   ComposerInstructionCompatibilityIcon,
@@ -29,6 +29,7 @@ function selectChatComposerState(s){
     composerBackend: s.composerBackend,
     composerModel: s.composerModel,
     composerEffort: s.composerEffort,
+    composerClaudeCodeMode: s.composerClaudeCodeMode,
     composerServiceTier: s.composerServiceTier,
     goal: s.goal,
     goalMode: s.goalMode,
@@ -463,6 +464,7 @@ export const ChatComposer = React.memo(function ChatComposer({ convId, profileLo
               composerBackend={state.composerBackend || conv.backend || null}
               composerModel={state.composerModel || conv.model || null}
               composerEffort={state.composerEffort || conv.effort || null}
+              composerClaudeCodeMode={state.composerClaudeCodeMode || conv.claudeCodeMode || null}
               composerServiceTier={state.composerServiceTier != null ? state.composerServiceTier : (conv.serviceTier || 'default')}
               profileLocked={profileLocked}
               disabled={awaiting || sending}
@@ -549,7 +551,7 @@ export const ChatComposer = React.memo(function ChatComposer({ convId, profileLo
    Values flush to the server with the next /message POST (see StreamStore.send).
    Each chip wraps a transparent native <select> so we get native dropdown
    UX, keyboard/a11y for free, and the chip's styled shell. */
-function ComposerPicks({ convId, backends, cliProfiles, composerCliProfileId, composerBackend, composerModel, composerEffort, composerServiceTier, profileLocked, disabled }){
+function ComposerPicks({ convId, backends, cliProfiles, composerCliProfileId, composerBackend, composerModel, composerEffort, composerClaudeCodeMode, composerServiceTier, profileLocked, disabled }){
   const activeProfiles = Array.isArray(cliProfiles) ? cliProfiles.filter(p => p && !p.disabled) : [];
   const exactProfile = activeProfiles.find(p => p.id === composerCliProfileId) || null;
   const canRepairMissingProfile = profileLocked && !!composerCliProfileId && !exactProfile;
@@ -598,6 +600,8 @@ function ComposerPicks({ convId, backends, cliProfiles, composerCliProfileId, co
   const effort = effortLevels.includes(composerEffort)
     ? composerEffort
     : (effortLevels.includes('high') ? 'high' : (effortLevels[0] || null));
+  const claudeCodeModeSupported = isClaudeBackend(effectiveBackendId) && effortLevels.includes('xhigh');
+  const claudeCodeMode = composerClaudeCodeMode === 'ultracode' ? 'ultracode' : 'default';
   const serviceTier = composerServiceTier === 'fast' ? 'fast' : 'default';
 
   /* If picker state drifted out of the backend's catalog (e.g. backend change
@@ -613,6 +617,11 @@ function ComposerPicks({ convId, backends, cliProfiles, composerCliProfileId, co
       StreamStore.setComposerEffort(convId, effort);
     }
   }, [convId, effort, composerEffort]);
+  React.useEffect(() => {
+    if (!claudeCodeModeSupported && composerClaudeCodeMode) {
+      StreamStore.setComposerClaudeCodeMode(convId, null);
+    }
+  }, [convId, claudeCodeModeSupported, composerClaudeCodeMode]);
 
   if (backends.length === 0) return <span className="picks"/>;
 
@@ -670,6 +679,20 @@ function ComposerPicks({ convId, backends, cliProfiles, composerCliProfileId, co
           currentValue={effort || ''}
           onChange={v => StreamStore.setComposerEffort(convId, v)}
           title="Adaptive reasoning effort"
+        />
+      ) : null}
+      {claudeCodeModeSupported ? (
+        <PickChip
+          label="Mode"
+          value={claudeCodeMode === 'ultracode' ? 'Ultracode' : 'Default'}
+          disabled={disabled}
+          options={[
+            { value: 'default', label: 'Default' },
+            { value: 'ultracode', label: 'Ultracode' },
+          ]}
+          currentValue={claudeCodeMode}
+          onChange={v => StreamStore.setComposerClaudeCodeMode(convId, v)}
+          title="Claude Code mode"
         />
       ) : null}
       {effectiveBackendId === 'codex' ? (

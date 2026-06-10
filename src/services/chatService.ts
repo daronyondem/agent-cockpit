@@ -42,6 +42,7 @@ import type {
   MemoryConsolidationAudit,
   ConversationWorkspaceContextStatus,
   EffortLevel,
+  ClaudeCodeMode,
   ServiceTier,
   KbState,
   KbCounters,
@@ -733,6 +734,7 @@ export class ChatService {
     const newSessionId = this._newId();
 
     delete convEntry.messageQueue;
+    delete convEntry.claudeCodeMode;
     if (convEntry.usage) convEntry.usage.contextUsagePercentage = undefined;
     convEntry.currentSessionId = newSessionId;
     if (!convEntry.titleManuallySet) {
@@ -794,6 +796,7 @@ export class ChatService {
     effort?: EffortLevel,
     cliProfileId?: string,
     serviceTier?: ServiceTier | null,
+    claudeCodeMode?: ClaudeCodeMode | null,
   ): Promise<Conversation> {
     const id = this._newId();
     const now = new Date().toISOString();
@@ -847,6 +850,7 @@ export class ChatService {
       }
 
       const effective = this._effectiveEffort(resolvedBackend, model, effort);
+      const effectiveClaudeCodeMode = this._effectiveClaudeCodeMode(resolvedBackend, model, claudeCodeMode || undefined);
       const requestedServiceTier = serviceTier === undefined ? settings.defaultServiceTier : serviceTier || undefined;
       const effectiveServiceTier = this._effectiveServiceTier(resolvedBackend, requestedServiceTier);
       const convEntry: ConversationEntry = {
@@ -856,6 +860,7 @@ export class ChatService {
         ...(resolvedCliProfileId ? { cliProfileId: resolvedCliProfileId } : {}),
         model: model || undefined,
         effort: effective,
+        claudeCodeMode: effectiveClaudeCodeMode,
         serviceTier: effectiveServiceTier,
         currentSessionId: sessionId,
         lastActivity: now,
@@ -894,6 +899,7 @@ export class ChatService {
         cliProfileId: convEntry.cliProfileId,
         model: convEntry.model,
         effort: convEntry.effort,
+        claudeCodeMode: convEntry.claudeCodeMode,
         serviceTier: convEntry.serviceTier,
         workingDir: workspacePath,
         ...(checkout ? { executionDir: checkout.executionDir, checkout } : {}),
@@ -928,6 +934,14 @@ export class ChatService {
     return requested === 'fast' ? 'fast' : undefined;
   }
 
+  private _effectiveClaudeCodeMode(backend: string, model: string | undefined, requested: ClaudeCodeMode | undefined): ClaudeCodeMode | undefined {
+    if (requested !== 'ultracode' || !model) return undefined;
+    if (cliHarnessForBackend(backend) !== 'claude-code') return undefined;
+    const adapter = this._backendRegistry?.get(backend);
+    const modelOption = adapter?.metadata.models?.find(m => m.id === model);
+    return modelOption?.supportedEffortLevels?.includes('xhigh') ? 'ultracode' : undefined;
+  }
+
   async getConversation(id: string): Promise<Conversation | null> {
     const result = await this._getConvFromIndex(id);
     if (!result) return null;
@@ -958,6 +972,7 @@ export class ChatService {
       cliProfileId: convEntry.cliProfileId,
       model: convEntry.model,
       effort: convEntry.effort,
+      claudeCodeMode: convEntry.claudeCodeMode,
       serviceTier: convEntry.serviceTier,
       workingDir: index.workspacePath,
       ...(checkout ? { executionDir: checkout.executionDir, checkout } : {}),
@@ -1085,6 +1100,7 @@ export class ChatService {
       if (backend !== 'codex') {
         delete convEntry.serviceTier;
       }
+      convEntry.claudeCodeMode = this._effectiveClaudeCodeMode(convEntry.backend, convEntry.model, convEntry.claudeCodeMode);
       await this._writeWorkspaceIndex(hash, index);
     });
   }
@@ -1110,6 +1126,7 @@ export class ChatService {
       if (runtime.backendId !== 'codex') {
         delete convEntry.serviceTier;
       }
+      convEntry.claudeCodeMode = this._effectiveClaudeCodeMode(convEntry.backend, convEntry.model, convEntry.claudeCodeMode);
       await this._writeWorkspaceIndex(hash, index);
     });
   }
@@ -1184,6 +1201,7 @@ export class ChatService {
       if (convEntry.effort) {
         convEntry.effort = this._effectiveEffort(convEntry.backend, convEntry.model, convEntry.effort);
       }
+      convEntry.claudeCodeMode = this._effectiveClaudeCodeMode(convEntry.backend, convEntry.model, convEntry.claudeCodeMode);
       await this._writeWorkspaceIndex(hash, index);
     });
   }
@@ -1197,6 +1215,20 @@ export class ChatService {
       const { index, convEntry } = result;
       convEntry.effort = effort
         ? this._effectiveEffort(convEntry.backend, convEntry.model, effort)
+        : undefined;
+      await this._writeWorkspaceIndex(hash, index);
+    });
+  }
+
+  async updateConversationClaudeCodeMode(convId: string, claudeCodeMode: ClaudeCodeMode | null): Promise<void> {
+    const hash = this._convWorkspaceMap.get(convId);
+    if (!hash) return;
+    await this._indexLock.run(hash, async () => {
+      const result = await this._getConvFromIndex(convId);
+      if (!result) return;
+      const { index, convEntry } = result;
+      convEntry.claudeCodeMode = claudeCodeMode
+        ? this._effectiveClaudeCodeMode(convEntry.backend, convEntry.model, claudeCodeMode)
         : undefined;
       await this._writeWorkspaceIndex(hash, index);
     });
@@ -1371,6 +1403,7 @@ export class ChatService {
       if (runtime.backendId !== 'codex') {
         delete convEntry.serviceTier;
       }
+      convEntry.claudeCodeMode = this._effectiveClaudeCodeMode(convEntry.backend, convEntry.model, convEntry.claudeCodeMode);
 
       const currentSessionNumber = activeSession.number;
       const newSessionNumber = currentSessionNumber + 1;

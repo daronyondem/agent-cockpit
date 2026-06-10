@@ -54,6 +54,7 @@ import { useViewportHeightVar } from './useViewportHeightVar';
 import type {
   AttachmentMeta,
   BackendMetadata,
+  ClaudeCodeMode,
   Conversation,
   ConversationListItem,
   CurrentUser,
@@ -136,6 +137,7 @@ export default function App() {
   const [selectedBackend, setSelectedBackend] = useState<string | undefined>();
   const [selectedModel, setSelectedModel] = useState<string | undefined>();
   const [selectedEffort, setSelectedEffort] = useState<EffortLevel | undefined>();
+  const [selectedClaudeCodeMode, setSelectedClaudeCodeMode] = useState<ClaudeCodeMode | 'default' | undefined>();
   const [selectedServiceTier, setSelectedServiceTier] = useState<ServiceTier | 'default' | undefined>();
 
   const [newConversationVisible, setNewConversationVisible] = useState(false);
@@ -203,6 +205,21 @@ export default function App() {
   );
   const goalCapable = selectedGoalCapability.set === true;
   const serviceTierEnabled = selectedBackendID === 'codex';
+  const claudeCodeModeEnabled = isClaudeBackend(selectedBackendID) && supportedEfforts.includes('xhigh');
+  const claudeCodeModeForRequest: ClaudeCodeMode | null | undefined = claudeCodeModeEnabled
+    ? selectedClaudeCodeMode === 'ultracode'
+      ? 'ultracode'
+      : selectedClaudeCodeMode === 'default'
+        ? null
+        : undefined
+    : undefined;
+  const claudeCodeModeForSelection: ClaudeCodeMode | null | undefined = claudeCodeModeEnabled
+    ? selectedClaudeCodeMode === 'ultracode'
+      ? 'ultracode'
+      : selectedClaudeCodeMode === 'default'
+        ? null
+        : undefined
+    : undefined;
   const hasUploadingAttachments = pendingAttachments.some((attachment) => attachment.status === 'uploading');
 
   useEffect(() => {
@@ -233,6 +250,12 @@ export default function App() {
       setGoalMode(false);
     }
   }, [goalCapable, goalMode]);
+
+  useEffect(() => {
+    if (!claudeCodeModeEnabled && selectedClaudeCodeMode) {
+      setSelectedClaudeCodeMode(undefined);
+    }
+  }, [claudeCodeModeEnabled, selectedClaudeCodeMode]);
 
   useEffect(() => {
     resumeStreamConnectionRef.current = resumeStreamConnection;
@@ -306,6 +329,7 @@ export default function App() {
     setSelectedBackend(backendIdForProfile(profile) || backendID);
     setSelectedModel(loadedSettings.defaultModel);
     setSelectedEffort(loadedSettings.defaultEffort);
+    setSelectedClaudeCodeMode(undefined);
     setSelectedServiceTier(loadedSettings.defaultBackend === 'codex' ? loadedSettings.defaultServiceTier : undefined);
     if (profileID) {
       void loadProfileMetadata(profileID);
@@ -474,6 +498,7 @@ export default function App() {
     setSelectedBackend(conversation.backend || settings?.defaultBackend);
     setSelectedModel(conversation.model || settings?.defaultModel);
     setSelectedEffort(conversation.effort || settings?.defaultEffort);
+    setSelectedClaudeCodeMode(conversation.claudeCodeMode || undefined);
     setSelectedServiceTier(conversation.backend === 'codex' ? (conversation.serviceTier || 'default') : undefined);
   }
 
@@ -486,6 +511,7 @@ export default function App() {
         cliProfileId: selectedCliProfileId,
         model: selectedModel,
         effort: selectedEffort,
+        claudeCodeMode: claudeCodeModeForRequest,
         serviceTier: serviceTierEnabled ? selectedServiceTier : undefined,
       });
       hydrateSelectionFromConversation(conversation);
@@ -608,6 +634,7 @@ export default function App() {
       cliProfileId: selectedCliProfileId,
       model: selectedModel,
       effort: selectedEffort,
+      claudeCodeMode: claudeCodeModeForSelection,
       serviceTier: serviceTierEnabled ? selectedServiceTier : undefined,
     };
     const optimisticID = `${Date.now()}-${Math.random().toString(16).slice(2, 8)}`;
@@ -646,6 +673,7 @@ export default function App() {
         cliProfileId: selectedCliProfileId,
         model: selectedModel,
         effort: selectedEffort,
+        claudeCodeMode: claudeCodeModeForRequest,
         serviceTier: serviceTierEnabled ? selectedServiceTier : undefined,
       });
       setActiveConversation((current) => {
@@ -749,6 +777,14 @@ export default function App() {
     const previousGoal = goalStateRef.current.conversationID === conversation.id ? goalStateRef.current.goal : null;
     const previousGoalUpdatedAtMs = goalStateRef.current.conversationID === conversation.id ? goalStateRef.current.updatedAtMs : null;
     const goalStartedAtMs = Date.now();
+    const runtimeSelection = {
+      backend: selectedBackendID || selectedBackend || conversation.backend || '',
+      cliProfileId: selectedCliProfileId,
+      model: selectedModel,
+      effort: selectedEffort,
+      claudeCodeMode: claudeCodeModeForSelection,
+      serviceTier: serviceTierEnabled ? selectedServiceTier : undefined,
+    };
     const optimisticBackend = selectedBackendID === 'codex' || isClaudeBackend(selectedBackendID)
       ? selectedBackendID as ThreadGoal['backend']
       : undefined;
@@ -780,23 +816,18 @@ export default function App() {
         cliProfileId: selectedCliProfileId,
         model: selectedModel,
         effort: selectedEffort,
+        claudeCodeMode: claudeCodeModeForRequest,
         serviceTier: serviceTierEnabled ? selectedServiceTier : undefined,
       });
       if (response.goal) applyGoalSnapshot(conversation.id, response.goal);
       applyServerMessage(conversation.id, response.message);
       setGoalMode(false);
-      setActiveConversation((current) =>
-        current && current.id === conversation.id
-          ? {
-              ...current,
-              backend: selectedBackend || current.backend,
-              cliProfileId: selectedCliProfileId || current.cliProfileId,
-              model: selectedModel || current.model,
-              effort: selectedEffort || current.effort,
-              serviceTier: selectedServiceTier === 'fast' ? 'fast' : undefined,
-            }
-          : current,
-      );
+      setActiveConversation((current) => {
+        if (!current || current.id !== conversation.id) return current;
+        const next = applyConversationRuntimeSelection(current, runtimeSelection);
+        activeConversationRef.current = next;
+        return next;
+      });
       if (response.streamReady !== false) {
         startStream(conversation.id);
       }
@@ -1936,6 +1967,7 @@ export default function App() {
     setSelectedBackend(backendIdForProfile(profile));
     setSelectedModel(undefined);
     setSelectedEffort(undefined);
+    setSelectedClaudeCodeMode(undefined);
     setSelectedServiceTier(profile?.harness === 'codex' ? (selectedServiceTier || settings?.defaultServiceTier) : undefined);
   }
 
@@ -2096,7 +2128,9 @@ export default function App() {
           selectedBackendMetadata={selectedBackendMetadata}
           selectedModel={selectedModel}
           selectedEffort={selectedEffort}
+          selectedClaudeCodeMode={selectedClaudeCodeMode}
           selectedServiceTier={selectedServiceTier}
+          claudeCodeModeEnabled={claudeCodeModeEnabled}
           serviceTierEnabled={serviceTierEnabled}
           supportedEfforts={supportedEfforts}
           locked={profileSelectionLocked}
@@ -2104,6 +2138,7 @@ export default function App() {
           onProfile={chooseProfile}
           onModel={setSelectedModel}
           onEffort={setSelectedEffort}
+          onClaudeCodeMode={setSelectedClaudeCodeMode}
           onServiceTier={setSelectedServiceTier}
         />
       ) : null}

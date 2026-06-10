@@ -6,6 +6,7 @@ import type {
   Conversation,
   ConversationArtifact,
   ConversationListItem,
+  ClaudeCodeMode,
   CurrentUser,
   EffortLevel,
   ExplorerPreviewResponse,
@@ -380,6 +381,7 @@ export function conversationListItemFromConversation(conversation: Conversation)
     cliProfileId: conversation.cliProfileId,
     model: conversation.model,
     effort: conversation.effort,
+    claudeCodeMode: conversation.claudeCodeMode,
     serviceTier: conversation.serviceTier,
     workingDir: conversation.workingDir,
     executionDir: conversation.executionDir,
@@ -399,15 +401,16 @@ export type ConversationRuntimeSelection = {
   cliProfileId?: string | null;
   model?: string | null;
   effort?: EffortLevel | null;
+  claudeCodeMode?: ClaudeCodeMode | null;
   serviceTier?: ServiceTier | 'default' | null;
 };
 
-export function applyConversationRuntimeSelection<T extends Pick<Conversation, 'backend' | 'cliProfileId' | 'model' | 'effort' | 'serviceTier'>>(
+export function applyConversationRuntimeSelection<T extends Pick<Conversation, 'backend' | 'cliProfileId' | 'model' | 'effort' | 'serviceTier'> & { claudeCodeMode?: ClaudeCodeMode }>(
   conversation: T,
   selection: ConversationRuntimeSelection,
 ): T {
   const backend = selection.backend || conversation.backend;
-  return {
+  const next = {
     ...conversation,
     backend,
     cliProfileId: selection.cliProfileId || conversation.cliProfileId,
@@ -415,6 +418,12 @@ export function applyConversationRuntimeSelection<T extends Pick<Conversation, '
     effort: selection.effort || conversation.effort,
     serviceTier: backend === 'codex' && selection.serviceTier === 'fast' ? 'fast' : undefined,
   };
+  if (!isClaudeBackend(backend) || selection.claudeCodeMode === null) {
+    delete next.claudeCodeMode;
+  } else if (selection.claudeCodeMode === 'ultracode') {
+    next.claudeCodeMode = 'ultracode';
+  }
+  return next;
 }
 
 export function updateSessionsAfterReset(sessions: SessionHistoryItem[], response: ResetSessionResponse): SessionHistoryItem[] {

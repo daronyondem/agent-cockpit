@@ -197,6 +197,7 @@ describe('mobile app model helpers', () => {
       cliProfileId: 'profile-claude',
       model: 'claude-opus-4-6',
       effort: 'max',
+      claudeCodeMode: 'ultracode',
       serviceTier: undefined,
     })).toEqual({
       ...conversation,
@@ -204,6 +205,35 @@ describe('mobile app model helpers', () => {
       cliProfileId: 'profile-claude',
       model: 'claude-opus-4-6',
       effort: 'max',
+      claudeCodeMode: 'ultracode',
+      serviceTier: undefined,
+    });
+
+    expect(model.applyConversationRuntimeSelection({
+      ...conversation,
+      backend: 'claude-code',
+      claudeCodeMode: 'ultracode',
+      serviceTier: undefined,
+    }, {
+      backend: 'claude-code',
+    })).toEqual({
+      ...conversation,
+      backend: 'claude-code',
+      claudeCodeMode: 'ultracode',
+      serviceTier: undefined,
+    });
+
+    expect(model.applyConversationRuntimeSelection({
+      ...conversation,
+      backend: 'claude-code',
+      claudeCodeMode: 'ultracode',
+      serviceTier: undefined,
+    }, {
+      backend: 'claude-code',
+      claudeCodeMode: null,
+    })).toEqual({
+      ...conversation,
+      backend: 'claude-code',
       serviceTier: undefined,
     });
   });

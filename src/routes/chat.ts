@@ -24,7 +24,7 @@ import { RoutinesScheduler, RoutinesService } from '../services/routines/service
 import { WorkspaceTaskQueueRegistry } from '../services/knowledgeBase/workspaceTaskQueue';
 import { createKbSearchMcpServer } from '../services/kbSearchMcp';
 import { SessionFinalizerQueue, type SessionFinalizerJob } from '../services/sessionFinalizerQueue';
-import type { Request, Response, ActiveStreamEntry, ContentBlock, ToolActivity, StreamEvent, WsServerFrame, EffortLevel, ServiceTier, StreamErrorSource, MemoryUpdateEvent, WorkspaceContextUpdateEvent, StreamJobRuntimeInfo, SendMessageResult, ThreadGoal, GoalEvent } from '../types';
+import type { Request, Response, ActiveStreamEntry, ContentBlock, ToolActivity, StreamEvent, WsServerFrame, EffortLevel, ClaudeCodeMode, ServiceTier, StreamErrorSource, MemoryUpdateEvent, WorkspaceContextUpdateEvent, StreamJobRuntimeInfo, SendMessageResult, ThreadGoal, GoalEvent } from '../types';
 import { logger } from '../utils/logger';
 import type { WsFunctions } from '../ws';
 import { createChatStatusRouter } from './chat/statusRoutes';
@@ -1290,6 +1290,7 @@ export function createChatRouter({ chatService, backendRegistry, updateService, 
     titleUpdateMessage: string | null;
     model: string | null;
     effort: EffortLevel | null;
+    claudeCodeMode?: ClaudeCodeMode | null;
     serviceTier?: ServiceTier | null;
     logUserMessageId?: string | null;
     logUserMessageTimestamp?: string | null;
@@ -1306,6 +1307,7 @@ export function createChatRouter({ chatService, backendRegistry, updateService, 
       titleUpdateMessage,
       model,
       effort,
+      claudeCodeMode = null,
       serviceTier = null,
       logUserMessageId = null,
       logUserMessageTimestamp = null,
@@ -1329,6 +1331,7 @@ export function createChatRouter({ chatService, backendRegistry, updateService, 
         lastEventAt: startedAt,
         model,
         effort,
+        claudeCodeMode,
         serviceTier,
       });
     } catch (err: unknown) {

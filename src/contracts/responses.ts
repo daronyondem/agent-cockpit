@@ -2,6 +2,7 @@ import type { ExplorerEntry, ExplorerPreviewResponse, ExplorerTreeResponse, File
 
 export type EffortLevel = 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max';
 export type ServiceTier = 'fast';
+export type ClaudeCodeMode = 'ultracode';
 export type AttachmentKind = 'image' | 'pdf' | 'text' | 'code' | 'md' | 'folder' | 'file';
 
 export interface Usage {
@@ -152,6 +153,7 @@ export interface ConversationListItem {
   cliProfileId?: string;
   model?: string;
   effort?: EffortLevel;
+  claudeCodeMode?: ClaudeCodeMode;
   serviceTier?: ServiceTier;
   workingDir: string;
   executionDir?: string;
@@ -173,6 +175,7 @@ export interface Conversation {
   cliProfileId?: string;
   model?: string;
   effort?: EffortLevel;
+  claudeCodeMode?: ClaudeCodeMode;
   serviceTier?: ServiceTier;
   workingDir: string;
   executionDir?: string;
