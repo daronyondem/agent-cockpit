@@ -87,6 +87,7 @@ import { WorkspaceKnowledgeStore } from './chat/workspaceKnowledgeStore';
 import { WorkspaceInstructionStore } from './chat/workspaceInstructionStore';
 import { UsageLedgerStore, emptyUsage } from './chat/usageLedgerStore';
 import { ConversationUsageStore } from './chat/conversationUsageStore';
+import { ClaudeTranscriptUsageImportService } from './claudeTranscriptUsageImportService';
 import { writeSessionRecoverySnapshot } from './chat/sessionRecoveryStore';
 import { applyCostEstimate } from './usagePricing/estimator';
 import { UsagePricingStore } from './usagePricing/store';
@@ -382,6 +383,7 @@ export class ChatService {
   private _workspaceInstructionStore: WorkspaceInstructionStore;
   private _usageLedgerStore: UsageLedgerStore;
   private _conversationUsageStore: ConversationUsageStore;
+  private _claudeTranscriptUsageImporter: ClaudeTranscriptUsageImportService;
   private _usagePricingStore: UsagePricingStore;
   private _artifactStore: ArtifactStore;
   private _workspaceIdentityStore: WorkspaceIdentityStore;
@@ -414,6 +416,10 @@ export class ChatService {
     this._usageLedgerStore = new UsageLedgerStore(this.usageLedgerFile, (backendId, model, usage, context) => (
       this._estimateUsageCost(backendId, model, usage, context?.pricingTier)
     ));
+    this._claudeTranscriptUsageImporter = new ClaudeTranscriptUsageImportService(
+      path.join(this.baseDir, 'claude-transcript-usage-import.json'),
+      this._usageLedgerStore,
+    );
     this._settingsService = new SettingsService(this.baseDir);
     this._defaultWorkspace = options.defaultWorkspace || DEFAULT_WORKSPACE_FALLBACK;
     this._backendRegistry = options.backendRegistry || null;
@@ -3631,11 +3637,66 @@ export class ChatService {
   }
 
   async getUsageStats(): Promise<UsageLedger> {
+    try {
+      await this._claudeTranscriptUsageImporter.importExternalUsage({
+        configRoots: this._claudeConfigRootsForUsageImport(await this.getSettings()),
+        ownedSessionIds: await this._agentCockpitSessionIds(),
+      });
+    } catch (err: unknown) {
+      log.warn('Failed to import external Claude transcript usage', { error: err });
+    }
     return this._usageLedgerStore.enrichMissingCosts();
   }
 
   async clearUsageStats(): Promise<void> {
     await this._usageLedgerStore.clear();
+  }
+
+  private _claudeConfigRootsForUsageImport(settings: Settings): string[] {
+    const roots: string[] = [];
+    for (const profile of settings.cliProfiles || []) {
+      if (profile.disabled || profile.harness !== 'claude-code') continue;
+      const configDir = profile.configDir?.trim() || profile.env?.CLAUDE_CONFIG_DIR?.trim();
+      if (configDir) roots.push(configDir);
+    }
+    return [...new Set(roots)];
+  }
+
+  private async _agentCockpitSessionIds(): Promise<Set<string>> {
+    const ids = new Set<string>();
+    let workspaceDirs: string[];
+    try {
+      workspaceDirs = await fsp.readdir(this.workspacesDir);
+    } catch (err: unknown) {
+      if ((err as NodeJS.ErrnoException).code === 'ENOENT') return ids;
+      throw err;
+    }
+
+    for (const dir of workspaceDirs) {
+      const indexPath = path.join(this.workspacesDir, dir, 'index.json');
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(await fsp.readFile(indexPath, 'utf8'));
+      } catch (err: unknown) {
+        if ((err as NodeJS.ErrnoException).code === 'ENOENT') continue;
+        throw err;
+      }
+      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) continue;
+      const conversations = (parsed as { conversations?: unknown }).conversations;
+      if (!Array.isArray(conversations)) continue;
+      for (const conv of conversations) {
+        if (!conv || typeof conv !== 'object' || Array.isArray(conv)) continue;
+        const sessions = (conv as { sessions?: unknown }).sessions;
+        if (!Array.isArray(sessions)) continue;
+        for (const session of sessions) {
+          if (!session || typeof session !== 'object' || Array.isArray(session)) continue;
+          const entry = session as { sessionId?: unknown; externalSessionId?: unknown };
+          if (typeof entry.sessionId === 'string' && entry.sessionId) ids.add(entry.sessionId);
+          if (typeof entry.externalSessionId === 'string' && entry.externalSessionId) ids.add(entry.externalSessionId);
+        }
+      }
+    }
+    return ids;
   }
 
   async getUsagePricingCatalog(): Promise<UsagePricingResponse> {

@@ -106,6 +106,27 @@ describe('UsageLedgerStore', () => {
     });
   });
 
+  test('records usage on an explicit ledger date', async () => {
+    const ledgerPath = path.join(dir, 'usage-ledger.json');
+    const store = new UsageLedgerStore(ledgerPath);
+
+    await store.recordForDate('2026-06-02', 'claude-code', 'claude-sonnet-4-6', {
+      ...emptyUsage(),
+      inputTokens: 10,
+      outputTokens: 5,
+    });
+
+    const ledger = await store.read();
+    expect(ledger.days).toEqual([{
+      date: '2026-06-02',
+      records: [{
+        backend: 'claude-code',
+        model: 'claude-sonnet-4-6',
+        usage: { ...emptyUsage(), inputTokens: 10, outputTokens: 5 },
+      }],
+    }]);
+  });
+
   test('lazily enriches historical zero-cost ledger rows without repricing stored estimates', async () => {
     const ledgerPath = path.join(dir, 'usage-ledger.json');
     await fsp.writeFile(ledgerPath, JSON.stringify({
