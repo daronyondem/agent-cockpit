@@ -182,7 +182,7 @@ When in doubt, lean toward writing one - but keep the bar honest. Over-writing p
 
 1. `npm run adr:new -- "Short title in present tense"` - scaffolds the file with the next sequential ID and the standard frontmatter.
 2. Fill the sections: **Context**, **Decision**, **Alternatives Considered**, **Consequences**, **References**. Keep it concise - a tight ADR is more useful than a thorough one nobody reads.
-3. Set `tags` and populate `affects` with code paths and docs whose existence depends on this decision (lint validates each path exists).
+3. Set `tags` and populate `affects` with code paths and docs whose existence depends on this decision (lint validates each path exists unless the ADR is tagged `historical` or the path is under a retired prefix listed in `scripts/adr-lint.js`).
 4. Update relevant SPEC sections to reflect the new state, and cross-link them to the ADR. SPEC says *what*; ADR says *why*. Do not duplicate.
 5. Commit alongside the implementation in the same PR branch - the ADR is part of the PR, not a follow-up.
 6. Set `status: Proposed` if you want to leave room for the maintainer to push back; default to `Accepted` once you and the maintainer agree on the direction.
@@ -196,4 +196,4 @@ When in doubt, lean toward writing one - but keep the bar honest. Over-writing p
   is reorganized and the linked target moves. Do not use link maintenance as an
   excuse to change the recorded decision text.
 - Do **not** edit `docs/adr/README.md`. CI regenerates it from frontmatter on every PR touching `docs/adr/**`.
-- The lint job (`npm run adr:lint`) validates frontmatter, filename, status/superseded-by rules, required sections, and that every path in `affects:` exists. Run it before pushing if you want fast feedback.
+- The lint job (`npm run adr:lint`) validates frontmatter, filename, status/superseded-by rules, required sections, and that every path in `affects:` exists unless the ADR is tagged `historical` or the path is under a retired prefix listed in `scripts/adr-lint.js`. Run it before pushing if you want fast feedback.
