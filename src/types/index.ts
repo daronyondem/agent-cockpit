@@ -208,6 +208,9 @@ export interface SessionHistoryItem {
 /** Adaptive reasoning effort level. Supported values are model/backend-specific. */
 export type EffortLevel = 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max';
 
+/** Claude Code-specific session mode. Omit for regular Claude Code effort handling. */
+export type ClaudeCodeMode = 'ultracode';
+
 /** Backend service tier override. Omit to use the selected CLI profile's own configuration. */
 export type ServiceTier = 'fast';
 
@@ -298,6 +301,8 @@ export interface ConversationEntry {
   model?: string;
   /** Adaptive reasoning effort level for supported models. */
   effort?: EffortLevel;
+  /** Claude Code-specific session mode. Only valid for Claude Code-family backends. */
+  claudeCodeMode?: ClaudeCodeMode;
   /** Backend service tier override. Currently used by Codex Fast mode. */
   serviceTier?: ServiceTier;
   currentSessionId: string;
@@ -439,6 +444,7 @@ export interface Conversation {
   cliProfileId?: string;
   model?: string;
   effort?: EffortLevel;
+  claudeCodeMode?: ClaudeCodeMode;
   serviceTier?: ServiceTier;
   workingDir: string;
   executionDir?: string;
@@ -534,6 +540,7 @@ export interface ConversationListItem {
   cliProfileId?: string;
   model?: string;
   effort?: EffortLevel;
+  claudeCodeMode?: ClaudeCodeMode;
   serviceTier?: ServiceTier;
   workingDir: string;
   executionDir?: string;
@@ -1124,6 +1131,7 @@ export interface DurableStreamJob {
   cliProfileId?: string | null;
   model?: string | null;
   effort?: EffortLevel | null;
+  claudeCodeMode?: ClaudeCodeMode | null;
   serviceTier?: ServiceTier | null;
   workingDir?: string | null;
   createdAt: string;
@@ -1866,6 +1874,8 @@ export interface SendMessageOptions {
    * (or backends whose selected model doesn't) ignore this.
    */
   effort?: EffortLevel;
+  /** Claude Code-specific session mode. Backends that are not Claude Code-family ignore this. */
+  claudeCodeMode?: ClaudeCodeMode;
   /** Backend service tier override. Currently used by Codex Fast mode. */
   serviceTier?: ServiceTier;
   /**

@@ -12,6 +12,7 @@ import { validateConversationInputRequest, validateSendMessageRequest } from '..
 import { isContractValidationError } from '../../contracts/validation';
 import type {
   ActiveStreamEntry,
+  ClaudeCodeMode,
   EffortLevel,
   McpServerConfig,
   Request,
@@ -46,6 +47,7 @@ export interface AttachAndPipeStreamArgs {
   titleUpdateMessage: string | null;
   model: string | null;
   effort: EffortLevel | null;
+  claudeCodeMode?: ClaudeCodeMode | null;
   serviceTier?: ServiceTier | null;
   logUserMessageId?: string | null;
   logUserMessageTimestamp?: string | null;
@@ -176,7 +178,7 @@ export function createStreamRouter(opts: StreamRoutesOptions): express.Router {
       }
       throw err;
     }
-    const { content, backend, model, effort, cliProfileId, serviceTier } = body;
+    const { content, backend, model, effort, claudeCodeMode, cliProfileId, serviceTier } = body;
     log.debug('POST /message accepted', { conversationId: convId, contentLength: content.length, activeStream: activeStreams.has(convId), wsConnected: isWsConnected(convId) });
 
     let conv = await chatService.getConversation(convId);
@@ -196,6 +198,7 @@ export function createStreamRouter(opts: StreamRoutesOptions): express.Router {
         cliProfileId: conv.cliProfileId || cliProfileId || null,
         model: model !== undefined ? (model || null) : (conv.model || null),
         effort: effort !== undefined ? (effort || null) : (conv.effort || null),
+        claudeCodeMode: claudeCodeMode !== undefined ? claudeCodeMode : (conv.claudeCodeMode || null),
         serviceTier: serviceTier !== undefined ? serviceTier : (conv.serviceTier || null),
         workingDir: executionDir,
       });
@@ -228,6 +231,9 @@ export function createStreamRouter(opts: StreamRoutesOptions): express.Router {
     if (effort !== undefined && effort !== (conv.effort || undefined)) {
       await chatService.updateConversationEffort(convId, effort || null);
     }
+    if (claudeCodeMode !== undefined && claudeCodeMode !== (conv.claudeCodeMode || null)) {
+      await chatService.updateConversationClaudeCodeMode(convId, claudeCodeMode || null);
+    }
     if (serviceTier !== undefined && serviceTier !== (conv.serviceTier || null)) {
       await chatService.updateConversationServiceTier(convId, serviceTier);
     }
@@ -253,6 +259,7 @@ export function createStreamRouter(opts: StreamRoutesOptions): express.Router {
       cliProfileId: runtime.cliProfileId || conv.cliProfileId || null,
       model: conv.model || null,
       effort: conv.effort || null,
+      claudeCodeMode: conv.claudeCodeMode || null,
       serviceTier: conv.serviceTier || null,
       workingDir: executionDir,
     });
@@ -396,6 +403,7 @@ export function createStreamRouter(opts: StreamRoutesOptions): express.Router {
     const effectiveEffort = effort !== undefined
       ? (refreshedConv?.effort || undefined)
       : (conv.effort || undefined);
+    const effectiveClaudeCodeMode = refreshedConv?.claudeCodeMode || undefined;
     const effectiveServiceTier = serviceTier !== undefined
       ? (refreshedConv?.serviceTier || undefined)
       : (conv.serviceTier || undefined);
@@ -420,6 +428,7 @@ export function createStreamRouter(opts: StreamRoutesOptions): express.Router {
         : undefined,
       model: model || conv.model || undefined,
       effort: effectiveEffort,
+      claudeCodeMode: effectiveClaudeCodeMode,
       serviceTier: effectiveServiceTier,
       mcpServers,
     });
@@ -436,6 +445,7 @@ export function createStreamRouter(opts: StreamRoutesOptions): express.Router {
       titleUpdateMessage: needsTitleUpdate ? content.trim() : null,
       model: model || conv.model || null,
       effort: effectiveEffort || null,
+      claudeCodeMode: effectiveClaudeCodeMode || null,
       serviceTier: effectiveServiceTier || null,
       logUserMessageId: userMsg?.id || null,
       logUserMessageTimestamp: userMsg?.timestamp || null,

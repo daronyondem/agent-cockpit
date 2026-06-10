@@ -459,7 +459,7 @@ export class ClaudeCodeAdapter extends BaseBackendAdapter {
     state: StreamState,
     retryingResumeAsNew: boolean,
   ): AsyncGenerator<StreamEvent> {
-    const { sessionId, isNewSession, workingDir, systemPrompt, model, effort, mcpServers, cliProfile } = options;
+    const { sessionId, isNewSession, workingDir, systemPrompt, model, effort, claudeCodeMode, mcpServers, cliProfile } = options;
     const attemptIsNewSession = isNewSession || retryingResumeAsNew;
     const runtime = resolveClaudeCliRuntime(cliProfile);
 
@@ -480,6 +480,12 @@ export class ClaudeCodeAdapter extends BaseBackendAdapter {
       const modelOption = this.metadata.models?.find(m => m.id === model);
       if (modelOption?.supportedEffortLevels?.includes(effort)) {
         args.push('--effort', effort);
+      }
+    }
+    if (claudeCodeMode === 'ultracode' && model) {
+      const modelOption = this.metadata.models?.find(m => m.id === model);
+      if (modelOption?.supportedEffortLevels?.includes('xhigh')) {
+        args.push('--settings', JSON.stringify({ ultracode: true }));
       }
     }
 

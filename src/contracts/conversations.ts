@@ -6,6 +6,7 @@ import type {
   Message,
   SessionHistoryItem,
 } from './responses';
+import { parseClaudeCodeModeInput, type ClaudeCodeModeInput, type ContractClaudeCodeMode } from './claudeCodeMode';
 import { parseServiceTierInput, type ContractServiceTier, type ServiceTierInput } from './serviceTier';
 import { asRecord, optionalBoolean, optionalString, optionalStringEnum, requiredBoolean, requiredNonEmptyString } from './validation';
 
@@ -20,10 +21,12 @@ export interface CreateConversationRequest {
   cliProfileId?: string;
   model?: string;
   effort?: ContractEffortLevel;
+  claudeCodeMode?: ClaudeCodeModeInput;
   serviceTier?: ServiceTierInput;
 }
 
-export interface ValidatedCreateConversationRequest extends Omit<CreateConversationRequest, 'serviceTier'> {
+export interface ValidatedCreateConversationRequest extends Omit<CreateConversationRequest, 'claudeCodeMode' | 'serviceTier'> {
+  claudeCodeMode?: ContractClaudeCodeMode | null;
   serviceTier?: ContractServiceTier | null;
 }
 
@@ -77,6 +80,7 @@ export function validateCreateConversationRequest(body: unknown): ValidatedCreat
     cliProfileId: optionalString(record, 'cliProfileId'),
     model: optionalString(record, 'model'),
     effort: optionalStringEnum(record, 'effort', CONTRACT_EFFORT_LEVELS),
+    claudeCodeMode: parseClaudeCodeModeInput(record.claudeCodeMode),
     serviceTier: parseServiceTierInput(record.serviceTier),
   };
 }

@@ -1037,7 +1037,7 @@ describe('effort selection', () => {
           },
           resumeCapabilities: TEST_RESUME_CAPABILITIES,
           models: [
-            { id: 'opus', label: 'Opus', family: 'opus', supportedEffortLevels: ['low', 'medium', 'high', 'max'] },
+            { id: 'opus', label: 'Opus', family: 'opus', supportedEffortLevels: ['low', 'medium', 'high', 'xhigh', 'max'] },
             { id: 'sonnet', label: 'Sonnet', family: 'sonnet', default: true, supportedEffortLevels: ['low', 'medium', 'high'] },
             { id: 'codex', label: 'Codex', family: 'gpt', supportedEffortLevels: ['none', 'minimal', 'low', 'medium', 'high', 'xhigh'] },
             { id: 'low-only', label: 'Low Only', family: 'gpt', supportedEffortLevels: ['low'] },
@@ -1132,6 +1132,34 @@ describe('effort selection', () => {
     await svc.createConversation('T', undefined, 'claude-code', 'opus', 'max');
     const list = await svc.listConversations();
     expect(list[0].effort).toBe('max');
+  });
+
+  test('stores Ultracode mode only for Claude models with xhigh support', async () => {
+    const conv = await svc.createConversation('T', undefined, 'claude-code', 'opus', undefined, undefined, undefined, 'ultracode');
+    expect(conv.claudeCodeMode).toBe('ultracode');
+
+    const loaded = await svc.getConversation(conv.id);
+    expect(loaded!.claudeCodeMode).toBe('ultracode');
+
+    const unsupported = await svc.createConversation('T2', undefined, 'claude-code', 'sonnet', undefined, undefined, undefined, 'ultracode');
+    expect(unsupported.claudeCodeMode).toBeUndefined();
+  });
+
+  test('reconciles Ultracode mode when model changes or mode is cleared', async () => {
+    const conv = await svc.createConversation('T', undefined, 'claude-code', 'opus', undefined, undefined, undefined, 'ultracode');
+
+    await svc.updateConversationModel(conv.id, 'sonnet');
+    let loaded = await svc.getConversation(conv.id);
+    expect(loaded!.claudeCodeMode).toBeUndefined();
+
+    await svc.updateConversationModel(conv.id, 'opus');
+    await svc.updateConversationClaudeCodeMode(conv.id, 'ultracode');
+    loaded = await svc.getConversation(conv.id);
+    expect(loaded!.claudeCodeMode).toBe('ultracode');
+
+    await svc.updateConversationClaudeCodeMode(conv.id, null);
+    loaded = await svc.getConversation(conv.id);
+    expect(loaded!.claudeCodeMode).toBeUndefined();
   });
 });
 

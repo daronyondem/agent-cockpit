@@ -642,6 +642,7 @@ Together these guarantee that a workspace index always parses on disk and that c
     cliProfileId?: string,      // Runtime CLI profile selected for this conversation. When present, runtime adapter selection is derived from Settings.cliProfiles[id].harness plus Claude Code's optional protocol while command/auth/config still come from the physical profile.
     model?: string,             // Full model ID (e.g. 'claude-fable-5', 'claude-opus-4-8', 'claude-sonnet-4-6', 'claude-haiku-4-5'); absent = backend default
     effort?: string,            // Adaptive reasoning effort: 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max'; absent = model default. Supported values are backend/model-specific. Stale unsupported values are reconciled to `high` when available, then the first supported level, or removed when the model has no effort support.
+    claudeCodeMode?: string,    // Claude Code-only session mode. Current value: 'ultracode'. Stored only for claude-code/claude-code-interactive when the selected model supports xhigh; absent = normal Claude Code mode.
     serviceTier?: string,       // Codex-only service tier override. Current value: 'fast'. Absent = use the selected Codex profile/config default.
     currentSessionId: string,   // UUID of the active CLI session
     checkout: {                 // Present when a conversation has explicit checkout metadata.
@@ -1320,6 +1321,7 @@ interface DurableStreamJob {
   cliProfileId?: string|null;
   model?: string|null;
   effort?: string|null;
+  claudeCodeMode?: string|null;
   serviceTier?: string|null;
   workingDir?: string|null;
   createdAt: string;
@@ -1461,6 +1463,7 @@ Flat object assembled from workspace index + active session file:
   backend: string,
   model?: string,               // Full model ID (e.g. 'claude-fable-5', 'claude-opus-4-8', 'claude-sonnet-4-6', 'claude-haiku-4-5')
   effort?: string,              // Adaptive reasoning effort: 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max'
+  claudeCodeMode?: string,      // Claude Code-only session mode. Current value: 'ultracode'
   serviceTier?: string,         // Codex-only service tier override; currently 'fast'
   workingDir: string,           // The workspace path
   currentSessionId: string,
@@ -1719,6 +1722,8 @@ Welcome setup auth can create first-run account profiles named `setup-codex-acco
 `memory.lastProcessorStatus` stores the last redacted Memory processor status known to Agent Cockpit ([ADR-0053](adr/0053-persist-memory-processor-status.md)). Shape: `{ status, updatedAt, backendId?, profileId?, profileName?, chatBackendId?, chatProfileId?, chatProfileName?, differsFromChatProfile?, error? }`. `status` is one of `last_succeeded`, `authentication_failed`, `unavailable`, `runtime_failed`, or `bad_output`. Successful `memory_note` write/skip decisions store `last_succeeded`; processor profile resolution, adapter availability, `runOneShot`, and bad-output failures store the corresponding failure class. `error` is bounded and redacted before persistence, including credential-looking paths and token values. Chat profile fields are present only when the active conversation runtime supplied them while issuing the Memory MCP session.
 
 `defaultEffort` is the default adaptive reasoning level for new conversations. It only applies when the chosen model matches `defaultModel` AND the model supports that effort level; otherwise the per-conversation selection falls back to `high` (or, defensively, the first supported level of the chosen model). The settings modal only renders the **Default Effort** field when `defaultBackend`/`defaultModel` resolve to a model that declares `supportedEffortLevels`; changing the default model to one without effort support drops `defaultEffort` on save.
+
+`ConversationEntry.claudeCodeMode` is a provider-specific session mode, not a shared effort level. The only current value is `"ultracode"` ([ADR-0085](adr/0085-represent-claude-code-ultracode-as-a-provider-session-mode.md)). The server accepts it on conversation create, normal message send, and goal-set requests, stores it only for Claude Code-family backends whose selected model advertises `xhigh`, and clears it when the session resets, the backend/profile changes away from Claude Code, the model no longer supports xhigh, or the request supplies `null`/`""`. Conversation and list responses include the field only while active.
 
 `defaultServiceTier` is the Codex-only default speed tier for new conversations. The only stored value is `"fast"`; absence means the selected Codex profile/config decides the tier. The settings modal only renders **Default Speed** when the selected default profile/backend resolves to Codex. `SettingsService.saveSettings()` drops `defaultServiceTier` when the default runtime is not Codex or the value is unsupported. A conversation-level `serviceTier: "fast"` forces Codex Fast mode; explicit request values `null`, `""`, or `"default"` clear the override so the selected Codex profile/config applies.
 

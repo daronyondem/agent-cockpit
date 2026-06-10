@@ -602,11 +602,31 @@ function buildInteractiveClaudeArgs(
     // runtime parameter intentionally used in this builder.
   }
 
-  if (settingsJson) {
-    args.push('--settings', settingsJson);
+  const resolvedSettingsJson = mergeInteractiveClaudeSettingsJson(
+    settingsJson,
+    options.claudeCodeMode === 'ultracode' && !!options.model
+      && !!models?.find((candidate) => candidate.id === options.model)?.supportedEffortLevels?.includes('xhigh'),
+  );
+  if (resolvedSettingsJson) {
+    args.push('--settings', resolvedSettingsJson);
   }
 
   return args;
+}
+
+function mergeInteractiveClaudeSettingsJson(settingsJson: string | null | undefined, ultracode: boolean): string | null {
+  if (!settingsJson) {
+    return ultracode ? JSON.stringify({ ultracode: true }) : null;
+  }
+  let settings: Record<string, unknown>;
+  try {
+    const parsed = JSON.parse(settingsJson);
+    settings = isPlainRecord(parsed) ? parsed : {};
+  } catch {
+    return settingsJson;
+  }
+  if (ultracode) settings.ultracode = true;
+  return JSON.stringify(settings);
 }
 
 function updatePendingQuestion(state: InteractiveStreamState, event: StreamEvent): void {

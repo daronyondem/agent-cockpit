@@ -93,6 +93,7 @@ import { reduceStreamFrame } from './stream/streamFrameReducer.ts';
    *   composerBackend: string | null,
    *   composerModel: string | null,
    *   composerEffort: string | null,
+   *   composerClaudeCodeMode: string | null,
    *   composerServiceTier: string | null,
    *   goal: ThreadGoal | null,
    *   goalUpdatedAtMs: number | null,
@@ -262,6 +263,7 @@ import { reduceStreamFrame } from './stream/streamFrameReducer.ts';
       composerBackend: null,
       composerModel: null,
       composerEffort: null,
+      composerClaudeCodeMode: null,
       composerServiceTier: null,
       goal: null,
       goalUpdatedAtMs: null,
@@ -366,8 +368,26 @@ import { reduceStreamFrame } from './stream/streamFrameReducer.ts';
   }
 
   function optimisticGoalActions(backend){
-    const isClaude = backend === 'claude-code' || backend === 'claude-code-interactive';
+    const isClaude = isClaudeCodeBackend(backend);
     return { clear: true, stopTurn: true, pause: !isClaude, resume: !isClaude };
+  }
+
+  function isClaudeCodeBackend(backend){
+    return backend === 'claude-code' || backend === 'claude-code-interactive';
+  }
+
+  function resolveComposerClaudeCodeMode(backend, composerMode, convMode){
+    const raw = composerMode !== null ? composerMode : (convMode || null);
+    if (!isClaudeCodeBackend(backend)) {
+      return { shouldSend: false, bodyValue: undefined, persistedValue: undefined };
+    }
+    if (raw === 'ultracode') {
+      return { shouldSend: true, bodyValue: 'ultracode', persistedValue: 'ultracode' };
+    }
+    if (raw === 'default') {
+      return { shouldSend: true, bodyValue: null, persistedValue: undefined };
+    }
+    return { shouldSend: false, bodyValue: undefined, persistedValue: undefined };
   }
 
   function upsertPersistedMessage(convId, message){
@@ -708,6 +728,7 @@ import { reduceStreamFrame } from './stream/streamFrameReducer.ts';
         composerBackend: cur.composerBackend != null ? cur.composerBackend : (data.backend || null),
         composerModel:   cur.composerModel   != null ? cur.composerModel   : (data.model   || null),
         composerEffort:  cur.composerEffort  != null ? cur.composerEffort  : (data.effort  || null),
+        composerClaudeCodeMode: cur.composerClaudeCodeMode != null ? cur.composerClaudeCodeMode : (data.claudeCodeMode || null),
         composerServiceTier: cur.composerServiceTier != null ? cur.composerServiceTier : (data.serviceTier || null),
         input: draft ? draft.text : cur.input,
         pendingAttachments: draft && draft.attachments.length
@@ -864,6 +885,7 @@ import { reduceStreamFrame } from './stream/streamFrameReducer.ts';
       composerBackend: freshSession ? (data.backend || null) : next.composerBackend,
       composerModel: freshSession ? (data.model || null) : next.composerModel,
       composerEffort: freshSession ? (data.effort || null) : next.composerEffort,
+      composerClaudeCodeMode: freshSession ? (data.claudeCodeMode || null) : next.composerClaudeCodeMode,
       composerServiceTier: freshSession ? (data.serviceTier || null) : next.composerServiceTier,
     }));
     if (data && typeof data.title === 'string') {
@@ -1276,6 +1298,7 @@ import { reduceStreamFrame } from './stream/streamFrameReducer.ts';
     const sendBackend = s.composerBackend || (s.conv && s.conv.backend) || '';
     const sendModel = s.composerModel || null;
     const sendEffort = s.composerEffort || null;
+    const sendClaudeCodeMode = resolveComposerClaudeCodeMode(sendBackend, s.composerClaudeCodeMode, s.conv && s.conv.claudeCodeMode);
     const sendServiceTier = s.composerServiceTier !== null
       ? s.composerServiceTier
       : (s.conv && s.conv.serviceTier) || null;
@@ -1301,6 +1324,7 @@ import { reduceStreamFrame } from './stream/streamFrameReducer.ts';
       if (sendBackend) body.backend = sendBackend;
       if (sendModel)   body.model   = sendModel;
       if (sendEffort)  body.effort  = sendEffort;
+      if (sendClaudeCodeMode.shouldSend) body.claudeCodeMode = sendClaudeCodeMode.bodyValue;
       if (sendBackend === 'codex' && sendServiceTier) body.serviceTier = sendServiceTier;
       const res = await AgentApi.fetch('conversations/' + encodeURIComponent(convId) + '/message', {
         method: 'POST',
@@ -1320,6 +1344,7 @@ import { reduceStreamFrame } from './stream/streamFrameReducer.ts';
             backend: sendBackend || cur.conv.backend,
             model:   sendModel   !== null ? sendModel   : cur.conv.model,
             effort:  sendEffort  !== null ? sendEffort  : cur.conv.effort,
+            claudeCodeMode: sendClaudeCodeMode.persistedValue,
             serviceTier: sendServiceTier === 'fast' ? 'fast' : undefined,
           } : cur.conv,
         }));
@@ -1393,6 +1418,7 @@ import { reduceStreamFrame } from './stream/streamFrameReducer.ts';
     const sendBackend = s.composerBackend || (s.conv && s.conv.backend) || '';
     const sendModel = s.composerModel || null;
     const sendEffort = s.composerEffort || null;
+    const sendClaudeCodeMode = resolveComposerClaudeCodeMode(sendBackend, s.composerClaudeCodeMode, s.conv && s.conv.claudeCodeMode);
     const sendServiceTier = s.composerServiceTier !== null
       ? s.composerServiceTier
       : (s.conv && s.conv.serviceTier) || null;
@@ -1432,6 +1458,7 @@ import { reduceStreamFrame } from './stream/streamFrameReducer.ts';
       if (sendBackend) body.backend = sendBackend;
       if (sendModel)   body.model   = sendModel;
       if (sendEffort)  body.effort  = sendEffort;
+      if (sendClaudeCodeMode.shouldSend) body.claudeCodeMode = sendClaudeCodeMode.bodyValue;
       if (sendBackend === 'codex' && sendServiceTier) body.serviceTier = sendServiceTier;
       const data = await AgentApi.conv.setGoal(convId, body);
       if (data && data.goal) applyGoalSnapshot(convId, data.goal);
@@ -1444,6 +1471,7 @@ import { reduceStreamFrame } from './stream/streamFrameReducer.ts';
           backend: sendBackend || cur.conv.backend,
           model:   sendModel   !== null ? sendModel   : cur.conv.model,
           effort:  sendEffort  !== null ? sendEffort  : cur.conv.effort,
+          claudeCodeMode: sendClaudeCodeMode.persistedValue,
           serviceTier: sendServiceTier === 'fast' ? 'fast' : undefined,
         } : cur.conv,
       }));
@@ -1643,6 +1671,7 @@ import { reduceStreamFrame } from './stream/streamFrameReducer.ts';
     if (!s || s.composerBackend === value) return;
     update(convId, {
       composerBackend: value || null,
+      composerClaudeCodeMode: isClaudeCodeBackend(value) ? s.composerClaudeCodeMode : null,
       composerServiceTier: value === 'codex' ? s.composerServiceTier : null,
       goalMode: (value === 'codex' || value === 'claude-code' || value === 'claude-code-interactive') ? s.goalMode : false,
     });
@@ -1655,6 +1684,7 @@ import { reduceStreamFrame } from './stream/streamFrameReducer.ts';
       composerBackend: backendId || null,
       composerModel: null,
       composerEffort: null,
+      composerClaudeCodeMode: isClaudeCodeBackend(backendId) ? s.composerClaudeCodeMode : null,
       composerServiceTier: backendId === 'codex' ? s.composerServiceTier : null,
       goalMode: (backendId === 'codex' || backendId === 'claude-code' || backendId === 'claude-code-interactive') ? s.goalMode : false,
     });
@@ -1668,6 +1698,12 @@ import { reduceStreamFrame } from './stream/streamFrameReducer.ts';
     const s = states.get(convId);
     if (!s || s.composerEffort === value) return;
     update(convId, { composerEffort: value || null });
+  }
+  function setComposerClaudeCodeMode(convId, value){
+    const s = states.get(convId);
+    const next = value === 'ultracode' ? 'ultracode' : (value === 'default' ? 'default' : null);
+    if (!s || s.composerClaudeCodeMode === next) return;
+    update(convId, { composerClaudeCodeMode: next });
   }
   function setComposerServiceTier(convId, value){
     const s = states.get(convId);
@@ -2065,6 +2101,7 @@ import { reduceStreamFrame } from './stream/streamFrameReducer.ts';
     const sendBackend = s.composerBackend || (s.conv && s.conv.backend) || '';
     const sendModel = s.composerModel || null;
     const sendEffort = s.composerEffort || null;
+    const sendClaudeCodeMode = resolveComposerClaudeCodeMode(sendBackend, s.composerClaudeCodeMode, s.conv && s.conv.claudeCodeMode);
     const sendServiceTier = s.composerServiceTier !== null
       ? s.composerServiceTier
       : (s.conv && s.conv.serviceTier) || null;
@@ -2088,6 +2125,7 @@ import { reduceStreamFrame } from './stream/streamFrameReducer.ts';
       if (sendBackend) body.backend = sendBackend;
       if (sendModel)   body.model   = sendModel;
       if (sendEffort)  body.effort  = sendEffort;
+      if (sendClaudeCodeMode.shouldSend) body.claudeCodeMode = sendClaudeCodeMode.bodyValue;
       if (sendBackend === 'codex' && sendServiceTier) body.serviceTier = sendServiceTier;
       const res = await AgentApi.fetch('conversations/' + encodeURIComponent(convId) + '/message', {
         method: 'POST',
@@ -2105,6 +2143,7 @@ import { reduceStreamFrame } from './stream/streamFrameReducer.ts';
             backend: sendBackend || cur.conv.backend,
             model: sendModel !== null ? sendModel : cur.conv.model,
             effort: sendEffort !== null ? sendEffort : cur.conv.effort,
+            claudeCodeMode: sendClaudeCodeMode.persistedValue,
             serviceTier: sendServiceTier === 'fast' ? 'fast' : undefined,
           } : cur.conv,
         }));
@@ -2404,6 +2443,7 @@ export const StreamStore = {
     setComposerBackend,
     setComposerModel,
     setComposerEffort,
+    setComposerClaudeCodeMode,
     setComposerServiceTier,
     addAttachments,
     removeAttachment,

@@ -10,6 +10,10 @@ export function backendIdForProfile(profile){
   return profile.harness;
 }
 
+export function isClaudeBackend(backendId){
+  return backendId === 'claude-code' || backendId === CLAUDE_CODE_INTERACTIVE_BACKEND_ID;
+}
+
 export function workspaceRefForConv(conv){
   return conv ? (conv.workspaceId || conv.workspaceHash || null) : null;
 }

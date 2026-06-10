@@ -59,6 +59,7 @@ export class ConversationLifecycleStore {
           cliProfileId: conv.cliProfileId,
           model: conv.model,
           effort: conv.effort,
+          claudeCodeMode: conv.claudeCodeMode,
           serviceTier: conv.serviceTier,
           workingDir: index.workspacePath,
           ...(worktreeCheckout ? {
