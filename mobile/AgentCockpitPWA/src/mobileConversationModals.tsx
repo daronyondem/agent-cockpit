@@ -121,6 +121,7 @@ function FolderPickerModal(props: {
 
   useEffect(() => {
     void loadDirectory(props.initialPath || undefined);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- The picker loads the initial path once when opened; later navigation is explicit.
   }, []);
 
   useEffect(() => {

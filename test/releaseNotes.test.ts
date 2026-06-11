@@ -2,7 +2,6 @@ import fs from 'fs';
 import os from 'os';
 import path from 'path';
 
-// eslint-disable-next-line @typescript-eslint/no-var-requires
 const { extractSection, renderReleaseNotes } = require('../scripts/render-release-notes.js');
 
 function writeFile(root: string, relPath: string, content: string) {

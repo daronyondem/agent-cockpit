@@ -756,7 +756,7 @@ import { reduceStreamFrame } from './stream/streamFrameReducer.ts';
       const s = states.get(convId);
       if (!s || !s.loaded) return false;
       try {
-        const data = await refreshConversationFromServer(convId, null, true);
+        await refreshConversationFromServer(convId, null, true);
         update(convId, { loadError: null, loaded: true });
         applyGoalSnapshot(convId, null);
         return true;
@@ -1924,7 +1924,7 @@ import { reduceStreamFrame } from './stream/streamFrameReducer.ts';
       applyAbortFallback();
       try {
         await refreshConversationFromServer(convId, { streamError: 'Aborted by user', streamErrorSource: 'abort' });
-      } catch (_) {
+      } catch {
         // Local abort fallback above is authoritative enough to unstick the UI.
       }
       return true;

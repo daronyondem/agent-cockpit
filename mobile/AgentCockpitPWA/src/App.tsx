@@ -340,6 +340,7 @@ export default function App() {
       closeStreamSocket();
       closeListStreamSockets();
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- Initial dashboard load and socket cleanup are mount/unmount lifecycle work; callback identities are not semantic triggers.
   }, []);
 
   useEffect(() => {

@@ -607,6 +607,7 @@ export function WorkspaceSettingsPage({ hash, label, initialTab, initialWorkspac
       if (!cancelled) setLoading(false);
     });
     return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- Initial workspace load is keyed by workspace/tab/routine inputs; appliers/selectors normalize fetched snapshots.
   }, [hash, initialTab, initialRoutineId]);
 
   React.useEffect(() => {
@@ -700,6 +701,7 @@ export function WorkspaceSettingsPage({ hash, label, initialTab, initialWorkspac
       cancelled = true;
       clearInterval(timer);
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- Routine polling is keyed by selected routine/run state; response appliers only normalize fetched snapshots.
   }, [hash, tab, routinesEnabled, routineRunPollKey, routineRunBusy, routineSelectedId, routineDirty]);
 
   React.useEffect(() => {
@@ -727,6 +729,7 @@ export function WorkspaceSettingsPage({ hash, label, initialTab, initialWorkspac
       cancelled = true;
       clearInterval(timer);
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- Telegram polling is keyed by pending connection status/code; the poll applier only consumes server responses.
   }, [hash, tab, routinesEnabled, routineTelegramConnect && routineTelegramConnect.status, routineTelegramConnect && routineTelegramConnect.code]);
 
   const loadProfileBackend = React.useCallback((profileId) => {
@@ -1522,6 +1525,7 @@ export function WorkspaceSettingsPage({ hash, label, initialTab, initialWorkspac
             onDelete={deleteMemoryEntry}
             onClearAll={clearAllMemory}
             onRefresh={refreshMemory}
+            toast={toast}
           />
         ) : tab === 'kb' ? (
           <KbTab enabled={kbEnabled} onToggle={toggleKb}/>
@@ -1798,6 +1802,7 @@ export function MemoryUpdateModal({ open, hash, label, update, onClose, onViewAl
         if (!cancelled) setLoading(false);
       });
     return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- Memory update modal reloads on open/hash/capture timestamp; update object identity is not a reload trigger.
   }, [open, hash, update && update.capturedAt]);
 
   React.useEffect(() => {
@@ -1979,7 +1984,7 @@ function InstructionsTab({ instructions, setInstructions, dirty, saving, onSave 
   );
 }
 
-function MemoryTab({ hash, enabled, snapshot, onToggle, onDelete, onClearAll, onRefresh }){
+function MemoryTab({ hash, enabled, snapshot, onToggle, onDelete, onClearAll, onRefresh, toast }){
   const [query, setQuery] = React.useState('');
   const [typeFilter, setTypeFilter] = React.useState('all');
   const [statusFilter, setStatusFilter] = React.useState('current');
@@ -2279,7 +2284,8 @@ function RoutinesTab({
   const canRun = detail && state !== 'proposed' && !running;
   const title = detail && detail.manifest ? detail.manifest.title : '';
   const browserTz = browserTimezone();
-  const timezoneOptions = React.useMemo(() => routineTimezoneOptions(draft && draft.timezone), [draft && draft.timezone]);
+  const draftTimezone = draft ? draft.timezone : null;
+  const timezoneOptions = React.useMemo(() => routineTimezoneOptions(draftTimezone), [draftTimezone]);
   const telegramConnectStatus = telegramConnect && telegramConnect.status;
   const telegramDestinationLabel = settingsDraft.telegramChatTitle
     ? `${settingsDraft.telegramChatTitle}${settingsDraft.telegramChatType ? ` (${settingsDraft.telegramChatType})` : ''}`
@@ -2722,12 +2728,13 @@ function WorkspaceContextTab({
   const selectedProfile = mode === 'override'
     ? workspaceProfileForSetting(profiles, ctx.cliProfileId, ctx.cliBackend, fallbackBackend)
     : globalProfile;
+  const selectedProfileId = selectedProfile ? selectedProfile.id : null;
   const [workspaceContextSection, setWorkspaceContextSection] = React.useState(() => normalizeWorkspaceContextSection(initialSection));
   const [fileQuery, setFileQuery] = React.useState('');
   const [referenceQuery, setReferenceQuery] = React.useState('');
   const [assetQuery, setAssetQuery] = React.useState('');
   const [selectedReference, setSelectedReference] = React.useState(null);
-  const [referenceContent, setReferenceContent] = React.useState('');
+  const [, setReferenceContent] = React.useState('');
   const [referenceDraft, setReferenceDraft] = React.useState('');
   const [referenceLoading, setReferenceLoading] = React.useState(false);
   const [referenceSaving, setReferenceSaving] = React.useState(false);
@@ -2744,18 +2751,18 @@ function WorkspaceContextTab({
   }, [initialSection]);
 
   React.useEffect(() => {
-    if (selectedProfile && loadProfileBackend) loadProfileBackend(selectedProfile.id);
-  }, [selectedProfile && selectedProfile.id, loadProfileBackend]);
+    if (selectedProfileId && loadProfileBackend) loadProfileBackend(selectedProfileId);
+  }, [selectedProfileId, loadProfileBackend]);
 
   const models = selectedProfile ? workspaceModelsForProfile(backends, profileBackends, selectedProfile) : [];
   const modelId = (mode === 'override' ? ctx.cliModel : globalContext.cliModel) || workspaceDefaultModelId(models) || '';
   const efforts = selectedProfile ? workspaceEffortLevelsForProfile(backends, profileBackends, selectedProfile, modelId) : [];
   const effort = (mode === 'override' ? ctx.cliEffort : globalContext.cliEffort) || workspaceDefaultEffort(efforts) || '';
   const runs = workspaceContextRunsFromState(state);
-  const latestRun = runs[0] || null;
   const latestScanRun = runs.find(isWorkspaceContextScanRun) || null;
   const latestMaintenanceRun = runs.find(isWorkspaceContextMaintenanceRun) || null;
   const runningRun = runs.find(run => run && run.status === 'running') || null;
+  const runningRunId = runningRun ? runningRun.runId : null;
   const failedRun = runs.find(run => run && run.status === 'failed') || null;
   const visibleFiles = (Array.isArray(files) ? files : []).filter(file => {
     const query = fileQuery.trim().toLowerCase();
@@ -2792,7 +2799,7 @@ function WorkspaceContextTab({
 
   React.useEffect(() => {
     if (runningRun) setRunPage(0);
-  }, [runningRun && runningRun.runId]);
+  }, [runningRunId, runningRun]);
 
   React.useEffect(() => {
     if (!selectedReference) return;

@@ -52,7 +52,7 @@ function useAnchorPosition(anchorEl, panelRef, open, { gap = 10, margin = 32 } =
       window.removeEventListener('resize', compute);
       window.removeEventListener('scroll', compute, true);
     };
-  }, [anchorEl, open]);
+  }, [anchorEl, gap, margin, open, panelRef]);
   return pos;
 }
 
@@ -76,7 +76,7 @@ function Dialog({ open, onClose, anchor, variant = 'confirm', title, body,
       else if (panelRef.current) panelRef.current.focus();
     }, 60);
     return () => clearTimeout(t);
-  }, [open, inputDefault]);
+  }, [choices, defaultChoice, inputDefault, open]);
 
   const handleConfirm = React.useCallback(() => {
     if (!onConfirm) return;

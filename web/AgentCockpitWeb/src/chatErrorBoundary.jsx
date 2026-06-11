@@ -4,11 +4,11 @@ export class ChatErrorBoundary extends React.Component {
   constructor(props){
     super(props);
     this.state = { err: null };
-    this.onReload = () => { try { window.location.reload(); } catch(e) {} };
+    this.onReload = () => { try { window.location.reload(); } catch {} };
   }
   static getDerivedStateFromError(err){ return { err }; }
   componentDidCatch(err, info){
-    try { console.error('[ChatErrorBoundary]', err, info); } catch(e) {}
+    try { console.error('[ChatErrorBoundary]', err, info); } catch {}
   }
   render(){
     if (!this.state.err) return this.props.children;

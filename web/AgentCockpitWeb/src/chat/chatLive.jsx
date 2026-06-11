@@ -8,7 +8,7 @@ import { useToasts } from '../toast.jsx';
 import { useCliProfileSettings, useConversationSelector, shallowEqual } from '../shellState.jsx';
 import { hiddenStreamErrorMessageIds } from './messageParsing';
 import { collapseProgressRuns, messageScrollSignature } from './messageModel.js';
-import { backendIdForProfile, CLAUDE_CODE_INTERACTIVE_BACKEND_ID, workspaceRefForConv } from './chatHelpers.js';
+import { backendIdForProfile, workspaceRefForConv } from './chatHelpers.js';
 import { AgentIndexProvider } from './toolRuns.jsx';
 import { FileViewerContext, ImageLightbox } from './messageContent.jsx';
 import { MessageBubble, PinStrip, ProgressBreadcrumbBubble, ResetProgressBubble } from './messageFeed.jsx';
@@ -74,7 +74,7 @@ function selectChatLiveState(s){
   };
 }
 
-export function ChatLive({ convId, onArchived, onDeleted, onRenamed, onOpenMemoryUpdate, onOpenWorkspaceSettings, onOpenSettings }){
+export function ChatLive({ convId, onArchived, onDeleted, onOpenMemoryUpdate, onOpenWorkspaceSettings, onOpenSettings }){
   const state = useConversationSelector(convId, selectChatLiveState, shallowEqual);
   const { profiles: cliProfiles } = useCliProfileSettings();
   const dialog = useDialog();
@@ -120,8 +120,11 @@ export function ChatLive({ convId, onArchived, onDeleted, onRenamed, onOpenMemor
     }
   }, [editingTitle]);
 
-  const messages = state ? state.messages : [];
+  const stateMessages = state ? state.messages : null;
+  const messages = React.useMemo(() => stateMessages || [], [stateMessages]);
   const messageWindow = state ? state.messageWindow : null;
+  const messageWindowStartIndex = messageWindow ? messageWindow.startIndex : null;
+  const messageWindowEndIndex = messageWindow ? messageWindow.endIndex : null;
   const loadingOlder = !!(state && state.loadingOlder);
   const loadingAround = !!(state && state.loadingAround);
   const activeStreamError = state ? state.streamError : null;
@@ -159,14 +162,15 @@ export function ChatLive({ convId, onArchived, onDeleted, onRenamed, onOpenMemor
     () => collapseProgressRuns(feedMessages),
     [feedMessages]
   );
+  const pinnedMessageEntries = state && Array.isArray(state.pinnedMessages) ? state.pinnedMessages : null;
   const pinnedMessages = React.useMemo(() => {
-    const entries = state && Array.isArray(state.pinnedMessages) ? state.pinnedMessages : [];
+    const entries = pinnedMessageEntries || [];
     const fromServer = entries
       .map(entry => entry && entry.message)
       .filter(m => m && m.pinned && (m.role === 'user' || m.role === 'assistant' || m.role === 'system'));
     if (fromServer.length) return fromServer;
     return feedMessages.filter(m => m && m.pinned && (m.role === 'user' || m.role === 'assistant' || m.role === 'system'));
-  }, [state && state.pinnedMessages, feedMessages]);
+  }, [pinnedMessageEntries, feedMessages]);
   const messageRefs = React.useRef(new Map());
   const pendingPinJumpRef = React.useRef(null);
   const pinJumpSerialRef = React.useRef(0);
@@ -298,8 +302,8 @@ export function ChatLive({ convId, onArchived, onDeleted, onRenamed, onOpenMemor
   }, [
     pinJumpToken,
     messages.length,
-    messageWindow && messageWindow.startIndex,
-    messageWindow && messageWindow.endIndex,
+    messageWindowStartIndex,
+    messageWindowEndIndex,
     focusPinnedMessage,
   ]);
 
@@ -406,7 +410,7 @@ export function ChatLive({ convId, onArchived, onDeleted, onRenamed, onOpenMemor
     loadingOlderRef.current = false;
     el.scrollTop = restore.scrollTop + Math.max(0, el.scrollHeight - restore.scrollHeight);
     saveFeedPosition();
-  }, [messages.length, loadingOlder, messageWindow && messageWindow.startIndex, saveFeedPosition]);
+  }, [messages.length, loadingOlder, messageWindowStartIndex, saveFeedPosition]);
 
   React.useLayoutEffect(() => {
     if (feedRestoreDoneRef.current) return;
@@ -414,8 +418,8 @@ export function ChatLive({ convId, onArchived, onDeleted, onRenamed, onOpenMemor
   }, [
     restoreSavedFeedPosition,
     messages.length,
-    messageWindow && messageWindow.startIndex,
-    messageWindow && messageWindow.endIndex,
+    messageWindowStartIndex,
+    messageWindowEndIndex,
   ]);
 
   React.useLayoutEffect(() => () => {
@@ -518,7 +522,6 @@ export function ChatLive({ convId, onArchived, onDeleted, onRenamed, onOpenMemor
   const wsLabel = conv.workingDir
     ? conv.workingDir.split('/').filter(Boolean).slice(-2).join('/')
     : 'workspace';
-  const awaiting = !!pendingInteraction;
   const topbarCliProfileId = profileLocked
     ? (conv.cliProfileId || null)
     : (state.composerCliProfileId || conv.cliProfileId || null);

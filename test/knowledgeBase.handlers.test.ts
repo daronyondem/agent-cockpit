@@ -1,4 +1,3 @@
-/* eslint-disable @typescript-eslint/no-explicit-any */
 
 // ─── Format handler tests ───────────────────────────────────────────────────
 // PDF and PPTX handlers are tested against real fixtures in
@@ -712,7 +711,6 @@ describe('pptxHandler', () => {
     // four runs collapsed to a single space-joined line in `text.md`, which
     // destroyed the bullet structure for any slide that didn't trigger the
     // AI path. This test pins the fix.
-    // eslint-disable-next-line @typescript-eslint/no-require-imports
     const AdmZip = require('adm-zip');
     const zip = new AdmZip();
     const slideXml = `<?xml version="1.0" encoding="UTF-8"?>
@@ -755,7 +753,6 @@ describe('pptxHandler', () => {
     // `ppt/slides/slideN.xml` entries during text extraction, so a
     // partial pptx skeleton is enough — no need for content types,
     // presentation.xml, or rels.
-    // eslint-disable-next-line @typescript-eslint/no-require-imports
     const AdmZip = require('adm-zip');
     const zip = new AdmZip();
     const slideXml = (body: string, hidden = false): string =>

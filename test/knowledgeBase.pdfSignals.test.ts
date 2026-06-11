@@ -1,4 +1,3 @@
-/* eslint-disable @typescript-eslint/no-explicit-any */
 
 // ─── PDF per-page signal tests ──────────────────────────────────────────────
 // Pure unit tests for the helpers that drive the hybrid handler's

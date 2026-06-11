@@ -1,4 +1,3 @@
-/* eslint-disable @typescript-eslint/no-explicit-any */
 
 // ─── KB multi-location + ref-counted delete tests ────────────────────────────
 // The Phase 3 KB stores a single raw row per unique sha256 and a variable

@@ -30,7 +30,7 @@ export function ContextChip({ backendId, cliProfileId, usage }){
     );
     store.refresh(cliProfileId);
     return unsub;
-  }, [backendId, store, profileKey]);
+  }, [backendId, store, profileKey, cliProfileId]);
   const planUsage = planUsageState.key === profileKey
     ? planUsageState.data
     : (store ? store.get(cliProfileId) : null);

@@ -87,6 +87,7 @@ Follow ADR-0051 for shared contracts, logging, and ownership boundaries.
 - Use `src/utils/logger.ts` for backend logging in touched code. Do not add new backend `console.*` calls unless the file is an intentional CLI/test/build script or already documented as an allowed exception.
 - When adding or changing an ownership boundary, update the relevant spec docs and add focused tests for the new module instead of only testing through the largest facade.
 - Before opening a PR, run `npm run lint`, `npm run maintainability:check`, and `npm run spec:drift` in addition to the existing required verification commands.
+- Treat `npm run lint` as a zero-warning gate. Do not leave new warnings behind; every intentional `react-hooks/exhaustive-deps` inline disable must include a written reason.
 
 # Claude Code Interactive Compatibility
 

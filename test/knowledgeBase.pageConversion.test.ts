@@ -1,4 +1,3 @@
-/* eslint-disable @typescript-eslint/no-explicit-any */
 
 // ─── Per-image AI conversion + downscaling tests ────────────────────────────
 // Two units under test:

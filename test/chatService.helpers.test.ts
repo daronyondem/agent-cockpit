@@ -1,4 +1,3 @@
-/* eslint-disable @typescript-eslint/no-explicit-any */
 
 import { attachmentFromPath, parseUploadedFilesTag, normalizeMessageQueue } from '../src/services/chatService';
 

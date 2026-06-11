@@ -9,7 +9,7 @@
   "scripts": {
     "start": "tsx server.ts",
     "typecheck": "tsc --noEmit",
-    "lint": "eslint .",
+    "lint": "eslint . --max-warnings=0",
     "test": "node --experimental-vm-modules node_modules/jest/bin/jest.js",
     "test:coverage": "node --experimental-vm-modules node_modules/jest/bin/jest.js --coverage --runInBand",
     "e2e:claude-interactive": "CLAUDE_INTERACTIVE_E2E=1 npm test -- test/claudeCodeInteractive.e2e.test.ts --runInBand --forceExit",

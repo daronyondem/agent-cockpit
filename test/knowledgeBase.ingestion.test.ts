@@ -1,4 +1,3 @@
-/* eslint-disable @typescript-eslint/no-explicit-any */
 
 // ─── Knowledge Base ingestion orchestrator tests ────────────────────────────
 // Exercises `KbIngestionService` end-to-end against a real `ChatService`

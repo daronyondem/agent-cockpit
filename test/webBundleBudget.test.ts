@@ -2,7 +2,6 @@ import fs from 'fs';
 import os from 'os';
 import path from 'path';
 
-// eslint-disable-next-line @typescript-eslint/no-var-requires
 const { checkBudget, normalizeAssetName } = require('../scripts/check-web-bundle-size.js');
 
 const tmpBuilds: string[] = [];

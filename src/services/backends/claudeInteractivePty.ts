@@ -292,7 +292,6 @@ function defaultClaudeInteractivePtyFactory(
   ensureNodePtySpawnHelperExecutable();
   // Import lazily so unit tests can exercise the controller helpers without
   // loading the native node-pty binding.
-  // eslint-disable-next-line @typescript-eslint/no-var-requires
   const nodePty = require('node-pty') as { spawn: (file: string, args: string[], options: ClaudeInteractivePtySpawnOptions) => IPty };
   try {
     return nodePty.spawn(command, args, options);
@@ -341,7 +340,6 @@ export function ensureNodePtySpawnHelperExecutable(packageRoot?: string): void {
 }
 
 function resolveNodePtyPackageRoot(): string {
-  // eslint-disable-next-line @typescript-eslint/no-var-requires
   const packageJson = require.resolve('node-pty/package.json');
   return path.dirname(packageJson);
 }

@@ -2,7 +2,6 @@
  * @jest-environment jsdom
  */
 
-/* eslint-disable @typescript-eslint/no-explicit-any */
 
 // ── Globals & DOM setup ──────────────────────────────────────────────────────
 

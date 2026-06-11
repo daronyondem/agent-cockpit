@@ -73,11 +73,9 @@ app.use(session({
 // Passport 0.7 regenerate/save polyfill — must come BEFORE setupAuth
 app.use((req: Request, _res: Response, next: NextFunction) => {
   if (req.session && !req.session.regenerate) {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     (req.session as any).regenerate = (cb: () => void) => cb();
   }
   if (req.session && !req.session.save) {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     (req.session as any).save = (cb: () => void) => cb();
   }
   next();

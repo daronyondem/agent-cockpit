@@ -74,6 +74,10 @@ function goalCapabilityForBackend(backends, backendId){
 
 function GoalStrip({ convId, goal, streaming, sending }){
   const status = goal?.status || 'active';
+  const hasGoal = !!goal;
+  const goalThreadId = goal?.threadId || null;
+  const goalUpdatedAt = goal?.updatedAt || null;
+  const goalTimeUsedSeconds = goal?.timeUsedSeconds || null;
   const canPause = !!goal && status === 'active' && goalSupportsAction(goal, 'pause');
   const canResume = !!goal && status === 'paused' && !streaming && goalSupportsAction(goal, 'resume');
   const canClear = !!goal && goalSupportsAction(goal, 'clear');
@@ -81,7 +85,7 @@ function GoalStrip({ convId, goal, streaming, sending }){
   const clearDisabled = sending || (claudeGoal && streaming);
   const [nowMs, setNowMs] = React.useState(() => Date.now());
   React.useEffect(() => {
-    if (!goal) return undefined;
+    if (!hasGoal) return undefined;
     StreamStore.refreshGoal(convId);
     const delay = status === 'active' ? 2000 : 5000;
     const poll = setInterval(() => {
@@ -89,12 +93,12 @@ function GoalStrip({ convId, goal, streaming, sending }){
       StreamStore.refreshGoal(convId);
     }, delay);
     return () => clearInterval(poll);
-  }, [convId, goal?.threadId, status]);
+  }, [convId, hasGoal, goalThreadId, status]);
   React.useEffect(() => {
     if (status !== 'active') return undefined;
     const tick = setInterval(() => setNowMs(Date.now()), 1000);
     return () => clearInterval(tick);
-  }, [status, goal?.updatedAt, goal?.timeUsedSeconds]);
+  }, [status, goalUpdatedAt, goalTimeUsedSeconds]);
   if (!goal) return null;
   const elapsed = compactDuration(goalElapsedSeconds(goal, nowMs));
   const objective = typeof goal.objective === 'string' ? goal.objective : '';
@@ -227,7 +231,7 @@ export const ChatComposer = React.memo(function ChatComposer({ convId, profileLo
      Confirm before inserting >50KB so a huge dump doesn't surprise the user. */
   async function dissolveAttachment(entry){
     if (!entry || !(entry.file instanceof Blob)) return;
-    let text = '';
+    let text;
     try { text = await entry.file.text(); } catch { return; }
     if (text.length > 50000) {
       const ok = await dialog.confirm({
@@ -560,19 +564,20 @@ function ComposerPicks({ convId, backends, cliProfiles, composerCliProfileId, co
     || (canChangeProfile && composerBackend ? activeProfiles.find(p => p.harness === cliHarnessForBackend(composerBackend)) : null)
     || (canChangeProfile && activeProfiles.length === 1 ? activeProfiles[0] : null)
     || null;
+  const selectedProfileId = selectedProfile ? selectedProfile.id : null;
   const effectiveBackendId = selectedProfile
     ? backendIdForProfile(selectedProfile)
     : composerBackend;
   const [profileBackend, setProfileBackend] = React.useState(null);
 
   React.useEffect(() => {
-    if (!selectedProfile) {
+    if (!selectedProfileId) {
       setProfileBackend(null);
       return;
     }
     let cancelled = false;
     setProfileBackend(null);
-    AgentApi.getCliProfileMetadata(selectedProfile.id)
+    AgentApi.getCliProfileMetadata(selectedProfileId)
       .then(backend => {
         if (!cancelled) setProfileBackend(backend || null);
       })
@@ -580,13 +585,13 @@ function ComposerPicks({ convId, backends, cliProfiles, composerCliProfileId, co
         if (!cancelled) setProfileBackend(null);
       });
     return () => { cancelled = true; };
-  }, [selectedProfile && selectedProfile.id]);
+  }, [selectedProfileId]);
   React.useEffect(() => {
-    if (!canChangeProfile || !selectedProfile || !effectiveBackendId) return;
-    if (composerCliProfileId !== selectedProfile.id || composerBackend !== effectiveBackendId) {
-      StreamStore.setComposerCliProfile(convId, selectedProfile.id, effectiveBackendId);
+    if (!canChangeProfile || !selectedProfileId || !effectiveBackendId) return;
+    if (composerCliProfileId !== selectedProfileId || composerBackend !== effectiveBackendId) {
+      StreamStore.setComposerCliProfile(convId, selectedProfileId, effectiveBackendId);
     }
-  }, [convId, canChangeProfile, selectedProfile && selectedProfile.id, effectiveBackendId, composerCliProfileId, composerBackend]);
+  }, [convId, canChangeProfile, selectedProfileId, effectiveBackendId, composerCliProfileId, composerBackend]);
 
   const backend = (selectedProfile && profileBackend && profileBackend.id === effectiveBackendId)
     ? profileBackend
@@ -596,6 +601,8 @@ function ComposerPicks({ convId, backends, cliProfiles, composerCliProfileId, co
     || backendModels.find(m => m.default)
     || backendModels[0]
     || null;
+  const backendId = backend ? backend.id : null;
+  const modelId = model ? model.id : null;
   const effortLevels = (model && Array.isArray(model.supportedEffortLevels)) ? model.supportedEffortLevels : [];
   const effort = effortLevels.includes(composerEffort)
     ? composerEffort
@@ -608,10 +615,10 @@ function ComposerPicks({ convId, backends, cliProfiles, composerCliProfileId, co
       invalidated the chosen model), push the reconciled value back down so
      the next send uses a valid pair. */
   React.useEffect(() => {
-    if (backend && model && composerModel !== model.id) {
-      StreamStore.setComposerModel(convId, model.id);
+    if (backendId && modelId && composerModel !== modelId) {
+      StreamStore.setComposerModel(convId, modelId);
     }
-  }, [convId, backend && backend.id, model && model.id, composerModel]);
+  }, [convId, backendId, modelId, composerModel]);
   React.useEffect(() => {
     if (effort !== composerEffort) {
       StreamStore.setComposerEffort(convId, effort);
