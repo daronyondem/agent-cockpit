@@ -36,7 +36,7 @@ describe('KiroAdapter', () => {
     const adapter = new KiroAdapter({ workingDir: '/tmp' });
     const models = adapter.metadata.models;
     expect(models).toBeDefined();
-    expect(models!.length).toBe(13); // auto + 3 opus + 3 sonnet + haiku + 5 open-weight
+    expect(models!.length).toBe(14); // auto + 4 opus + 3 sonnet + haiku + 5 open-weight
 
     const auto = models!.find(m => m.id === 'auto');
     expect(auto).toBeDefined();
@@ -47,6 +47,12 @@ describe('KiroAdapter', () => {
 
     // auto is the only default
     expect(models!.filter(m => m.default).length).toBe(1);
+
+    const opus48 = models!.find(m => m.id === 'claude-opus-4.8');
+    expect(opus48).toBeDefined();
+    expect(opus48!.family).toBe('opus');
+    expect(opus48!.costTier).toBe('high');
+    expect(opus48!.capabilities?.input?.image).toBe(true);
 
     const opus47 = models!.find(m => m.id === 'claude-opus-4.7');
     expect(opus47).toBeDefined();

@@ -1102,6 +1102,7 @@ When a `.claude/plans/` write completes in plan mode, the streaming route may em
 | ID | Family | Cost Tier | Default |
 |---|---|---|---|
 | `auto` | router | medium | ✓ |
+| `claude-opus-4.8` | opus | high | — |
 | `claude-opus-4.7` | opus | high | — |
 | `claude-opus-4.6` | opus | high | — |
 | `claude-opus-4.5` | opus | high | — |
