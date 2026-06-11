@@ -248,7 +248,7 @@ The following Jest tests in [`test/kiroBackend.test.ts`](../../test/kiroBackend.
 - `reencodeForKiro` — passthrough for in-spec images, downscale + JPEG flatten otherwise.
 - `collectImageContentBlocks` — basename token matching, 5-image cap, MIME mapping, re-encode integration.
 - `extractKiroToolDetails` — tool-name normalization (separate concern, but in the same suite).
-- KiroAdapter metadata — model list pinned (auto + 3 opus + 3 sonnet + haiku + 5 open-weight = 13 entries).
+- KiroAdapter metadata — model list pinned (auto + 4 opus + 3 sonnet + haiku + 5 open-weight = 14 entries).
 
 Note: the adapter's streaming behavior (findings 3.5 and 3.6) is not unit-tested end-to-end because `session/prompt` notification streams require a real ACP child process; both behaviors are covered by integration smoke testing during release.
 
