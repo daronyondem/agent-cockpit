@@ -21,6 +21,8 @@ tool is unavailable.
   explicitly says the PR fully resolves the issue.
 - PR readiness includes tests, `npm run lint`, behavior/spec updates, ADR
   evaluation, mobile PWA impact evaluation, and `AGENTS.md` evaluation.
+- `npm run lint` is a zero-warning gate. Intentional
+  `react-hooks/exhaustive-deps` inline disables must include a written reason.
 - Jest coverage thresholds live in `jest.config.js`. When meaningful backend
   coverage is added, raise thresholds toward the new baseline in the same PR;
   do not lower thresholds just to merge a regression.

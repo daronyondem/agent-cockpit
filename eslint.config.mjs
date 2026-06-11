@@ -45,6 +45,8 @@ const nodeGlobals = {
 const browserGlobals = {
   AbortController: 'readonly',
   AbortSignal: 'readonly',
+  atob: 'readonly',
+  btoa: 'readonly',
   Blob: 'readonly',
   cancelAnimationFrame: 'readonly',
   clearInterval: 'readonly',
@@ -55,6 +57,7 @@ const browserGlobals = {
   document: 'readonly',
   DOMParser: 'readonly',
   Event: 'readonly',
+  fetch: 'readonly',
   File: 'readonly',
   FileReader: 'readonly',
   FormData: 'readonly',
@@ -77,7 +80,8 @@ const browserGlobals = {
   URL: 'readonly',
   URLSearchParams: 'readonly',
   WebSocket: 'readonly',
-  window: 'readonly'
+  window: 'readonly',
+  XMLHttpRequest: 'readonly'
 };
 
 const jestGlobals = {
@@ -124,6 +128,13 @@ const typeScriptRecommendedOff = Object.fromEntries(
 const jsRecommendedWarningRules = Object.fromEntries(
   Object.keys(js.configs.recommended.rules).map((rule) => [rule, 'warn'])
 );
+
+const jsMechanicalErrorRules = {
+  'no-empty': ['error', { allowEmptyCatch: true }],
+  'no-undef': 'error',
+  'no-unused-vars': 'error',
+  'no-useless-assignment': 'error'
+};
 
 const reactHooksRules = {
   'react-hooks/rules-of-hooks': 'error',
@@ -223,7 +234,8 @@ export default [
     },
     rules: {
       ...js.configs.recommended.rules,
-      ...jsRecommendedWarningRules
+      ...jsRecommendedWarningRules,
+      ...jsMechanicalErrorRules
     }
   },
   {
@@ -243,7 +255,8 @@ export default [
     },
     rules: {
       ...js.configs.recommended.rules,
-      ...jsRecommendedWarningRules
+      ...jsRecommendedWarningRules,
+      ...jsMechanicalErrorRules
     }
   },
   {
@@ -262,6 +275,7 @@ export default [
     rules: {
       ...js.configs.recommended.rules,
       ...jsRecommendedWarningRules,
+      ...jsMechanicalErrorRules,
       ...reactHooksRules
     }
   },

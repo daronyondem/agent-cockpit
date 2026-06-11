@@ -27,7 +27,7 @@ function renderMd(md){
 function rewriteEntryMediaPaths(md, hash, rawId){
   if (!md || !rawId) return md || '';
   return String(md).replace(/!\[([^\]]*)\]\(([^)\s]+)(\s+"[^"]*")?\)/g, (full, alt, url, title) => {
-    if (/^(?:[a-z]+:|\/\/|[\/#])/i.test(url)) return full;
+    if (/^(?:[a-z]+:|\/\/|[/#])/i.test(url)) return full;
     const abs = AgentApi.kb.rawMediaUrl(hash, rawId, url);
     return `![${alt}](${abs}${title || ''})`;
   });
@@ -1477,8 +1477,10 @@ function KbSynthesisTab({ hash }){
     }
   }
 
-  const topics = data && Array.isArray(data.topics) ? data.topics : [];
-  const connections = data && Array.isArray(data.connections) ? data.connections : [];
+  const dataTopics = data && Array.isArray(data.topics) ? data.topics : null;
+  const dataConnections = data && Array.isArray(data.connections) ? data.connections : null;
+  const topics = React.useMemo(() => dataTopics || [], [dataTopics]);
+  const connections = React.useMemo(() => dataConnections || [], [dataConnections]);
   const topicsById = React.useMemo(() => {
     const m = {};
     for (const t of topics) m[t.topicId] = t;

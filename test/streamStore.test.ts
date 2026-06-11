@@ -2,7 +2,6 @@
  * @jest-environment jsdom
  */
 
-/* eslint-disable @typescript-eslint/no-explicit-any */
 
 // Frontend test for web/AgentCockpitWeb/src/streamStore.js (PR 4c scope):
 // - plan-mode exit and user-question tool_activity frames produce a

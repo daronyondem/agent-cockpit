@@ -49,7 +49,7 @@ export function FolderPicker({ open, initialPath = '', onClose, onSelect, onUseD
   React.useEffect(() => {
     if (!open || !data) return;
     load(data.currentPath);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- Reload is intentionally keyed only by hidden-file visibility; path/open changes are handled by the open-load effect.
   }, [showHidden]);
 
   // Escape closes the modal (unless a sub-input has the key).

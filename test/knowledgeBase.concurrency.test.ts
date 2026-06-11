@@ -1,4 +1,3 @@
-/* eslint-disable @typescript-eslint/no-explicit-any */
 
 // ─── KB workspace task queue tests ───────────────────────────────────────────
 // Pins down the bounded-parallelism queue + registry that ingestion and

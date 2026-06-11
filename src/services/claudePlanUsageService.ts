@@ -595,7 +595,6 @@ function spawnPty(
 ): ClaudeInteractivePtyProcess {
   ensureNodePtySpawnHelperExecutable();
   // Import lazily so normal OAuth plan-usage reads never load the native binding.
-  // eslint-disable-next-line @typescript-eslint/no-var-requires
   const nodePty = require('node-pty') as { spawn: (file: string, args: string[], options: ClaudeInteractivePtySpawnOptions) => ClaudeInteractivePtyProcess };
   return nodePty.spawn(command, args, options);
 }

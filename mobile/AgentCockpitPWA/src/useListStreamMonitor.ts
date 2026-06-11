@@ -29,6 +29,7 @@ export function useListStreamMonitor(options: UseListStreamMonitorOptions) {
       return;
     }
     syncListStreamSockets(options.activeStreamIDs);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- Socket syncing is keyed by enabled state and active stream ids; options callbacks are read at event time.
   }, [options.enabled, options.activeStreamIDs]);
 
   function syncListStreamSockets(streamIDs: Set<string>) {

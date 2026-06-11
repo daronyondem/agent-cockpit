@@ -138,7 +138,7 @@ async function listOpenSupportIssues({ runner = execFileText, root = ROOT, env =
   try {
     issues = JSON.parse(output || '[]');
   } catch (err) {
-    throw new Error(`Could not parse gh issue list output: ${err.message}`);
+    throw new Error(`Could not parse gh issue list output: ${err.message}`, { cause: err });
   }
 
   return issues.filter((issue) => isOpenIssue(issue) && parseIssueVersion(issue));

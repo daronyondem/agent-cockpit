@@ -1,4 +1,3 @@
-/* eslint-disable @typescript-eslint/no-explicit-any */
 
 // ─── Knowledge Base embedding service tests ─────────────────────────────────
 // Tests the pure helper functions and mocks the Ollama HTTP API for

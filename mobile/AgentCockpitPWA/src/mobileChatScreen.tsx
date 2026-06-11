@@ -198,6 +198,7 @@ export function ChatScreen(props: {
     } else {
       setShowTranscriptBackToEnd(true);
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- scrollKey already captures every transcript dimension that should trigger auto-follow work.
   }, [scrollKey]);
   useEffect(() => {
     setPinStripIndex(0);
@@ -405,6 +406,7 @@ function GoalStrip(props: {
     }
     const interval = window.setInterval(() => setNowMs(Date.now()), isActiveGoal(props.goal) ? 1000 : 10_000);
     return () => window.clearInterval(interval);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- goalKey captures the goal identity/status fields that should reset the elapsed timer cadence.
   }, [goalKey]);
   useEffect(() => {
     if (!props.goal) {
@@ -412,6 +414,7 @@ function GoalStrip(props: {
     }
     const interval = window.setInterval(() => props.onRefresh(), 10_000);
     return () => window.clearInterval(interval);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- goalKey controls refresh subscription lifetime; onRefresh is supplied by the app shell and is not a reset trigger.
   }, [goalKey]);
   if (!props.goal) {
     return null;

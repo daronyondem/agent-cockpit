@@ -61,7 +61,7 @@ export function useRunSelection(options: UseRunSelectionOptions) {
     () => selectedBackendMetadata?.models?.find((model) => model.id === selectedModel),
     [selectedBackendMetadata, selectedModel],
   );
-  const supportedEfforts = selectedModelMetadata?.supportedEffortLevels || [];
+  const supportedEfforts = useMemo(() => selectedModelMetadata?.supportedEffortLevels || [], [selectedModelMetadata]);
   const selectedBackendID = selectedProfile
     ? (profileSelectionLocked ? selectedBackend : selectedProfileBackendID)
     : selectedBackendMetadata?.id || selectedBackend;
@@ -103,11 +103,12 @@ export function useRunSelection(options: UseRunSelectionOptions) {
     if (selectedCliProfileId) {
       void loadProfileMetadata(selectedCliProfileId);
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- Profile metadata loads are keyed only by selected profile id; the loader reads current settings refs internally.
   }, [selectedCliProfileId]);
 
   useEffect(() => {
     setSelectedEffort((current) => reconcileEffort(current, supportedEfforts));
-  }, [supportedEfforts.join('|')]);
+  }, [supportedEfforts]);
 
   function hydrateSelectionDefaults(loadedSettings: Settings) {
     const profiles = (loadedSettings.cliProfiles || []).filter((profile) => profile.disabled !== true);

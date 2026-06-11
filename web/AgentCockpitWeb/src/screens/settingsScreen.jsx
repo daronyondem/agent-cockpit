@@ -160,7 +160,7 @@ function applyThemePreview(theme){
    save() and from the settings-load reconcile — NOT from applyThemePreview
    so an unsaved preview doesn't linger across reloads. */
 function persistThemeToLocalStorage(theme){
-  try { localStorage.setItem('ac:v2:theme', theme || 'system'); } catch (e) {}
+  try { localStorage.setItem('ac:v2:theme', theme || 'system'); } catch {}
 }
 
 /* Backend → models[] / model → effort[] lookups. Returns [] when missing so
@@ -366,9 +366,10 @@ export function SettingsScreen({ onClose, initialTab, onOpenWorkspaceSettings })
   }, []);
 
   /* Live theme preview as the dropdown changes — Save persists. */
+  const settingsTheme = settings ? settings.theme : null;
   React.useEffect(() => {
-    if (settings && settings.theme) applyThemePreview(settings.theme);
-  }, [settings && settings.theme]);
+    if (settingsTheme) applyThemePreview(settingsTheme);
+  }, [settingsTheme]);
 
   function patch(updater){
     setSettings(prev => {
@@ -477,12 +478,13 @@ function GeneralTab({ settings, backends, profileBackends, loadProfileBackend, o
   const profiles = activeCliProfiles(settings);
   const selectedProfile = profiles.find(p => p.id === settings.defaultCliProfileId)
     || null;
+  const selectedProfileId = selectedProfile ? selectedProfile.id : null;
   const backendId = (selectedProfile && backendIdForProfile(selectedProfile))
     || settings.defaultBackend
     || '';
   React.useEffect(() => {
-    if (selectedProfile && loadProfileBackend) loadProfileBackend(selectedProfile.id);
-  }, [selectedProfile && selectedProfile.id, loadProfileBackend]);
+    if (selectedProfileId && loadProfileBackend) loadProfileBackend(selectedProfileId);
+  }, [selectedProfileId, loadProfileBackend]);
   const models = selectedProfile
     ? modelsForProfile(backends, profileBackends, selectedProfile)
     : modelsForBackend(backends, backendId);
@@ -720,8 +722,12 @@ function CliUpdatesPanel(){
   );
 }
 
-function CliProfilesTab({ settings, backends, profileBackends, loadProfileBackend, onPatch, onSave, saving, onValidationChange }){
-  const profiles = Array.isArray(settings.cliProfiles) ? settings.cliProfiles : [];
+function CliProfilesTab({ settings, backends, onPatch, onSave, saving, onValidationChange }){
+  const settingsCliProfiles = settings.cliProfiles;
+  const profiles = React.useMemo(
+    () => Array.isArray(settingsCliProfiles) ? settingsCliProfiles : [],
+    [settingsCliProfiles]
+  );
   const [expandedProfileId, setExpandedProfileId] = React.useState(() => (profiles[0] && profiles[0].id) || null);
   const [envTextById, setEnvTextById] = React.useState({});
   const [envErrorsById, setEnvErrorsById] = React.useState({});
@@ -731,6 +737,7 @@ function CliProfilesTab({ settings, backends, profileBackends, loadProfileBacken
   const mountedRef = React.useRef(true);
   const hasEnvErrors = Object.values(envErrorsById).some(Boolean);
   const enabledCount = profiles.filter(profile => profile && !profile.disabled).length;
+  const profileIdsKey = profiles.map(p => p.id).join('|');
 
   React.useEffect(() => {
     return () => { mountedRef.current = false; };
@@ -765,7 +772,7 @@ function CliProfilesTab({ settings, backends, profileBackends, loadProfileBacken
       }
       return next;
     });
-  }, [profiles.map(p => p.id).join('|')]);
+  }, [profileIdsKey, profiles]);
 
   React.useEffect(() => {
     setExpandedProfileId(current => {
@@ -773,14 +780,18 @@ function CliProfilesTab({ settings, backends, profileBackends, loadProfileBacken
       if (current && profiles.some(profile => profile.id === current)) return current;
       return profiles[0].id;
     });
-  }, [profiles.map(p => p.id).join('|')]);
+  }, [profileIdsKey, profiles]);
 
   const expandedProfile = profiles.find(profile => profile.id === expandedProfileId);
+  const expandedProfileIdKey = expandedProfile ? expandedProfile.id : null;
+  const expandedProfileHarness = expandedProfile ? expandedProfile.harness : null;
+  const expandedProfileCommand = expandedProfile ? expandedProfile.command : null;
   React.useEffect(() => {
     if (expandedProfile && expandedProfile.harness === 'opencode') {
       loadOpenCodeCatalog(expandedProfile);
     }
-  }, [expandedProfile && expandedProfile.id, expandedProfile && expandedProfile.harness, expandedProfile && expandedProfile.command]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- Catalog loading is keyed by the expanded profile fields; the loader reads that profile snapshot.
+  }, [expandedProfileIdKey, expandedProfileHarness, expandedProfileCommand]);
 
   function patchProfile(id, updater){
     onPatch(prev => {
@@ -1357,9 +1368,10 @@ function SettingsMemoryTab({ settings, backends, profileBackends, loadProfileBac
     || profiles.find(p => p.id === settings.defaultCliProfileId)
     || profileForBackend(profiles, fallbackBackend)
     || null;
+  const selectedProfileId = selectedProfile ? selectedProfile.id : null;
   React.useEffect(() => {
-    if (selectedProfile && loadProfileBackend) loadProfileBackend(selectedProfile.id);
-  }, [selectedProfile && selectedProfile.id, loadProfileBackend]);
+    if (selectedProfileId && loadProfileBackend) loadProfileBackend(selectedProfileId);
+  }, [selectedProfileId, loadProfileBackend]);
   const models = selectedProfile
     ? modelsForProfile(backends, profileBackends, selectedProfile)
     : modelsForBackend(backends, fallbackBackend);
@@ -1511,6 +1523,10 @@ function SettingsKbTab({ settings, backends, profileBackends, loadProfileBackend
   const [pandoc, setPandoc] = React.useState(null);
   const [libreOffice, setLibreOffice] = React.useState(null);
   const [convertWarning, setConvertWarning] = React.useState(null);
+  const profileIdsKey = profiles.map(profile => profile.id).join('|');
+  const dgProfileId = dgProfile ? dgProfile.id : null;
+  const drProfileId = drProfile ? drProfile.id : null;
+  const kbProfileLoadKey = [profileIdsKey, dgProfileId || '', drProfileId || ''].join('|');
 
   React.useEffect(() => {
     AgentApi.kb.pandocStatus().then(setPandoc).catch(() => setPandoc({ available: false }));
@@ -1520,7 +1536,8 @@ function SettingsKbTab({ settings, backends, profileBackends, loadProfileBackend
     [...profiles, dgProfile, drProfile].forEach(profile => {
       if (profile && loadProfileBackend) loadProfileBackend(profile.id);
     });
-  }, [profiles.map(profile => profile.id).join('|'), dgProfile && dgProfile.id, drProfile && drProfile.id, loadProfileBackend]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- KB metadata preload is keyed by profile ids; the profile snapshots only provide ids to the loader.
+  }, [kbProfileLoadKey, loadProfileBackend]);
 
   function patchKb(next){
     onPatch(prev => ({ knowledgeBase: { ...(prev.knowledgeBase || {}), ...next } }));
@@ -1741,9 +1758,10 @@ function SettingsWorkspaceContextTab({ settings, backends, profileBackends, load
   const profiles = activeCliProfiles(settings);
   const fallbackBackend = settings.defaultBackend || '';
   const selectedProfile = profileForSetting(profiles, workspaceContext.cliProfileId, workspaceContext.cliBackend, fallbackBackend);
+  const selectedProfileId = selectedProfile ? selectedProfile.id : null;
   React.useEffect(() => {
-    if (selectedProfile && loadProfileBackend) loadProfileBackend(selectedProfile.id);
-  }, [selectedProfile && selectedProfile.id, loadProfileBackend]);
+    if (selectedProfileId && loadProfileBackend) loadProfileBackend(selectedProfileId);
+  }, [selectedProfileId, loadProfileBackend]);
   const models = selectedProfile
     ? modelsForProfile(backends, profileBackends, selectedProfile)
     : modelsForBackend(backends, fallbackBackend);
@@ -1993,7 +2011,7 @@ async function copySecurityText(text, toast, label){
   try {
     await navigator.clipboard.writeText(text);
     toast.success((label || 'Value') + ' copied');
-  } catch (err) {
+  } catch {
     toast.error('Copy failed');
   }
 }

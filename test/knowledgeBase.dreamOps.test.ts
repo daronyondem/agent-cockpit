@@ -1,4 +1,3 @@
-/* eslint-disable @typescript-eslint/no-explicit-any */
 
 // ─── DreamOps: parse + validate + apply tests ──────────────────────────────
 

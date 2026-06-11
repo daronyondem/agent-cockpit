@@ -1,4 +1,3 @@
-/* eslint-disable @typescript-eslint/no-explicit-any */
 
 // ─── Dreaming pipeline helper tests ───────────────────────────────────────
 //

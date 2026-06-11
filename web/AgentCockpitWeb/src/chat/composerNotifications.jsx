@@ -40,7 +40,7 @@ function useFixedPopoverPosition(anchorRef, panelRef, open){
       window.removeEventListener('resize', compute);
       window.removeEventListener('scroll', compute, true);
     };
-  }, [open]);
+  }, [open, anchorRef, panelRef]);
   return pos;
 }
 
@@ -100,9 +100,11 @@ function ComposerInstructionCompatibilityIcon({ workspaceHash, workspaceLabel, o
     };
   }, [open]);
 
+  const statusFingerprint = status ? status.fingerprint : null;
+  const statusShouldNotify = !!(status && status.shouldNotify);
   React.useEffect(() => {
-    if (!status || !status.shouldNotify) setOpen(false);
-  }, [status && status.fingerprint, status && status.shouldNotify]);
+    if (!statusShouldNotify) setOpen(false);
+  }, [statusFingerprint, statusShouldNotify]);
 
   if (!status || !status.shouldNotify) return null;
 
@@ -260,9 +262,11 @@ function ComposerCliUpdateIcon({ cliProfileId, backendId, onOpenSettings }){
     };
   }, [open]);
 
+  const itemId = item ? item.id : null;
+  const itemUpdateAvailable = !!(item && item.updateAvailable);
   React.useEffect(() => {
-    if (!item || (!item.updateAvailable && !showCompatibilityWarning)) setOpen(false);
-  }, [item && item.id, item && item.updateAvailable, showCompatibilityWarning]);
+    if (!itemId || (!itemUpdateAvailable && !showCompatibilityWarning)) setOpen(false);
+  }, [itemId, itemUpdateAvailable, showCompatibilityWarning]);
 
   if (!item || (!item.updateAvailable && !showCompatibilityWarning)) return null;
 
@@ -520,9 +524,11 @@ function ComposerWorkspaceContextIcon({ conv, workspaceLabel, onOpenWorkspaceSet
     };
   }, [open]);
 
+  const workspaceContextPending = !!(workspaceContext && workspaceContext.pending);
+  const workspaceContextLatestRunId = workspaceContext ? workspaceContext.latestRunId : null;
   React.useEffect(() => {
-    if (!workspaceContext || !workspaceContext.pending) setOpen(false);
-  }, [workspaceContext && workspaceContext.pending, workspaceContext && workspaceContext.latestRunId]);
+    if (!workspaceContextPending) setOpen(false);
+  }, [workspaceContextPending, workspaceContextLatestRunId]);
 
   if (!workspaceContext || !workspaceContext.enabled || !workspaceContext.pending) return null;
 

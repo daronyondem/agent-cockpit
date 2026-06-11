@@ -1,4 +1,3 @@
-/* eslint-disable @typescript-eslint/no-explicit-any */
 
 // ─── Knowledge Base digestion orchestrator tests ─────────────────────────────
 // Exercises `KbDigestionService` with a stub backend adapter so we can drive

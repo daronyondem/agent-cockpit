@@ -162,7 +162,7 @@
         });
       };
       xhr.onload = () => {
-        let body = null;
+        let body;
         try {
           body = xhr.responseText ? JSON.parse(xhr.responseText) : null;
         } catch {
@@ -549,7 +549,7 @@
           if (onProgress && ev.lengthComputable) onProgress(ev.loaded, ev.total);
         };
         xhr.onload = () => {
-          let parsed = null;
+          let parsed;
           try { parsed = JSON.parse(xhr.responseText); } catch { parsed = null; }
           if (xhr.status >= 200 && xhr.status < 300) {
             resolve(parsed || { ok: true });
@@ -650,7 +650,7 @@
           if (onProgress && ev.lengthComputable) onProgress(ev.loaded, ev.total);
         };
         xhr.onload = () => {
-          let parsed = null;
+          let parsed;
           try { parsed = JSON.parse(xhr.responseText); } catch { parsed = null; }
           if (xhr.status >= 200 && xhr.status < 300) {
             resolve(parsed || { ok: true });
@@ -1181,7 +1181,7 @@
           if (onProgress && ev.lengthComputable) onProgress(ev.loaded, ev.total);
         };
         xhr.onload = () => {
-          let parsed = null;
+          let parsed;
           try { parsed = JSON.parse(xhr.responseText); } catch { parsed = null; }
           if (xhr.status >= 200 && xhr.status < 300) {
             const entry = parsed && parsed.files && parsed.files[0];

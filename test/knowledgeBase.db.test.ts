@@ -1,4 +1,3 @@
-/* eslint-disable @typescript-eslint/no-explicit-any */
 
 // ─── Knowledge Base SQLite layer tests ───────────────────────────────────────
 // Exercises `KbDatabase` directly against a temp-dir-backed SQLite DB. These

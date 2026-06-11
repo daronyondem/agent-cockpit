@@ -134,14 +134,14 @@ function timeAgo(iso){
 function readWorkspaceFilter(){
   try {
     return window.localStorage.getItem(WORKSPACE_FILTER_KEY) || ALL_WORKSPACES;
-  } catch (e) {
+  } catch {
     return ALL_WORKSPACES;
   }
 }
 
 function writeWorkspaceFilter(value){
   try { window.localStorage.setItem(WORKSPACE_FILTER_KEY, value || ALL_WORKSPACES); }
-  catch (e) {}
+  catch {}
 }
 
 /* Sidebar width is persisted via the `--cockpit-sb-w` CSS variable set on
@@ -331,6 +331,7 @@ export function Sidebar({ activeId = null, onSelect = null, onMarkUnread = null,
     if (listed) return listed;
     const state = StreamStore.getState ? StreamStore.getState(activeId) : null;
     return state && state.conv ? state.conv : null;
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- convStates intentionally invalidates the StreamStore.getState fallback when the active row updates outside convs.
   }, [activeId, convs, convStates]);
   const selectedWorkspace = selectedWorkspaceKey === ALL_WORKSPACES
     ? null

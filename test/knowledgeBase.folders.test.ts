@@ -1,4 +1,3 @@
-/* eslint-disable @typescript-eslint/no-explicit-any */
 
 // ─── KB folder orchestration tests ───────────────────────────────────────────
 // Exercises folder create/rename/delete at the `KbIngestionService` level so

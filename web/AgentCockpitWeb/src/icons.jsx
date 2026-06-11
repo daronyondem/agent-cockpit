@@ -1,5 +1,3 @@
-import React from 'react';
-
 /* Refreshed icon set — 14×14 default, 1.5px stroke, round caps/joins.
    All currentColor. Exportable individually. */
 const svg = (p, s=14) => (

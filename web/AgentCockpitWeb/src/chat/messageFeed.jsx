@@ -138,7 +138,7 @@ export const MessageBubble = React.memo(function MessageBubble({ message, cliPro
   }, [message.id, setMessageRef]);
 
   function copy(mode){
-    let text = '';
+    let text;
     if (mode === 'md') {
       text = message.content || '';
     } else {

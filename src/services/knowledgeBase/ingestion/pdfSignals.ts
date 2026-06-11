@@ -24,7 +24,6 @@
 // explicitly: when pdfjs probes throw, we should assume the page has
 // structure and let the AI converter handle it.
 
-/* eslint-disable @typescript-eslint/no-explicit-any */
 
 export interface PageSignals {
   /** Plain-text body of the page from `getTextContent()`. */

@@ -1,4 +1,3 @@
-/* eslint-disable @typescript-eslint/no-explicit-any */
 
 // ─── Knowledge Base PGLite vector store tests ───────────────────────────────
 // Exercises `KbVectorStore` directly against a temp-dir-backed PGLite DB.

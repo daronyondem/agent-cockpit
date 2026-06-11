@@ -275,7 +275,7 @@ export const TextSegment = React.memo(function TextSegment({ content }){
     if (hljs) {
       root.querySelectorAll('pre code').forEach(el => {
         if (el.dataset.hljsHighlighted) return;
-        try { hljs.highlightElement(el); } catch (e) {}
+        try { hljs.highlightElement(el); } catch {}
         el.dataset.hljsHighlighted = '1';
       });
     }

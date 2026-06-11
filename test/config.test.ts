@@ -6,7 +6,6 @@ describe('config data root', () => {
   function loadConfig() {
     // Reload after env changes; dynamic import requires explicit extensions
     // under NodeNext, while Jest's CJS require handles this test case cleanly.
-    // eslint-disable-next-line @typescript-eslint/no-var-requires
     return require('../src/config').default;
   }
 

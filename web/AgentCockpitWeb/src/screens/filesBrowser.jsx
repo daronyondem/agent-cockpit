@@ -133,7 +133,8 @@ export function FilesBrowser({ hash, label, initialPath = '', scope = null, read
     if (scopedRoot && mode !== 'files') setMode('files');
   }, [scopedRoot, mode]);
 
-  const gitFiles = gitStatus.files || [];
+  const rawGitFiles = gitStatus.files || null;
+  const gitFiles = React.useMemo(() => rawGitFiles || [], [rawGitFiles]);
   const gitByPath = React.useMemo(() => {
     const next = new Map();
     for (const file of gitFiles) {

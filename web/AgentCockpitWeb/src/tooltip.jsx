@@ -13,8 +13,6 @@ import React from 'react';
      <Tip variant="stat" rich={<TokenCard/>}><span>18.4k</span></Tip>
    ============================================================ */
 
-const TipContext = React.createContext(null);
-
 function useAnchorPos(anchorRef, panelRef, open, { gap = 8, margin = 16 } = {}){
   const [pos, setPos] = React.useState(null);
   React.useEffect(() => {
@@ -46,7 +44,7 @@ function useAnchorPos(anchorRef, panelRef, open, { gap = 8, margin = 16 } = {}){
       window.removeEventListener("resize", compute);
       window.removeEventListener("scroll", compute, true);
     };
-  }, [open]);
+  }, [anchorRef, gap, margin, open, panelRef]);
   return pos;
 }
 
@@ -55,7 +53,6 @@ export const Tip = React.forwardRef(function Tip(props, outerRef){
     children, content, rich, variant = "label",
     delay = 300, closeDelay = 80,
     kb, pinned: pinnedProp,
-    ...rest
   } = props;
   const anchorRef = React.useRef(null);
   const panelRef  = React.useRef(null);
@@ -66,14 +63,14 @@ export const Tip = React.forwardRef(function Tip(props, outerRef){
 
   const pos = useAnchorPos(anchorRef, panelRef, open);
 
-  const clear = () => { clearTimeout(openTimer.current); clearTimeout(closeTimer.current); };
+  const clear = React.useCallback(() => { clearTimeout(openTimer.current); clearTimeout(closeTimer.current); }, []);
   const show  = () => { clear(); openTimer.current  = setTimeout(()=>setOpen(true),  delay); };
   const hide  = () => {
     if (pinned) return;
     clear(); closeTimer.current = setTimeout(()=>setOpen(false), closeDelay);
   };
-  const showNow = () => { clear(); setOpen(true); };
-  const hideNow = () => { clear(); setOpen(false); setPinned(false); };
+  const showNow = React.useCallback(() => { clear(); setOpen(true); }, [clear]);
+  const hideNow = React.useCallback(() => { clear(); setOpen(false); setPinned(false); }, [clear]);
 
   // expose imperative API
   React.useImperativeHandle(outerRef, () => ({
@@ -81,7 +78,7 @@ export const Tip = React.forwardRef(function Tip(props, outerRef){
     pin: () => { setPinned(true); setOpen(true); },
     unpin: () => setPinned(false),
     anchor: () => anchorRef.current,
-  }), []);
+  }), [hideNow, showNow]);
 
   // click-outside when pinned
   React.useEffect(() => {

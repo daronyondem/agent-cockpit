@@ -1,4 +1,3 @@
-/* eslint-disable @typescript-eslint/no-explicit-any */
 
 // ─── KB Search MCP server tests ───────────────────────────────────────────
 

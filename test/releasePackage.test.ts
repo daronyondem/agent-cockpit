@@ -2,11 +2,9 @@ import { execFileSync } from 'child_process';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
-// eslint-disable-next-line @typescript-eslint/no-var-requires
 const AdmZip = require('adm-zip');
 
 const repoRoot = process.cwd();
-// eslint-disable-next-line @typescript-eslint/no-var-requires
 const { isExcluded, normalizeVersion } = require('../scripts/package-release.js');
 
 function writeFile(root: string, relPath: string, content = '') {

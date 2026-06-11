@@ -1,4 +1,3 @@
-import React from 'react';
 import { UsageProjection } from './usageProjection.ts';
 /* ============================================================
    ContextChip renderers — per-CLI registry

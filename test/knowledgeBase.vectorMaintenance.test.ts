@@ -1,4 +1,3 @@
-/* eslint-disable @typescript-eslint/no-explicit-any */
 
 jest.mock('../src/services/knowledgeBase/embeddings', () => ({
   resolveConfig: jest.fn((cfg) => ({
