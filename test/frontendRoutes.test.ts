@@ -496,6 +496,35 @@ describe('frontend routes', () => {
     expect(thinkingRule).not.toContain('display: inline-flex;');
   });
 
+  test('mobile and desktop chat code blocks wrap with copy controls', () => {
+    const mobileChatScreenSrc = readMobileChatScreen();
+    const mobileCss = readMobileCss();
+    const desktopCss = readDesktopCss();
+    const mobilePreRule = mobileCss.match(/\.markdown-body pre,\n\.code-preview \{[^}]+\}/)?.[0] || '';
+    const mobilePreCodeRule = mobileCss.match(/\.markdown-body pre code \{[^}]+\}/)?.[0] || '';
+    const desktopPreRule = [...desktopCss.matchAll(/\.prose pre\{[^}]+\}/g)]
+      .map((match) => match[0])
+      .find((rule) => rule.includes('white-space')) || '';
+    const desktopPreCodeRule = [...desktopCss.matchAll(/\.prose pre code\{[^}]+\}/g)]
+      .map((match) => match[0])
+      .find((rule) => rule.includes('white-space')) || '';
+
+    expect(mobileChatScreenSrc).toContain('renderer.code = ({ text, lang }: Tokens.Code)');
+    expect(mobileChatScreenSrc).toContain('data-code-copy="1"');
+    expect(mobileChatScreenSrc).toContain("ADD_ATTR: ['data-code-copy']");
+    expect(mobileChatScreenSrc).toContain("navigator.clipboard.writeText(code.textContent || '')");
+    expect(mobileCss).toContain('.markdown-body .code-header');
+    expect(mobileCss).toContain('.markdown-body .code-copy');
+    expect(mobilePreRule).toContain('white-space: pre-wrap;');
+    expect(mobilePreRule).toContain('overflow-wrap: anywhere;');
+    expect(mobilePreRule).toContain('overflow-x: hidden;');
+    expect(mobilePreCodeRule).not.toContain('min-width: max-content;');
+    expect(desktopPreRule).toContain('white-space: pre-wrap;');
+    expect(desktopPreRule).toContain('overflow-wrap: anywhere;');
+    expect(desktopPreRule).toContain('overflow-x: hidden;');
+    expect(desktopPreCodeRule).toContain('white-space: inherit;');
+  });
+
   test('mobile PWA treats stream socket loss as reconnectable', () => {
     const appSrc = fs.readFileSync(path.join(ROOT, 'mobile/AgentCockpitPWA/src/App.tsx'), 'utf8');
     const modelSrc = fs.readFileSync(path.join(ROOT, 'mobile/AgentCockpitPWA/src/appModel.ts'), 'utf8');
