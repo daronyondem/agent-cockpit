@@ -1,6 +1,7 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type MouseEvent } from 'react';
 import DOMPurify from 'dompurify';
 import { marked } from 'marked';
+import type { Tokens } from 'marked';
 import type { AgentCockpitAPI } from './api';
 import {
   completedAttachmentMetas,
@@ -730,8 +731,23 @@ export function MessageTextWithFiles(props: {
 function MarkdownContent(props: { content: string; className?: string; onOpenLink?: (href: string) => boolean }) {
   const html = useMemo(() => renderMarkdown(props.content), [props.content]);
   const onClick = (event: MouseEvent<HTMLDivElement>) => {
-    if (!props.onOpenLink) return;
     const target = event.target as HTMLElement | null;
+    const copyButton = target?.closest?.('[data-code-copy]') as HTMLButtonElement | null;
+    if (copyButton && event.currentTarget.contains(copyButton)) {
+      const block = copyButton.closest('.code-block');
+      const code = block?.querySelector('pre code');
+      if (code && navigator.clipboard?.writeText) {
+        event.preventDefault();
+        void navigator.clipboard.writeText(code.textContent || '').then(() => {
+          copyButton.textContent = 'Copied';
+          window.setTimeout(() => {
+            copyButton.textContent = 'Copy';
+          }, 1400);
+        }).catch(() => undefined);
+      }
+      return;
+    }
+    if (!props.onOpenLink) return;
     const link = target?.closest?.('a[href]') as HTMLAnchorElement | null;
     if (!link) return;
     if (props.onOpenLink(link.getAttribute('href') || '')) {
@@ -748,8 +764,33 @@ function MarkdownContent(props: { content: string; className?: string; onOpenLin
 }
 
 function renderMarkdown(content: string): string {
-  const raw = marked.parse(content || '', { breaks: true, gfm: true, async: false });
-  return DOMPurify.sanitize(raw);
+  const renderer = new marked.Renderer();
+  renderer.code = ({ text, lang }: Tokens.Code) => {
+    const language = lang ? escapeHtml(lang) : 'code';
+    const languageClass = lang ? ` class="language-${escapeHtml(lang)}"` : '';
+    return [
+      '<div class="code-block">',
+      '<div class="code-header">',
+      `<span class="code-lang">${language}</span>`,
+      '<button type="button" class="code-copy" data-code-copy="1">Copy</button>',
+      '</div>',
+      `<pre><code${languageClass}>${escapeHtml(text)}</code></pre>`,
+      '</div>',
+    ].join('');
+  };
+  const raw = marked.parse(content || '', { breaks: true, gfm: true, async: false, renderer });
+  return DOMPurify.sanitize(raw, {
+    ADD_ATTR: ['data-code-copy'],
+  });
+}
+
+function escapeHtml(value: string): string {
+  return String(value == null ? '' : value)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
 }
 
 function FileCard(props: { reference: FileReference; onOpen: (reference: FileReference) => void; onShare: (reference: FileReference) => void }) {

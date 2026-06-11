@@ -90,19 +90,62 @@
   font-size: 11px;
   line-height: 1.5;
   max-width: 100%;
-  overflow-x: auto;
+  overflow-x: hidden;
+  overflow-wrap: anywhere;
   padding: 10px;
-  white-space: pre;
-  -webkit-overflow-scrolling: touch;
+  white-space: pre-wrap;
+  word-break: break-word;
 }
 
 .markdown-body pre code {
   background: transparent;
   border: 0;
   display: block;
-  min-width: max-content;
   padding: 0;
-  white-space: pre;
+  white-space: inherit;
+  overflow-wrap: inherit;
+  word-break: inherit;
+}
+
+.markdown-body .code-block {
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  max-width: 100%;
+  overflow: hidden;
+}
+
+.markdown-body .code-block pre {
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+  margin: 0;
+}
+
+.markdown-body .code-header {
+  align-items: center;
+  background: color-mix(in oklch, var(--surface-2), var(--text) 6%);
+  border-bottom: 1px solid var(--border);
+  color: var(--text-2);
+  display: flex;
+  font-family: var(--mono-font);
+  font-size: 11px;
+  justify-content: space-between;
+  padding: 5px 8px;
+}
+
+.markdown-body .code-lang {
+  font-weight: 700;
+}
+
+.markdown-body .code-copy {
+  background: transparent;
+  border: 0;
+  border-radius: 4px;
+  color: inherit;
+  font: inherit;
+  min-height: 28px;
+  padding: 3px 8px;
 }
 
 .markdown-body table {

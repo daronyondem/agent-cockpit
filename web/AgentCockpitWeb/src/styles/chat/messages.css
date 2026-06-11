@@ -341,8 +341,10 @@
   font-size: 12.5px;
   line-height: 1.55;
   color: var(--text);
-  overflow-x: auto;
-  white-space: pre;
+  overflow-x: hidden;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+  word-break: break-word;
   -webkit-user-select: text; user-select: text;
 }
 .prose pre code{
@@ -352,6 +354,8 @@
   padding: 0;
   border-radius: 0;
   white-space: inherit;
+  overflow-wrap: inherit;
+  word-break: inherit;
 }
 .prose strong{ font-weight: 600; }
 .prose a.local-file-link{
