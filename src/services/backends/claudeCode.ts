@@ -19,6 +19,7 @@ import {
 } from './sessionRecovery';
 import type {
   BackendMetadata,
+  ModelOption,
   SendMessageOptions,
   SendMessageResult,
   StreamEvent,
@@ -199,6 +200,10 @@ export class ClaudeCodeAdapter extends BaseBackendAdapter {
     };
   }
 
+  async getMetadata(options: BackendCallOptions = {}): Promise<BackendMetadata> {
+    return buildClaudeMetadataForProfile(this.metadata, options.cliProfile);
+  }
+
   sendMessage(message: string, options: SendMessageOptions = {} as SendMessageOptions): SendMessageResult {
     const state: StreamState = { proc: null, aborted: false };
 
@@ -372,6 +377,8 @@ export class ClaudeCodeAdapter extends BaseBackendAdapter {
   async runOneShot(prompt: string, options: RunOneShotOptions = {}): Promise<string> {
     const { model, effort, timeoutMs = 60000, abortSignal, workingDir, allowTools, mcpServers, cliProfile } = options;
     if (abortSignal?.aborted) throw new Error('claude --print stopped');
+    const modelValidationError = validateClaudeModelSelection(model, cliProfile, this.metadata);
+    if (modelValidationError) throw new Error(modelValidationError);
     const runtime = resolveClaudeCliRuntime(cliProfile);
     const args = ['--print', '-p', prompt];
     // Digestion / Dreaming need to read every file under the workspace
@@ -387,7 +394,7 @@ export class ClaudeCodeAdapter extends BaseBackendAdapter {
     }
     if (model) args.push('--model', model);
     if (effort && model) {
-      const modelOption = this.metadata.models?.find(m => m.id === model);
+      const modelOption = this._resolveModelOptionForSelection(model, { cliProfile });
       if (modelOption?.supportedEffortLevels?.includes(effort)) {
         args.push('--effort', effort);
       }
@@ -462,6 +469,11 @@ export class ClaudeCodeAdapter extends BaseBackendAdapter {
     const { sessionId, isNewSession, workingDir, systemPrompt, model, effort, claudeCodeMode, mcpServers, cliProfile } = options;
     const attemptIsNewSession = isNewSession || retryingResumeAsNew;
     const runtime = resolveClaudeCliRuntime(cliProfile);
+    const modelValidationError = validateClaudeModelSelection(model, cliProfile, this.metadata);
+    if (modelValidationError) {
+      yield { type: 'error', error: modelValidationError, terminal: true };
+      return;
+    }
 
     const args = [
       '--print',
@@ -477,13 +489,13 @@ export class ClaudeCodeAdapter extends BaseBackendAdapter {
     // Only forward --effort when the selected model actually supports the level.
     // This guards against stale conversation state after a model downgrade.
     if (effort && model) {
-      const modelOption = this.metadata.models?.find(m => m.id === model);
+      const modelOption = this._resolveModelOptionForSelection(model, { cliProfile });
       if (modelOption?.supportedEffortLevels?.includes(effort)) {
         args.push('--effort', effort);
       }
     }
     if (claudeCodeMode === 'ultracode' && model) {
-      const modelOption = this.metadata.models?.find(m => m.id === model);
+      const modelOption = this._resolveModelOptionForSelection(model, { cliProfile });
       if (modelOption?.supportedEffortLevels?.includes('xhigh')) {
         args.push('--settings', JSON.stringify({ ultracode: true }));
       }
@@ -774,6 +786,84 @@ export class ClaudeCodeAdapter extends BaseBackendAdapter {
       yield* this._createStreamAttempt(recovery.prompt, options, state, true);
     }
   }
+
+  private _resolveModelOptionForSelection(selectedModelId: string, options: BackendCallOptions = {}): ModelOption | undefined {
+    return resolveClaudeModelOptionForSelection(selectedModelId, this.metadata, options.cliProfile);
+  }
+}
+
+function buildClaudeMetadataForProfile(baseMetadata: BackendMetadata, profile?: CliProfile): BackendMetadata {
+  if (!isClaudeBedrockProfile(profile)) return baseMetadata;
+
+  const inferenceProfiles = (profile?.claudeCode?.bedrock?.inferenceProfiles || [])
+    .filter((row) => row.name.trim() && row.inferenceProfileId.trim());
+  const models = inferenceProfiles.map((row, index) => {
+    const baseModel = row.baseModelId
+      ? baseMetadata.models?.find((candidate) => candidate.id === row.baseModelId)
+      : undefined;
+    const isDefault = row.default === true || (index === 0 && !inferenceProfiles.some((candidate) => candidate.default === true));
+    if (baseModel) {
+      return {
+        ...baseModel,
+        id: row.inferenceProfileId,
+        label: row.name,
+        description: `AWS Bedrock inference profile for ${baseModel.label}`,
+        default: isDefault,
+      };
+    }
+    return {
+      id: row.inferenceProfileId,
+      label: row.name,
+      family: 'bedrock',
+      description: 'AWS Bedrock inference profile',
+      default: isDefault,
+      capabilities: {
+        input: { text: true },
+        output: { text: true },
+      },
+    };
+  });
+
+  return {
+    ...baseMetadata,
+    models,
+  };
+}
+
+function resolveClaudeModelOptionForSelection(
+  selectedModelId: string,
+  baseMetadata: BackendMetadata,
+  profile?: CliProfile,
+): ModelOption | undefined {
+  const profileMetadata = buildClaudeMetadataForProfile(baseMetadata, profile);
+  const exact = profileMetadata.models?.find((model) => model.id === selectedModelId);
+  if (exact) return exact;
+  if (!isClaudeBedrockProfile(profile)) return undefined;
+
+  const inferenceProfile = profile?.claudeCode?.bedrock?.inferenceProfiles
+    ?.find((row) => row.inferenceProfileId === selectedModelId);
+  if (!inferenceProfile?.baseModelId) return undefined;
+  return baseMetadata.models?.find((model) => model.id === inferenceProfile.baseModelId);
+}
+
+function validateClaudeModelSelection(
+  selectedModelId: string | undefined,
+  profile: CliProfile | undefined,
+  baseMetadata: BackendMetadata,
+): string | null {
+  if (!isClaudeBedrockProfile(profile)) return null;
+  const models = buildClaudeMetadataForProfile(baseMetadata, profile).models || [];
+  if (models.length === 0 || !selectedModelId) {
+    return 'This Claude Code profile uses AWS Bedrock but has no inference profile selected. Add a Bedrock inference profile in CLI Profile settings.';
+  }
+  if (!models.some((model) => model.id === selectedModelId)) {
+    return `This Claude Code profile uses AWS Bedrock, but "${selectedModelId}" is not one of its configured inference profiles. Select a Bedrock inference profile in the model picker.`;
+  }
+  return null;
+}
+
+function isClaudeBedrockProfile(profile?: CliProfile): boolean {
+  return profile?.harness === 'claude-code' && profile.claudeCode?.provider === 'bedrock';
 }
 
 // ── MCP config ──────────────────────────────────────────────────────────────

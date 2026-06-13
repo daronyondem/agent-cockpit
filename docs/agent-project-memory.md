@@ -191,6 +191,11 @@ tool is unavailable.
   `CliProfile.harness` and use legacy `vendor` only as migration/backcompat
   input. The Settings field label is **Harness**; composer selectors remain
   **Profile** / **CLI Profile**.
+- Claude Code provider routing belongs to `CliProfile.claudeCode.provider`.
+  Bedrock AWS runtime values stay in profile `env`, Bedrock inference profiles
+  stay in structured `claudeCode.bedrock.inferenceProfiles`, and `baseModelId`
+  is used for Agent Cockpit metadata/effort/pricing mapping rather than as the
+  runtime model sent to Claude Code.
 - Claude/Codex install/auth flows should promote a created account profile when
   no default exists or when replacing that harness's server-configured default.
 - Welcome setup auth for Claude/Codex should use the user's normal system CLI

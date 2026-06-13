@@ -569,20 +569,29 @@ function ComposerPicks({ convId, backends, cliProfiles, composerCliProfileId, co
     ? backendIdForProfile(selectedProfile)
     : composerBackend;
   const [profileBackend, setProfileBackend] = React.useState(null);
+  const [profileBackendLoadedFor, setProfileBackendLoadedFor] = React.useState(null);
 
   React.useEffect(() => {
     if (!selectedProfileId) {
       setProfileBackend(null);
+      setProfileBackendLoadedFor(null);
       return;
     }
     let cancelled = false;
     setProfileBackend(null);
+    setProfileBackendLoadedFor(null);
     AgentApi.getCliProfileMetadata(selectedProfileId)
       .then(backend => {
-        if (!cancelled) setProfileBackend(backend || null);
+        if (!cancelled) {
+          setProfileBackend(backend || null);
+          setProfileBackendLoadedFor(selectedProfileId);
+        }
       })
       .catch(() => {
-        if (!cancelled) setProfileBackend(null);
+        if (!cancelled) {
+          setProfileBackend(null);
+          setProfileBackendLoadedFor(selectedProfileId);
+        }
       });
     return () => { cancelled = true; };
   }, [selectedProfileId]);
@@ -593,14 +602,25 @@ function ComposerPicks({ convId, backends, cliProfiles, composerCliProfileId, co
     }
   }, [convId, canChangeProfile, selectedProfileId, effectiveBackendId, composerCliProfileId, composerBackend]);
 
+  const profileMetadataPending = !!selectedProfileId && profileBackendLoadedFor !== selectedProfileId;
   const backend = (selectedProfile && profileBackend && profileBackend.id === effectiveBackendId)
     ? profileBackend
     : (backends.find(b => b.id === effectiveBackendId) || null);
   const backendModels = (backend && Array.isArray(backend.models)) ? backend.models : [];
-  const model = backendModels.find(m => m.id === composerModel)
-    || backendModels.find(m => m.default)
-    || backendModels[0]
+  const modelFromCatalog = backendModels.find(m => m.id === composerModel) || null;
+  const fallbackModel = profileMetadataPending
+    ? null
+    : (backendModels.find(m => m.default) || backendModels[0] || null);
+  const pendingModel = profileMetadataPending && composerModel
+    ? { id: composerModel, label: composerModel }
+    : null;
+  const model = modelFromCatalog
+    || pendingModel
+    || fallbackModel
     || null;
+  const modelOptions = profileMetadataPending && !modelFromCatalog
+    ? (pendingModel ? [{ value: pendingModel.id, label: modelDisplayLabel(pendingModel), disabled: true }] : [])
+    : backendModels.map(m => ({ value: m.id, label: modelDisplayLabel(m) + costTierDot(m.costTier) }));
   const backendId = backend ? backend.id : null;
   const modelId = model ? model.id : null;
   const effortLevels = (model && Array.isArray(model.supportedEffortLevels)) ? model.supportedEffortLevels : [];
@@ -615,20 +635,23 @@ function ComposerPicks({ convId, backends, cliProfiles, composerCliProfileId, co
       invalidated the chosen model), push the reconciled value back down so
      the next send uses a valid pair. */
   React.useEffect(() => {
+    if (profileMetadataPending) return;
     if (backendId && modelId && composerModel !== modelId) {
       StreamStore.setComposerModel(convId, modelId);
     }
-  }, [convId, backendId, modelId, composerModel]);
+  }, [convId, backendId, modelId, composerModel, profileMetadataPending]);
   React.useEffect(() => {
+    if (profileMetadataPending) return;
     if (effort !== composerEffort) {
       StreamStore.setComposerEffort(convId, effort);
     }
-  }, [convId, effort, composerEffort]);
+  }, [convId, effort, composerEffort, profileMetadataPending]);
   React.useEffect(() => {
+    if (profileMetadataPending) return;
     if (!claudeCodeModeSupported && composerClaudeCodeMode) {
       StreamStore.setComposerClaudeCodeMode(convId, null);
     }
-  }, [convId, claudeCodeModeSupported, composerClaudeCodeMode]);
+  }, [convId, claudeCodeModeSupported, composerClaudeCodeMode, profileMetadataPending]);
 
   if (backends.length === 0) return <span className="picks"/>;
 
@@ -666,12 +689,12 @@ function ComposerPicks({ convId, backends, cliProfiles, composerCliProfileId, co
           title={profileLocked ? 'Backend locked for this session' : 'Backend'}
         />
       )}
-      {backendModels.length > 0 ? (
+      {modelOptions.length > 0 ? (
         <PickChip
           label="Model"
           value={model ? modelDisplayLabel(model) : (composerModel ? modelDisplayLabel(composerModel) : '—')}
-          disabled={disabled}
-          options={backendModels.map(m => ({ value: m.id, label: modelDisplayLabel(m) + costTierDot(m.costTier) }))}
+          disabled={disabled || (profileMetadataPending && !modelFromCatalog)}
+          options={modelOptions}
           currentValue={model ? model.id : ''}
           onChange={v => StreamStore.setComposerModel(convId, v)}
           title="Model"

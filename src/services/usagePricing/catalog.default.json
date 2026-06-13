@@ -122,7 +122,7 @@
     {
       "id": "anthropic-claude-fable-5-family",
       "provider": "anthropic",
-      "modelPattern": "claude-fable-5*",
+      "modelPattern": "*claude-fable-5*",
       "unit": "tokens",
       "sourceUrl": "https://platform.claude.com/docs/en/about-claude/pricing",
       "verifiedAt": "2026-06-09",
@@ -137,7 +137,7 @@
     {
       "id": "anthropic-claude-opus-4.8-family",
       "provider": "anthropic",
-      "modelPattern": "claude-opus-4-8*",
+      "modelPattern": "*claude-opus-4-8*",
       "unit": "tokens",
       "sourceUrl": "https://platform.claude.com/docs/en/about-claude/pricing",
       "verifiedAt": "2026-05-28",
@@ -152,7 +152,7 @@
     {
       "id": "anthropic-claude-opus-4.7-family",
       "provider": "anthropic",
-      "modelPattern": "claude-opus-4-7*",
+      "modelPattern": "*claude-opus-4-7*",
       "unit": "tokens",
       "sourceUrl": "https://platform.claude.com/docs/en/about-claude/pricing",
       "verifiedAt": "2026-05-20",
@@ -167,7 +167,7 @@
     {
       "id": "anthropic-claude-opus-4.6-family",
       "provider": "anthropic",
-      "modelPattern": "claude-opus-4-6*",
+      "modelPattern": "*claude-opus-4-6*",
       "unit": "tokens",
       "sourceUrl": "https://platform.claude.com/docs/en/about-claude/pricing",
       "verifiedAt": "2026-05-20",
@@ -182,7 +182,7 @@
     {
       "id": "anthropic-claude-opus-4.5-family",
       "provider": "anthropic",
-      "modelPattern": "claude-opus-4-5*",
+      "modelPattern": "*claude-opus-4-5*",
       "unit": "tokens",
       "sourceUrl": "https://platform.claude.com/docs/en/about-claude/pricing",
       "verifiedAt": "2026-05-20",
@@ -197,7 +197,7 @@
     {
       "id": "anthropic-claude-opus-4.1-family",
       "provider": "anthropic",
-      "modelPattern": "claude-opus-4-1*",
+      "modelPattern": "*claude-opus-4-1*",
       "unit": "tokens",
       "sourceUrl": "https://platform.claude.com/docs/en/about-claude/pricing",
       "verifiedAt": "2026-05-20",
@@ -227,7 +227,7 @@
     {
       "id": "anthropic-claude-opus-4-2025-deprecated",
       "provider": "anthropic",
-      "modelPattern": "claude-opus-4-2025*",
+      "modelPattern": "*claude-opus-4-2025*",
       "unit": "tokens",
       "sourceUrl": "https://platform.claude.com/docs/en/about-claude/pricing",
       "verifiedAt": "2026-05-20",
@@ -242,7 +242,7 @@
     {
       "id": "anthropic-claude-sonnet-4-family",
       "provider": "anthropic",
-      "modelPattern": "claude-sonnet-4*",
+      "modelPattern": "*claude-sonnet-4*",
       "unit": "tokens",
       "sourceUrl": "https://platform.claude.com/docs/en/about-claude/pricing",
       "verifiedAt": "2026-05-20",
@@ -257,7 +257,7 @@
     {
       "id": "anthropic-claude-haiku-4.5-family",
       "provider": "anthropic",
-      "modelPattern": "claude-haiku-4-5*",
+      "modelPattern": "*claude-haiku-4-5*",
       "unit": "tokens",
       "sourceUrl": "https://platform.claude.com/docs/en/about-claude/pricing",
       "verifiedAt": "2026-05-20",

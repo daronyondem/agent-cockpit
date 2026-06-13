@@ -118,6 +118,18 @@ describe('usage cost estimator', () => {
     expect(estimate.costSnapshot?.pricingEntryId).toBe('anthropic-claude-fable-5-family');
   });
 
+  test('uses Fable 5 pricing for Bedrock inference profile ids', () => {
+    const estimate = estimateUsageCost({
+      backend: 'claude-code',
+      model: 'global.anthropic.claude-fable-5',
+      usage: { ...baseUsage, inputTokens: 1_000_000, outputTokens: 1_000_000 },
+    });
+    expect(estimate.costSource).toBe('estimated');
+    expect(estimate.estimatedCostUsd).toBeCloseTo(60);
+    expect(estimate.costSnapshot?.model).toBe('global.anthropic.claude-fable-5');
+    expect(estimate.costSnapshot?.pricingEntryId).toBe('anthropic-claude-fable-5-family');
+  });
+
   test('uses current Opus 4.6 pricing instead of deprecated Opus 4 pricing', () => {
     const estimate = estimateUsageCost({
       backend: 'claude-code',
@@ -127,6 +139,17 @@ describe('usage cost estimator', () => {
     expect(estimate.costSource).toBe('estimated');
     expect(estimate.estimatedCostUsd).toBeCloseTo(30);
     expect(estimate.costSnapshot?.pricingEntryId).toBe('anthropic-claude-opus-4.6-family');
+  });
+
+  test('uses current Opus pricing for Bedrock inference profile ARNs', () => {
+    const estimate = estimateUsageCost({
+      backend: 'claude-code',
+      model: 'arn:aws:bedrock:us-west-2:123456789012:inference-profile/global.anthropic.claude-opus-4-8',
+      usage: { ...baseUsage, inputTokens: 1_000_000, outputTokens: 1_000_000 },
+    });
+    expect(estimate.costSource).toBe('estimated');
+    expect(estimate.estimatedCostUsd).toBeCloseTo(30);
+    expect(estimate.costSnapshot?.pricingEntryId).toBe('anthropic-claude-opus-4.8-family');
   });
 
   test('retains deprecated Opus 4.1 pricing for older Opus ids', () => {

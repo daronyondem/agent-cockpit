@@ -15,12 +15,33 @@ export type CliAuthMode = 'server-configured' | 'account';
 
 export type CliCommunicationProtocol = 'standard' | 'interactive';
 
+export type ClaudeCodeProvider = 'anthropic' | 'bedrock';
+
+export interface ClaudeCodeBedrockInferenceProfile {
+  id: string;
+  name: string;
+  inferenceProfileId: string;
+  baseModelId?: string;
+  default?: boolean;
+}
+
+export interface ClaudeCodeBedrockConfig {
+  inferenceProfiles?: ClaudeCodeBedrockInferenceProfile[];
+}
+
+export interface ClaudeCodeProfileConfig {
+  provider?: ClaudeCodeProvider;
+  bedrock?: ClaudeCodeBedrockConfig;
+}
+
 export interface CliProfile {
   id: string;
   name: string;
   harness: CliHarness;
   /** Claude Code only: how Agent Cockpit communicates with the shared Claude CLI. */
   protocol?: CliCommunicationProtocol;
+  /** Claude Code only: provider and provider-specific model routing configuration. */
+  claudeCode?: ClaudeCodeProfileConfig;
   /** OpenCode only: provider choice for this logical profile. model is retained for legacy saved profiles; new UI selections happen in the composer. */
   opencode?: {
     provider?: string;

@@ -473,6 +473,54 @@
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
+.bedrock-profile-box{
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+}
+.bedrock-profile-head{
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+.bedrock-profile-head > div{
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+.bedrock-profile-head b{
+  font-size: 13px;
+  font-weight: 600;
+}
+.bedrock-profile-head .u-dim{
+  font-size: 12px;
+  line-height: 1.45;
+}
+.bedrock-profile-table{
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.bedrock-profile-row{
+  display: grid;
+  grid-template-columns: minmax(130px, 1fr) minmax(130px, 0.8fr) minmax(220px, 1.4fr) auto auto;
+  gap: 8px;
+  align-items: center;
+}
+.bedrock-default{
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
+  font-size: 12px;
+  color: var(--text-2);
+}
 .cli-add{
   display: flex;
   align-items: center;

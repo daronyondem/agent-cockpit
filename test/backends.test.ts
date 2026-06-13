@@ -261,6 +261,78 @@ describe('ClaudeCodeAdapter', () => {
     expect(meta.models!.find(m => m.id === 'sonnet[1m]')).toBeUndefined();
   });
 
+  test('Bedrock profile metadata exposes configured inference profiles', async () => {
+    const adapter = new ClaudeCodeAdapter({ workingDir: '/tmp' });
+    const meta = await adapter.getMetadata({
+      cliProfile: {
+        id: 'profile-claude-bedrock',
+        name: 'Claude Bedrock',
+        harness: 'claude-code',
+        authMode: 'account',
+        claudeCode: {
+          provider: 'bedrock',
+          bedrock: {
+            inferenceProfiles: [{
+              id: 'bedrock-fable-global',
+              name: 'Fable 5 - Global',
+              inferenceProfileId: 'global.anthropic.claude-fable-5',
+              baseModelId: 'claude-fable-5',
+              default: true,
+            }],
+          },
+        },
+        createdAt: '2026-06-13T00:00:00.000Z',
+        updatedAt: '2026-06-13T00:00:00.000Z',
+      },
+    });
+
+    expect(meta.models).toEqual([
+      expect.objectContaining({
+        id: 'global.anthropic.claude-fable-5',
+        label: 'Fable 5 - Global',
+        family: 'fable',
+        costTier: 'high',
+        default: true,
+        supportedEffortLevels: ['low', 'medium', 'high', 'xhigh', 'max'],
+      }),
+    ]);
+  });
+
+  test('Bedrock profile metadata falls back to conservative text metadata for unknown base models', async () => {
+    const adapter = new ClaudeCodeAdapter({ workingDir: '/tmp' });
+    const meta = await adapter.getMetadata({
+      cliProfile: {
+        id: 'profile-claude-bedrock',
+        name: 'Claude Bedrock',
+        harness: 'claude-code',
+        authMode: 'account',
+        claudeCode: {
+          provider: 'bedrock',
+          bedrock: {
+            inferenceProfiles: [{
+              id: 'bedrock-custom',
+              name: 'Custom Bedrock',
+              inferenceProfileId: 'arn:aws:bedrock:us-west-2:123456789012:inference-profile/custom',
+              baseModelId: 'missing-model',
+            }],
+          },
+        },
+        createdAt: '2026-06-13T00:00:00.000Z',
+        updatedAt: '2026-06-13T00:00:00.000Z',
+      },
+    });
+
+    expect(meta.models).toEqual([
+      expect.objectContaining({
+        id: 'arn:aws:bedrock:us-west-2:123456789012:inference-profile/custom',
+        label: 'Custom Bedrock',
+        family: 'bedrock',
+        capabilities: { input: { text: true }, output: { text: true } },
+      }),
+    ]);
+    expect(meta.models![0].supportedEffortLevels).toBeUndefined();
+  });
+
   test('resolveClaudeCliRuntime maps profile configDir to CLAUDE_CONFIG_DIR and honors command/env', () => {
     const runtime = resolveClaudeCliRuntime({
       id: 'profile-claude-work',
@@ -685,6 +757,72 @@ describe('ClaudeCodeAdapter sendMessage', () => {
     const idx = capturedArgs!.indexOf('--model');
     expect(idx).toBeGreaterThan(-1);
     expect(capturedArgs![idx + 1]).toBe('claude-opus-4-7');
+  });
+
+  test('passes Bedrock inference profile IDs through model, effort, and Ultracode gating', async () => {
+    let capturedArgs: string[] | undefined;
+    let streamRef: AsyncGenerator<any>;
+    jest.isolateModules(() => {
+      jest.mock('child_process', () => ({
+        spawn: (_cmd: string, args: string[]) => {
+          capturedArgs = args;
+          const { EventEmitter } = require('events');
+          const proc = new EventEmitter();
+          proc.stdout = new EventEmitter();
+          proc.stderr = new EventEmitter();
+          proc.stdin = { write: () => {}, destroyed: false };
+          proc.kill = () => {};
+          setTimeout(() => proc.emit('close', 0, null), 10);
+          return proc;
+        },
+        execFile: () => {},
+      }));
+      const { ClaudeCodeAdapter: IsolatedAdapter } = require('../src/services/backends/claudeCode');
+      const adapter = new IsolatedAdapter({ workingDir: '/tmp' });
+      const { stream } = adapter.sendMessage('hello', {
+        sessionId: 'test-bedrock-model',
+        isNewSession: true,
+        workingDir: '/tmp',
+        systemPrompt: '',
+        model: 'global.anthropic.claude-fable-5',
+        effort: 'max',
+        claudeCodeMode: 'ultracode',
+        cliProfile: {
+          id: 'profile-claude-bedrock',
+          name: 'Claude Bedrock',
+          harness: 'claude-code',
+          authMode: 'account',
+          claudeCode: {
+            provider: 'bedrock',
+            bedrock: {
+              inferenceProfiles: [{
+                id: 'bedrock-fable-global',
+                name: 'Fable 5 - Global',
+                inferenceProfileId: 'global.anthropic.claude-fable-5',
+                baseModelId: 'claude-fable-5',
+                default: true,
+              }],
+            },
+          },
+          createdAt: '2026-06-13T00:00:00.000Z',
+          updatedAt: '2026-06-13T00:00:00.000Z',
+        },
+      });
+      streamRef = stream;
+    });
+
+    for await (const event of streamRef!) {
+      if (event.type === 'done') break;
+    }
+
+    expect(capturedArgs).toBeDefined();
+    expect(capturedArgs).toEqual(expect.arrayContaining([
+      '--model',
+      'global.anthropic.claude-fable-5',
+      '--effort',
+      'max',
+      '--settings',
+    ]));
   });
 
   test('uses Claude profile command, env, and CLAUDE_CONFIG_DIR for streaming', async () => {

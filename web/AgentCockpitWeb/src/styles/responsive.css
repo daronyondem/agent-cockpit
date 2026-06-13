@@ -128,6 +128,15 @@
   .cli-profile-grid{
     grid-template-columns: 1fr;
   }
+  .bedrock-profile-head{
+    flex-direction: column;
+  }
+  .bedrock-profile-row{
+    grid-template-columns: 1fr;
+  }
+  .bedrock-default{
+    justify-content: flex-start;
+  }
   .cli-add{
     align-items: flex-start;
     flex-wrap: wrap;

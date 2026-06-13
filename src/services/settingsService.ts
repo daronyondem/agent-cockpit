@@ -425,6 +425,9 @@ export class SettingsService {
       ...(harness === 'claude-code'
         ? { protocol: profile.protocol === 'interactive' ? 'interactive' : profile.protocol === 'standard' ? 'standard' : cliProtocolForBackend(defaultBackend, harness) || 'standard' }
         : {}),
+      ...(harness === 'claude-code'
+        ? { claudeCode: normalizeClaudeCodeProfileConfig(profile.claudeCode) }
+        : {}),
       authMode: harness === 'kiro' || harness === 'opencode'
         ? 'server-configured'
         : profile.authMode === 'account' ? 'account' : 'server-configured',
@@ -465,4 +468,61 @@ function isCliAuthHomeEnvKey(harness: CliProfile['harness'], key: string): boole
   const normalized = key.toUpperCase();
   return (harness === 'claude-code' && normalized === 'CLAUDE_CONFIG_DIR')
     || (harness === 'codex' && normalized === 'CODEX_HOME');
+}
+
+function normalizeClaudeCodeProfileConfig(value: unknown): NonNullable<CliProfile['claudeCode']> {
+  const config = value && typeof value === 'object' ? value as NonNullable<CliProfile['claudeCode']> : {};
+  const provider = config.provider === 'bedrock' ? 'bedrock' : 'anthropic';
+  if (provider !== 'bedrock') return { provider };
+
+  const inferenceProfiles = normalizeBedrockInferenceProfiles(config.bedrock?.inferenceProfiles);
+  return {
+    provider,
+    bedrock: {
+      inferenceProfiles,
+    },
+  };
+}
+
+function normalizeBedrockInferenceProfiles(value: unknown): NonNullable<NonNullable<NonNullable<CliProfile['claudeCode']>['bedrock']>['inferenceProfiles']> {
+  if (!Array.isArray(value)) return [];
+  const profiles: NonNullable<NonNullable<NonNullable<CliProfile['claudeCode']>['bedrock']>['inferenceProfiles']> = [];
+  let defaultAssigned = false;
+
+  value.forEach((row, index) => {
+    if (!row || typeof row !== 'object') return;
+    const candidate = row as Record<string, unknown>;
+    const name = typeof candidate.name === 'string' ? candidate.name.trim() : '';
+    const inferenceProfileId = typeof candidate.inferenceProfileId === 'string' ? candidate.inferenceProfileId.trim() : '';
+    const baseModelId = typeof candidate.baseModelId === 'string' ? candidate.baseModelId.trim() : '';
+    if (!name && !inferenceProfileId && !baseModelId) return;
+
+    const normalized = {
+      id: normalizeBedrockInferenceProfileId(candidate.id, name, inferenceProfileId, index),
+      name,
+      inferenceProfileId,
+      ...(baseModelId ? { baseModelId } : {}),
+      ...(candidate.default === true && !defaultAssigned ? { default: true } : {}),
+    };
+    if (normalized.default) defaultAssigned = true;
+    profiles.push(normalized);
+  });
+
+  if (!defaultAssigned && profiles.length > 0) {
+    profiles[0] = { ...profiles[0], default: true };
+  }
+
+  return profiles;
+}
+
+function normalizeBedrockInferenceProfileId(id: unknown, name: string, inferenceProfileId: string, index: number): string {
+  const existing = typeof id === 'string' ? id.trim() : '';
+  if (existing) return existing;
+  const seed = inferenceProfileId || name || `profile-${index + 1}`;
+  const slug = seed
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 48);
+  return `bedrock-${slug || index + 1}`;
 }

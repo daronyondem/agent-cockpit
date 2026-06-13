@@ -407,6 +407,22 @@ describe('frontend routes', () => {
     expect(settingsSrc).toContain('usesGeneratedCliProfileName(current) ? defaultCliProfileName(harness) : current.name');
   });
 
+  test('Claude Code profile settings expose Bedrock provider and inference profile controls', () => {
+    const settingsSrc = fs.readFileSync(path.join(ROOT, 'web/AgentCockpitWeb/src/screens/settingsScreen.jsx'), 'utf8');
+    const appCss = readDesktopCss();
+
+    expect(settingsSrc).toContain('<option value="anthropic">Anthropic</option>');
+    expect(settingsSrc).toContain('<option value="bedrock">AWS Bedrock</option>');
+    expect(settingsSrc).toContain('Bedrock Inference Profiles');
+    expect(settingsSrc).toContain('addBedrockInferenceProfile');
+    expect(settingsSrc).toContain('removeBedrockInferenceProfile');
+    expect(settingsSrc).toContain('setDefaultBedrockInferenceProfile');
+    expect(settingsSrc).toContain('Inference Profile ID or ARN');
+    expect(settingsSrc).toContain('Environment overrides');
+    expect(appCss).toContain('.bedrock-profile-box');
+    expect(appCss).toContain('.bedrock-profile-row');
+  });
+
   test('instruction compatibility popover separates covered harnesses from pointer needs', () => {
     const composerNotificationsSrc = fs.readFileSync(path.join(ROOT, 'web/AgentCockpitWeb/src/chat/composerNotifications.jsx'), 'utf8');
 
@@ -442,6 +458,30 @@ describe('frontend routes', () => {
     expect(mobileAppSrc).toContain('const storedProfileMissing = !!conversation.cliProfileId');
     expect(mobileAppSrc).toContain('chooseResetProfileRepair(availableProfiles, conversation, selectedCliProfileId)');
     expect(mobileAppSrc).toContain('const response = await clientRef.current.resetConversation(conversation.id, resetProfile ? {');
+  });
+
+  test('composer profile metadata loading does not overwrite the selected model', () => {
+    const composerSrc = fs.readFileSync(path.join(ROOT, 'web/AgentCockpitWeb/src/chat/composer.jsx'), 'utf8');
+
+    expect(composerSrc).toContain('const [profileBackendLoadedFor, setProfileBackendLoadedFor] = React.useState(null);');
+    expect(composerSrc).toContain('const profileMetadataPending = !!selectedProfileId && profileBackendLoadedFor !== selectedProfileId;');
+    expect(composerSrc).toContain('const fallbackModel = profileMetadataPending');
+    expect(composerSrc).toContain('const pendingModel = profileMetadataPending && composerModel');
+    expect(composerSrc).toContain('const modelOptions = profileMetadataPending && !modelFromCatalog');
+    expect(composerSrc).toContain("disabled={disabled || (profileMetadataPending && !modelFromCatalog)}");
+    expect(composerSrc).toMatch(/React\.useEffect\(\(\) => \{\s+if \(profileMetadataPending\) return;\s+if \(backendId && modelId && composerModel !== modelId\)/);
+    expect(composerSrc).toMatch(/React\.useEffect\(\(\) => \{\s+if \(profileMetadataPending\) return;\s+if \(effort !== composerEffort\)/);
+    expect(composerSrc).toMatch(/React\.useEffect\(\(\) => \{\s+if \(profileMetadataPending\) return;\s+if \(!claudeCodeModeSupported && composerClaudeCodeMode\)/);
+  });
+
+  test('Bedrock Claude Code profiles do not show Claude subscription plan usage', () => {
+    const chatLiveSrc = fs.readFileSync(path.join(ROOT, 'web/AgentCockpitWeb/src/chat/chatLive.jsx'), 'utf8');
+    const contextChipSrc = fs.readFileSync(path.join(ROOT, 'web/AgentCockpitWeb/src/chat/contextChip.jsx'), 'utf8');
+
+    expect(chatLiveSrc).toContain('cliProfile={topbarProfile}');
+    expect(contextChipSrc).toContain('function shouldShowClaudePlanUsage(backendId, cliProfile)');
+    expect(contextChipSrc).toContain("return (cliProfile.claudeCode?.provider || 'anthropic') === 'anthropic';");
+    expect(contextChipSrc).toContain('const store = shouldShowClaudePlanUsage(backendId, cliProfile) ? PlanUsageStore');
   });
 
   test('desktop Usage settings separate reported and estimated cost with pricing override controls', () => {

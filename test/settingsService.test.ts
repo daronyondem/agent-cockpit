@@ -389,6 +389,129 @@ describe('settings', () => {
     expect(saved.cliProfiles![0].opencode).toBeUndefined();
   });
 
+  test('saving Claude Code profiles preserves and normalizes Bedrock provider config', async () => {
+    const settings = await service.getSettings();
+    const saved = await service.saveSettings({
+      ...settings,
+      cliProfiles: [{
+        id: 'profile-claude-bedrock',
+        name: 'Claude Bedrock',
+        harness: 'claude-code',
+        authMode: 'account',
+        claudeCode: {
+          provider: 'bedrock',
+          bedrock: {
+            inferenceProfiles: [
+              {
+                id: '',
+                name: ' Fable 5 - Global ',
+                inferenceProfileId: ' global.anthropic.claude-fable-5 ',
+                baseModelId: ' claude-fable-5 ',
+              },
+              {
+                id: 'empty-row',
+                name: '',
+                inferenceProfileId: '',
+                baseModelId: '',
+              },
+              {
+                id: 'bedrock-opus',
+                name: 'Opus 4.8 - US',
+                inferenceProfileId: 'us.anthropic.claude-opus-4-8',
+                baseModelId: 'claude-opus-4-8',
+                default: true,
+              },
+              {
+                id: 'bedrock-sonnet',
+                name: 'Sonnet 4.6 - EU',
+                inferenceProfileId: 'eu.anthropic.claude-sonnet-4-6',
+                baseModelId: 'claude-sonnet-4-6',
+                default: true,
+              },
+            ],
+          },
+        },
+        createdAt: '2026-06-13T00:00:00.000Z',
+        updatedAt: '2026-06-13T00:00:00.000Z',
+      }],
+    } as any);
+
+    const profile = saved.cliProfiles![0];
+    expect(profile.claudeCode).toEqual({
+      provider: 'bedrock',
+      bedrock: {
+        inferenceProfiles: [
+          {
+            id: 'bedrock-global-anthropic-claude-fable-5',
+            name: 'Fable 5 - Global',
+            inferenceProfileId: 'global.anthropic.claude-fable-5',
+            baseModelId: 'claude-fable-5',
+          },
+          {
+            id: 'bedrock-opus',
+            name: 'Opus 4.8 - US',
+            inferenceProfileId: 'us.anthropic.claude-opus-4-8',
+            baseModelId: 'claude-opus-4-8',
+            default: true,
+          },
+          {
+            id: 'bedrock-sonnet',
+            name: 'Sonnet 4.6 - EU',
+            inferenceProfileId: 'eu.anthropic.claude-sonnet-4-6',
+            baseModelId: 'claude-sonnet-4-6',
+          },
+        ],
+      },
+    });
+  });
+
+  test('saving Claude Code profiles defaults missing provider to Anthropic', async () => {
+    const settings = await service.getSettings();
+    const saved = await service.saveSettings({
+      ...settings,
+      cliProfiles: [{
+        id: 'profile-claude-default',
+        name: 'Claude Default',
+        harness: 'claude-code',
+        authMode: 'server-configured',
+        claudeCode: {
+          bedrock: {
+            inferenceProfiles: [{
+              id: 'bedrock-fable',
+              name: 'Fable 5 - Global',
+              inferenceProfileId: 'global.anthropic.claude-fable-5',
+            }],
+          },
+        },
+        createdAt: '2026-06-13T00:00:00.000Z',
+        updatedAt: '2026-06-13T00:00:00.000Z',
+      }],
+    } as any);
+
+    expect(saved.cliProfiles![0].claudeCode).toEqual({ provider: 'anthropic' });
+  });
+
+  test('saving non-Claude profiles drops Claude Code provider config', async () => {
+    const settings = await service.getSettings();
+    const saved = await service.saveSettings({
+      ...settings,
+      cliProfiles: [{
+        id: 'profile-codex-with-claude',
+        name: 'Codex',
+        harness: 'codex',
+        authMode: 'account',
+        configDir: '/tmp/codex',
+        claudeCode: {
+          provider: 'bedrock',
+        },
+        createdAt: '2026-06-13T00:00:00.000Z',
+        updatedAt: '2026-06-13T00:00:00.000Z',
+      }],
+    } as any);
+
+    expect(saved.cliProfiles![0].claudeCode).toBeUndefined();
+  });
+
   test('saving setup account profiles strips isolated auth homes', async () => {
     const settings = await service.getSettings();
     const saved = await service.saveSettings({
