@@ -737,7 +737,7 @@ export function ChatLive({ convId, onArchived, onDeleted, onOpenMemoryUpdate, on
           )}
         </div>
         <div className="right">
-          {usage ? <ContextChip backendId={topbarBackendId} cliProfileId={topbarCliProfileId} usage={usage}/> : null}
+          {usage ? <ContextChip backendId={topbarBackendId} cliProfileId={topbarCliProfileId} cliProfile={topbarProfile} usage={usage}/> : null}
           <button className="btn ghost" onClick={(e) => handleDownload(e.currentTarget)} title="Download as markdown">↓ Download</button>
           <button className="btn ghost" onClick={(e) => handleReset(e.currentTarget)} disabled={streaming || sending || resetting} title="Reset session">{resetting ? '↺ Resetting…' : '↺ Reset'}</button>
           <button className="btn ghost" onClick={() => setSessionsOpen(true)} title="Session history">{Ico.clock(12)} Sessions</button>

@@ -66,10 +66,12 @@ function normalizeUiProfile(profile){
   const next = { ...profile };
   if (next.harness === 'claude-code') {
     next.protocol = next.protocol === 'interactive' ? 'interactive' : 'standard';
+    next.claudeCode = normalizeClaudeCodeConfig(next.claudeCode);
   } else {
     delete next.protocol;
+    delete next.claudeCode;
   }
-  if (next.authMode !== 'account') {
+  if (next.authMode !== 'account' && claudeProvider(next) !== 'bedrock') {
     delete next.configDir;
     delete next.env;
   }
@@ -90,6 +92,87 @@ function normalizeUiProfile(profile){
     delete next.opencode;
   }
   return next;
+}
+
+function claudeProvider(profile){
+  return profile && profile.harness === 'claude-code' && profile.claudeCode && profile.claudeCode.provider === 'bedrock'
+    ? 'bedrock'
+    : 'anthropic';
+}
+
+function normalizeClaudeCodeConfig(config){
+  const provider = config && config.provider === 'bedrock' ? 'bedrock' : 'anthropic';
+  if (provider !== 'bedrock') return { provider };
+  const inferenceProfiles = config && config.bedrock && Array.isArray(config.bedrock.inferenceProfiles)
+    ? config.bedrock.inferenceProfiles
+    : [];
+  return {
+    provider,
+    bedrock: {
+      inferenceProfiles: normalizeBedrockRows(inferenceProfiles),
+    },
+  };
+}
+
+function normalizeBedrockRows(rows){
+  let defaultSeen = false;
+  const normalized = (Array.isArray(rows) ? rows : []).map((row, index) => {
+    const next = {
+      id: String(row && row.id || '').trim() || `bedrock-${Date.now().toString(36)}-${index}`,
+      name: String(row && row.name || ''),
+      inferenceProfileId: String(row && row.inferenceProfileId || ''),
+      baseModelId: String(row && row.baseModelId || '').trim() || undefined,
+    };
+    if (row && row.default === true && !defaultSeen) {
+      next.default = true;
+      defaultSeen = true;
+    }
+    return next;
+  });
+  if (!defaultSeen && normalized.length > 0) normalized[0].default = true;
+  return normalized;
+}
+
+function claudeStaticModels(backends){
+  const backend = (backends || []).find(b => b.id === 'claude-code');
+  return backend && Array.isArray(backend.models) ? backend.models : [];
+}
+
+function bedrockValidationError(profiles){
+  for (const profile of profiles || []) {
+    if (!profile || profile.harness !== 'claude-code' || claudeProvider(profile) !== 'bedrock') continue;
+    const rows = profile.claudeCode && profile.claudeCode.bedrock && Array.isArray(profile.claudeCode.bedrock.inferenceProfiles)
+      ? profile.claudeCode.bedrock.inferenceProfiles
+      : [];
+    if (rows.length === 0) return `${profile.name || profile.id}: add at least one Bedrock inference profile.`;
+    const names = new Set();
+    const ids = new Set();
+    for (const row of rows) {
+      const name = String(row && row.name || '').trim();
+      const inferenceProfileId = String(row && row.inferenceProfileId || '').trim();
+      if (!name) return `${profile.name || profile.id}: Bedrock inference profile friendly name is required.`;
+      if (!inferenceProfileId) return `${profile.name || profile.id}: Bedrock inference profile ID or ARN is required.`;
+      const nameKey = name.toLowerCase();
+      const idKey = inferenceProfileId.toLowerCase();
+      if (names.has(nameKey)) return `${profile.name || profile.id}: Bedrock inference profile names must be unique.`;
+      if (ids.has(idKey)) return `${profile.name || profile.id}: Bedrock inference profile IDs must be unique.`;
+      names.add(nameKey);
+      ids.add(idKey);
+    }
+  }
+  return '';
+}
+
+function bedrockEnvWarning(profile){
+  if (!profile || claudeProvider(profile) !== 'bedrock') return '';
+  const env = profile.env || {};
+  const useBedrock = String(env.CLAUDE_CODE_USE_BEDROCK || '').trim().toLowerCase();
+  const hasUseBedrock = useBedrock === '1' || useBedrock === 'true';
+  const hasRegion = !!String(env.AWS_REGION || env.AWS_DEFAULT_REGION || '').trim();
+  if (!hasUseBedrock && !hasRegion) return 'Set CLAUDE_CODE_USE_BEDROCK and AWS_REGION or AWS_DEFAULT_REGION in Environment overrides before running this profile.';
+  if (!hasUseBedrock) return 'Set CLAUDE_CODE_USE_BEDROCK to "1" or "true" in Environment overrides before running this profile.';
+  if (!hasRegion) return 'Set AWS_REGION or AWS_DEFAULT_REGION in Environment overrides before running this profile.';
+  return '';
 }
 
 function cliDefaultCommand(harness){
@@ -736,6 +819,7 @@ function CliProfilesTab({ settings, backends, onPatch, onSave, saving, onValidat
   const [opencodeCatalogById, setOpenCodeCatalogById] = React.useState({});
   const mountedRef = React.useRef(true);
   const hasEnvErrors = Object.values(envErrorsById).some(Boolean);
+  const cliProfileValidationError = React.useMemo(() => bedrockValidationError(profiles), [profiles]);
   const enabledCount = profiles.filter(profile => profile && !profile.disabled).length;
   const profileIdsKey = profiles.map(p => p.id).join('|');
 
@@ -745,9 +829,9 @@ function CliProfilesTab({ settings, backends, onPatch, onSave, saving, onValidat
 
   React.useEffect(() => {
     if (onValidationChange) {
-      onValidationChange(hasEnvErrors ? 'Fix environment JSON before saving.' : '');
+      onValidationChange(hasEnvErrors ? 'Fix environment JSON before saving.' : cliProfileValidationError);
     }
-  }, [hasEnvErrors, onValidationChange]);
+  }, [hasEnvErrors, cliProfileValidationError, onValidationChange]);
 
   React.useEffect(() => {
     return () => {
@@ -891,6 +975,59 @@ function CliProfilesTab({ settings, backends, onPatch, onSave, saving, onValidat
         ...patch,
       },
     }));
+  }
+
+  function patchClaudeCode(profile, patch){
+    patchProfile(profile.id, current => ({
+      claudeCode: normalizeClaudeCodeConfig({
+        ...(current.claudeCode || {}),
+        ...patch,
+      }),
+    }));
+  }
+
+  function bedrockRows(profile){
+    return profile && profile.claudeCode && profile.claudeCode.bedrock && Array.isArray(profile.claudeCode.bedrock.inferenceProfiles)
+      ? profile.claudeCode.bedrock.inferenceProfiles
+      : [];
+  }
+
+  function patchBedrockRows(profile, rows){
+    patchClaudeCode(profile, {
+      provider: 'bedrock',
+      bedrock: {
+        inferenceProfiles: rows,
+      },
+    });
+  }
+
+  function addBedrockInferenceProfile(profile){
+    patchBedrockRows(profile, [
+      ...bedrockRows(profile),
+      {
+        id: `bedrock-${Date.now().toString(36)}`,
+        name: '',
+        baseModelId: '',
+        inferenceProfileId: '',
+      },
+    ]);
+  }
+
+  function updateBedrockInferenceProfile(profile, rowId, patch){
+    patchBedrockRows(profile, bedrockRows(profile).map(row => (
+      row.id === rowId ? { ...row, ...patch } : row
+    )));
+  }
+
+  function removeBedrockInferenceProfile(profile, rowId){
+    patchBedrockRows(profile, bedrockRows(profile).filter(row => row.id !== rowId));
+  }
+
+  function setDefaultBedrockInferenceProfile(profile, rowId){
+    patchBedrockRows(profile, bedrockRows(profile).map(row => ({
+      ...row,
+      default: row.id === rowId,
+    })));
   }
 
   function onSetupModeChange(profile, authMode){
@@ -1082,6 +1219,9 @@ function CliProfilesTab({ settings, backends, onPatch, onSave, saving, onValidat
         ) : profiles.map(profile => {
           const isKiro = profile.harness === 'kiro';
           const isOpenCode = profile.harness === 'opencode';
+          const isClaudeCode = profile.harness === 'claude-code';
+          const claudeCodeProvider = claudeProvider(profile);
+          const isClaudeBedrock = isClaudeCode && claudeCodeProvider === 'bedrock';
           const isServerProfile = isServerConfiguredProfile(profile);
           const isAccount = !isKiro && !isOpenCode && profile.authMode === 'account';
           const expanded = expandedProfileId === profile.id;
@@ -1102,6 +1242,9 @@ function CliProfilesTab({ settings, backends, onPatch, onSave, saving, onValidat
           const opencodeCatalogModels = opencodeCatalog.backend && Array.isArray(opencodeCatalog.backend.models)
             ? opencodeCatalog.backend.models
             : [];
+          const claudeModels = claudeStaticModels(backends);
+          const bedrockProfiles = isClaudeBedrock ? bedrockRows(profile) : [];
+          const bedrockWarning = bedrockEnvWarning(profile);
           const opencodeProviders = providerOptionsFromModels(opencodeCatalogModels);
           const opencodeProviderChoices = opencodeProvider && !opencodeProviders.some(provider => provider.id === opencodeProvider)
             ? [{ id: opencodeProvider, label: opencodeProvider }, ...opencodeProviders]
@@ -1203,6 +1346,20 @@ function CliProfilesTab({ settings, backends, onPatch, onSave, saving, onValidat
                         </div>
                       </Field>
                     ) : null}
+                    {profile.harness === 'claude-code' ? (
+                      <Field label="Provider" hint="Choose whether this Claude Code profile uses Anthropic or AWS Bedrock model routing.">
+                        <div className="settings-select-wrap">
+                          <select
+                            value={claudeCodeProvider}
+                            onChange={(e) => patchClaudeCode(profile, { provider: e.target.value })}
+                          >
+                            <option value="anthropic">Anthropic</option>
+                            <option value="bedrock">AWS Bedrock</option>
+                          </select>
+                          {Ico.chevD(12)}
+                        </div>
+                      </Field>
+                    ) : null}
                     {isOpenCode ? (
                       <Field label="Provider" hint="Discovered from opencode models on this server.">
                         {opencodeProviderChoices.length > 0 ? (
@@ -1253,6 +1410,77 @@ function CliProfilesTab({ settings, backends, onPatch, onSave, saving, onValidat
                       </Field>
                     ) : null}
                   </div>
+
+                  {isClaudeBedrock ? (
+                    <div className="bedrock-profile-box">
+                      <div className="bedrock-profile-head">
+                        <div>
+                          <b>Bedrock Inference Profiles</b>
+                          <span className="u-dim">Friendly names appear in chat. The inference profile ID or ARN is sent to Claude Code as the model.</span>
+                        </div>
+                        <button
+                          type="button"
+                          className="btn"
+                          onClick={() => addBedrockInferenceProfile(profile)}
+                        >{Ico.plus(13)} Add Inference Profile</button>
+                      </div>
+                      {bedrockProfiles.length === 0 ? (
+                        <div className="settings-warning">Add at least one Bedrock inference profile to use this Claude Code profile in chat.</div>
+                      ) : (
+                        <div className="bedrock-profile-table">
+                          {bedrockProfiles.map(row => (
+                            <div className="bedrock-profile-row" key={row.id}>
+                              <input
+                                className="inp"
+                                value={row.name || ''}
+                                placeholder="Fable 5 - Global"
+                                aria-label="Friendly Name"
+                                onChange={(e) => updateBedrockInferenceProfile(profile, row.id, { name: e.target.value })}
+                              />
+                              <div className="settings-select-wrap">
+                                <select
+                                  value={row.baseModelId || ''}
+                                  aria-label="Base Model"
+                                  onChange={(e) => updateBedrockInferenceProfile(profile, row.id, { baseModelId: e.target.value || undefined })}
+                                >
+                                  <option value="">Base model</option>
+                                  {claudeModels.map(model => (
+                                    <option key={model.id} value={model.id}>{model.label || model.id}</option>
+                                  ))}
+                                </select>
+                                {Ico.chevD(12)}
+                              </div>
+                              <input
+                                className="inp u-mono"
+                                value={row.inferenceProfileId || ''}
+                                placeholder="global.anthropic.claude-fable-5"
+                                aria-label="Inference Profile ID or ARN"
+                                onChange={(e) => updateBedrockInferenceProfile(profile, row.id, { inferenceProfileId: e.target.value })}
+                              />
+                              <label className="bedrock-default">
+                                <input
+                                  type="radio"
+                                  name={`bedrock-default-${profile.id}`}
+                                  checked={row.default === true}
+                                  onChange={() => setDefaultBedrockInferenceProfile(profile, row.id)}
+                                />
+                                <span>Default</span>
+                              </label>
+                              <button
+                                type="button"
+                                className="iconbtn-lg"
+                                title="Remove inference profile"
+                                onClick={() => removeBedrockInferenceProfile(profile, row.id)}
+                              >
+                                {Ico.trash(13)}
+                              </button>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                      {bedrockWarning ? <div className="settings-field-hint u-err">{bedrockWarning}</div> : null}
+                    </div>
+                  ) : null}
 
                   {isAccount ? (
                     <>
@@ -1308,33 +1536,49 @@ function CliProfilesTab({ settings, backends, onPatch, onSave, saving, onValidat
                       </div>
                     </>
                   ) : (
-                    <div className="cli-self-note">
-                      <span className="dot-ok"/>
-                      <div>
-                        <b>Uses CLI state already on this server.</b>
-                        <div className="u-dim" style={{fontSize: 12, marginTop: 2}}>
-                          {isKiro ? (
-                            <>Configure Kiro on the server and use this self-configured profile. Kiro does not expose a dedicated account/config directory override yet.</>
-                          ) : isOpenCode ? (
-                            <>Configure OpenCode on the server with <code>opencode auth login</code>. This profile selects the OpenCode provider.</>
-                          ) : (
-                            <>Self-configured profiles inherit the host's existing <code>{cliSelfConfiguredHome(profile.harness)}</code> directory and shell environment. No directory or env overrides needed.</>
-                          )}
-                        </div>
-                        {isOpenCode ? (
-                          <div className="cli-auth-actions" style={{marginTop: 10}}>
-                            <button
-                              type="button"
-                              className="btn"
-                              disabled={saving || authBusy}
-                              onClick={() => checkProfileAuth(profile)}
-                            >Check OpenCode</button>
-                            <span className={`cli-auth-status ${authRunning ? 'running' : ''}`}>{authStateLabel(authState)}</span>
+                    <>
+                      {isClaudeBedrock ? (
+                        <Field label="Environment overrides" hint="Optional JSON object for AWS/Claude runtime environment values. Inference profiles are configured separately above.">
+                          <textarea
+                            className="ta"
+                            rows={5}
+                            value={envTextById[profile.id] || ''}
+                            placeholder={'{\n  "CLAUDE_CODE_USE_BEDROCK": "1",\n  "AWS_REGION": "us-west-2"\n}'}
+                            onChange={(e) => onEnvChange(profile, e.target.value)}
+                          />
+                          {envError ? <span className="settings-field-hint u-err">{envError}</span> : null}
+                        </Field>
+                      ) : null}
+                      <div className="cli-self-note">
+                        <span className="dot-ok"/>
+                        <div>
+                          <b>Uses CLI state already on this server.</b>
+                          <div className="u-dim" style={{fontSize: 12, marginTop: 2}}>
+                            {isKiro ? (
+                              <>Configure Kiro on the server and use this self-configured profile. Kiro does not expose a dedicated account/config directory override yet.</>
+                            ) : isOpenCode ? (
+                              <>Configure OpenCode on the server with <code>opencode auth login</code>. This profile selects the OpenCode provider.</>
+                            ) : isClaudeBedrock ? (
+                              <>This Bedrock profile inherits the host's existing <code>{cliSelfConfiguredHome(profile.harness)}</code> directory and applies the environment overrides above at runtime.</>
+                            ) : (
+                              <>Self-configured profiles inherit the host's existing <code>{cliSelfConfiguredHome(profile.harness)}</code> directory and shell environment. No directory or env overrides needed.</>
+                            )}
                           </div>
-                        ) : null}
-                        {isOpenCode && authText ? <pre className="cli-auth-log">{authText}</pre> : null}
+                          {isOpenCode ? (
+                            <div className="cli-auth-actions" style={{marginTop: 10}}>
+                              <button
+                                type="button"
+                                className="btn"
+                                disabled={saving || authBusy}
+                                onClick={() => checkProfileAuth(profile)}
+                              >Check OpenCode</button>
+                              <span className={`cli-auth-status ${authRunning ? 'running' : ''}`}>{authStateLabel(authState)}</span>
+                            </div>
+                          ) : null}
+                          {isOpenCode && authText ? <pre className="cli-auth-log">{authText}</pre> : null}
+                        </div>
                       </div>
-                    </div>
+                    </>
                   )}
                 </div>
               ) : null}

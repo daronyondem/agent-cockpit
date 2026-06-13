@@ -7,9 +7,19 @@ import { CodexPlanUsageStore } from '../codexPlanUsageStore.js';
 import { Tip } from '../tooltip.jsx';
 import { CLAUDE_CODE_INTERACTIVE_BACKEND_ID } from './chatHelpers.js';
 
-export function ContextChip({ backendId, cliProfileId, usage }){
+function isClaudeCodeFamilyBackend(backendId){
+  return backendId === 'claude-code' || backendId === CLAUDE_CODE_INTERACTIVE_BACKEND_ID;
+}
+
+function shouldShowClaudePlanUsage(backendId, cliProfile){
+  if (!isClaudeCodeFamilyBackend(backendId)) return false;
+  if (!cliProfile || cliProfile.harness !== 'claude-code') return true;
+  return (cliProfile.claudeCode?.provider || 'anthropic') === 'anthropic';
+}
+
+export function ContextChip({ backendId, cliProfileId, cliProfile, usage }){
   const renderer = getChipRenderer(backendId);
-  const store = (backendId === 'claude-code' || backendId === CLAUDE_CODE_INTERACTIVE_BACKEND_ID) ? PlanUsageStore
+  const store = shouldShowClaudePlanUsage(backendId, cliProfile) ? PlanUsageStore
     : backendId === 'kiro'        ? KiroPlanUsageStore
     : backendId === 'codex'       ? CodexPlanUsageStore
     : null;
