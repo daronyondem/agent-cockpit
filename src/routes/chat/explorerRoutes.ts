@@ -468,6 +468,7 @@ function explorerMimeType(filename: string): string {
     '.json': 'application/json', '.xml': 'application/xml', '.yaml': 'text/yaml', '.yml': 'text/yaml',
     '.csv': 'text/csv', '.tsv': 'text/tab-separated-values',
     '.html': 'text/html', '.htm': 'text/html', '.css': 'text/css', '.js': 'application/javascript',
+    '.astro': 'text/x-astro',
     '.ts': 'application/typescript', '.tsx': 'application/typescript', '.jsx': 'application/javascript',
     '.py': 'text/x-python', '.sh': 'application/x-sh', '.go': 'text/x-go', '.rs': 'text/x-rust',
     '.java': 'text/x-java', '.c': 'text/x-c', '.cpp': 'text/x-c++', '.h': 'text/x-c',

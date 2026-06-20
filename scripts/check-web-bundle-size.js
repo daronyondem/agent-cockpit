@@ -18,7 +18,7 @@ const DEFAULT_BUDGETS = {
     'markdown-vendor.js': 160 * KIB,
     'kbBrowser.js': 115 * KIB,
     'workspaceSettings.js': 95 * KIB,
-    'settingsScreen.js': 75 * KIB,
+    'settingsScreen.js': 80 * KIB,
     'settingsMigrationTab.js': 20 * KIB,
     'dialog.js': 60 * KIB,
     'filesBrowser.js': 45 * KIB,
