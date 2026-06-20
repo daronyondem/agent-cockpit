@@ -162,6 +162,19 @@ describe('GET /api/chat/workspaces/:hash/explorer/preview', () => {
     expect(res.body.mimeType).toBe('application/json');
   });
 
+  test('view mode returns Astro content with language and text mimeType', async () => {
+    const wsDir = path.join(env.tmpDir, 'fe-prev-astro');
+    fs.mkdirSync(wsDir, { recursive: true });
+    const content = '---\nconst title = "Hello";\n---\n<h1>{title}</h1>\n';
+    fs.writeFileSync(path.join(wsDir, 'index.astro'), content);
+    const conv = await env.chatService.createConversation('Test', wsDir);
+    const res = await env.request('GET', `/api/chat/workspaces/${conv.workspaceHash}/explorer/preview?path=${encodeURIComponent('index.astro')}&mode=view`);
+    expect(res.status).toBe(200);
+    expect(res.body.content).toBe(content);
+    expect(res.body.language).toBe('astro');
+    expect(res.body.mimeType).toBe('text/x-astro');
+  });
+
   test('view mode 413 when file is over 5 MB', async () => {
     const wsDir = path.join(env.tmpDir, 'fe-prev-big');
     fs.mkdirSync(wsDir, { recursive: true });
@@ -491,6 +504,17 @@ describe('PUT /api/chat/workspaces/:hash/explorer/file', () => {
     const res = await env.request('PUT', `/api/chat/workspaces/${conv.workspaceHash}/explorer/file`, { path: 'a/b/n.md', content: '# New' });
     expect(res.status).toBe(200);
     expect(fs.readFileSync(path.join(wsDir, 'a', 'b', 'n.md'), 'utf8')).toBe('# New');
+  });
+
+  test('overwrites an Astro file', async () => {
+    const wsDir = path.join(env.tmpDir, 'fe-save-astro');
+    fs.mkdirSync(wsDir, { recursive: true });
+    fs.writeFileSync(path.join(wsDir, 'index.astro'), '<h1>Old</h1>');
+    const conv = await env.chatService.createConversation('Test', wsDir);
+    const next = '---\nconst title = "New";\n---\n<h1>{title}</h1>\n';
+    const res = await env.request('PUT', `/api/chat/workspaces/${conv.workspaceHash}/explorer/file`, { path: 'index.astro', content: next });
+    expect(res.status).toBe(200);
+    expect(fs.readFileSync(path.join(wsDir, 'index.astro'), 'utf8')).toBe(next);
   });
 
   test('allows writing an empty string to truncate a file', async () => {

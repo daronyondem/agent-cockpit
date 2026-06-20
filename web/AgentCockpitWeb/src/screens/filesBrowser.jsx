@@ -5,16 +5,13 @@ import { AgentApi } from '../api.js';
 import { Ico } from '../icons.jsx';
 import { useDialog } from '../dialog.jsx';
 import { buildSideBySideRows, foldSideBySideRows, inlineDiffParts } from '../gitDiffRows';
+import { previewKind } from '../filePreviewKinds';
 
 /* Files Browser — modal-swap over the chat main pane.
    Full-screen workspace file explorer: lazy-loaded tree, preview/edit pane,
    CRUD via the anchored Dialog system (useDialog hook), multi-file upload
    with 3-concurrency progress, drag-and-drop onto the tree pane. */
 
-const TEXT_EXTS = new Set(['txt','md','markdown','json','yaml','yml','xml','csv','tsv','log','ini','conf','env','html','htm','css','js','ts','tsx','jsx','py','sh','bash','zsh','go','rs','java','c','cpp','h','hpp','sql','toml','rb','php','swift','kt','scala','r','lua','pl','gitignore','gitattributes','dockerignore','editorconfig']);
-const MD_EXTS = new Set(['md','markdown']);
-const IMAGE_EXTS = new Set(['png','jpg','jpeg','gif','webp','svg','bmp','ico']);
-const IMAGE_PREVIEW_LIMIT = 25 * 1024 * 1024;
 const UPLOAD_CONCURRENCY = 3;
 
 const FX_WIDTH_STORAGE_PREFIX = 'ac:v2:fx-tree-width:';
@@ -46,20 +43,6 @@ function saveFxWidth(hash, width){
   try {
     window.localStorage.setItem(FX_WIDTH_STORAGE_PREFIX + hash, String(Math.round(width)));
   } catch {}
-}
-
-function extOf(name){
-  const i = (name || '').lastIndexOf('.');
-  if (i < 0) return (name || '').toLowerCase().replace(/^\./, '');
-  return (name || '').slice(i + 1).toLowerCase();
-}
-
-function previewKind(name, size){
-  const e = extOf(name);
-  if (IMAGE_EXTS.has(e)) return (size || 0) > IMAGE_PREVIEW_LIMIT ? 'oversize-image' : 'image';
-  if (MD_EXTS.has(e)) return 'markdown';
-  if (TEXT_EXTS.has(e)) return 'text';
-  return 'unsupported';
 }
 
 function joinRel(parent, name){ return parent ? `${parent}/${name}` : name; }
