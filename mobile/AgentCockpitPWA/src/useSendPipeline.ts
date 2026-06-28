@@ -3,6 +3,7 @@ import { AgentAPIError } from './api';
 import {
   applyConversationRuntimeSelection,
   completedAttachmentMetas,
+  conversationForSend,
   goalActionUnsupportedMessage,
   parseGoalSlashCommand,
   reconcileRecoveredSendConversation,
@@ -165,9 +166,9 @@ export function useSendPipeline(options: UseSendPipelineOptions) {
 
   async function sendMessageNow(
     message: QueuedMessage,
-    sendOptions: { clearComposer?: boolean; restoreDraftOnFailure?: boolean } = {},
+    sendOptions: { clearComposer?: boolean; restoreDraftOnFailure?: boolean; conversationID?: string } = {},
   ): Promise<SendMessageResult> {
-    const conversation = options.activeConversation;
+    const conversation = conversationForSend(options.activeConversation, options.activeConversationRef, sendOptions.conversationID);
     if (!conversation) {
       return { ok: false, reason: 'busy' };
     }
@@ -347,7 +348,11 @@ export function useSendPipeline(options: UseSendPipelineOptions) {
     try {
       const savedQueue = await options.clientRef.current.saveQueue(conversation.id, remaining);
       setActiveConversationQueue(conversation.id, savedQueue);
-      const result = await sendMessageNow(nextMessage, { clearComposer: false, restoreDraftOnFailure: false });
+      const result = await sendMessageNow(nextMessage, {
+        clearComposer: false,
+        restoreDraftOnFailure: false,
+        conversationID: conversation.id,
+      });
       if (!result.ok) {
         await options.clientRef.current.saveQueue(conversation.id, queue).catch(() => undefined);
         setActiveConversationQueue(conversation.id, queue);

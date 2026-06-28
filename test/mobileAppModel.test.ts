@@ -208,6 +208,25 @@ describe('mobile app model helpers', () => {
     });
   });
 
+  test('resolves queued sends from the live active conversation ref', () => {
+    const liveConversation = {
+      id: 'conv-1',
+      messages: [],
+      backend: 'codex',
+    };
+    const renderedConversation = {
+      id: 'stale-conv',
+      messages: [],
+      backend: 'claude-code',
+    };
+
+    expect(model.conversationForSend(null, { current: liveConversation }, 'conv-1')).toBe(liveConversation);
+    expect(model.conversationForSend(renderedConversation, { current: liveConversation }, 'conv-1')).toBe(liveConversation);
+    expect(model.conversationForSend(renderedConversation, { current: null }, 'stale-conv')).toBe(renderedConversation);
+    expect(model.conversationForSend(renderedConversation, { current: liveConversation }, 'stale-conv')).toBeNull();
+    expect(model.conversationForSend(renderedConversation, { current: liveConversation }, 'missing-conv')).toBeNull();
+  });
+
   test('normalizes mobile backend profile and workspace identity helpers', () => {
     const profiles = [
       { id: 'codex-profile', name: 'Codex', harness: 'codex' },

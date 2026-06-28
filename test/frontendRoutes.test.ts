@@ -609,7 +609,8 @@ describe('frontend routes', () => {
     expect(sendPipelineSrc).toContain('if (await options.recoverActiveStream(conversation.id, { onlyIfServerActive: true }))');
     expect(sendPipelineSrc).toContain('await reconcileRecoveredActiveSend(conversation.id, conversation.messages.length, content);');
     expect(sendPipelineSrc).toContain('return { ok: true };');
-    expect(sendPipelineSrc).toContain('sendMessageNow(nextMessage, { clearComposer: false, restoreDraftOnFailure: false })');
+    expect(sendPipelineSrc).toContain('conversationForSend(options.activeConversation, options.activeConversationRef, sendOptions.conversationID)');
+    expect(sendPipelineSrc).toContain('conversationID: conversation.id');
     expect(mobileChatScreenSrc).toContain('isSending: boolean;');
     expect(mobileChatScreenSrc).toContain('props.isSending');
   });

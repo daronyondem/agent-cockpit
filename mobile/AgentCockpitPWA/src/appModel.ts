@@ -470,6 +470,24 @@ export function applyConversationRuntimeSelection<T extends Pick<Conversation, '
   return next;
 }
 
+export function conversationForSend<T extends Pick<Conversation, 'id'>>(
+  renderedConversation: T | null | undefined,
+  activeConversationRef: { current: T | null | undefined },
+  expectedConversationID?: string,
+): T | null {
+  const current = activeConversationRef.current || null;
+  if (!expectedConversationID) {
+    return current || renderedConversation || null;
+  }
+  if (current) {
+    return current.id === expectedConversationID ? current : null;
+  }
+  if (renderedConversation && renderedConversation.id === expectedConversationID) {
+    return renderedConversation;
+  }
+  return null;
+}
+
 export function updateSessionsAfterReset(sessions: SessionHistoryItem[], response: ResetSessionResponse): SessionHistoryItem[] {
   const archived = response.archivedSession;
   const updated = sessions.map((session) => {
