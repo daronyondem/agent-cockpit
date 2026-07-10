@@ -26,6 +26,9 @@ describe('web bundle budget', () => {
 
   test('normalizes Vite hashed chunk names', () => {
     expect(normalizeAssetName('react-vendor-68Ltgy9u.js')).toBe('react-vendor.js');
+    expect(normalizeAssetName('react-vendor.js')).toBe('react-vendor.js');
+    expect(normalizeAssetName('index-Lh-PE9iR.js')).toBe('index.js');
+    expect(normalizeAssetName('stream-frame-reducer-BrHVYrmO.js')).toBe('stream-frame-reducer.js');
     expect(normalizeAssetName('index-CxCf_pmJ.css')).toBe('index.css');
     expect(normalizeAssetName('rolldown-runtime-jpDsebLB.js')).toBe('rolldown-runtime.js');
   });

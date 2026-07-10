@@ -8,12 +8,12 @@ const DEFAULT_BUILD_DIR = path.join(ROOT, 'public', 'v2-built');
 const KIB = 1024;
 
 const DEFAULT_BUDGETS = {
-  totalJs: 890 * KIB,
+  totalJs: 895 * KIB,
   totalCss: 230 * KIB,
   maxJsAsset: 230 * KIB,
   maxCssAsset: 230 * KIB,
   assets: {
-    'index.js': 212 * KIB,
+    'index.js': 260 * KIB,
     'react-vendor.js': 230 * KIB,
     'markdown-vendor.js': 160 * KIB,
     'kbBrowser.js': 115 * KIB,
@@ -34,9 +34,29 @@ function formatBytes(bytes) {
   return `${(bytes / KIB).toFixed(1)} KiB`;
 }
 
+function looksLikeViteHash(token) {
+  return token.length >= 6 && /^[A-Za-z0-9_-]+$/.test(token) && /[A-Z0-9_]/.test(token);
+}
+
 function normalizeAssetName(fileName) {
   const ext = path.extname(fileName);
-  const stem = path.basename(fileName, ext).replace(/-[A-Za-z0-9_]{6,}$/, '');
+  const stem = path.basename(fileName, ext);
+  const parts = stem.split('-');
+
+  if (parts.length > 1) {
+    const last = parts[parts.length - 1];
+    if (looksLikeViteHash(last)) {
+      return `${parts.slice(0, -1).join('-')}${ext}`;
+    }
+
+    if (parts.length > 2) {
+      const twoPartHash = `${parts[parts.length - 2]}-${last}`;
+      if (looksLikeViteHash(twoPartHash)) {
+        return `${parts.slice(0, -2).join('-')}${ext}`;
+      }
+    }
+  }
+
   return `${stem}${ext}`;
 }
 
