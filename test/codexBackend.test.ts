@@ -273,11 +273,14 @@ describe('CodexAdapter', () => {
     expect(models!.length).toBeGreaterThanOrEqual(3);
     // Exactly one default model
     expect(models!.filter((m) => m.default).length).toBe(1);
-    // Fallback list includes the GPT family
-    const gpt55 = models!.find((m) => m.id === 'gpt-5.5');
-    expect(gpt55).toBeDefined();
-    expect(gpt55!.supportedEffortLevels).toEqual(['low', 'medium', 'high', 'xhigh']);
-    expect(gpt55!.capabilities?.input?.image).toBe(true);
+    // Fallback list includes the current Codex CLI model family.
+    const gpt56Sol = models!.find((m) => m.id === 'gpt-5.6-sol');
+    expect(gpt56Sol).toBeDefined();
+    expect(gpt56Sol!.default).toBe(true);
+    expect(gpt56Sol!.supportedEffortLevels).toEqual(['low', 'medium', 'high', 'xhigh', 'max', 'ultra']);
+    expect(gpt56Sol!.capabilities?.input?.image).toBe(true);
+    const spark = models!.find((m) => m.id === 'gpt-5.3-codex-spark');
+    expect(spark?.capabilities?.input).toEqual({ text: true });
   });
 
   test('getMetadata falls back when a Windows cmd shim exits before stdin writes complete', async () => {
@@ -419,6 +422,8 @@ describe('CodexAdapter', () => {
         { reasoningEffort: 'low', description: 'Low reasoning' },
         { reasoningEffort: 'high', description: 'High reasoning' },
         { reasoningEffort: 'xhigh', description: 'Extra high reasoning' },
+        { reasoningEffort: 'max', description: 'Max reasoning' },
+        { reasoningEffort: 'ultra', description: 'Ultra reasoning' },
       ],
     });
 
@@ -429,7 +434,7 @@ describe('CodexAdapter', () => {
       description: 'Frontier model',
       costTier: 'medium',
       default: true,
-      supportedEffortLevels: ['none', 'minimal', 'low', 'high', 'xhigh'],
+      supportedEffortLevels: ['none', 'minimal', 'low', 'high', 'xhigh', 'max', 'ultra'],
       capabilities: {
         input: { text: true, image: true },
         output: { text: true },
@@ -446,27 +451,28 @@ describe('CodexAdapter', () => {
         { effort: 'medium' },
         { effort: 'high' },
         { effort: 'xhigh' },
+        { effort: 'ultra' },
         { effort: 'unsupported-value' },
       ],
     });
 
     expect(model!.id).toBe('gpt-5.4');
     expect(model!.label).toBe('GPT-5.4');
-    expect(model!.supportedEffortLevels).toEqual(['low', 'medium', 'high', 'xhigh']);
+    expect(model!.supportedEffortLevels).toEqual(['low', 'medium', 'high', 'xhigh', 'ultra']);
   });
 
   test('buildCodexTurnStartParams forwards supported effort only', () => {
     const models = [
-      { id: 'gpt-5.5', label: 'GPT-5.5', family: 'gpt', supportedEffortLevels: ['none', 'minimal', 'low', 'medium', 'high', 'xhigh'] },
+      { id: 'gpt-5.6-sol', label: 'GPT-5.6-Sol', family: 'gpt', supportedEffortLevels: ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra'] },
       { id: 'basic', label: 'Basic', family: 'gpt' },
     ] satisfies ModelOption[];
     const input = [{ type: 'text', text: 'hello', text_elements: [] }];
 
-    expect(buildCodexTurnStartParams('t1', input, 'gpt-5.5', 'minimal', models)).toEqual({
+    expect(buildCodexTurnStartParams('t1', input, 'gpt-5.6-sol', 'ultra', models)).toEqual({
       threadId: 't1',
       input,
-      model: 'gpt-5.5',
-      effort: 'minimal',
+      model: 'gpt-5.6-sol',
+      effort: 'ultra',
     });
     expect(buildCodexTurnStartParams('t1', input, 'basic', 'minimal', models)).toEqual({
       threadId: 't1',

@@ -26,7 +26,7 @@ export const CHAT_SCROLL_BOTTOM_THRESHOLD_PX = 48;
 const STREAM_RECONNECT_BASE_MS = 1_000;
 const STREAM_RECONNECT_MAX_MS = 15_000;
 
-const effortOrder: EffortLevel[] = ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'];
+const effortOrder: EffortLevel[] = ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra'];
 
 type GoalCapabilityMetadata = NonNullable<NonNullable<BackendMetadata['capabilities']>['goals']>;
 

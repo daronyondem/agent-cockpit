@@ -1,7 +1,9 @@
 import type { EffortLevel, ModelCapabilities, ModelOption } from '../../types';
 
-const CODEX_SUPPORTED_EFFORTS: EffortLevel[] = ['none', 'minimal', 'low', 'medium', 'high', 'xhigh'];
+const CODEX_SUPPORTED_EFFORTS: EffortLevel[] = ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra'];
 const CODEX_FALLBACK_EFFORTS: EffortLevel[] = ['low', 'medium', 'high', 'xhigh'];
+const CODEX_56_FALLBACK_EFFORTS: EffortLevel[] = ['low', 'medium', 'high', 'xhigh', 'max'];
+const CODEX_56_ULTRA_FALLBACK_EFFORTS: EffortLevel[] = ['low', 'medium', 'high', 'xhigh', 'max', 'ultra'];
 
 export const CODEX_MODEL_CAPABILITIES: ModelCapabilities = {
   input: { text: true, image: true },
@@ -16,32 +18,71 @@ export const CODEX_MODEL_CAPABILITIES: ModelCapabilities = {
 // lineup churns enough that authoritative discovery beats hardcoding.
 export const FALLBACK_MODELS: ModelOption[] = [
   {
+    id: 'gpt-5.6-sol',
+    label: 'GPT-5.6-Sol',
+    family: 'gpt',
+    description: 'Latest frontier agentic coding model.',
+    costTier: 'high',
+    default: true,
+    supportedEffortLevels: CODEX_56_ULTRA_FALLBACK_EFFORTS,
+    capabilities: CODEX_MODEL_CAPABILITIES,
+  },
+  {
     id: 'gpt-5.5',
     label: 'GPT-5.5',
     family: 'gpt',
-    description: 'Latest GPT — default model for codex',
-    costTier: 'high',
-    default: true,
-    supportedEffortLevels: CODEX_FALLBACK_EFFORTS,
-    capabilities: CODEX_MODEL_CAPABILITIES,
-  },
-  {
-    id: 'gpt-5.5-codex',
-    label: 'GPT-5.5 Codex',
-    family: 'gpt',
-    description: 'Codex-tuned variant — optimized for agentic coding tasks',
+    description: 'Frontier model for complex coding, research, and real-world work.',
     costTier: 'high',
     supportedEffortLevels: CODEX_FALLBACK_EFFORTS,
     capabilities: CODEX_MODEL_CAPABILITIES,
   },
   {
-    id: 'gpt-5.5-mini',
-    label: 'GPT-5.5 Mini',
+    id: 'gpt-5.6-terra',
+    label: 'GPT-5.6-Terra',
     family: 'gpt',
-    description: 'Smaller and faster — good for simple tasks',
+    description: 'Balanced agentic coding model for everyday work.',
+    costTier: 'medium',
+    supportedEffortLevels: CODEX_56_ULTRA_FALLBACK_EFFORTS,
+    capabilities: CODEX_MODEL_CAPABILITIES,
+  },
+  {
+    id: 'gpt-5.6-luna',
+    label: 'GPT-5.6-Luna',
+    family: 'gpt',
+    description: 'Fast and affordable agentic coding model.',
+    costTier: 'low',
+    supportedEffortLevels: CODEX_56_FALLBACK_EFFORTS,
+    capabilities: CODEX_MODEL_CAPABILITIES,
+  },
+  {
+    id: 'gpt-5.4',
+    label: 'GPT-5.4',
+    family: 'gpt',
+    description: 'Strong model for everyday coding.',
+    costTier: 'medium',
+    supportedEffortLevels: CODEX_FALLBACK_EFFORTS,
+    capabilities: CODEX_MODEL_CAPABILITIES,
+  },
+  {
+    id: 'gpt-5.4-mini',
+    label: 'GPT-5.4-Mini',
+    family: 'gpt',
+    description: 'Small, fast, and cost-efficient model for simpler coding tasks.',
     costTier: 'low',
     supportedEffortLevels: CODEX_FALLBACK_EFFORTS,
     capabilities: CODEX_MODEL_CAPABILITIES,
+  },
+  {
+    id: 'gpt-5.3-codex-spark',
+    label: 'GPT-5.3-Codex-Spark',
+    family: 'gpt',
+    description: 'Ultra-fast coding model.',
+    costTier: 'low',
+    supportedEffortLevels: CODEX_FALLBACK_EFFORTS,
+    capabilities: {
+      input: { text: true },
+      output: { text: true },
+    },
   },
 ];
 
@@ -71,7 +112,7 @@ export interface CodexModelListEntry {
 }
 
 function isEffortLevel(v: unknown): v is EffortLevel {
-  return typeof v === 'string' && (['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'] as string[]).includes(v);
+  return typeof v === 'string' && (CODEX_SUPPORTED_EFFORTS as string[]).includes(v);
 }
 
 function normalizeCodexEfforts(raw: unknown): EffortLevel[] | undefined {

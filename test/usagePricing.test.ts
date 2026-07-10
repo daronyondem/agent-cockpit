@@ -76,6 +76,59 @@ describe('usage cost estimator', () => {
     });
   });
 
+  test('estimates GPT-5.6 Sol token cost with cache writes', () => {
+    const estimate = estimateUsageCost({
+      backend: 'codex',
+      model: 'gpt-5.6-sol',
+      pricedAt: '2026-07-10T00:00:00.000Z',
+      usage: {
+        ...baseUsage,
+        inputTokens: 1_000_000,
+        cacheReadTokens: 2_000_000,
+        cacheWriteTokens: 1_000_000,
+        outputTokens: 500_000,
+      },
+    });
+    expect(estimate.costSource).toBe('estimated');
+    expect(estimate.estimatedCostUsd).toBeCloseTo(27.25);
+    expect(estimate.costSnapshot).toMatchObject({
+      provider: 'openai',
+      model: 'gpt-5.6-sol',
+      pricingEntryId: 'openai-gpt-5.6-sol-standard',
+      ratesPerMillion: {
+        input: 5,
+        cachedInput: 0.5,
+        cacheWrite: 6.25,
+        output: 30,
+      },
+    });
+  });
+
+  test('uses GPT-5.6 Priority pricing when Codex Fast requests the priority tier', () => {
+    const estimate = estimateUsageCost({
+      backend: 'codex',
+      model: 'gpt-5.6-luna',
+      pricingTier: 'priority',
+      pricedAt: '2026-07-10T00:00:00.000Z',
+      usage: {
+        ...baseUsage,
+        inputTokens: 1_000_000,
+        cacheReadTokens: 2_000_000,
+        cacheWriteTokens: 1_000_000,
+        outputTokens: 500_000,
+      },
+    });
+    expect(estimate.costSource).toBe('estimated');
+    expect(estimate.estimatedCostUsd).toBeCloseTo(10.9);
+    expect(estimate.costSnapshot).toMatchObject({
+      provider: 'openai',
+      model: 'gpt-5.6-luna',
+      pricingTier: 'priority',
+      pricingEntryId: 'openai-gpt-5.6-luna-priority',
+      sourceUrl: 'https://developers.openai.com/api/docs/pricing',
+    });
+  });
+
   test('matches more specific model patterns before broad patterns', () => {
     const entry = findPricingEntry(BUILTIN_USAGE_PRICING_CATALOG.entries, 'openai', 'gpt-5.4-mini');
     expect(entry?.id).toBe('openai-gpt-5.4-mini-standard');
@@ -197,6 +250,15 @@ describe('usage cost estimator', () => {
     const estimate = estimateUsageCost({
       backend: 'codex',
       model: 'gpt-5.5-mini',
+      usage: { ...baseUsage, inputTokens: 1_000_000 },
+    });
+    expect(estimate.costSource).toBe('none');
+  });
+
+  test('does not infer API pricing for Codex Spark research preview', () => {
+    const estimate = estimateUsageCost({
+      backend: 'codex',
+      model: 'gpt-5.3-codex-spark',
       usage: { ...baseUsage, inputTokens: 1_000_000 },
     });
     expect(estimate.costSource).toBe('none');

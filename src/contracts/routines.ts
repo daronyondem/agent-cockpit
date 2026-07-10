@@ -170,7 +170,7 @@ export interface RoutineProposalValidationRequest {
 
 export const ROUTINE_PROPOSAL_MARKER_RE = /<!--\s*AGENT_COCKPIT_ROUTINE_PROPOSAL:v1:(.*?)\s*-->/g;
 
-const EFFORT_LEVELS = ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'] as const;
+const EFFORT_LEVELS = ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra'] as const;
 
 export function extractRoutineProposalMarkers(text: unknown): string[] {
   if (typeof text !== 'string' || !text) return [];

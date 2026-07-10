@@ -31,7 +31,7 @@ import type {
 const OPENCODE_ICON = null;
 const OPENCODE_EXEC_TIMEOUT_MS = 60_000;
 const OPENCODE_MAX_BUFFER = 4 * 1024 * 1024;
-const OPENCODE_EFFORT_ORDER: EffortLevel[] = ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'];
+const OPENCODE_EFFORT_ORDER: EffortLevel[] = ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra'];
 const OPENCODE_EFFORT_SET = new Set<string>(OPENCODE_EFFORT_ORDER);
 const opencodeLog = logger.child({ module: 'opencode-backend' });
 

@@ -103,7 +103,7 @@ validators. The manifest schema is:
   harness?: {
     cliProfileId?: string;
     model?: string;
-    effort?: 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max';
+    effort?: 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max' | 'ultra';
   };
   notification?: { mode: 'off' | 'workspaceDefault' };
   outputRetentionDays?: number;  // clamped 1..3650
