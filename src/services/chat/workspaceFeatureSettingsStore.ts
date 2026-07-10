@@ -19,6 +19,7 @@ const WORKSPACE_CONTEXT_EFFORT_LEVELS = new Set<EffortLevel>([
   'high',
   'xhigh',
   'max',
+  'ultra',
 ]);
 
 interface WorkspaceFeatureSettingsStoreDeps {

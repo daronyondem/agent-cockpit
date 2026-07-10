@@ -10,9 +10,9 @@ import { parseClaudeCodeModeInput, type ClaudeCodeModeInput, type ContractClaude
 import { parseServiceTierInput, type ContractServiceTier, type ServiceTierInput } from './serviceTier';
 import { asRecord, optionalBoolean, optionalString, optionalStringEnum, requiredBoolean, requiredNonEmptyString } from './validation';
 
-export type ContractEffortLevel = 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max';
+export type ContractEffortLevel = 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max' | 'ultra';
 
-export const CONTRACT_EFFORT_LEVELS: readonly ContractEffortLevel[] = ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'];
+export const CONTRACT_EFFORT_LEVELS: readonly ContractEffortLevel[] = ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra'];
 
 export interface CreateConversationRequest {
   title?: string;

@@ -1,7 +1,7 @@
 // ── CLI Profile Types ───────────────────────────────────────────────
 
 /** Adaptive reasoning effort level. Supported values are model/backend-specific. */
-export type EffortLevel = 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max';
+export type EffortLevel = 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max' | 'ultra';
 
 /** Claude Code-specific session mode. Omit for regular Claude Code effort handling. */
 export type ClaudeCodeMode = 'ultracode';

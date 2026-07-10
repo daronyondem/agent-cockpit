@@ -675,7 +675,7 @@ Together these guarantee that a workspace index always parses on disk and that c
     backend: string,            // Internal backend id: 'claude-code' | 'claude-code-interactive' | 'kiro' | 'codex' | 'opencode'. Kept for back-compat and transcript rendering. Some backends share a physical CLI harness/profile.
     cliProfileId?: string,      // Runtime CLI profile selected for this conversation. When present, runtime adapter selection is derived from Settings.cliProfiles[id].harness plus Claude Code's optional protocol while command/auth/config still come from the physical profile.
     model?: string,             // Full model ID (e.g. 'claude-fable-5', 'claude-opus-4-8', 'claude-sonnet-4-6', 'claude-haiku-4-5'); absent = backend default
-    effort?: string,            // Adaptive reasoning effort: 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max'; absent = model default. Supported values are backend/model-specific. Stale unsupported values are reconciled to `high` when available, then the first supported level, or removed when the model has no effort support.
+    effort?: string,            // Adaptive reasoning effort: 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max' | 'ultra'; absent = model default. Supported values are backend/model-specific. Stale unsupported values are reconciled to `high` when available, then the first supported level, or removed when the model has no effort support.
     claudeCodeMode?: string,    // Claude Code-only session mode. Current value: 'ultracode'. Stored only for claude-code/claude-code-interactive when the selected model supports xhigh; absent = normal Claude Code mode.
     serviceTier?: string,       // Codex-only service tier override. Current value: 'fast'. Absent = use the selected Codex profile/config default.
     currentSessionId: string,   // UUID of the active CLI session
@@ -1496,7 +1496,7 @@ Flat object assembled from workspace index + active session file:
   title: string,
   backend: string,
   model?: string,               // Full model ID (e.g. 'claude-fable-5', 'claude-opus-4-8', 'claude-sonnet-4-6', 'claude-haiku-4-5')
-  effort?: string,              // Adaptive reasoning effort: 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max'
+  effort?: string,              // Adaptive reasoning effort: 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max' | 'ultra'
   claudeCodeMode?: string,      // Claude Code-only session mode. Current value: 'ultracode'
   serviceTier?: string,         // Codex-only service tier override; currently 'fast'
   workingDir: string,           // The workspace path

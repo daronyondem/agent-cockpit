@@ -1,6 +1,6 @@
 import type { ExplorerEntry, ExplorerPreviewResponse, ExplorerTreeResponse, FilePreviewResponse } from './explorer';
 
-export type EffortLevel = 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max';
+export type EffortLevel = 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max' | 'ultra';
 export type ServiceTier = 'fast';
 export type ClaudeCodeMode = 'ultracode';
 export type AttachmentKind = 'image' | 'pdf' | 'text' | 'code' | 'md' | 'folder' | 'file';

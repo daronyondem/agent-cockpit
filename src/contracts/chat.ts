@@ -82,7 +82,7 @@ export function validateSettingsRequest(body: unknown): Settings {
   optionalString(record, 'defaultBackend', 'defaultBackend must be a string');
   optionalString(record, 'defaultCliProfileId', 'defaultCliProfileId must be a string');
   optionalString(record, 'defaultModel', 'defaultModel must be a string');
-  optionalStringEnum(record, 'defaultEffort', ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'], 'defaultEffort is invalid');
+  optionalStringEnum(record, 'defaultEffort', ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra'], 'defaultEffort is invalid');
   optionalStringEnum(record, 'defaultServiceTier', ['fast'], 'defaultServiceTier is invalid');
   optionalString(record, 'workingDirectory', 'workingDirectory must be a string');
   validateCliProfiles(record.cliProfiles);

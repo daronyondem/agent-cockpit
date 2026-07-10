@@ -71,8 +71,8 @@ export interface ModelOption {
    * Adaptive reasoning effort levels this model supports. Omit for models
    * without effort support (e.g. Haiku). UI uses presence of this field to
    * decide whether to show the effort dropdown. Values are backend/model-
-   * specific; Codex may expose `none` / `minimal`, while Claude Code exposes
-   * `max` on supported Claude models.
+   * specific; Codex may expose `none` / `minimal` / `ultra`, while Claude Code
+   * exposes `max` on supported Claude models.
    */
   supportedEffortLevels?: EffortLevel[];
   capabilities?: ModelCapabilities;

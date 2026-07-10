@@ -1,8 +1,101 @@
 {
   "schemaVersion": 1,
-  "version": "2026-06-09",
+  "version": "2026-07-10",
   "currency": "USD",
   "entries": [
+    {
+      "id": "openai-gpt-5.6-sol-standard",
+      "provider": "openai",
+      "modelPattern": "gpt-5.6-sol",
+      "unit": "tokens",
+      "sourceUrl": "https://developers.openai.com/api/docs/pricing",
+      "verifiedAt": "2026-07-10",
+      "effectiveDate": "2026-07-09",
+      "ratesPerMillion": {
+        "input": 5,
+        "cachedInput": 0.5,
+        "cacheWrite": 6.25,
+        "output": 30
+      }
+    },
+    {
+      "id": "openai-gpt-5.6-sol-priority",
+      "provider": "openai",
+      "modelPattern": "gpt-5.6-sol",
+      "pricingTier": "priority",
+      "unit": "tokens",
+      "sourceUrl": "https://developers.openai.com/api/docs/pricing",
+      "verifiedAt": "2026-07-10",
+      "effectiveDate": "2026-07-09",
+      "ratesPerMillion": {
+        "input": 10,
+        "cachedInput": 1,
+        "cacheWrite": 12.5,
+        "output": 60
+      }
+    },
+    {
+      "id": "openai-gpt-5.6-terra-standard",
+      "provider": "openai",
+      "modelPattern": "gpt-5.6-terra",
+      "unit": "tokens",
+      "sourceUrl": "https://developers.openai.com/api/docs/pricing",
+      "verifiedAt": "2026-07-10",
+      "effectiveDate": "2026-07-09",
+      "ratesPerMillion": {
+        "input": 2.5,
+        "cachedInput": 0.25,
+        "cacheWrite": 3.125,
+        "output": 15
+      }
+    },
+    {
+      "id": "openai-gpt-5.6-terra-priority",
+      "provider": "openai",
+      "modelPattern": "gpt-5.6-terra",
+      "pricingTier": "priority",
+      "unit": "tokens",
+      "sourceUrl": "https://developers.openai.com/api/docs/pricing",
+      "verifiedAt": "2026-07-10",
+      "effectiveDate": "2026-07-09",
+      "ratesPerMillion": {
+        "input": 5,
+        "cachedInput": 0.5,
+        "cacheWrite": 6.25,
+        "output": 30
+      }
+    },
+    {
+      "id": "openai-gpt-5.6-luna-standard",
+      "provider": "openai",
+      "modelPattern": "gpt-5.6-luna",
+      "unit": "tokens",
+      "sourceUrl": "https://developers.openai.com/api/docs/pricing",
+      "verifiedAt": "2026-07-10",
+      "effectiveDate": "2026-07-09",
+      "ratesPerMillion": {
+        "input": 1,
+        "cachedInput": 0.1,
+        "cacheWrite": 1.25,
+        "output": 6
+      }
+    },
+    {
+      "id": "openai-gpt-5.6-luna-priority",
+      "provider": "openai",
+      "modelPattern": "gpt-5.6-luna",
+      "pricingTier": "priority",
+      "unit": "tokens",
+      "sourceUrl": "https://developers.openai.com/api/docs/pricing",
+      "verifiedAt": "2026-07-10",
+      "effectiveDate": "2026-07-09",
+      "ratesPerMillion": {
+        "input": 2,
+        "cachedInput": 0.2,
+        "cacheWrite": 2.5,
+        "output": 12
+      }
+    },
     {
       "id": "openai-gpt-5.5-standard",
       "provider": "openai",
