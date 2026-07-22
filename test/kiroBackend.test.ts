@@ -36,7 +36,7 @@ describe('KiroAdapter', () => {
     const adapter = new KiroAdapter({ workingDir: '/tmp' });
     const models = adapter.metadata.models;
     expect(models).toBeDefined();
-    expect(models!.length).toBe(14); // auto + 4 opus + 3 sonnet + haiku + 5 open-weight
+    expect(models!.length).toBe(19); // auto + fable + 4 opus + 4 sonnet + haiku + 3 GPT + 5 open-weight
 
     const auto = models!.find(m => m.id === 'auto');
     expect(auto).toBeDefined();
@@ -47,6 +47,12 @@ describe('KiroAdapter', () => {
 
     // auto is the only default
     expect(models!.filter(m => m.default).length).toBe(1);
+
+    const sonnet5 = models!.find(m => m.id === 'claude-sonnet-5');
+    expect(sonnet5).toBeDefined();
+    expect(sonnet5!.family).toBe('sonnet');
+    expect(sonnet5!.costTier).toBe('medium');
+    expect(sonnet5!.capabilities?.input?.image).toBe(true);
 
     const opus48 = models!.find(m => m.id === 'claude-opus-4.8');
     expect(opus48).toBeDefined();
@@ -73,14 +79,33 @@ describe('KiroAdapter', () => {
     expect(deepseek).toBeDefined();
     expect(deepseek!.capabilities?.input?.image).toBe(false);
 
-    const sonnet40 = models!.find(m => m.id === 'claude-sonnet-4.0');
-    expect(sonnet40).toBeDefined();
-    expect(sonnet40!.family).toBe('sonnet');
+    const sonnet4 = models!.find(m => m.id === 'claude-sonnet-4');
+    expect(sonnet4).toBeDefined();
+    expect(sonnet4!.family).toBe('sonnet');
+    expect(models!.find(m => m.id === 'claude-sonnet-4.0')).toBeUndefined();
+
+    const fable5 = models!.find(m => m.id === 'claude-fable-5');
+    expect(fable5).toBeDefined();
+    expect(fable5!.family).toBe('fable');
+    expect(fable5!.costTier).toBe('high');
+    expect(fable5!.capabilities?.input?.image).toBe(true);
 
     const haiku = models!.find(m => m.id === 'claude-haiku-4.5');
     expect(haiku).toBeDefined();
     expect(haiku!.family).toBe('haiku');
     expect(haiku!.costTier).toBe('low');
+
+    for (const [id, costTier] of [
+      ['gpt-5.6-sol', 'high'],
+      ['gpt-5.6-terra', 'medium'],
+      ['gpt-5.6-luna', 'low'],
+    ] as const) {
+      const m = models!.find(x => x.id === id);
+      expect(m).toBeDefined();
+      expect(m!.family).toBe('gpt');
+      expect(m!.costTier).toBe(costTier);
+      expect(m!.capabilities?.input?.image).toBe(false);
+    }
 
     // Open-weight models are tagged family='other' and costTier='low'
     for (const id of ['deepseek-3.2', 'minimax-m2.5', 'minimax-m2.1', 'glm-5', 'qwen3-coder-next']) {
