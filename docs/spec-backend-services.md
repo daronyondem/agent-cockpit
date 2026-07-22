@@ -1099,18 +1099,23 @@ When a `.claude/plans/` write completes in plan mode, the streaming route may em
 
 ### KiroAdapter (`src/services/backends/kiro.ts`)
 
-**Metadata:** `id: 'kiro'`, capabilities: `thinking: true, planMode: false, agents: true, toolActivity: true, userQuestions: false, stdinInput: false, oneShotMediaInput: { image: ['explicit-attachment'] }`. `resumeCapabilities` reports active-turn resume as unsupported and later-session resume as supported via `external_session` + `session/load`. Exposes a hardcoded `models` array so the selector renders immediately on page load (Kiro's ACP `session/new` response also carries a model list, but that's only available after the first message — reading it lazily caused the dropdown to appear empty and then pop in "after the fact"). The hardcoded list mirrors [kiro.dev/docs/cli/models](https://kiro.dev/docs/cli/models/). `auto` and Claude-family Kiro models declare image input support; open-weight Kiro models with unknown or text-only media behavior declare text-only capabilities so KB image conversion fails closed instead of assuming vision:
+**Metadata:** `id: 'kiro'`, capabilities: `thinking: true, planMode: false, agents: true, toolActivity: true, userQuestions: false, stdinInput: false, oneShotMediaInput: { image: ['explicit-attachment'] }`. `resumeCapabilities` reports active-turn resume as unsupported and later-session resume as supported via `external_session` + `session/load`. Exposes a hardcoded `models` array so the selector renders immediately on page load (Kiro's ACP `session/new` response also carries a model list, but that's only available after the first message — reading it lazily caused the dropdown to appear empty and then pop in "after the fact"). The hardcoded list mirrors the customer-usable catalog advertised by Kiro CLI 2.13.1 plus the explicitly requested internal `claude-fable-5` preview. `auto` and Claude-family Kiro models declare image input support; GPT and open-weight Kiro models with unconfirmed media behavior declare text-only capabilities so KB image conversion fails closed instead of assuming vision:
 
 | ID | Family | Cost Tier | Default |
 |---|---|---|---|
 | `auto` | router | medium | ✓ |
+| `claude-sonnet-5` | sonnet | medium | — |
 | `claude-opus-4.8` | opus | high | — |
+| `gpt-5.6-sol` | gpt | high | — |
+| `gpt-5.6-terra` | gpt | medium | — |
+| `gpt-5.6-luna` | gpt | low | — |
 | `claude-opus-4.7` | opus | high | — |
 | `claude-opus-4.6` | opus | high | — |
 | `claude-opus-4.5` | opus | high | — |
 | `claude-sonnet-4.6` | sonnet | medium | — |
 | `claude-sonnet-4.5` | sonnet | medium | — |
-| `claude-sonnet-4.0` | sonnet | medium | — |
+| `claude-sonnet-4` | sonnet | medium | — |
+| `claude-fable-5` | fable | high | — |
 | `claude-haiku-4.5` | haiku | low | — |
 | `deepseek-3.2` | other | low | — |
 | `minimax-m2.5` | other | low | — |
@@ -1118,7 +1123,7 @@ When a `.claude/plans/` write completes in plan mode, the streaming route may em
 | `glm-5` | other | low | — |
 | `qwen3-coder-next` | other | low | — |
 
-No `supportedEffortLevels` — Kiro does not expose effort tuning. When Kiro adds or removes models upstream, update this list manually.
+No `supportedEffortLevels` — Kiro does not expose effort tuning. `claude-fable-5` is visibly labeled as an internal development preview that must not be used with customer data, ITAR, or PII. When Kiro adds or removes models upstream, update this list manually.
 
 **Integration protocol:** ACP (Agent Client Protocol) — JSON-RPC 2.0 over stdin/stdout via `kiro-cli acp`.
 
