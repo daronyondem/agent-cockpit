@@ -121,7 +121,7 @@ export interface SendMessageOptions {
    * prompting the fresh native session.
    */
   sessionRecovery?: SessionRecoveryOptions;
-  /** Full model ID (e.g., 'claude-fable-5', 'claude-opus-4-8', 'claude-sonnet-4-6'). Backends that don't support model selection ignore this. */
+  /** Full model ID (e.g., 'claude-opus-5[1m]', 'claude-fable-5', 'claude-sonnet-5'). Backends that don't support model selection ignore this. */
   model?: string;
   /**
    * Adaptive reasoning effort level. Backends that don't support effort

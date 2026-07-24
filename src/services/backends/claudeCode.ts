@@ -143,6 +143,15 @@ export class ClaudeCodeAdapter extends BaseBackendAdapter {
       },
       models: [
         {
+          id: 'claude-opus-5[1m]',
+          label: 'Opus 5 (1M context)',
+          family: 'opus',
+          description: 'Latest Opus — complex agentic coding and enterprise work with a 1M context window',
+          costTier: 'high',
+          supportedEffortLevels: ['low', 'medium', 'high', 'xhigh', 'max'],
+          capabilities: CLAUDE_MODEL_CAPABILITIES,
+        },
+        {
           id: 'claude-fable-5',
           label: 'Fable 5',
           family: 'fable',
@@ -179,12 +188,21 @@ export class ClaudeCodeAdapter extends BaseBackendAdapter {
           capabilities: CLAUDE_MODEL_CAPABILITIES,
         },
         {
+          id: 'claude-sonnet-5',
+          label: 'Sonnet 5',
+          family: 'sonnet',
+          description: 'Latest Sonnet — efficient frontier performance for coding and agentic tasks',
+          costTier: 'medium',
+          default: true,
+          supportedEffortLevels: ['low', 'medium', 'high', 'xhigh', 'max'],
+          capabilities: CLAUDE_MODEL_CAPABILITIES,
+        },
+        {
           id: 'claude-sonnet-4-6',
           label: 'Sonnet 4.6',
           family: 'sonnet',
           description: 'Balanced — fast and capable for most coding tasks',
           costTier: 'medium',
-          default: true,
           supportedEffortLevels: ['low', 'medium', 'high'],
           capabilities: CLAUDE_MODEL_CAPABILITIES,
         },

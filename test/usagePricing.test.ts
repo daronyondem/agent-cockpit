@@ -160,6 +160,49 @@ describe('usage cost estimator', () => {
     expect(estimate.costSnapshot?.pricingEntryId).toBe('anthropic-claude-opus-4.8-family');
   });
 
+  test('uses Opus 5 pricing for the Claude Code 1M model id', () => {
+    const estimate = estimateUsageCost({
+      backend: 'claude-code',
+      model: 'claude-opus-5[1m]',
+      usage: { ...baseUsage, inputTokens: 1_000_000, cacheReadTokens: 1_000_000, cacheWriteTokens: 1_000_000, outputTokens: 1_000_000 },
+    });
+    expect(estimate.costSource).toBe('estimated');
+    expect(estimate.estimatedCostUsd).toBeCloseTo(36.75);
+    expect(estimate.costSnapshot?.pricingEntryId).toBe('anthropic-claude-opus-5-family');
+  });
+
+  test('uses introductory Sonnet 5 pricing', () => {
+    const estimate = estimateUsageCost({
+      backend: 'claude-code',
+      model: 'claude-sonnet-5',
+      usage: { ...baseUsage, inputTokens: 1_000_000, cacheReadTokens: 1_000_000, cacheWriteTokens: 1_000_000, outputTokens: 1_000_000 },
+    });
+    expect(estimate.costSource).toBe('estimated');
+    expect(estimate.estimatedCostUsd).toBeCloseTo(14.7);
+    expect(estimate.costSnapshot).toMatchObject({
+      pricingEntryId: 'anthropic-claude-sonnet-5-introductory',
+      effectiveDate: '2026-06-30',
+      ratesPerMillion: {
+        input: 2,
+        cachedInput: 0.2,
+        cacheWrite: 2.5,
+        output: 10,
+      },
+    });
+  });
+
+  test('uses Opus 5 pricing for Bedrock inference profile ids', () => {
+    const estimate = estimateUsageCost({
+      backend: 'claude-code',
+      model: 'global.anthropic.claude-opus-5',
+      usage: { ...baseUsage, inputTokens: 1_000_000, outputTokens: 1_000_000 },
+    });
+    expect(estimate.costSource).toBe('estimated');
+    expect(estimate.estimatedCostUsd).toBeCloseTo(30);
+    expect(estimate.costSnapshot?.model).toBe('global.anthropic.claude-opus-5');
+    expect(estimate.costSnapshot?.pricingEntryId).toBe('anthropic-claude-opus-5-family');
+  });
+
   test('uses Fable 5 pricing', () => {
     const estimate = estimateUsageCost({
       backend: 'claude-code',

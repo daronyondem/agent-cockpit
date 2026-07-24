@@ -190,7 +190,14 @@ describe('ClaudeCodeAdapter', () => {
     const meta = adapter.metadata;
     expect(meta.models).toBeDefined();
     expect(Array.isArray(meta.models)).toBe(true);
-    expect(meta.models!.length).toBe(6);
+    expect(meta.models!.length).toBe(8);
+
+    const opus5 = meta.models!.find(m => m.id === 'claude-opus-5[1m]');
+    expect(opus5).toBeDefined();
+    expect(opus5!.label).toBe('Opus 5 (1M context)');
+    expect(opus5!.family).toBe('opus');
+    expect(opus5!.costTier).toBe('high');
+    expect(opus5!.capabilities?.input?.image).toBe(true);
 
     const fable = meta.models!.find(m => m.id === 'claude-fable-5');
     expect(fable).toBeDefined();
@@ -219,11 +226,17 @@ describe('ClaudeCodeAdapter', () => {
     expect(opus46!.family).toBe('opus');
     expect(opus46!.costTier).toBe('high');
 
-    const sonnet = meta.models!.find(m => m.id === 'claude-sonnet-4-6');
-    expect(sonnet).toBeDefined();
-    expect(sonnet!.default).toBe(true);
-    expect(sonnet!.costTier).toBe('medium');
-    expect(sonnet!.capabilities?.input?.image).toBe(true);
+    const sonnet5 = meta.models!.find(m => m.id === 'claude-sonnet-5');
+    expect(sonnet5).toBeDefined();
+    expect(sonnet5!.default).toBe(true);
+    expect(sonnet5!.costTier).toBe('medium');
+    expect(sonnet5!.capabilities?.input?.image).toBe(true);
+
+    const sonnet46 = meta.models!.find(m => m.id === 'claude-sonnet-4-6');
+    expect(sonnet46).toBeDefined();
+    expect(sonnet46!.default).toBeUndefined();
+    expect(sonnet46!.costTier).toBe('medium');
+    expect(sonnet46!.capabilities?.input?.image).toBe(true);
 
     const haiku = meta.models!.find(m => m.id === 'claude-haiku-4-5');
     expect(haiku).toBeDefined();
@@ -233,6 +246,9 @@ describe('ClaudeCodeAdapter', () => {
   test('metadata declares supportedEffortLevels per model', () => {
     const adapter = new ClaudeCodeAdapter({ workingDir: '/tmp' });
     const meta = adapter.metadata;
+
+    const opus5 = meta.models!.find(m => m.id === 'claude-opus-5[1m]');
+    expect(opus5!.supportedEffortLevels).toEqual(['low', 'medium', 'high', 'xhigh', 'max']);
 
     const fable = meta.models!.find(m => m.id === 'claude-fable-5');
     expect(fable!.supportedEffortLevels).toEqual(['low', 'medium', 'high', 'xhigh', 'max']);
@@ -248,9 +264,12 @@ describe('ClaudeCodeAdapter', () => {
     const opus46 = meta.models!.find(m => m.id === 'claude-opus-4-6');
     expect(opus46!.supportedEffortLevels).toEqual(['low', 'medium', 'high', 'max']);
 
+    const sonnet5 = meta.models!.find(m => m.id === 'claude-sonnet-5');
+    expect(sonnet5!.supportedEffortLevels).toEqual(['low', 'medium', 'high', 'xhigh', 'max']);
+
     // Sonnet 4.6 supports low/medium/high (no max, no xhigh)
-    const sonnet = meta.models!.find(m => m.id === 'claude-sonnet-4-6');
-    expect(sonnet!.supportedEffortLevels).toEqual(['low', 'medium', 'high']);
+    const sonnet46 = meta.models!.find(m => m.id === 'claude-sonnet-4-6');
+    expect(sonnet46!.supportedEffortLevels).toEqual(['low', 'medium', 'high']);
 
     // Haiku does not support effort at all
     const haiku = meta.models!.find(m => m.id === 'claude-haiku-4-5');
@@ -979,7 +998,7 @@ describe('ClaudeCodeAdapter sendMessage', () => {
         isNewSession: true,
         workingDir: '/tmp',
         systemPrompt: '',
-        model: 'claude-opus-4-6',
+        model: 'claude-sonnet-5',
         effort: 'max',
       });
       streamRef = stream;
@@ -994,7 +1013,7 @@ describe('ClaudeCodeAdapter sendMessage', () => {
     expect(capturedArgs![idx + 1]).toBe('max');
   });
 
-  test('passes --effort xhigh for Opus 4.8', async () => {
+  test('passes --effort xhigh for Opus 5', async () => {
     let capturedArgs: string[] | undefined;
     let streamRef: AsyncGenerator<any>;
     jest.isolateModules(() => {
@@ -1019,7 +1038,7 @@ describe('ClaudeCodeAdapter sendMessage', () => {
         isNewSession: true,
         workingDir: '/tmp',
         systemPrompt: '',
-        model: 'claude-opus-4-8',
+        model: 'claude-opus-5[1m]',
         effort: 'xhigh',
       });
       streamRef = stream;
@@ -1060,7 +1079,7 @@ describe('ClaudeCodeAdapter sendMessage', () => {
         isNewSession: true,
         workingDir: '/tmp',
         systemPrompt: '',
-        model: 'claude-opus-4-8',
+        model: 'claude-sonnet-5',
         claudeCodeMode: 'ultracode',
       });
       streamRef = stream;
@@ -1900,16 +1919,16 @@ describe('ClaudeCodeAdapter runOneShot', () => {
       }));
       const { ClaudeCodeAdapter: IsolatedAdapter } = require('../src/services/backends/claudeCode');
       const adapter = new IsolatedAdapter({ workingDir: '/tmp' });
-      adapter.runOneShot('test prompt', { model: 'claude-opus-4-6', effort: 'high' });
+      adapter.runOneShot('test prompt', { model: 'claude-sonnet-5', effort: 'max' });
     });
 
     expect(capturedArgs).toBeDefined();
     const modelIdx = capturedArgs!.indexOf('--model');
     expect(modelIdx).toBeGreaterThan(-1);
-    expect(capturedArgs![modelIdx + 1]).toBe('claude-opus-4-6');
+    expect(capturedArgs![modelIdx + 1]).toBe('claude-sonnet-5');
     const effortIdx = capturedArgs!.indexOf('--effort');
     expect(effortIdx).toBeGreaterThan(-1);
-    expect(capturedArgs![effortIdx + 1]).toBe('high');
+    expect(capturedArgs![effortIdx + 1]).toBe('max');
   });
 
   test('drops --effort when model does not support that level', async () => {
