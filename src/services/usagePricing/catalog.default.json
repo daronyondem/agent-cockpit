@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "version": "2026-07-10",
+  "version": "2026-07-24",
   "currency": "USD",
   "entries": [
     {
@@ -213,6 +213,21 @@
       }
     },
     {
+      "id": "anthropic-claude-opus-5-family",
+      "provider": "anthropic",
+      "modelPattern": "*claude-opus-5*",
+      "unit": "tokens",
+      "sourceUrl": "https://platform.claude.com/docs/en/about-claude/pricing",
+      "verifiedAt": "2026-07-24",
+      "effectiveDate": "2026-07-23",
+      "ratesPerMillion": {
+        "input": 5,
+        "cacheWrite": 6.25,
+        "cachedInput": 0.5,
+        "output": 25
+      }
+    },
+    {
       "id": "anthropic-claude-fable-5-family",
       "provider": "anthropic",
       "modelPattern": "*claude-fable-5*",
@@ -330,6 +345,21 @@
         "cacheWrite": 18.75,
         "cachedInput": 1.5,
         "output": 75
+      }
+    },
+    {
+      "id": "anthropic-claude-sonnet-5-introductory",
+      "provider": "anthropic",
+      "modelPattern": "*claude-sonnet-5*",
+      "unit": "tokens",
+      "sourceUrl": "https://platform.claude.com/docs/en/about-claude/pricing",
+      "verifiedAt": "2026-07-24",
+      "effectiveDate": "2026-06-30",
+      "ratesPerMillion": {
+        "input": 2,
+        "cacheWrite": 2.5,
+        "cachedInput": 0.2,
+        "output": 10
       }
     },
     {

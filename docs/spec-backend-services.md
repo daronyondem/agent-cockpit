@@ -983,18 +983,22 @@ Because every current backend advertises `activeTurnResume: 'unsupported'`, star
 
 | `id` | `label` | `family` | `costTier` | `default` |
 |---|---|---|---|---|
+| `claude-opus-5[1m]` | Opus 5 (1M context) | opus | high | — |
 | `claude-fable-5` | Fable 5 | fable | high | — |
 | `claude-opus-4-8` | Opus 4.8 | opus | high | — |
 | `claude-opus-4-7` | Opus 4.7 | opus | high | — |
 | `claude-opus-4-6` | Opus 4.6 | opus | high | — |
-| `claude-sonnet-4-6` | Sonnet 4.6 | sonnet | medium | ✓ |
+| `claude-sonnet-5` | Sonnet 5 | sonnet | medium | ✓ |
+| `claude-sonnet-4-6` | Sonnet 4.6 | sonnet | medium | — |
 | `claude-haiku-4-5` | Haiku 4.5 | haiku | low | — |
 
 Adaptive reasoning effort support (`supportedEffortLevels`):
+- `claude-opus-5[1m]`: `['low', 'medium', 'high', 'xhigh', 'max']`
 - `claude-fable-5`: `['low', 'medium', 'high', 'xhigh', 'max']`
 - `claude-opus-4-8`: `['low', 'medium', 'high', 'xhigh', 'max']`
 - `claude-opus-4-7`: `['low', 'medium', 'high', 'xhigh', 'max']`
 - `claude-opus-4-6`: `['low', 'medium', 'high', 'max']`
+- `claude-sonnet-5`: `['low', 'medium', 'high', 'xhigh', 'max']`
 - `claude-sonnet-4-6`: `['low', 'medium', 'high']`
 - `claude-haiku-4-5`: field omitted (no effort support)
 
@@ -1014,7 +1018,7 @@ Adaptive reasoning effort support (`supportedEffortLevels`):
   --permission-mode bypassPermissions \
   --output-format stream-json \
   --verbose \
-  [--model <id>]                     # if model specified (e.g. claude-fable-5, claude-opus-4-8, claude-sonnet-4-6)
+  [--model <id>]                     # if model specified (e.g. claude-opus-5[1m], claude-fable-5, claude-sonnet-5)
   [--effort <level>]                # if effort specified AND model supports that level
   [--settings '{"ultracode":true}']  # if claudeCodeMode is ultracode AND model supports xhigh
   [--session-id <uuid>]              # if isNewSession
@@ -1735,6 +1739,16 @@ priority token-rate rows for `gpt-5.6-sol`, `gpt-5.6-terra`, and
 `gpt-5.6-luna`, including their cache-write rates. `gpt-5.3-codex-spark`
 remains unpriced in the dollar catalog because the local Codex CLI marks it
 as not supported in the API and OpenAI identifies it as a research preview.
+The Anthropic entries include Claude Opus 5 at $5 input, $0.50 cache read,
+$6.25 five-minute cache write, and $25 output per million tokens. Claude
+Sonnet 5 uses its introductory rates of $2 input, $0.20 cache read, $2.50
+five-minute cache write, and $10 output per million tokens through August 31,
+2026. Anthropic's published standard Sonnet 5 rates become $3/$0.30/$3.75/$15
+on September 1, 2026; because the built-in catalog is release-owned rather than
+time-scheduled, a release on or after that date must refresh this entry before
+shipping. Claude effort and Ultracode selections do not change per-token rates;
+they affect estimates through the actual input/output/cache token counts
+reported by Claude Code.
 Mutable user overrides live under
 `data/chat/usage-pricing-overrides.json`; `UsagePricingStore` reads them with a
 separate keyed mutex, writes through `atomicWriteFile`, ignores corrupt files
