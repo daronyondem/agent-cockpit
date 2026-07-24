@@ -37,7 +37,7 @@
     "@electric-sql/pglite": "^0.4.4",
     "@napi-rs/canvas": "^0.1.97",
     "@simplewebauthn/server": "^13.3.0",
-    "adm-zip": "^0.5.17",
+    "adm-zip": "^0.6.0",
     "better-sqlite3": "^12.8.0",
     "dompurify": "^3.4.2",
     "dotenv": "^16.4.7",
