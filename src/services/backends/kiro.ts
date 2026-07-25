@@ -478,6 +478,14 @@ export class KiroAdapter extends BaseBackendAdapter {
           capabilities: TEXT_IMAGE_MODEL_CAPABILITIES,
         },
         {
+          id: 'claude-opus-5',
+          label: 'claude-opus-5',
+          family: 'opus',
+          description: 'Experimental preview of Claude Opus 5 with a 1M context window',
+          costTier: 'high',
+          capabilities: TEXT_IMAGE_MODEL_CAPABILITIES,
+        },
+        {
           id: 'claude-sonnet-5',
           label: 'claude-sonnet-5',
           family: 'sonnet',
