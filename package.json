@@ -63,6 +63,9 @@
     "yauzl": "^3.3.1",
     "yazl": "^3.3.1"
   },
+  "overrides": {
+    "qs": "6.16.0"
+  },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
     "@playwright/test": "^1.60.0",
