@@ -717,6 +717,7 @@ Together these guarantee that a workspace index always parses on disk and that c
           cachedInput?: number,
           cacheWrite?: number
         },
+        longContextThresholdTokens?: number, // Present when token estimate used long-context rates.
         usdPerCredit?: number
       },
       credits?: number,                // Kiro only: accumulated credits consumed (fractional)
@@ -1552,9 +1553,12 @@ subscription CLI usage where the provider reports tokens/credits but no spend,
 the server estimates an API-equivalent fallback into `usage.estimatedCostUsd`
 and marks `usage.costSource = "estimated"`. Once `estimatedCostUsd` is written,
 the ledger treats it as historical data and does not recalculate it from future
-catalog changes. `costSnapshot` records the pricing entry, rates, catalog
-version, provider pricing tier when present, and source metadata used for that
-stored estimate. Ledger rows are grouped by backend, model, and optional
+catalog changes. `costSnapshot` records the pricing entry, selected rates,
+catalog version, provider pricing tier when present, and source metadata used
+for that stored estimate. For token pricing entries with long-context pricing,
+`costSnapshot.ratesPerMillion` stores the applied short- or long-context table;
+`costSnapshot.longContextThresholdTokens` is present only when the estimate used
+the long-context table. Ledger rows are grouped by backend, model, and optional
 `pricingTier`, so Codex default and Fast/Priority usage are not merged into one
 average. Historical legacy day buckets shaped as `{ backends: { [backendId]:
 Usage } }` are normalized into `records[]` on write or lazy usage-stat
@@ -1616,6 +1620,13 @@ Mutable user pricing overrides are stored separately from release-owned defaults
       cachedInput?: number,
       cacheWrite?: number
     },
+    longContextThresholdTokens?: number, // Positive prompt-input threshold for alternate token rates.
+    longContextRatesPerMillion?: {
+      input: number,
+      output: number,
+      cachedInput?: number,
+      cacheWrite?: number
+    },
     usdPerCredit?: number
 }]
 }
@@ -1623,7 +1634,12 @@ Mutable user pricing overrides are stored separately from release-owned defaults
 
 Override entries are validated through the browser-safe
 `src/contracts/usagePricing.ts` contract and replace the complete override
-catalog on save. The effective catalog is `overrides.entries` followed by
+catalog on save. Token entries may include a paired
+`longContextThresholdTokens` and `longContextRatesPerMillion`; if either
+long-context field is present, both are required, the threshold must be positive,
+and the long-context rates use the same non-negative rate validation as
+`ratesPerMillion`; see
+[ADR-0091](adr/0091-support-long-context-usage-pricing.md). The effective catalog is `overrides.entries` followed by
 built-in entries, so a user override can intentionally shadow a built-in model
 pattern. Release updates only change `src/services/usagePricing/catalog.default.json`;
 they never rewrite this override file unless the user clears or saves overrides

@@ -18,12 +18,21 @@ export const CODEX_MODEL_CAPABILITIES: ModelCapabilities = {
 // lineup churns enough that authoritative discovery beats hardcoding.
 export const FALLBACK_MODELS: ModelOption[] = [
   {
+    id: 'gpt-6-astra',
+    label: 'GPT-6-Astra',
+    family: 'gpt',
+    description: 'Most capable model for complex, demanding work.',
+    costTier: 'high',
+    default: true,
+    supportedEffortLevels: CODEX_56_ULTRA_FALLBACK_EFFORTS,
+    capabilities: CODEX_MODEL_CAPABILITIES,
+  },
+  {
     id: 'gpt-5.6-sol',
     label: 'GPT-5.6-Sol',
     family: 'gpt',
-    description: 'Latest frontier agentic coding model.',
+    description: 'Reliable agentic workhorse for everyday tasks.',
     costTier: 'high',
-    default: true,
     supportedEffortLevels: CODEX_56_ULTRA_FALLBACK_EFFORTS,
     capabilities: CODEX_MODEL_CAPABILITIES,
   },

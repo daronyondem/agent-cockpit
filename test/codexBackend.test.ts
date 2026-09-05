@@ -274,9 +274,14 @@ describe('CodexAdapter', () => {
     // Exactly one default model
     expect(models!.filter((m) => m.default).length).toBe(1);
     // Fallback list includes the current Codex CLI model family.
+    const astra = models!.find((m) => m.id === 'gpt-6-astra');
+    expect(astra).toBeDefined();
+    expect(astra!.default).toBe(true);
+    expect(astra!.supportedEffortLevels).toEqual(['low', 'medium', 'high', 'xhigh', 'max', 'ultra']);
+    expect(astra!.capabilities?.input?.image).toBe(true);
     const gpt56Sol = models!.find((m) => m.id === 'gpt-5.6-sol');
     expect(gpt56Sol).toBeDefined();
-    expect(gpt56Sol!.default).toBe(true);
+    expect(gpt56Sol!.default).toBeUndefined();
     expect(gpt56Sol!.supportedEffortLevels).toEqual(['low', 'medium', 'high', 'xhigh', 'max', 'ultra']);
     expect(gpt56Sol!.capabilities?.input?.image).toBe(true);
     const spark = models!.find((m) => m.id === 'gpt-5.3-codex-spark');

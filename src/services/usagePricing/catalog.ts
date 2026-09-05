@@ -19,6 +19,30 @@ function requireNumber(value: unknown, field: string): number {
   return value;
 }
 
+function requirePositiveNumber(value: unknown, field: string): number {
+  if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0) {
+    throw new Error(`usage pricing catalog ${field} must be a positive number`);
+  }
+  return value;
+}
+
+function validateTokenRates(value: unknown, field: string) {
+  if (!isObject(value)) {
+    throw new Error(`usage pricing catalog ${field} must be an object`);
+  }
+  const rates = {
+    input: requireNumber(value.input, `${field}.input`),
+    output: requireNumber(value.output, `${field}.output`),
+  };
+  if (value.cachedInput !== undefined) {
+    Object.assign(rates, { cachedInput: requireNumber(value.cachedInput, `${field}.cachedInput`) });
+  }
+  if (value.cacheWrite !== undefined) {
+    Object.assign(rates, { cacheWrite: requireNumber(value.cacheWrite, `${field}.cacheWrite`) });
+  }
+  return rates;
+}
+
 function validateEntry(value: unknown, index: number): UsagePricingEntry {
   if (!isObject(value)) throw new Error(`usage pricing catalog entries[${index}] must be an object`);
   const provider = requireString(value.provider, `entries[${index}].provider`);
@@ -44,18 +68,10 @@ function validateEntry(value: unknown, index: number): UsagePricingEntry {
   }
 
   if (unit === 'tokens') {
-    if (!isObject(value.ratesPerMillion)) {
-      throw new Error(`usage pricing catalog entries[${index}].ratesPerMillion must be an object`);
-    }
-    entry.ratesPerMillion = {
-      input: requireNumber(value.ratesPerMillion.input, `entries[${index}].ratesPerMillion.input`),
-      output: requireNumber(value.ratesPerMillion.output, `entries[${index}].ratesPerMillion.output`),
-    };
-    if (value.ratesPerMillion.cachedInput !== undefined) {
-      entry.ratesPerMillion.cachedInput = requireNumber(value.ratesPerMillion.cachedInput, `entries[${index}].ratesPerMillion.cachedInput`);
-    }
-    if (value.ratesPerMillion.cacheWrite !== undefined) {
-      entry.ratesPerMillion.cacheWrite = requireNumber(value.ratesPerMillion.cacheWrite, `entries[${index}].ratesPerMillion.cacheWrite`);
+    entry.ratesPerMillion = validateTokenRates(value.ratesPerMillion, `entries[${index}].ratesPerMillion`);
+    if (value.longContextThresholdTokens !== undefined || value.longContextRatesPerMillion !== undefined) {
+      entry.longContextThresholdTokens = requirePositiveNumber(value.longContextThresholdTokens, `entries[${index}].longContextThresholdTokens`);
+      entry.longContextRatesPerMillion = validateTokenRates(value.longContextRatesPerMillion, `entries[${index}].longContextRatesPerMillion`);
     }
   } else {
     entry.usdPerCredit = requireNumber(value.usdPerCredit, `entries[${index}].usdPerCredit`);
