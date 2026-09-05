@@ -1,8 +1,53 @@
 {
   "schemaVersion": 1,
-  "version": "2026-07-24",
+  "version": "2026-09-04",
   "currency": "USD",
   "entries": [
+    {
+      "id": "openai-gpt-6-astra-standard",
+      "provider": "openai",
+      "modelPattern": "gpt-6-astra",
+      "unit": "tokens",
+      "sourceUrl": "https://developers.openai.com/api/docs/pricing",
+      "verifiedAt": "2026-09-04",
+      "effectiveDate": "2026-09-04",
+      "ratesPerMillion": {
+        "input": 5,
+        "cachedInput": 0.5,
+        "cacheWrite": 6.25,
+        "output": 25
+      },
+      "longContextThresholdTokens": 272000,
+      "longContextRatesPerMillion": {
+        "input": 10,
+        "cachedInput": 1,
+        "cacheWrite": 12.5,
+        "output": 37.5
+      }
+    },
+    {
+      "id": "openai-gpt-6-astra-priority",
+      "provider": "openai",
+      "modelPattern": "gpt-6-astra",
+      "pricingTier": "priority",
+      "unit": "tokens",
+      "sourceUrl": "https://developers.openai.com/api/docs/pricing",
+      "verifiedAt": "2026-09-04",
+      "effectiveDate": "2026-09-04",
+      "ratesPerMillion": {
+        "input": 10,
+        "cachedInput": 1,
+        "cacheWrite": 12.5,
+        "output": 50
+      },
+      "longContextThresholdTokens": 272000,
+      "longContextRatesPerMillion": {
+        "input": 20,
+        "cachedInput": 2,
+        "cacheWrite": 25,
+        "output": 75
+      }
+    },
     {
       "id": "openai-gpt-5.6-sol-standard",
       "provider": "openai",

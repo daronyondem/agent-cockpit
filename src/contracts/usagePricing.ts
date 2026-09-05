@@ -23,6 +23,8 @@ export interface UsagePricingEntry {
   verifiedAt: string;
   effectiveDate: string;
   ratesPerMillion?: UsageTokenRatesPerMillion;
+  longContextThresholdTokens?: number;
+  longContextRatesPerMillion?: UsageTokenRatesPerMillion;
   usdPerCredit?: number;
 }
 
@@ -46,6 +48,7 @@ export interface UsageCostSnapshot {
   currency: 'USD';
   unit: UsagePricingUnit;
   ratesPerMillion?: UsageTokenRatesPerMillion;
+  longContextThresholdTokens?: number;
   usdPerCredit?: number;
 }
 
@@ -92,15 +95,11 @@ function validateUsagePricingEntry(value: unknown, index: number): UsagePricingE
 
   if (unit === 'tokens') {
     const rates = asRecord(record.ratesPerMillion, `usage pricing overrides entries[${index}].ratesPerMillion must be an object`);
-    entry.ratesPerMillion = {
-      input: requiredNonNegativeNumber(rates.input, `usage pricing overrides entries[${index}].ratesPerMillion.input must be a non-negative number`),
-      output: requiredNonNegativeNumber(rates.output, `usage pricing overrides entries[${index}].ratesPerMillion.output must be a non-negative number`),
-    };
-    if (rates.cachedInput !== undefined) {
-      entry.ratesPerMillion.cachedInput = requiredNonNegativeNumber(rates.cachedInput, `usage pricing overrides entries[${index}].ratesPerMillion.cachedInput must be a non-negative number`);
-    }
-    if (rates.cacheWrite !== undefined) {
-      entry.ratesPerMillion.cacheWrite = requiredNonNegativeNumber(rates.cacheWrite, `usage pricing overrides entries[${index}].ratesPerMillion.cacheWrite must be a non-negative number`);
+    entry.ratesPerMillion = validateTokenRates(rates, `usage pricing overrides entries[${index}].ratesPerMillion`);
+    if (record.longContextThresholdTokens !== undefined || record.longContextRatesPerMillion !== undefined) {
+      entry.longContextThresholdTokens = requiredPositiveNumber(record.longContextThresholdTokens, `usage pricing overrides entries[${index}].longContextThresholdTokens must be a positive number`);
+      const longRates = asRecord(record.longContextRatesPerMillion, `usage pricing overrides entries[${index}].longContextRatesPerMillion must be an object`);
+      entry.longContextRatesPerMillion = validateTokenRates(longRates, `usage pricing overrides entries[${index}].longContextRatesPerMillion`);
     }
   } else {
     entry.usdPerCredit = requiredNonNegativeNumber(record.usdPerCredit, `usage pricing overrides entries[${index}].usdPerCredit must be a non-negative number`);
@@ -118,4 +117,23 @@ function requiredEnum<T extends string>(record: Record<string, unknown>, key: st
 function requiredNonNegativeNumber(value: unknown, message: string): number {
   if (typeof value !== 'number' || !Number.isFinite(value) || value < 0) contractError(message);
   return value;
+}
+
+function requiredPositiveNumber(value: unknown, message: string): number {
+  if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0) contractError(message);
+  return value;
+}
+
+function validateTokenRates(record: Record<string, unknown>, field: string): UsageTokenRatesPerMillion {
+  const rates: UsageTokenRatesPerMillion = {
+    input: requiredNonNegativeNumber(record.input, `${field}.input must be a non-negative number`),
+    output: requiredNonNegativeNumber(record.output, `${field}.output must be a non-negative number`),
+  };
+  if (record.cachedInput !== undefined) {
+    rates.cachedInput = requiredNonNegativeNumber(record.cachedInput, `${field}.cachedInput must be a non-negative number`);
+  }
+  if (record.cacheWrite !== undefined) {
+    rates.cacheWrite = requiredNonNegativeNumber(record.cacheWrite, `${field}.cacheWrite must be a non-negative number`);
+  }
+  return rates;
 }

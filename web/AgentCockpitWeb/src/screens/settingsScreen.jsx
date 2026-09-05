@@ -2759,6 +2759,20 @@ function optionalRate(value){
   const n = Number(value);
   return Number.isFinite(n) && n >= 0 ? n : undefined;
 }
+function optionalPositiveRate(value){
+  const n = optionalRate(value);
+  return n && n > 0 ? n : undefined;
+}
+function cloneRates(rates){
+  return rates ? { ...rates } : undefined;
+}
+function clonePricingOverride(entry){
+  return {
+    ...entry,
+    ratesPerMillion: cloneRates(entry.ratesPerMillion),
+    longContextRatesPerMillion: cloneRates(entry.longContextRatesPerMillion),
+  };
+}
 function blankPricingOverride(){
   const date = todayDateString();
   return {
@@ -2795,10 +2809,24 @@ function cleanPricingOverride(entry){
   const cacheWrite = optionalRate(rates.cacheWrite);
   if (cachedInput !== undefined) ratesPerMillion.cachedInput = cachedInput;
   if (cacheWrite !== undefined) ratesPerMillion.cacheWrite = cacheWrite;
-  return {
+  const cleaned = {
     ...base,
     ratesPerMillion,
   };
+  const longContextThresholdTokens = optionalPositiveRate(entry.longContextThresholdTokens);
+  if (longContextThresholdTokens !== undefined && entry.longContextRatesPerMillion) {
+    const longRates = entry.longContextRatesPerMillion || {};
+    cleaned.longContextThresholdTokens = longContextThresholdTokens;
+    cleaned.longContextRatesPerMillion = {
+      input: safeRate(longRates.input),
+      output: safeRate(longRates.output),
+    };
+    const longCachedInput = optionalRate(longRates.cachedInput);
+    const longCacheWrite = optionalRate(longRates.cacheWrite);
+    if (longCachedInput !== undefined) cleaned.longContextRatesPerMillion.cachedInput = longCachedInput;
+    if (longCacheWrite !== undefined) cleaned.longContextRatesPerMillion.cacheWrite = longCacheWrite;
+  }
+  return cleaned;
 }
 
 function UsageTab(){
@@ -2825,7 +2853,7 @@ function UsageTab(){
       const totals = totalsFor((res && res.days) || []);
       setMetric(current => (current === 'cost' && totals.costUsd <= 0 && totals.estimatedCostUsd > 0 ? 'estimated' : current));
       setPricing(pricingRes || null);
-      setPricingDraft(((pricingRes && pricingRes.overrides && pricingRes.overrides.entries) || []).map(e => ({ ...e, ratesPerMillion: e.ratesPerMillion ? { ...e.ratesPerMillion } : undefined })));
+      setPricingDraft(((pricingRes && pricingRes.overrides && pricingRes.overrides.entries) || []).map(clonePricingOverride));
     } catch (e) {
       setError(e.message || String(e));
     } finally { setLoading(false); }
@@ -2873,7 +2901,7 @@ function UsageTab(){
     try {
       const next = await AgentApi.settings.saveUsagePricingOverrides(pricingDraft.map(cleanPricingOverride));
       setPricing(next || null);
-      setPricingDraft(((next && next.overrides && next.overrides.entries) || []).map(e => ({ ...e, ratesPerMillion: e.ratesPerMillion ? { ...e.ratesPerMillion } : undefined })));
+      setPricingDraft(((next && next.overrides && next.overrides.entries) || []).map(clonePricingOverride));
     } catch (e) {
       await dialog.alert({ anchor, variant: 'error', title: 'Save failed', body: e.message || String(e) });
     } finally {

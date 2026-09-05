@@ -6,6 +6,7 @@ import type {
   UsageCostSnapshot,
   UsagePricingEntry,
   UsagePricingProvider,
+  UsageTokenRatesPerMillion,
 } from './types';
 
 const MILLION = 1_000_000;
@@ -50,13 +51,13 @@ function estimateTokenUsage(input: UsageCostInput, provider: UsagePricingProvide
   const entry = findPricingEntry(entries, provider, input.model, input.pricingTier);
   if (!entry || entry.unit !== 'tokens') return { estimatedCostUsd: 0, costSource: 'none' };
 
-  const estimatedCostUsd = calculateTokenEstimate(input.usage, entry);
+  const { estimatedCostUsd, ratesPerMillion, longContextThresholdTokens } = calculateTokenEstimate(input.usage, entry);
   if (!(estimatedCostUsd > 0)) return { estimatedCostUsd: 0, costSource: 'none' };
 
   return {
     estimatedCostUsd,
     costSource: 'estimated',
-    costSnapshot: buildSnapshot(input, provider, entry),
+    costSnapshot: buildSnapshot(input, provider, entry, { ratesPerMillion, longContextThresholdTokens }),
   };
 }
 
@@ -74,17 +75,51 @@ function estimateKiroCredits(input: UsageCostInput, provider: UsagePricingProvid
   };
 }
 
-function calculateTokenEstimate(usage: Usage, entry: UsagePricingEntry): number {
-  const rates = entry.ratesPerMillion;
-  if (!rates) return 0;
-  return ((usage.inputTokens || 0) * rates.input
-    + (usage.outputTokens || 0) * rates.output
-    + (usage.cacheReadTokens || 0) * (rates.cachedInput || rates.input)
-    + (usage.cacheWriteTokens || 0) * (rates.cacheWrite || rates.input)) / MILLION;
+function calculateTokenEstimate(usage: Usage, entry: UsagePricingEntry): {
+  estimatedCostUsd: number;
+  ratesPerMillion?: UsageTokenRatesPerMillion;
+  longContextThresholdTokens?: number;
+} {
+  const rates = ratesForUsage(usage, entry);
+  if (!rates.ratesPerMillion) return { estimatedCostUsd: 0 };
+  const selectedRates = rates.ratesPerMillion;
+  const estimatedCostUsd = ((usage.inputTokens || 0) * selectedRates.input
+    + (usage.outputTokens || 0) * selectedRates.output
+    + (usage.cacheReadTokens || 0) * (selectedRates.cachedInput ?? selectedRates.input)
+    + (usage.cacheWriteTokens || 0) * (selectedRates.cacheWrite ?? selectedRates.input)) / MILLION;
+  return {
+    estimatedCostUsd,
+    ratesPerMillion: selectedRates,
+    ...(rates.longContextThresholdTokens ? { longContextThresholdTokens: rates.longContextThresholdTokens } : {}),
+  };
 }
 
-function buildSnapshot(input: UsageCostInput, provider: UsagePricingProvider, entry: UsagePricingEntry): UsageCostSnapshot {
+function ratesForUsage(usage: Usage, entry: UsagePricingEntry): {
+  ratesPerMillion?: UsageTokenRatesPerMillion;
+  longContextThresholdTokens?: number;
+} {
+  const promptInputTokens = (usage.inputTokens || 0) + (usage.cacheReadTokens || 0) + (usage.cacheWriteTokens || 0);
+  if (
+    entry.longContextThresholdTokens
+    && entry.longContextRatesPerMillion
+    && promptInputTokens > entry.longContextThresholdTokens
+  ) {
+    return {
+      ratesPerMillion: entry.longContextRatesPerMillion,
+      longContextThresholdTokens: entry.longContextThresholdTokens,
+    };
+  }
+  return { ratesPerMillion: entry.ratesPerMillion };
+}
+
+function buildSnapshot(
+  input: UsageCostInput,
+  provider: UsagePricingProvider,
+  entry: UsagePricingEntry,
+  tokenRates?: { ratesPerMillion?: UsageTokenRatesPerMillion; longContextThresholdTokens?: number },
+): UsageCostSnapshot {
   const pricingTier = normalizedPricingTier(input.pricingTier) || normalizedPricingTier(entry.pricingTier);
+  const ratesPerMillion = tokenRates?.ratesPerMillion || entry.ratesPerMillion;
   return {
     catalogVersion: input.catalogVersion || BUILTIN_USAGE_PRICING_CATALOG.version,
     pricedAt: input.pricedAt || new Date().toISOString(),
@@ -97,7 +132,8 @@ function buildSnapshot(input: UsageCostInput, provider: UsagePricingProvider, en
     effectiveDate: entry.effectiveDate,
     currency: 'USD',
     unit: entry.unit,
-    ...(entry.ratesPerMillion ? { ratesPerMillion: { ...entry.ratesPerMillion } } : {}),
+    ...(ratesPerMillion ? { ratesPerMillion: { ...ratesPerMillion } } : {}),
+    ...(tokenRates?.longContextThresholdTokens ? { longContextThresholdTokens: tokenRates.longContextThresholdTokens } : {}),
     ...(entry.usdPerCredit !== undefined ? { usdPerCredit: entry.usdPerCredit } : {}),
   };
 }

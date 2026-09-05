@@ -16,6 +16,15 @@ const overrideEntry: UsagePricingEntry = {
   ratesPerMillion: { input: 1, cachedInput: 0.1, output: 2 },
 };
 
+const longContextOverrideEntry: UsagePricingEntry = {
+  ...overrideEntry,
+  id: 'user-openai-gpt-6-astra',
+  modelPattern: 'gpt-6-astra',
+  ratesPerMillion: { input: 5, cachedInput: 0.5, cacheWrite: 6.25, output: 25 },
+  longContextThresholdTokens: 272_000,
+  longContextRatesPerMillion: { input: 10, cachedInput: 1, cacheWrite: 12.5, output: 37.5 },
+};
+
 describe('UsagePricingStore', () => {
   let dir: string;
 
@@ -49,6 +58,19 @@ describe('UsagePricingStore', () => {
     const reloadedCatalogs = await reloaded.getCatalogs();
     expect(reloadedCatalogs.overrides.entries).toEqual([overrideEntry]);
     expect(reloadedCatalogs.effective.entries[0]).toEqual(overrideEntry);
+  });
+
+  test('persists long-context token override fields', async () => {
+    const file = path.join(dir, 'usage-pricing-overrides.json');
+    const store = new UsagePricingStore(file);
+    const catalogs = await store.replaceOverrides([longContextOverrideEntry]);
+
+    expect(catalogs.overrides.entries[0]).toEqual(longContextOverrideEntry);
+    expect(catalogs.effective.entries[0]).toEqual(longContextOverrideEntry);
+
+    const reloaded = new UsagePricingStore(file);
+    const reloadedCatalogs = await reloaded.getCatalogs();
+    expect(reloadedCatalogs.overrides.entries[0]).toEqual(longContextOverrideEntry);
   });
 
   test('clears overrides without changing built-in defaults', async () => {

@@ -20,6 +20,25 @@ describe('usage pricing catalog', () => {
   test('rejects malformed catalogs', () => {
     expect(() => validateUsagePricingCatalog({ schemaVersion: 1, currency: 'USD', version: 'x', entries: [{ id: 'bad' }] })).toThrow(/provider/);
   });
+
+  test('rejects incomplete long-context token pricing', () => {
+    expect(() => validateUsagePricingCatalog({
+      schemaVersion: 1,
+      currency: 'USD',
+      version: 'x',
+      entries: [{
+        id: 'bad-long-context',
+        provider: 'openai',
+        modelPattern: 'gpt-test',
+        unit: 'tokens',
+        sourceUrl: 'test',
+        verifiedAt: '2026-09-04',
+        effectiveDate: '2026-09-04',
+        ratesPerMillion: { input: 1, output: 2 },
+        longContextThresholdTokens: 272_000,
+      }],
+    })).toThrow(/longContextRatesPerMillion/);
+  });
 });
 
 describe('usage cost estimator', () => {
@@ -73,6 +92,95 @@ describe('usage cost estimator', () => {
       pricingTier: 'priority',
       pricingEntryId: 'openai-gpt-5.5-priority',
       sourceUrl: 'https://openai.com/api-priority-processing/',
+    });
+  });
+
+  test('estimates GPT-6 Astra short-context token cost', () => {
+    const estimate = estimateUsageCost({
+      backend: 'codex',
+      model: 'gpt-6-astra',
+      pricedAt: '2026-09-04T00:00:00.000Z',
+      usage: {
+        ...baseUsage,
+        inputTokens: 100_000,
+        cacheReadTokens: 100_000,
+        cacheWriteTokens: 50_000,
+        outputTokens: 10_000,
+      },
+    });
+    expect(estimate.costSource).toBe('estimated');
+    expect(estimate.estimatedCostUsd).toBeCloseTo(1.1125);
+    expect(estimate.costSnapshot).toMatchObject({
+      provider: 'openai',
+      model: 'gpt-6-astra',
+      pricingEntryId: 'openai-gpt-6-astra-standard',
+      ratesPerMillion: {
+        input: 5,
+        cachedInput: 0.5,
+        cacheWrite: 6.25,
+        output: 25,
+      },
+    });
+    expect(estimate.costSnapshot?.longContextThresholdTokens).toBeUndefined();
+  });
+
+  test('estimates GPT-6 Astra long-context token cost for the full request', () => {
+    const estimate = estimateUsageCost({
+      backend: 'codex',
+      model: 'gpt-6-astra',
+      pricedAt: '2026-09-04T00:00:00.000Z',
+      usage: {
+        ...baseUsage,
+        inputTokens: 100_000,
+        cacheReadTokens: 200_000,
+        outputTokens: 20_000,
+      },
+    });
+    expect(estimate.costSource).toBe('estimated');
+    expect(estimate.estimatedCostUsd).toBeCloseTo(1.95);
+    expect(estimate.costSnapshot).toMatchObject({
+      provider: 'openai',
+      model: 'gpt-6-astra',
+      pricingEntryId: 'openai-gpt-6-astra-standard',
+      longContextThresholdTokens: 272_000,
+      ratesPerMillion: {
+        input: 10,
+        cachedInput: 1,
+        cacheWrite: 12.5,
+        output: 37.5,
+      },
+    });
+  });
+
+  test('uses GPT-6 Astra Fast pricing when Codex Fast requests the priority tier', () => {
+    const estimate = estimateUsageCost({
+      backend: 'codex',
+      model: 'gpt-6-astra',
+      pricingTier: 'priority',
+      pricedAt: '2026-09-04T00:00:00.000Z',
+      usage: {
+        ...baseUsage,
+        inputTokens: 100_000,
+        cacheReadTokens: 200_000,
+        cacheWriteTokens: 100_000,
+        outputTokens: 10_000,
+      },
+    });
+    expect(estimate.costSource).toBe('estimated');
+    expect(estimate.estimatedCostUsd).toBeCloseTo(5.65);
+    expect(estimate.costSnapshot).toMatchObject({
+      provider: 'openai',
+      model: 'gpt-6-astra',
+      pricingTier: 'priority',
+      pricingEntryId: 'openai-gpt-6-astra-priority',
+      sourceUrl: 'https://developers.openai.com/api/docs/pricing',
+      longContextThresholdTokens: 272_000,
+      ratesPerMillion: {
+        input: 20,
+        cachedInput: 2,
+        cacheWrite: 25,
+        output: 75,
+      },
     });
   });
 

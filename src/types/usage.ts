@@ -29,6 +29,7 @@ export interface Usage {
       cachedInput?: number;
       cacheWrite?: number;
     };
+    longContextThresholdTokens?: number;
     usdPerCredit?: number;
   };
   /** Kiro credits consumed (fractional, Kiro-specific unit). */
