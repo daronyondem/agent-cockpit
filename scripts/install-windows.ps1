@@ -6,6 +6,7 @@ param(
   [string] $Repo = 'daronyondem/agent-cockpit',
   [string] $InstallDir = "$env:LOCALAPPDATA\Agent Cockpit",
   [string] $DevDir = "$env:USERPROFILE\agent-cockpit",
+  [ValidateRange(1, 65535)]
   [int] $Port = 3334,
 
   [switch] $InstallNode,
@@ -34,6 +35,11 @@ $PreservedSessionSecret = ''
 $PreservedSetupToken = ''
 $PreservedInstalledAt = ''
 $PreservedWelcomeCompletedAt = ''
+$PreviousAppDir = ''
+$InstallLog = ''
+$WorkDir = ''
+$RollbackCandidateStopped = $false
+$PortExplicit = $PSBoundParameters.ContainsKey('Port')
 
 $InstallDir = [System.IO.Path]::GetFullPath($InstallDir)
 $DevDir = [System.IO.Path]::GetFullPath($DevDir)
@@ -41,12 +47,14 @@ $DevDir = [System.IO.Path]::GetFullPath($DevDir)
 function Write-Log {
   param([string] $Message)
   Write-Host "[agent-cockpit] $Message"
+  if ($script:InstallLog) {
+    Add-Content -Path $script:InstallLog -Value "[agent-cockpit] $Message"
+  }
 }
 
 function Fail {
   param([string] $Message)
-  Write-Error "[agent-cockpit] ERROR: $Message"
-  exit 1
+  throw "[agent-cockpit] ERROR: $Message"
 }
 
 function Require-Windows {
@@ -84,7 +92,19 @@ function Download-File {
   param([string] $Url, [string] $Destination)
   Write-Log "Downloading $Url"
   Ensure-Directory ([System.IO.Path]::GetDirectoryName($Destination))
-  Invoke-WebRequest -UseBasicParsing -Uri $Url -OutFile $Destination
+  if ($env:AGENT_COCKPIT_INSTALL_TEST_RELEASE_DIR -and $Url -like 'https://github.com/*/releases/*') {
+    Copy-Item (Join-Path $env:AGENT_COCKPIT_INSTALL_TEST_RELEASE_DIR ([System.IO.Path]::GetFileName($Url))) $Destination
+    return
+  }
+  for ($attempt = 0; $attempt -lt 3; $attempt++) {
+    try {
+      Invoke-WebRequest -UseBasicParsing -TimeoutSec 300 -Uri $Url -OutFile $Destination
+      return
+    } catch {
+      if ($attempt -eq 2) { throw }
+      Start-Sleep -Seconds 2
+    }
+  }
 }
 
 function Get-Sha256 {
@@ -127,7 +147,8 @@ function Write-JsonFile {
   param([string] $Path, [object] $Value)
   Ensure-Directory ([System.IO.Path]::GetDirectoryName($Path))
   $json = $Value | ConvertTo-Json -Depth 20
-  [System.IO.File]::WriteAllText($Path, $json + [Environment]::NewLine, (New-Object System.Text.UTF8Encoding($false)))
+  [System.IO.File]::WriteAllText("$Path.tmp", $json + [Environment]::NewLine, (New-Object System.Text.UTF8Encoding($false)))
+  Move-Item -Force "$Path.tmp" $Path
 }
 
 function New-RandomHex {
@@ -173,6 +194,7 @@ function Capture-ExistingRuntimeConfig {
         $script:PreservedWelcomeCompletedAt = [string]$install.welcomeCompletedAt
       }
       if ($install.appDir) {
+        $script:PreviousAppDir = [string]$install.appDir
         $candidates += (Join-Path ([string]$install.appDir) '.env')
       }
     } catch {
@@ -588,7 +610,11 @@ function Write-EnvFile {
   $cliToolsDir = Join-Path $InstallDir 'cli-tools'
   Ensure-Directory $cliToolsDir
   Ensure-UserPathEntry $cliToolsDir
-  $lines = @(
+  $preserved = @()
+  if (Test-Path $envPath) {
+    $preserved = @(Get-Content $envPath | Where-Object { $_ -notmatch '^(PORT|SESSION_SECRET|AUTH_SETUP_TOKEN|AGENT_COCKPIT_DATA_DIR|WEB_BUILD_MODE|AUTH_ENABLE_LEGACY_OAUTH|PM2_HOME|PATH)=' })
+  }
+  $lines = $preserved + @(
     "PORT=$Port",
     "SESSION_SECRET=$SessionSecret",
     "AUTH_SETUP_TOKEN=$SetupToken",
@@ -675,8 +701,10 @@ function Install-Dependencies {
   $env:PM2_HOME = Join-Path $InstallDir 'pm2'
   Write-Log 'Installing root dependencies.'
   Invoke-Quiet $NpmCmd @('ci', '--no-audit', '--no-fund', '--loglevel=error') $AppDir
-  Write-Log 'Installing mobile PWA dependencies.'
-  Invoke-Quiet $NpmCmd @('--prefix', 'mobile/AgentCockpitPWA', 'ci', '--no-audit', '--no-fund', '--loglevel=error') $AppDir
+  if ($Channel -eq 'dev' -or -not (Test-Path (Join-Path $AppDir 'public/mobile-built/index.html'))) {
+    Write-Log 'Installing mobile PWA dependencies.'
+    Invoke-Quiet $NpmCmd @('--prefix', 'mobile/AgentCockpitPWA', 'ci', '--no-audit', '--no-fund', '--loglevel=error') $AppDir
+  }
 }
 
 function Ensure-BuiltAssets {
@@ -746,8 +774,37 @@ foreach (`$logPath in @(`$runnerOut, `$runnerErr)) {
 "@)
 }
 
+function Test-LogonTaskOwnership {
+  param([object] $Task)
+  if (-not $Task -or -not $Task.PSObject.Properties['Actions']) { return $false }
+  $expected = Normalize-PathEntry (Resolve-InstallPath (Join-Path $InstallDir 'bin\start-agent-cockpit.ps1') -AllowMissing)
+  if (-not $expected) { return $false }
+  foreach ($action in @($Task.Actions)) {
+    if (-not $action.PSObject.Properties['Arguments']) { continue }
+    $match = [regex]::Match([string]$action.Arguments, '(?i)(?:^|\s)-File\s+(?:"([^"]+)"|''([^'']+)''|(\S+))')
+    if (-not $match.Success) { continue }
+    $target = ($match.Groups | Select-Object -Skip 1 | Where-Object { $_.Success } | Select-Object -First 1).Value
+    try {
+      $actual = Normalize-PathEntry (Resolve-InstallPath ([Environment]::ExpandEnvironmentVariables($target)) -AllowMissing)
+      if ($actual -and $actual -eq $expected) { return $true }
+    } catch { continue }
+  }
+  return $false
+}
+
 function Register-LogonTask {
+  $task = Get-ScheduledTask -TaskName $TaskName -TaskPath '\' -ErrorAction SilentlyContinue
+  if ($task -and -not (Test-LogonTaskOwnership $task)) {
+    if ($NoAutoStart) {
+      Write-Log 'Leaving the startup task for a different installation unchanged.'
+      return
+    }
+    Fail 'The existing startup task belongs to another installation. It will not be replaced.'
+  }
   if ($NoAutoStart) {
+    if ($task) {
+      Unregister-ScheduledTask -TaskName $TaskName -TaskPath '\' -Confirm:$false
+    }
     Write-Log 'Skipping logon startup registration.'
     return
   }
@@ -770,13 +827,15 @@ function Register-LogonTask {
 }
 
 function Invoke-Pm2BestEffort {
-  param([string] $AppDir, [string[]] $Arguments)
+  param([string] $AppDir, [string[]] $Arguments, [switch] $PassThru)
   if (-not (Test-Path $AppDir)) {
+    if ($PassThru) { return $false }
     return
   }
   $pm2Cmd = Join-Path $AppDir 'node_modules\.bin\pm2.cmd'
   if (-not (Test-Path $pm2Cmd)) {
     Write-Log "Skipping PM2 cleanup for $AppDir because local PM2 is not installed yet."
+    if ($PassThru) { return $false }
     return
   }
   $env:PM2_HOME = Join-Path $InstallDir 'pm2'
@@ -784,9 +843,11 @@ function Invoke-Pm2BestEffort {
     $env:Path = "$NodeRuntimeBinDir;$env:Path"
   }
   $previous = Get-Location
+  $succeeded = $false
   try {
     Set-Location $AppDir
-    & $pm2Cmd @Arguments
+    if ($PassThru) { & $pm2Cmd @Arguments > $null } else { & $pm2Cmd @Arguments }
+    $succeeded = $LASTEXITCODE -eq 0
     if ($LASTEXITCODE -ne 0) {
       Write-Log "Ignoring PM2 cleanup exit code $LASTEXITCODE for: $pm2Cmd $($Arguments -join ' ')"
     }
@@ -797,15 +858,7 @@ function Invoke-Pm2BestEffort {
   } finally {
     Set-Location $previous
   }
-}
-
-function Stop-ExistingAppForReplacement {
-  param([string] $AppDir)
-  if (-not (Test-Path $AppDir)) {
-    return
-  }
-  Write-Log 'Stopping existing Agent Cockpit process before replacing app files.'
-  Invoke-Pm2BestEffort $AppDir @('delete', $AppName)
+  if ($PassThru) { return $succeeded }
 }
 
 function Start-Pm2 {
@@ -825,11 +878,12 @@ function Start-Pm2 {
 }
 
 function Wait-ForServer {
-  param([string] $AppDir)
+  param([string] $AppDir, [string] $ExpectedVersion, [int] $Attempts = 90)
   $url = "http://127.0.0.1:$Port/auth/setup"
   Write-Log "Waiting for Agent Cockpit to answer at $url."
-  for ($i = 0; $i -lt 90; $i++) {
-    if (Test-HttpReady $url) {
+  for ($i = 0; $i -lt $Attempts; $i++) {
+    $version = Read-HttpJson "http://127.0.0.1:$Port/api/chat/version"
+    if ($version -and $version.PSObject.Properties['version'] -and $version.version -ceq $ExpectedVersion -and (Test-HttpReady $url)) {
       return
     }
     Start-Sleep -Seconds 1
@@ -877,13 +931,127 @@ function Test-HttpReady {
   }
 }
 
+function Read-HttpJson {
+  param([string] $Url)
+  $response = $null
+  $reader = $null
+  try {
+    $request = [System.Net.HttpWebRequest]::Create($Url)
+    $request.Timeout = 2000
+    $request.ReadWriteTimeout = 2000
+    $response = $request.GetResponse()
+    $reader = New-Object System.IO.StreamReader($response.GetResponseStream())
+    return ($reader.ReadToEnd() | ConvertFrom-Json)
+  } catch {
+    return $null
+  } finally {
+    if ($reader) { $reader.Dispose() }
+    if ($response) { $response.Close() }
+  }
+}
+
+function Resolve-InstallPath {
+  param([string] $Value, [switch] $AllowMissing)
+  if (-not $Value -or -not $NodeExe) { return '' }
+  $code = @'
+const fs = require('fs'), path = require('path');
+let current = path.resolve(process.argv[1]), missing = [];
+for (;;) {
+  try { process.stdout.write(path.join(fs.realpathSync(current), ...missing)); break; }
+  catch (error) {
+    if (process.argv[2] !== 'allow-missing' || error.code !== 'ENOENT' || path.dirname(current) === current) throw error;
+    missing.unshift(path.basename(current)); current = path.dirname(current);
+  }
+}
+'@
+  $mode = if ($AllowMissing) { 'allow-missing' } else { 'existing' }
+  try {
+    return Invoke-NativeOutput $NodeExe @('-e', $code, '--', $Value, $mode)
+  } catch { return '' }
+}
+
+function Get-OwnedPm2App {
+  param([int] $ExpectedPort = 0)
+  if (-not $NodeExe) { return '' }
+  $code = @'
+const fs = require('fs'), path = require('path'), { execFileSync } = require('child_process');
+const { root, previous, dev, expected } = JSON.parse(Buffer.from(process.argv[1], 'base64').toString('utf8'));
+function canonical(value) {
+  try { const result = fs.realpathSync(value); return process.platform === 'win32' ? result.toLowerCase() : result; } catch { return null; }
+}
+function alive(pid) { try { if (!Number.isInteger(pid) || pid <= 0) return false; process.kill(pid, 0); return true; } catch { return false; } }
+try {
+  const home = path.join(root, 'pm2');
+  if (!alive(Number(fs.readFileSync(path.join(home, 'pm2.pid'), 'utf8')))) process.exit();
+  const releases = path.join(root, 'releases');
+  const candidates = [previous, dev, ...(fs.existsSync(releases) ? fs.readdirSync(releases).map(name => path.join(releases, name)) : [])].filter(Boolean);
+  const cli = candidates.map(dir => path.join(dir, 'node_modules/pm2/bin/pm2')).find(file => fs.existsSync(file));
+  if (!cli) process.exit();
+  // Query existing RPC directly; invoking the CLI can start a missing daemon.
+  const query = `
+const path = require('path'), root = process.argv[1];
+const socket = require(path.join(root, 'modules/pm2-axon')).socket('req');
+const client = new (require(path.join(root, 'modules/pm2-axon-rpc')).Client)(socket);
+let finished = false;
+function finish(error, list) {
+  if (finished) return;
+  finished = true; socket.close();
+  if (error) process.exit(1);
+  process.stdout.write(JSON.stringify(list), () => process.exit(0));
+}
+socket.once('error', finish);
+socket.once('reconnect attempt', () => finish(new Error('Daemon unavailable')));
+socket.once('connect', () => client.call('getMonitorData', {}, finish));
+socket.connect(require(path.join(root, 'constants.js')).DAEMON_RPC_PORT);
+`;
+  const output = execFileSync(process.execPath, ['-e', query, '--', path.dirname(path.dirname(cli))], { timeout: 3000, maxBuffer: 4 * 1024 * 1024, stdio: ['ignore', 'pipe', 'ignore'], env: { ...process.env, PM2_HOME: home } });
+  const releaseRoot = canonical(releases), data = canonical(path.join(root, 'data'));
+  for (const entry of JSON.parse(output.toString())) {
+    const env = entry.pm2_env || {}, cwd = canonical(env.pm_cwd);
+    if (entry.name !== 'agent-cockpit' || env.status !== 'online' || !alive(entry.pid) || !cwd || !data) continue;
+    if (Number(expected) && Number(env.PORT ?? env.env?.PORT) !== Number(expected)) continue;
+    if (canonical(env.AGENT_COCKPIT_DATA_DIR ?? env.env?.AGENT_COCKPIT_DATA_DIR) !== data) continue;
+    if (cwd === canonical(previous) || cwd === canonical(dev) || (releaseRoot && cwd.startsWith(releaseRoot + path.sep))) {
+      process.stdout.write(fs.realpathSync(env.pm_cwd)); break;
+    }
+  }
+} catch {}
+'@
+  $inputJson = @{ root = $InstallDir; previous = $script:PreviousAppDir; dev = $DevDir; expected = $ExpectedPort } | ConvertTo-Json -Compress
+  $encoded = [Convert]::ToBase64String([System.Text.Encoding]::UTF8.GetBytes($inputJson))
+  try { return Invoke-NativeOutput $NodeExe @('-e', $code, $encoded) } catch { return '' }
+}
+
+function Test-InstallPreflight {
+  if (-not $script:PortExplicit -and $script:PreviousAppDir) {
+    $existingPort = Read-EnvValue (Join-Path $script:PreviousAppDir '.env') 'PORT'
+    if ($existingPort) { $script:Port = [int]$existingPort }
+  }
+  if ($Port -lt 1 -or $Port -gt 65535) { Fail 'Port must be from 1 to 65535.' }
+  $listener = New-Object System.Net.Sockets.TcpListener([System.Net.IPAddress]::Loopback, $Port)
+  try {
+    $listener.Start()
+  } catch {
+    $state = Read-HttpJson "http://127.0.0.1:$Port/api/chat/install/status"
+    $reported = if ($state -and $state.PSObject.Properties['installDir']) { Resolve-InstallPath ([string]$state.installDir) } else { '' }
+    if (-not $reported -or $reported -ne (Resolve-InstallPath $InstallDir)) {
+      $owned = Get-OwnedPm2App $Port
+      if (-not $owned) { Fail "Port $Port is already used by another application." }
+      $script:PreviousAppDir = $owned
+      Capture-ExistingRuntimeConfig (Join-Path $InstallDir 'data') $owned
+    }
+  } finally {
+    $listener.Stop()
+  }
+}
+
 function Open-Setup {
   param([string] $SetupToken)
   $url = "http://localhost:$Port/auth/setup"
-  Write-Log "First-run setup token: $SetupToken"
+  Write-Host "[agent-cockpit] First-run setup token: $SetupToken"
   Write-Log "Agent Cockpit is ready at $url"
   if (-not $SkipOpen) {
-    Start-Process $url
+    try { Start-Process $url } catch { Write-Log "Warning: unable to open the browser. Open $url manually." }
   }
 }
 
@@ -902,22 +1070,80 @@ function Existing-OrNewSecret {
   return New-RandomHex $Bytes
 }
 
-function Configure-App {
-  param([string] $AppDir, [string] $DataDir, [string] $InstallVersion, [string] $InstallSource, [string] $Branch, [bool] $ForceBuild)
+function Prepare-App {
+  param([string] $AppDir, [string] $DataDir, [bool] $ForceBuild)
   Ensure-Directory $DataDir
+  if ($script:PreviousAppDir -and (Test-Path (Join-Path $script:PreviousAppDir '.env'))) {
+    $source = Resolve-InstallPath (Join-Path $script:PreviousAppDir '.env')
+    $target = Resolve-InstallPath (Join-Path $AppDir '.env') -AllowMissing
+    if (-not $source -or -not $target) { Fail 'Could not resolve the existing runtime configuration for repair.' }
+    if ($source -ne $target) { Copy-Item (Join-Path $script:PreviousAppDir '.env') (Join-Path $AppDir '.env') }
+  }
   $sessionSecret = Existing-OrNewSecret $AppDir 'SESSION_SECRET' 48
   $setupToken = Existing-OrNewSecret $AppDir 'AUTH_SETUP_TOKEN' 32
   Install-Dependencies $AppDir
   Ensure-BuiltAssets $AppDir $ForceBuild
   Write-EnvFile $AppDir $DataDir $sessionSecret $setupToken
   Write-EcosystemConfig $AppDir $DataDir $sessionSecret $setupToken
+}
+
+function Configure-App {
+  param([string] $AppDir, [string] $DataDir, [string] $InstallVersion, [string] $InstallSource, [string] $Branch, [bool] $ForceBuild, [switch] $Prepared)
+  if (-not $Prepared) { Prepare-App $AppDir $DataDir $ForceBuild }
   Write-InstallManifest $DataDir $AppDir $InstallVersion $InstallSource $Branch
   Write-HelperScripts $AppDir
   Repair-CliToolWrappers
   Register-LogonTask
   Start-Pm2 $AppDir
-  Wait-ForServer $AppDir
-  Open-Setup $setupToken
+  Wait-ForServer $AppDir $InstallVersion
+  Write-Log "Stage 4/4: release $InstallVersion is ready."
+  Open-Setup (Read-EnvValue (Join-Path $AppDir '.env') 'AUTH_SETUP_TOKEN')
+}
+
+function Save-Activation {
+  $manifest = Join-Path $InstallDir 'data\install.json'
+  if (Test-Path $manifest) { Copy-Item $manifest (Join-Path $WorkDir 'install.json') }
+  $bin = Join-Path $InstallDir 'bin'
+  if (Test-Path $bin) { Copy-Item -Recurse $bin (Join-Path $WorkDir 'bin') }
+  $task = Get-ScheduledTask -TaskName $TaskName -TaskPath '\' -ErrorAction SilentlyContinue
+  if (Test-LogonTaskOwnership $task) {
+    Export-ScheduledTask -TaskName $TaskName -TaskPath '\' | Set-Content (Join-Path $WorkDir 'startup.xml')
+  }
+}
+
+function Restore-Activation {
+  param([string] $Candidate)
+  Write-Log 'Restoring the previous installation.'
+  try {
+    $script:RollbackCandidateStopped = [bool](Invoke-Pm2BestEffort $Candidate @('delete', $AppName) -PassThru)
+    $manifest = Join-Path $InstallDir 'data\install.json'
+    if (Test-Path (Join-Path $WorkDir 'install.json')) {
+      Copy-Item -Force (Join-Path $WorkDir 'install.json') $manifest
+    } else {
+      Remove-Item -Force -ErrorAction SilentlyContinue $manifest
+    }
+    if (Test-Path (Join-Path $WorkDir 'bin')) {
+      Copy-Item -Recurse -Force (Join-Path $WorkDir 'bin\*') (Join-Path $InstallDir 'bin')
+    } else {
+      foreach ($name in @('start-agent-cockpit.ps1', 'stop-agent-cockpit.ps1', 'logs-agent-cockpit.ps1', 'run-agent-cockpit.vbs')) {
+        Remove-Item -Force -ErrorAction SilentlyContinue (Join-Path (Join-Path $InstallDir 'bin') $name)
+      }
+    }
+    try {
+      $task = Get-ScheduledTask -TaskName $TaskName -TaskPath '\' -ErrorAction SilentlyContinue
+      if ($task -and -not (Test-LogonTaskOwnership $task)) {
+        Write-Log 'Leaving the startup task for a different installation unchanged during rollback.'
+      } elseif (Test-Path (Join-Path $WorkDir 'startup.xml')) {
+        Register-ScheduledTask -TaskName $TaskName -TaskPath '\' -Xml (Get-Content -Raw (Join-Path $WorkDir 'startup.xml')) -Force | Out-Null
+      } elseif ($task) {
+        Unregister-ScheduledTask -TaskName $TaskName -TaskPath '\' -Confirm:$false
+      }
+    } catch {
+      Write-Log "Warning: startup task restoration failed: $($_.Exception.Message)"
+    }
+  } finally {
+    if ($script:PreviousAppDir -and (Test-Path $script:PreviousAppDir)) { Start-Pm2 $script:PreviousAppDir }
+  }
 }
 
 function Install-Production {
@@ -925,6 +1151,9 @@ function Install-Production {
   $dataDir = Join-Path $InstallDir 'data'
   $tmp = Join-Path ([System.IO.Path]::GetTempPath()) "agent-cockpit-release-$([System.Guid]::NewGuid().ToString('n'))"
   Ensure-Directory $tmp
+  $appDir = ''
+  $activationStarted = $false
+  $installed = $false
   try {
     if ($Version) {
       $releaseBase = "https://github.com/$Repo/releases/download/v$($Version.TrimStart('v'))"
@@ -937,10 +1166,12 @@ function Install-Production {
     Download-File "$releaseBase/SHA256SUMS" $checksumsPath
     Assert-Checksum $manifestPath 'release-manifest.json' $checksumsPath
     $manifest = Read-JsonFile $manifestPath
+    if ($Version -and $manifest.version -cne $Version.TrimStart('v')) { Fail "Release version mismatch: expected $Version, received $($manifest.version)" }
     $zipArtifact = $manifest.artifacts | Where-Object { ($_.role -eq 'app-zip') -or ($_.platform -eq 'win32' -and $_.format -eq 'zip') } | Select-Object -First 1
     if (-not $zipArtifact) {
       Fail 'Release manifest does not include a Windows app ZIP artifact.'
     }
+    if ($zipArtifact.name -match '[/\\]' -or $zipArtifact.name -notlike '*.zip') { Fail 'Invalid release archive name.' }
     $zipPath = Join-Path $tmp $zipArtifact.name
     Download-File "$releaseBase/$($zipArtifact.name)" $zipPath
     Assert-Checksum $zipPath $zipArtifact.name $checksumsPath
@@ -953,19 +1184,51 @@ function Install-Production {
     $extractRoot = Join-Path $tmp 'extract'
     Expand-ZipFile $zipPath $extractRoot
     $packageRoot = $manifest.packageRoot
+    if ($packageRoot -notmatch '^agent-cockpit-v[0-9A-Za-z.+-]+$') { Fail 'Invalid release package root.' }
     $extracted = Join-Path $extractRoot $packageRoot
     if (-not (Test-Path (Join-Path $extracted 'server.ts'))) {
       Fail 'Extracted release is missing server.ts'
     }
-    $appDir = Join-Path $releasesDir $packageRoot
+    $appDir = Join-Path $releasesDir "$packageRoot-$([System.Guid]::NewGuid().ToString('n'))"
     Capture-ExistingRuntimeConfig $dataDir $appDir
-    if (Test-Path $appDir) {
-      Stop-ExistingAppForReplacement $appDir
-      Remove-Item -Recurse -Force $appDir
-    }
+    Test-InstallPreflight
+    Write-Log "Stage 2/4: preparing release $($manifest.version)."
     Move-Item -Path $extracted -Destination $appDir
-    Configure-App $appDir $dataDir $manifest.version 'github-release' '' $false
+    Prepare-App $appDir $dataDir $false
+    Save-Activation
+    $activationStarted = $true
+    Write-Log 'Stage 3/4: activating the prepared release.'
+    try {
+      Configure-App $appDir $dataDir $manifest.version 'github-release' '' $false -Prepared
+      $installed = $true
+    } catch {
+      $failure = $_
+      try { Restore-Activation $appDir } catch { Write-Log "Rollback failed: $($_.Exception.Message)" }
+      throw $failure
+    }
   } finally {
+    if (-not $installed -and $appDir -and (Test-Path $appDir)) {
+      $removeCandidate = -not $activationStarted -or $script:RollbackCandidateStopped
+      try {
+        $candidate = Resolve-InstallPath $appDir
+        $parent = Resolve-InstallPath ([System.IO.Path]::GetDirectoryName($appDir))
+        $releaseRoot = Resolve-InstallPath $releasesDir
+        if (-not $candidate -or -not $parent -or $parent -ne $releaseRoot) { $removeCandidate = $false }
+        $manifestPath = Join-Path $dataDir 'install.json'
+        if ($removeCandidate -and $activationStarted -and (Test-Path $manifestPath)) {
+          $selected = Read-JsonFile $manifestPath
+          $active = if ($selected -and $selected.PSObject.Properties['appDir']) { Resolve-InstallPath ([string]$selected.appDir) } else { '' }
+          if (-not $active -or $active -eq $candidate) { $removeCandidate = $false }
+        }
+        if ($removeCandidate) {
+          Remove-Item -Recurse -Force $appDir
+        } else {
+          Write-Log "Keeping failed candidate $appDir because it may still be active."
+        }
+      } catch {
+        Write-Log "Warning: could not safely clean failed candidate $appDir`: $($_.Exception.Message)"
+      }
+    }
     if (Test-Path $tmp) {
       Remove-Item -Recurse -Force $tmp
     }
@@ -992,20 +1255,39 @@ function Install-Dev {
     Invoke-Quiet $git @('-C', $DevDir, 'pull', '--ff-only', 'origin', 'main') $DevDir
   }
   Capture-ExistingRuntimeConfig $dataDir $DevDir
+  Test-InstallPreflight
   $devVersion = (& $NodeExe -e "process.stdout.write(require(process.argv[1]).version)" (Join-Path $DevDir 'package.json')).Trim()
   Configure-App $DevDir $dataDir $devVersion 'git-main' 'main' $true
 }
 
+if ($env:AGENT_COCKPIT_INSTALL_LIBRARY_ONLY -eq '1') { return }
 if ($InstallNode -and $NoInstallNode) {
   Fail 'Use either -InstallNode or -NoInstallNode, not both.'
 }
 
 Require-Windows
 Resolve-Architecture | Out-Null
-Resolve-Node
-
-if ($Channel -eq 'production') {
-  Install-Production
-} else {
-  Install-Dev
+try {
+  Ensure-Directory $InstallDir
+  Ensure-Directory (Join-Path $InstallDir 'logs')
+  $InstallLog = Join-Path $InstallDir 'logs\install.log'
+  $WorkDir = Join-Path $InstallDir ".install-$([System.Guid]::NewGuid().ToString('n'))"
+  Ensure-Directory $WorkDir
+  Write-Log "Stage 1/4: checking the installation. Diagnostic log: $InstallLog"
+  Capture-ExistingRuntimeConfig (Join-Path $InstallDir 'data') ''
+  Resolve-Node
+  if (-not $script:PreviousAppDir) {
+    $owned = Get-OwnedPm2App
+    if ($owned) {
+      $script:PreviousAppDir = $owned
+      Capture-ExistingRuntimeConfig (Join-Path $InstallDir 'data') $owned
+    }
+  }
+  Test-InstallPreflight
+  if ($Channel -eq 'production') { Install-Production } else { Install-Dev }
+} catch {
+  Write-Log "Installation failed: $($_.Exception.Message)"
+  exit 1
+} finally {
+  if ($WorkDir -and (Test-Path $WorkDir)) { Remove-Item -Recurse -Force $WorkDir }
 }

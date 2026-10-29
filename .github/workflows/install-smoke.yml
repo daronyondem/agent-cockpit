@@ -1,0 +1,54 @@
+name: Native installation smoke
+
+on:
+  workflow_call:
+    inputs:
+      source_ref:
+        required: true
+        type: string
+      artifact_name:
+        required: true
+        type: string
+      full_matrix:
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+jobs:
+  install:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: ${{ fromJSON(inputs.full_matrix && '["ubuntu-24.04","windows-latest","macos-15","macos-15-intel"]' || '["ubuntu-24.04","windows-latest","macos-15"]') }}
+        runtime: ${{ fromJSON(inputs.full_matrix && '["system","private"]' || '["system"]') }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.source_ref }}
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+      - uses: actions/download-artifact@v4
+        with:
+          name: ${{ inputs.artifact_name }}
+          path: candidate
+      - name: Install browser test dependencies
+        if: matrix.os == 'ubuntu-24.04' && matrix.runtime == 'system'
+        run: npm ci && npx playwright install --with-deps chromium
+      - name: Install production candidate, repair, and restart
+        shell: bash
+        run: |
+          args=(--release-dir candidate --report-dir install-report --auto-start)
+          if [ "${{ matrix.runtime }}" = private ]; then args+=(--private-node); fi
+          if [ "${{ matrix.os }}" = ubuntu-24.04 ] && [ "${{ matrix.runtime }}" = system ]; then args+=(--ui); fi
+          node scripts/run-install-smoke.js "${args[@]}"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: install-report-${{ matrix.os }}-${{ matrix.runtime }}
+          path: install-report
+          if-no-files-found: warn

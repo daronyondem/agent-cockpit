@@ -171,6 +171,25 @@ Always use pm2:
 
 # Releases
 
+- Installer changes require `npm run test:install`. Run
+  `npm run e2e:install -- --ui` and `npm run e2e:install -- --private-node`
+  for isolated native production-package checks. Never use the smoke runner's
+  `--auto-start` option on a shared development machine; it is CI-only.
+  Release publishing must reuse the exact candidate archives that passed native
+  installation gates, not rebuild them after testing. Preserve existing config,
+  secrets, onboarding, and data during repair; prepare replacements before
+  activation and restore prior activation metadata/startup on failure.
+  Startup task changes must be owned by the selected install, task-restore
+  failures must not block restarting the prior app, and POSIX startup helpers
+  must persist the selected `PM2_HOME`. Repair may recover corrupt HTTP install
+  metadata only through verified live PM2 ownership and canonical paths.
+  Apply startup ownership checks on every platform, including helper paths
+  reached through directory aliases. Remove failed candidates only when they
+  were never activated or are confirmed stopped and no longer selected; retain
+  active candidates and prior working releases.
+  PM2 ownership lookups must use a non-starting RPC query; a reused daemon PID
+  must not cause preflight to launch PM2. Compare canonical `.env` identities
+  before copying runtime config between dev/release paths.
 - Before triggering the production release workflow, follow [`docs/release-workflow.md`](docs/release-workflow.md).
 - Installer, release packaging, install-state, install-doctor, and self-update changes must preserve existing macOS production behavior. When a change targets Windows or another platform, explicitly verify the macOS-compatible path with focused tests such as `test/macosInstallerScript.test.ts`, `test/releasePackage.test.ts`, and relevant `test/updateService.test.ts` coverage, or document why a macOS check was unavailable.
 - Linux production release support targets Ubuntu 24.04 LTS x64/glibc first. Keep Alpine/musl, NixOS, WSL, Linux arm64, and 32-bit Linux unsupported unless a later tested decision changes the support matrix. Linux installer/updater changes must preserve the macOS symlink activation path and Windows appDir activation path.

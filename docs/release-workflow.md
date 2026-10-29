@@ -68,29 +68,47 @@ After review, trigger `.github/workflows/release.yml` with:
 - `smoke_only`: when true, run pre-publish validation and skip GitHub Release
   creation; default false
 
-The workflow always runs Windows and Linux smoke jobs before publishing. For
-real releases, it also validates that `docs/releases/v<version>.md` exists in
-the selected source ref, renders `dist/release/github-release-notes.md`, and
-passes that file to `gh release create --notes-file`. The Windows smoke job
-parses `install-windows.ps1`, runs Windows-focused installer/doctor/install-state
-tests plus the Windows-named update-service tests, builds the web and mobile
-assets required by release packaging, and packages the release on
-`windows-latest` to verify macOS, Linux, and Windows manifest entries before
-assets are uploaded. It also runs `install-windows.ps1` in dev mode against a
-temporary checkout, uses a private-runtime-capable path, uses an install path
-containing spaces, confirms the ONLOGON scheduled task exists, probes
-`/auth/setup`, confirms Install Doctor reports `node`, `npm`, and `pm2` as
-ready, and stops PM2 before the publish job can start.
+The `candidate` job normalizes the version, runs the existing type/build/lint/
+test/ADR gates, and packages one candidate on Ubuntu 24.04. Real releases also
+validate the release document and render `github-release-notes.md`; smoke-only
+runs do not require release notes. The complete candidate is uploaded once.
 
-The Linux smoke job parses `install-linux.sh`, runs Linux installer static
-coverage plus install doctor/install-state tests and the Linux-named
-update-service tests, builds the web and mobile assets required by release
-packaging, packages the release on `ubuntu-latest`, verifies macOS, Linux, and
-Windows manifest entries, runs `install-linux.sh` in dev mode against a
-temporary checkout and install root, probes `/auth/setup`, confirms Install
-Doctor reports `node`, `npm`, and `pm2` as ready, verifies and removes the
-test systemd user unit, and deletes the PM2 process before the publish job can
-start.
+The reusable `install-smoke.yml` gate downloads that candidate on Ubuntu 24.04
+x64, Windows x64, macOS arm64 (`macos-15`), and macOS x64 (`macos-15-intel`).
+Each runs with system Node and with an installer-managed private Node runtime.
+The runner executes the candidate's bundled production installer against those
+exact archives, checks expected version, required Install Doctor checks, desktop
+and mobile assets, same-version repair, data/config/onboarding preservation,
+manual-start opt-out, and generated stop/start helpers. It uses isolated
+temporary homes, data, auth, PM2, and ports. Startup-registration checks are
+CI-only and are cleaned up. The Ubuntu system-runtime job also runs Playwright
+owner/welcome and post-repair mobile checks without any live backend account.
+Reports and browser failure artifacts are uploaded even when a job fails.
+The runner checks live process ownership and PID changes, verifies
+corrupt-manifest repair, proves stopping releases the port, and starts the
+helper with inherited `PM2_HOME` removed. Windows task cleanup uses installer
+ownership checks rather than blindly deleting a task with the same name.
+
+Publishing depends on the candidate and all native gates. It downloads the
+already-tested candidate and creates the GitHub Release without rebuilding or
+repackaging it. `smoke_only` runs the same native matrix but never publishes.
+
+Relevant installation PRs run `install.yml`: one candidate build plus a smaller
+system-runtime matrix on Ubuntu 24.04, Windows, and macOS arm64. The normal PR
+test workflow remains responsible for the complete backend regression suite.
+
+### Disposable-Machine Startup Checklist
+
+Native registration checks do not prove startup after a real login. Before
+claiming a newly changed startup mechanism is validated, install on a disposable
+supported machine, log out/reboot and log in as the installing user, and check:
+
+1. The expected version serves desktop and mobile after login, with a minimal
+   terminal PATH and no global Node/npm/PM2 when using the private runtime.
+2. No admin service or no-login startup was added; Windows shows no persistent
+   Node console window.
+3. Rerunning with manual startup removes the managed entry, and the next login
+   does not start the app. A failed replacement retains the previous startup.
 
 ## Post-Release Checks
 

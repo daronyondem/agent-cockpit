@@ -1,77 +1,48 @@
 import fs from 'fs';
 import path from 'path';
 
-const workflowPath = path.join(process.cwd(), '.github/workflows/release.yml');
+const read = (file: string) => fs.readFileSync(path.join(process.cwd(), '.github/workflows', file), 'utf8');
 
-function indexOfOrThrow(source: string, needle: string): number {
-  const index = source.indexOf(needle);
-  if (index < 0) throw new Error(`Missing workflow text: ${needle}`);
-  return index;
-}
-
-describe('release workflow', () => {
-  const source = fs.readFileSync(workflowPath, 'utf8');
-
-  test('runs platform smoke jobs before publishing release assets', () => {
-    expect(source).toContain('windows-smoke:');
-    expect(source).toContain('runs-on: windows-latest');
-    expect(source).toContain('linux-smoke:');
-    expect(source).toContain('runs-on: ubuntu-latest');
-    expect(source).toContain('fetch-depth: 0');
-    expect(source).toContain('smoke_only:');
-    expect(source).toContain('needs: [windows-smoke, linux-smoke]');
+describe('production installer release gates', () => {
+  test('publishes the same candidate artifact only after native smoke gates', () => {
+    const source = read('release.yml');
+    expect(source).toContain('needs: [candidate, platform-smoke]');
+    expect(source).toContain('full_matrix: true');
     expect(source).toContain('if: ${{ !inputs.smoke_only }}');
-    expect(source).toContain('test/updateService.test.ts -t Windows');
-    expect(source).toContain('Parse Windows installer');
-    expect(source).toContain('Package release on Windows');
-    expect(source).toContain('Exercise Windows installer');
-    expect(source).toContain('-Channel dev -DevDir $devDir -InstallDir $installDir -InstallNode -SkipOpen -Port $port');
-    expect(source).toContain('schtasks.exe /Query /TN AgentCockpit');
-    expect(source).toContain('Invoke-WebRequest -UseBasicParsing -TimeoutSec 5 -Uri "http://127.0.0.1:$port/auth/setup"');
-    expect(source).toContain('Invoke-RestMethod -TimeoutSec 5 -Uri "http://127.0.0.1:$port/api/chat/install/doctor"');
-    expect(source).toContain("foreach ($checkId in @('node', 'npm', 'pm2'))");
-    expect(source).toContain('Install doctor required check failed');
-    expect(source).toContain('test/updateService.test.ts -t Linux');
-    expect(source).toContain('Parse Linux installer');
-    expect(source).toContain('Package release on Linux');
-    expect(source).toContain('Exercise Linux installer');
-    expect(source).toContain('bash -n scripts/install-linux.sh');
-    expect(source).toContain('./scripts/install-linux.sh --channel dev --dev-dir "$devDir" --install-dir "$installDir" --install-node --skip-open --port "$port"');
-    expect(source).toContain('test -f "${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user/agent-cockpit.service"');
-    expect(source).toContain('systemctl --user disable agent-cockpit.service');
-    expect(source).toContain("node - \"$port\" <<'NODE'");
-    expect(source).toContain("for (const id of ['node', 'npm', 'pm2'])");
-    expect(source).toContain('Install doctor request timed out');
-    expect(source).toContain('"dist/release/install-linux.sh"');
+    expect(source.match(/^\s+name: release-candidate$/gm)).toHaveLength(2);
+    const publish = source.slice(source.indexOf('\n  release:'));
+    expect(publish).toContain('actions/download-artifact@');
+    expect(publish).not.toContain('release:package');
+    expect(publish).not.toContain('npm version');
+    expect(publish).toContain('dist/release/install-linux.sh');
   });
 
-  test('builds Windows smoke release assets before packaging', () => {
-    const windowsJob = indexOfOrThrow(source, 'windows-smoke:');
-    const webBuild = indexOfOrThrow(source, '- run: npm run web:build');
-    const mobileBuild = indexOfOrThrow(source, '- run: npm run mobile:build');
-    const packageStep = indexOfOrThrow(source, '- name: Package release on Windows');
-    const installerStep = indexOfOrThrow(source, '- name: Exercise Windows installer');
-
-    expect(webBuild).toBeGreaterThan(windowsJob);
-    expect(mobileBuild).toBeGreaterThan(windowsJob);
-    expect(webBuild).toBeLessThan(packageStep);
-    expect(mobileBuild).toBeLessThan(packageStep);
-    expect(packageStep).toBeLessThan(installerStep);
-    expect(source).toContain('npm run release:package -- --version 0.0.0-windows-smoke');
-    expect(source).toContain("['app-tarball','linux','tar.gz']");
-    expect(source).toContain("['linux-installer','linux',undefined]");
+  test('runs actual production packages on native supported platforms and both runtimes', () => {
+    const source = read('install-smoke.yml');
+    for (const os of ['ubuntu-24.04', 'windows-latest', 'macos-15', 'macos-15-intel']) expect(source).toContain(os);
+    expect(source).toContain('["system","private"]');
+    expect(source).toContain('node scripts/run-install-smoke.js');
+    expect(source).toContain('--release-dir candidate');
+    expect(source).toContain('--auto-start');
+    expect(source).toContain('--private-node');
+    expect(source).toContain('--ui');
+    expect(source).not.toContain('--channel dev');
+    expect(source).toContain('if: always()');
   });
 
-  test('builds Linux smoke release assets before packaging', () => {
-    const linuxJob = indexOfOrThrow(source, 'linux-smoke:');
-    const packageStep = indexOfOrThrow(source, '- name: Package release on Linux');
-    const installerStep = indexOfOrThrow(source, '- name: Exercise Linux installer');
-    const linuxPackageCommand = indexOfOrThrow(source, 'npm run release:package -- --version 0.0.0-linux-smoke');
+  test('checks relevant pull requests with the smaller native matrix', () => {
+    const source = read('install.yml');
+    expect(source).toContain('pull_request:');
+    expect(source).toContain('npm run test:install');
+    expect(source).toContain('uses: ./.github/workflows/install-smoke.yml');
+    expect(source).not.toContain('full_matrix: true');
+  });
 
-    expect(packageStep).toBeGreaterThan(linuxJob);
-    expect(linuxPackageCommand).toBeGreaterThan(packageStep);
-    expect(packageStep).toBeLessThan(installerStep);
-    expect(source).toContain("['app-tarball','linux','tar.gz']");
-    expect(source).toContain("['linux-installer','linux',undefined]");
+  test('ADR checks fetch fork commits and do not push with a fork token', () => {
+    const source = read('adr.yml');
+    expect(source).toContain('ref: ${{ github.event.pull_request.head.sha }}');
+    expect(source).toContain('CAN_PUSH_INDEX: ${{ github.event.pull_request.head.repo.full_name == github.repository }}');
+    expect(source).toContain('if [[ "$CAN_PUSH_INDEX" == true &&');
+    expect(source).not.toContain('ref: ${{ github.head_ref }}');
   });
 });

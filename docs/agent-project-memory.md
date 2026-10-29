@@ -44,6 +44,25 @@ tool is unavailable.
 
 ## Releases And Installers
 
+- Installer verification uses `npm run test:install` plus isolated native
+  `npm run e2e:install -- --ui` and
+  `npm run e2e:install -- --private-node`. Native startup-registration smoke is
+  CI-only; actual login/reboot validation remains a disposable-machine check.
+  Publish the exact candidate archives that passed native gates. Repair must
+  preserve config, secrets, onboarding, and data; preparation precedes activation,
+  and failed activation restores the prior release metadata and startup config.
+  Startup task operations must not change another install's task. Windows
+  rollback must attempt the prior app restart even if task restoration fails.
+  POSIX helpers/config persist the selected `PM2_HOME`; corrupt-metadata repair
+  verifies canonical paths and live PM2 ownership instead of trusting HTTP
+  install metadata alone.
+  Startup ownership checks apply to every platform and resolve directory
+  aliases, even when the helper needs repair. Failed candidates may be removed
+  only before activation or after confirmed stop and deactivation; retain active
+  candidates and previous working releases.
+  PM2 ownership preflight uses read-only RPC, not the auto-starting CLI, so stale
+  PID records cannot launch a daemon. Runtime config copies compare canonical
+  `.env` identities to avoid copying a dev alias onto the same file.
 - Production installs update from GitHub Releases. Development installs track
   `main`. Do not add extra release channels unless that decision changes.
 - Release procedure belongs in repo markdown outside GitHub Actions and is

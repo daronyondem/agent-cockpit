@@ -1,0 +1,55 @@
+name: Installation
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - '.github/workflows/install*.yml'
+      - '.github/workflows/release.yml'
+      - 'scripts/install-*'
+      - 'scripts/run-install-smoke.js'
+      - 'scripts/package-release.js'
+      - 'test/*Installer*.test.ts'
+      - 'test/install*.test.ts'
+      - 'test/helpers/installerFixture.ts'
+      - 'test/e2e/install.ui.pw.ts'
+      - 'test/release*'
+      - 'src/services/install*'
+      - 'src/services/updateService.ts'
+      - 'src/middleware/auth.ts'
+      - 'web/AgentCockpitWeb/src/welcomeScreen.jsx'
+      - 'package*.json'
+      - 'mobile/AgentCockpitPWA/package*.json'
+      - 'playwright.config.ts'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  candidate:
+    runs-on: ubuntu-24.04
+    outputs:
+      commit: ${{ steps.commit.outputs.sha }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci && npm --prefix mobile/AgentCockpitPWA ci
+      - run: npm run web:build && npm run mobile:build
+      - run: npm run test:install
+      - run: npm run release:package -- --version "$(node -p 'require("./package.json").version')" --out-dir dist/install-candidate
+      - id: commit
+        run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: install-candidate
+          path: dist/install-candidate
+  smoke:
+    needs: candidate
+    uses: ./.github/workflows/install-smoke.yml
+    with:
+      source_ref: ${{ needs.candidate.outputs.commit }}
+      artifact_name: install-candidate

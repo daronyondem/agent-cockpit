@@ -37,7 +37,6 @@ describe('Windows installer script', () => {
     expect(source).toContain('$request.Timeout = 2000');
     expect(source).toContain('$request.AllowAutoRedirect = $true');
     expect(source).toContain('return ($statusCode -ge 200 -and $statusCode -lt 400)');
-    expect(source).toContain('if (Test-HttpReady $url)');
     expect(source).not.toContain('Invoke-WebRequest -UseBasicParsing -TimeoutSec 2 -Uri $url');
   });
 
@@ -85,7 +84,7 @@ describe('Windows installer script', () => {
     expect(source).toContain("$script:PreservedWelcomeCompletedAt = [string]$install.welcomeCompletedAt");
     expect(source).toContain('installedAt = if ($script:PreservedInstalledAt)');
     expect(source).toContain('welcomeCompletedAt = if ($script:PreservedWelcomeCompletedAt)');
-    expect(source).toContain('[System.IO.File]::WriteAllText($Path, $json + [Environment]::NewLine, (New-Object System.Text.UTF8Encoding($false)))');
+    expect(source).toContain('[System.IO.File]::WriteAllText("$Path.tmp", $json + [Environment]::NewLine, (New-Object System.Text.UTF8Encoding($false)))');
     expect(source).toContain('function Env-Quote');
     expect(source).toContain("$cliToolsDir = Join-Path $InstallDir 'cli-tools'");
     expect(source).toContain('function Ensure-UserPathEntry');
@@ -140,8 +139,6 @@ describe('Windows installer script', () => {
     expect(source).toContain('-WindowStyle Hidden');
     expect(source).toContain('schtasks.exe /Create /TN $TaskName /SC ONLOGON /RU $currentUser /TR $taskRun /RL LIMITED /F');
     expect(source).toContain('Failed to register current-user logon task with schtasks.exe');
-    expect(source).toContain('function Stop-ExistingAppForReplacement');
-    expect(source).toContain('Stopping existing Agent Cockpit process before replacing app files.');
     expect(source).toContain("Invoke-Pm2BestEffort $AppDir @('delete', $AppName)");
     expect(source).toContain('Skipping PM2 cleanup for $AppDir because local PM2 is not installed yet.');
     expect(source).toContain("Invoke-Quiet $pm2Cmd @('startOrRestart', 'ecosystem.config.js', '--update-env') $AppDir");

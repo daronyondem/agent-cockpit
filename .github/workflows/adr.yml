@@ -17,22 +17,26 @@ jobs:
     steps:
       - uses: actions/checkout@v6
         with:
-          ref: ${{ github.head_ref }}
+          ref: ${{ github.event.pull_request.head.sha }}
           token: ${{ secrets.GITHUB_TOKEN }}
+          persist-credentials: ${{ github.event.pull_request.head.repo.full_name == github.repository }}
 
       - uses: actions/setup-node@v6
         with:
           node-version: 22
 
       - name: Regenerate ADR index
+        env:
+          CAN_PUSH_INDEX: ${{ github.event.pull_request.head.repo.full_name == github.repository }}
+          HEAD_REF: ${{ github.head_ref }}
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           node scripts/adr-index.js
-          if [[ -n "$(git status --porcelain docs/adr/README.md)" ]]; then
+          if [[ "$CAN_PUSH_INDEX" == true && -n "$(git status --porcelain docs/adr/README.md)" ]]; then
             git add docs/adr/README.md
             git commit -m "chore(adr): regenerate index"
-            git push origin HEAD:${{ github.head_ref }}
+            git push origin HEAD:"$HEAD_REF"
           fi
 
       - name: Lint ADRs

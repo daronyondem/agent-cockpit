@@ -122,38 +122,26 @@ Production releases are created by `.github/workflows/release.yml`, a manual
 The workflow checks out `source_ref`, normalizes the version, records the
 checked-out commit, and runs `npm version <version> --no-git-tag-version` only
 when the checked-out package version differs from the requested release version.
-Before the publish job can create the GitHub Release, platform smoke jobs run on
-Windows and Linux. The `windows-smoke` job runs on `windows-latest`. It checks
-out `source_ref` with full history, installs root and mobile dependencies, runs
-the root/web/mobile TypeScript checks, builds the web and mobile assets required
-by the release package, checks the web bundle budget, runs the Windows-focused
-installer/doctor/install-state Jest tests plus the Windows-named update-service
-Jest tests, parses `scripts/install-windows.ps1` with PowerShell's parser API,
-runs `npm run release:package` on Windows, and verifies the manifest includes
-macOS, Linux, and Windows app/installer artifacts. It then creates a temporary
-Git origin whose `main` branch points at the selected `source_ref`, runs
-`scripts/install-windows.ps1 -Channel dev` against a temporary checkout with
-`-InstallNode`, an install path containing spaces, `-SkipOpen`, and a fixed high
-port, verifies the `AgentCockpit` ONLOGON scheduled task is queryable, probes
-`/auth/setup`, verifies `/api/chat/install/doctor` reports `node`, `npm`, and
-`pm2` as `ok`, and runs the generated stop script before the publish job starts.
+The Ubuntu 24.04 `candidate` job runs the release gate and packages exactly once.
+The reusable `.github/workflows/install-smoke.yml` downloads the candidate on
+Ubuntu 24.04 x64, Windows x64, macOS arm64 (`macos-15`), and macOS x64
+(`macos-15-intel`), each with system and private Node runtimes. It executes the
+candidate's bundled production installer against the candidate archives,
+validates required Install Doctor checks, version and desktop/mobile readiness,
+repairs the same version, verifies preserved data/config/onboarding, opts out of
+startup, and exercises generated stop/start helpers. The Ubuntu system-runtime
+job runs Playwright first-owner/welcome and post-repair mobile checks. Reports
+are uploaded on success or failure.
 
-The `linux-smoke` job runs on `ubuntu-latest`. It installs root and mobile
-dependencies, runs the root/web/mobile TypeScript checks, builds the web and
-mobile assets, checks the web bundle budget, runs the Linux installer static
-coverage plus install doctor/install-state tests and the Linux-named
-update-service tests, parses `scripts/install-linux.sh` with `bash -n`, runs
-`npm run release:package`, and verifies the manifest includes macOS, Linux, and
-Windows app/installer artifacts. It then creates a temporary Git origin, runs
-`scripts/install-linux.sh --channel dev` against a temporary checkout with a
-temporary install root, `--skip-open`, and a fixed high port, probes
-`/auth/setup`, verifies `/api/chat/install/doctor` reports `node`, `npm`, and
-`pm2` as `ok`, verifies the systemd user unit file was written, disables/removes
-that test unit during cleanup, and deletes the PM2 process before the publish
-job starts.
+Publishing depends on all native gates and downloads the same candidate without
+rebuilding or repackaging. Smoke-only runs use the same candidate and native
+matrix but skip release-note rendering and publishing. Relevant installation
+PRs use `.github/workflows/install.yml` and a smaller system-runtime-only matrix
+on Ubuntu, Windows, and macOS arm64. See
+[ADR-0093](adr/0093-make-installer-activation-transactional-and-test-production-artifacts.md).
 
-When `smoke_only` is false, the Ubuntu publish job then runs the release gate in
-this order:
+The candidate gate runs in this order; release notes are rendered only for a
+real release:
 
 ```bash
 npm ci
@@ -163,6 +151,7 @@ npm run web:typecheck
 npm run web:build
 npm run web:budget
 npm run mobile:typecheck
+npm run lint
 npm run maintainability:check
 npm run spec:drift
 npm run mobile:build
@@ -231,6 +220,120 @@ version bookkeeping workflow. It bumps the patch version on pushes to `main`,
 commits the package files, and pushes `main`; it does not create or force-push
 `v*` tags. GitHub Releases are the only production release signal.
 
+## Installer Preparation, Repair, And Activation
+
+The standalone platform installers retain their production/dev channels and
+per-user PM2 model. Production repair is transactional at the release-activation
+boundary, not a backup/restore of mutable user data. See
+[ADR-0093](adr/0093-make-installer-activation-transactional-and-test-production-artifacts.md).
+
+1. Validate the port (1–65535), platform, prerequisites, and writable install
+   root. Create `<install-root>/logs/install.log` for stage/failure diagnostics.
+   Resolve a working runtime, load the prior install manifest/app config, and
+   retain its port unless explicitly overridden. Restored port values are
+   normalized to decimal integers before writing `.env` or JavaScript config,
+   so zero-prefixed strings cannot become octal literals. An occupied port is accepted
+   when `/api/chat/install/status.installDir` resolves to the same canonical
+   filesystem root. If HTTP metadata is corrupt, unavailable, or inferred, use a
+   bounded three-second read-only `getMonitorData` RPC query using the existing
+   app-local PM2 package's bundled axon/RPC transport and configured endpoint.
+   The lookup never invokes PM2's CLI, creates a daemon, or resolves npm packages.
+   A live recorded daemon PID is only an initial check: a stale/reused PID with
+   no live RPC endpoint must still fail without starting a replacement. Require
+   a live online `agent-cockpit` app PID, matching port, canonical app directory,
+   and canonical data directory. POSIX requires the previous app directory;
+   Windows can recover it from an owned release under the install root or the
+   known dev directory. Unrelated services, stale PIDs, wrong ports, and foreign
+   app directories remain errors. Unreadable timestamps cannot be recovered
+   from a corrupt manifest; config, secrets, and mutable data remain preserved.
+2. Verify release manifest/archive checksums and safe package/archive basenames.
+   When a version is explicitly requested, reject a manifest for another version.
+   Extract into a unique release directory; never remove a same-version active
+   directory. Install root dependencies and use packaged desktop/mobile assets.
+   Mobile `npm ci` runs only for dev or a missing prebuilt mobile shell.
+3. Copy existing `.env` custom entries, retaining secrets and replacing only
+   installer-managed fields. POSIX `.env` and stage logs have mode `0600`.
+   Preserve `installedAt` and `welcomeCompletedAt`. Snapshot the previous
+   manifest, managed helper directory, and startup registration. POSIX swaps
+   `current` with a temporary symlink plus atomic rename; Windows records the
+   separate versioned `appDir`. Regenerate helpers/config, register startup, and
+   start a fresh PM2 app entry to discard stale process metadata.
+4. Require the exact expected `/api/chat/version.version` and a successful
+   `/auth/setup` probe before reporting success. There are up to 90 attempts
+   with one-second delays and bounded two-second probes. On failure after
+   activation begins, stop the candidate and restore the prior manifest,
+   symlink/app selection, helpers, startup registration, and PM2 app. A failed
+   first install removes the new activation metadata/managed helpers instead.
+   User data, CLI auth, and external application side effects are not reverted.
+
+Installer errors exit nonzero and retain stage diagnostics. Raw application logs
+and setup-token output are not appended to the installer log. POSIX downloads
+use a 15-second connect timeout, 300-second transfer timeout, three curl retries,
+and a 600-second retry budget. Windows makes at most three 300-second download
+attempts with two-second delays. Integrity/extraction failures are not retried as
+activation. Prior release directories remain available for recovery.
+Failed candidates are removed before activation. After a failed activation,
+cleanup requires a confirmed process stop and verifies that neither the active
+selection nor the restored manifest still references that candidate. Cleanup is
+restricted to the unique directory created by this attempt directly under
+`releases/`; it never prunes prior working releases. Candidates are retained
+when stopping, restoring metadata, resolving references, or deleting files
+cannot be confirmed safe.
+Failure to open an optional browser prints the ready URL and a warning; it does
+not roll back an otherwise healthy installation.
+
+`--no-auto-start` / `-NoAutoStart` removes an existing managed startup entry as
+well as recording `startup.kind: "manual"`; the current session still starts.
+POSIX rollback restores whether an owned prior startup entry was loaded/enabled,
+and only changes startup registration if this attempt modified it.
+Windows snapshots the existing task XML. Linux still warns, rather than failing
+installation, when no usable user-systemd session is available.
+
+POSIX startup operations check ownership before registering, removing, or
+snapshotting an entry. macOS reads the LaunchAgent's first `ProgramArguments`
+value through built-in `plutil`; Linux reads the generated unit's `ExecStart`
+path, decoding its quoted form. Each must resolve to this install's
+`bin/start-agent-cockpit.sh`. Manual startup and rollback leave foreign entries
+and their loaded/enabled state untouched; automatic registration refuses a
+foreign entry rather than replacing it.
+
+Windows task operations are restricted to the root `AgentCockpit` task whose
+action's canonical filesystem `-File` path points to this install's
+`bin\start-agent-cockpit.ps1`. Manual startup and rollback leave tasks owned by
+another install unchanged, including their XML. Automatic registration refuses
+to replace a foreign task. Task restoration errors are warnings; rollback
+attempts the previous app restart in a `finally` block even when task or file
+restoration fails. Startup-path identity on every platform follows directory
+aliases/junctions/symlinks; if the helper is missing during repair, it resolves
+the nearest existing parent and appends the missing suffix. Other install path
+checks still require an existing target. Windows smoke cleanup supplies the
+runner's Node executable when loading these ownership functions without a full
+installer bootstrap.
+
+POSIX selects `PM2_HOME` from the invoking environment, then the prior app's
+`.env`, then the unchanged `$HOME/.pm2` default, and resolves it to an absolute
+path. It writes that selection into `.env`, ecosystem config, and both start/
+stop helpers. The helpers export it before PM2 runs, so launchd and user systemd
+do not depend on inheriting the interactive installer's environment. Windows
+continues to use `<install-root>\pm2`.
+
+macOS writes and validates the LaunchAgent before starting PM2, but loads its
+`RunAtLoad` job only after the runtime start succeeds. This prevents the
+installer and login helper from racing to bootstrap the same empty PM2 home.
+Both production and dev then perform the version/setup readiness checks.
+
+Windows configuration preparation compares canonical source and destination
+`.env` paths before copying. A dev-directory alias that resolves to the same
+file is not copied onto itself; distinct app directories still receive the
+preserved runtime configuration before activation.
+
+The test-only `AGENT_COCKPIT_INSTALL_TEST_RELEASE_DIR` transport copies
+GitHub-release asset basenames from an explicit local candidate directory;
+normal installs remain pinned to GitHub Releases. It does not intercept official
+Node downloads. `AGENT_COCKPIT_INSTALL_LIBRARY_ONLY=1` allows fixture suites to
+load installer functions without executing bootstrap/platform startup. Neither
+environment variable is an application setting or a new release channel.
+
 ## macOS Installer
 
 The first supported installer is `scripts/install-macos.sh`. It is included in
@@ -247,14 +350,16 @@ Supported options are `--channel production|dev`, `--version <version>`,
 `--port <port>`, `--install-node`, `--no-install-node`, `--no-auto-start`, and
 `--skip-open`. The
 default install root is `~/Library/Application Support/Agent Cockpit`;
-production releases are extracted under `releases/agent-cockpit-v<version>`,
+production releases are prepared under unique
+`releases/agent-cockpit-v<version>-<unique>/agent-cockpit-v<version>` directories,
 and `current` is a symlink to the active release. Mutable runtime data lives
 under `<install-root>/data`.
 
 The installer exits unless `uname -s` is `Darwin`, the CPU is `arm64` or
 `x86_64`, and `curl`, `tar`, and `shasum` are available. When Node.js 22+ and
-npm are already available on `PATH`, the installer uses them. Otherwise it
-downloads the latest official Node.js 22 macOS tarball for the detected
+npm/npx are usable on `PATH`, the installer uses them. Otherwise it first reuses
+a healthy existing private runtime after executing node/npm/npx checks. If
+needed, it downloads the latest official Node.js 22 macOS tarball for the detected
 architecture from `https://nodejs.org/dist/latest-v22.x/`, downloads
 `SHASUMS256.txt`, verifies the tarball with `shasum -a 256`, extracts it under
 `<install-root>/runtime/node-v<version>`, and points
@@ -282,7 +387,8 @@ verifies SHA256 for both the manifest and tarball before extraction. After
 extraction it exports `NPM_CONFIG_AUDIT=false`, `NPM_CONFIG_FUND=false`,
 `NPM_CONFIG_LOGLEVEL=error`, and `NPM_CONFIG_UPDATE_NOTIFIER=false`, runs root
 `npm ci --no-audit --no-fund --loglevel=error`, runs
-`npm --prefix mobile/AgentCockpitPWA ci --no-audit --no-fund --loglevel=error`, verifies
+`npm --prefix mobile/AgentCockpitPWA ci --no-audit --no-fund --loglevel=error`
+only when the prebuilt mobile shell is missing, verifies
 that `public/v2-built/index.html` and `public/mobile-built/index.html` exist,
 and runs the corresponding build command only if an expected prebuilt shell is
 missing. These npm settings keep install-time audit/funding/update-notifier
@@ -297,8 +403,8 @@ both web/mobile builds so the dev checkout is immediately runnable.
 
 Both channels generate `.env`, `ecosystem.config.js`, and
 `<AGENT_COCKPIT_DATA_DIR>/install.json`, plus helper scripts under
-`<install-root>/bin/`. Generated runtime config sets `PORT`, secure random
-`SESSION_SECRET`, secure random `AUTH_SETUP_TOKEN`, `AGENT_COCKPIT_DATA_DIR`,
+`<install-root>/bin/`. Generated runtime config sets `PORT`, retained or initially
+secure-random `SESSION_SECRET` and `AUTH_SETUP_TOKEN`, `AGENT_COCKPIT_DATA_DIR`,
 `WEB_BUILD_MODE=auto`, and `AUTH_ENABLE_LEGACY_OAUTH=false`. Generated config
 also persists `PATH` with the private Node.js runtime `bin` directory first when
 present, followed by common user CLI install locations and the inherited
@@ -318,8 +424,9 @@ npx pm2 startOrRestart ecosystem.config.js --update-env
 npx pm2 save
 ```
 
-It does not require global PM2. After PM2 starts, the installer probes
-`http://127.0.0.1:<port>/auth/setup` for up to 90 seconds with `curl`. If the
+It does not require global PM2. After PM2 starts, the installer checks the exact
+expected `/api/chat/version` and probes
+`http://127.0.0.1:<port>/auth/setup` for up to 90 attempts with `curl`. If the
 server does not answer, the installer fails with a local
 PM2 logs command. When the installer is using a private Node.js runtime, that
 printed command prepends the private runtime `bin` directory and calls the
@@ -361,7 +468,8 @@ Supported options are `--channel production|dev`, `--version <version>`,
 `--port <port>`, `--install-node`, `--no-install-node`, `--no-auto-start`, and
 `--skip-open`. The
 default install root is `${XDG_DATA_HOME:-$HOME/.local/share}/agent-cockpit`;
-production releases are extracted under `releases/agent-cockpit-v<version>`,
+production releases are prepared under unique
+`releases/agent-cockpit-v<version>-<unique>/agent-cockpit-v<version>` directories,
 and `current` is a symlink to the active release. Mutable runtime data lives
 under `<install-root>/data`.
 
@@ -369,7 +477,9 @@ The installer exits unless `uname -s` is `Linux`, `uname -m` is `x86_64`, and
 `curl`, `tar`, and `sha256sum` are available. It rejects musl-based systems when
 `ldd --version` reports musl, because the first supported runtime path uses
 official glibc-linked Node.js Linux binaries. When Node.js 22+ and npm are
-already available on `PATH`, the installer uses them. Otherwise it downloads the
+usable together with npx on `PATH`, the installer uses them. Otherwise it first
+tries the existing private runtime, verifies node/npm/npx execution, and reuses
+it when healthy. If necessary it downloads the
 latest official Node.js 22 Linux x64 tarball from
 `https://nodejs.org/dist/latest-v22.x/`, downloads `SHASUMS256.txt`, verifies
 the tarball with `sha256sum`, extracts it under
@@ -388,8 +498,9 @@ that runtime.
 Production installs download `release-manifest.json`, `SHA256SUMS`, and the
 manifest artifact with `platform: "linux"` and `format: "tar.gz"` from
 GitHub Releases. They verify SHA256 for both the manifest and tarball before
-extraction. After extraction they install root and mobile dependencies with the
-same quiet npm settings as macOS, verify prebuilt `public/v2-built/` and
+extraction. After extraction they install root dependencies with the
+same quiet npm settings as macOS, install mobile dependencies only when the
+prebuilt mobile shell is missing, verify prebuilt `public/v2-built/` and
 `public/mobile-built/` shells, and build only if an expected shell is missing.
 Dev installs clone or update `main` under `--dev-dir`, install dependencies, and
 force both builds.
@@ -414,7 +525,8 @@ not available in the install environment, it leaves the unit file in place and
 prints a warning rather than failing the entire install. The installer starts the
 current session with local PM2 through
 `npx pm2 startOrRestart ecosystem.config.js --update-env` and `npx pm2 save`,
-then probes `http://127.0.0.1:<port>/auth/setup` for up to 90 seconds. Once the
+then checks `/api/chat/version` against the expected version and probes
+`http://127.0.0.1:<port>/auth/setup` for up to 90 attempts. Once the
 setup endpoint is ready, it prints the first-run setup token and opens
 `http://localhost:<port>/auth/setup` with `xdg-open` when available unless
 `--skip-open` is set; when `xdg-open` is unavailable, it prints the setup URL.
@@ -433,7 +545,7 @@ Supported options are `-Channel production|dev`, `-Version <version>`,
 `-Repo <owner/name>`, `-InstallDir <path>`, `-DevDir <path>`, `-Port <port>`,
 `-InstallNode`, `-NoInstallNode`, `-SkipOpen`, `-NoAutoStart`, and `-Repair`.
 The default install root is `%LOCALAPPDATA%\Agent Cockpit`; production releases
-are extracted under `releases\agent-cockpit-v<version>`, mutable runtime data
+are prepared under unique `releases\agent-cockpit-v<version>-<unique>` directories, mutable runtime data
 lives under `data\`, install-local PM2 state lives under `pm2\`, and private
 Node.js runtimes live under `runtime\node-v<version>-win-x64`.
 
@@ -459,7 +571,8 @@ Production installs download `release-manifest.json`, `SHA256SUMS`, and the
 manifest-designated Windows `app-zip` from GitHub Releases. They verify SHA256,
 extract the ZIP with `System.IO.Compression.ZipFile` through an
 `Expand-ZipFile` helper that logs the extraction step without PowerShell archive
-progress UI, install root and mobile dependencies with quiet npm settings,
+progress UI, install root dependencies with quiet npm settings and mobile
+dependencies only when the packaged mobile shell is missing,
 verify the prebuilt `public/v2-built/` and
 `public/mobile-built/` shells, and build only if an expected shell is missing.
 Dev installs clone or update `main` under `-DevDir`, install dependencies, and
@@ -513,9 +626,9 @@ path-valued `.env` entries use backtick quoting so dotenv does not interpret
 and `AUTH_SETUP_TOKEN` values are generated with
 `RandomNumberGenerator.Create().GetBytes(...)` so the installer works in Windows
 PowerShell 5.1 as well as newer PowerShell runtimes. Repair or reinstall runs
-read the existing app `.env` and install manifest before replacing a same-version
-release directory, stop the existing PM2 app on a best-effort basis before
-deleting active app files, and keep `SESSION_SECRET`, `AUTH_SETUP_TOKEN`,
+read the existing app `.env` and install manifest before preparing a same-version
+release in a separate directory, leave active app files untouched, and keep
+custom environment entries, `SESSION_SECRET`, `AUTH_SETUP_TOKEN`,
 `installedAt`, and `welcomeCompletedAt` stable while mutable `data\` content is
 preserved outside the app directory. The best-effort PM2 cleanup path resolves
 `<appDir>\node_modules\.bin\pm2.cmd` directly and skips cleanup when that local
@@ -539,8 +652,10 @@ Hidden`. The scheduled-task cmdlet path uses the current Windows identity as an
 `Interactive` limited principal; the `schtasks.exe` fallback passes `/RU
 <current-user>` with limited run level. This is
 intentionally user-logon startup, not a Windows Service and not "run whether
-user is logged on or not". If the server does not answer `/auth/setup` within
-90 seconds, the installer prints the helper logs command.
+user is logged on or not". Readiness requires the expected `/api/chat/version`
+as well as `/auth/setup`, using raw .NET HTTP requests rather than HTML page
+parsing. After 90 failed attempts, the installer prints diagnostics and the
+helper logs command and attempts activation rollback.
 
 Windows production self-update uses the same app-local PM2 ownership model as
 the installer helpers. The generated `restart.ps1` resolves the target release's

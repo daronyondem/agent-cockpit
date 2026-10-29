@@ -12,6 +12,8 @@
     "lint": "eslint . --max-warnings=0",
     "test": "node --experimental-vm-modules node_modules/jest/bin/jest.js",
     "test:coverage": "node --experimental-vm-modules node_modules/jest/bin/jest.js --coverage --runInBand",
+    "test:install": "npm test -- --runInBand test/installerBehavior.test.ts test/installSmokeRunner.test.ts test/macosInstallerScript.test.ts test/linuxInstallerScript.test.ts test/windowsInstallerScript.test.ts test/installStateService.test.ts test/installDoctorService.test.ts test/releasePackage.test.ts test/releaseWorkflow.test.ts",
+    "e2e:install": "node scripts/run-install-smoke.js",
     "e2e:claude-interactive": "CLAUDE_INTERACTIVE_E2E=1 npm test -- test/claudeCodeInteractive.e2e.test.ts --runInBand --forceExit",
     "e2e:claude-interactive:report": "tsx scripts/run-claude-interactive-compat.ts",
     "e2e:claude-interactive-ui": "CLAUDE_INTERACTIVE_UI_E2E=1 playwright test test/e2e/claudeCodeInteractive.ui.pw.ts --config playwright.config.ts --project chromium",
