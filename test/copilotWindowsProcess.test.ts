@@ -20,7 +20,7 @@ test('passes Windows invocation data through stdin with native argument quoting 
       const launch: typeof spawnWindowsCopilotProcess = require('../src/services/backends/copilotWindowsProcess').spawnWindowsCopilotProcess;
       expect(launch('C:\\Copilot tools\\copilot.exe', ['-p', 'a "quote"\n日本語', '', 'C:\\space path\\'], { cwd: 'C:\\workspace', env: { TOKEN: 'fixture' } })).toBe(proc);
     });
-    expect(spawn).toHaveBeenCalledWith('powershell.exe', ['-NoLogo', '-NoProfile', '-NonInteractive', '-EncodedCommand', expect.any(String)], expect.objectContaining({ cwd: 'C:\\workspace', env: { TOKEN: 'fixture' }, detached: false, windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] }));
+    expect(spawn).toHaveBeenCalledWith('powershell.exe', ['-NoLogo', '-NoProfile', '-NonInteractive', '-InputFormat', 'Text', '-OutputFormat', 'Text', '-EncodedCommand', expect.any(String)], expect.objectContaining({ cwd: 'C:\\workspace', env: { TOKEN: 'fixture' }, detached: false, windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] }));
     expect(JSON.parse(stdin.end.mock.calls[0][0])).toEqual({ command: 'C:\\Copilot tools\\copilot.exe', arguments: '-p "a \\"quote\\"\n日本語" "" "C:\\space path\\\\"' });
     expect(() => stdin.emit('error', new Error('pipe closed on abort'))).not.toThrow();
   } finally { jest.dontMock('child_process'); }
@@ -44,7 +44,7 @@ const fs = require('fs');
 require('child_process').spawn(process.execPath, [${JSON.stringify(middle)}], {detached:true,stdio:'ignore'}).unref();
 const timer = setInterval(() => {
   if (!fs.existsSync(${JSON.stringify(pidFile)})) return;
-  console.log('READY');
+  fs.writeSync(1, 'READY\\n');
   clearInterval(timer);
   ${action === 'exit' ? 'process.exit(42);' : 'setInterval(()=>{},1000);'}
 }, 10);
@@ -85,8 +85,8 @@ const timer = setInterval(() => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'copilot ü windows '));
     const args = ['', 'a b', 'a"b', 'a\\"b', 'C:\\space path\\', 'line\nbreak', 'café 日本語 😀', '& | % $ `'];
     const proc = spawnWindowsCopilotProcess(process.execPath, ['-e', `
-console.log(JSON.stringify({args:process.argv.slice(1),cwd:process.cwd(),env:process.env.COPILOT_FIXTURE}));
-console.error('é日本語😀'); process.exit(7);
+require('fs').writeSync(1,JSON.stringify({args:process.argv.slice(1),cwd:process.cwd(),env:process.env.COPILOT_FIXTURE}));
+require('fs').writeSync(2,'é日本語😀'); process.exit(7);
 `, '--', ...args], { cwd: dir, env: { ...process.env, COPILOT_FIXTURE: 'é日本語😀' } });
     let stdout = '';
     let stderr = '';
