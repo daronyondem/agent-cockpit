@@ -146,6 +146,12 @@ must await aborted scopes for its conversation before resuming native work.
 Send/goal admission blocked by a reset uses temporary `503` with `Retry-After`,
 while active-stream conflicts retain `409`; clients interpret `409` as an
 existing stream and must not attach to a reset reservation.
+For Copilot Memory/Workspace Context changes, run the normal-CI application
+integration suite in `test/copilotMemoryContext.test.ts` and native
+`npm run e2e:copilot-workflows`. The native suite uses isolated temporary auth
+and fixed local model responses to test production MCP, governance, persistence,
+and managed Context file paths. Record the actual CLI/OS/revision and keep this
+evidence separate from hosted-model reasoning, account auth, and browser UX.
 
 # Grok Build Protocol Compatibility
 

@@ -194,6 +194,11 @@ tool is unavailable.
   turns await aborted scopes from the same conversation before native reuse.
   Reset admission returns temporary `503` for sends/goal starts/resume, while
   active-stream conflicts retain `409` so clients do not enter phantom streaming.
+  Memory/Context application integration is covered in normal CI; run
+  `npm run e2e:copilot-workflows` for real-CLI checks with isolated temporary auth
+  and fixed local model responses. That evidence covers production MCP,
+  governance, persistence, and managed Context files, not hosted-model judgment
+  or account/browser certification.
 - Claude Code Interactive is a separate protocol/backend path requiring real CLI
   compatibility checks when protocol behavior changes.
 - Do not auto-update Claude Code CLI as part of Claude Code Interactive
