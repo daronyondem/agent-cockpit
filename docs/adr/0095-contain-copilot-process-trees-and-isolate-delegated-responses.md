@@ -1,10 +1,10 @@
 ---
 id: 0095
 title: Contain Copilot process trees and isolate delegated responses
-status: Accepted
+status: Superseded
 date: 2026-10-29
 supersedes: [0094]
-superseded-by: null
+superseded-by: 0096
 tags: [backends, copilot, lifecycle, protocol, testing]
 affects:
   - src/services/backends/copilot.ts

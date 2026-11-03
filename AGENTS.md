@@ -133,6 +133,13 @@ CLI updates use reusable shutdown, which blocks starts only while draining.
 Retain verified child-led groups after leader exit as well, and cancel one-shot
 controllers before termination so a clean launcher close cannot accept partial
 output as success.
+Keep a fresh inherited `AGENT_COCKPIT_COPILOT_SCOPE` marker per chat/one-shot
+spawn so cleanup can recover orphans whose detached leader was never observed.
+Environment snapshots are bounded, current-user-only, used only during cleanup,
+and must never be logged. Keep PID/start and verified-group checks as well.
+Reserve the conversation/workspace before asynchronous reset cleanup, drain all
+ending backends before changing any session or Git checkout, and release the
+reservation on every exit path. See ADR-0096.
 
 # Grok Build Protocol Compatibility
 

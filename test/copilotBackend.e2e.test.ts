@@ -1,10 +1,12 @@
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
+import http from 'http';
 import { createCanvas } from '@napi-rs/canvas';
 import { execFileSync } from 'child_process';
 import { CopilotAdapter } from '../src/services/backends/copilot';
 import { readCopilotUsageBaseline } from '../src/services/backends/copilotUsage';
+import { spawnCopilotProcess } from '../src/services/backends/copilotProcess';
 import type { StreamEvent } from '../src/types';
 
 const native = process.env.COPILOT_E2E === '1' ? describe : describe.skip;
@@ -21,6 +23,74 @@ native('real Copilot CLI compatibility', () => {
     });
   });
   afterAll(() => { fs.rmSync(workdir, { recursive: true, force: true }); });
+
+  (process.platform === 'win32' ? test.skip : test)('reaps orphaned native bash work with an isolated local model fixture', async () => {
+    const fixtureDir = fs.mkdtempSync(path.join(workdir, 'orphan-'));
+    const pidFile = path.join(fixtureDir, 'worker.pid');
+    const worker = path.join(fixtureDir, 'worker.cjs');
+    fs.writeFileSync(worker, `
+process.on('SIGTERM', () => {});
+require('fs').writeFileSync(${JSON.stringify(pidFile)}, String(process.pid));
+setInterval(() => {}, 1000);
+`);
+    const quote = (value: string) => `'${value.replace(/'/g, `'\\''`)}'`;
+    const command = `/bin/sh -c ${quote(`${quote(process.execPath)} ${quote(worker)} </dev/null >/dev/null 2>&1 &`)}`;
+    const server = http.createServer((req, res) => {
+      let body = '';
+      req.on('data', chunk => { body += chunk.toString(); });
+      req.on('end', () => {
+        const request = JSON.parse(body);
+        // Leave the parent turn active after the shell finishes so stop, rather
+        // than normal CLI completion, owns cancellation of the detached worker.
+        if (request.messages.some((message: { role: string }) => message.role === 'tool')) return;
+        res.writeHead(200, { 'Content-Type': 'text/event-stream' });
+        const delta = { role: 'assistant', tool_calls: [{ index: 0, id: 'fixture-shell', type: 'function', function: {
+          name: 'bash', arguments: JSON.stringify({ command, description: 'Process cleanup fixture', initial_wait: 1000 }),
+        } }] };
+        for (const [content, reason] of [[delta, null], [{}, 'tool_calls']]) {
+          res.write(`data: ${JSON.stringify({ id: 'fixture', object: 'chat.completion.chunk', created: 1, model: 'gpt-4', choices: [{ index: 0, delta: content, finish_reason: reason }] })}\n\n`);
+        }
+        res.end('data: [DONE]\n\n');
+      });
+    });
+    await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
+    const port = (server.address() as { port: number }).port;
+    const { proc, scope } = spawnCopilotProcess('copilot', [
+      '-p', 'Run the supplied synthetic fixture command.', '--no-auto-update', '--disable-client-telemetry',
+      '--disable-builtin-mcps', '--no-ask-user', '--allow-all', '--output-format', 'json', '--stream', 'on',
+    ], {
+      cwd: fixtureDir, stdio: ['ignore', 'pipe', 'pipe'],
+      env: {
+        PATH: process.env.PATH, HOME: fixtureDir, COPILOT_HOME: fixtureDir,
+        COPILOT_PROVIDER_BASE_URL: `http://127.0.0.1:${port}/v1`, COPILOT_PROVIDER_TYPE: 'openai', COPILOT_MODEL: 'gpt-4',
+      },
+    });
+    proc.stdout?.resume();
+    let stderr = '';
+    proc.stderr?.on('data', chunk => { stderr += chunk.toString(); });
+    const alive = (pid: number) => {
+      try {
+        return !execFileSync('ps', ['-o', 'stat=', '-p', String(pid)], { encoding: 'utf8' }).trim().startsWith('Z');
+      } catch { return false; }
+    };
+    let workerPid: number | undefined;
+    try {
+      for (let i = 0; i < 500 && !fs.existsSync(pidFile) && proc.exitCode === null; i += 1) {
+        await new Promise(resolve => setTimeout(resolve, 20));
+      }
+      if (!fs.existsSync(pidFile)) throw new Error(`Native bash did not start the fixture worker: ${stderr}`);
+      workerPid = Number(fs.readFileSync(pidFile, 'utf8'));
+      await new Promise(resolve => setTimeout(resolve, 200));
+      expect(alive(workerPid)).toBe(true);
+      await scope.stop();
+      expect(alive(workerPid)).toBe(false);
+    } finally {
+      await scope.stop();
+      if (workerPid && alive(workerPid)) process.kill(workerPid, 'SIGKILL');
+      server.closeAllConnections();
+      await new Promise<void>(resolve => server.close(() => resolve()));
+    }
+  }, 20_000);
 
   test('transports explicit image and PDF attachments without file tools', async () => {
     const canvas = createCanvas(32, 32);

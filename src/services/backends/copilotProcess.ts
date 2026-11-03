@@ -1,8 +1,24 @@
-import { execFile, type ChildProcess } from 'child_process';
+import { execFile, spawn, type ChildProcess, type SpawnOptions } from 'child_process';
+import crypto from 'crypto';
 import { logger } from '../../utils/logger';
 
 const log = logger.child({ module: 'copilot-process' });
 interface Identity { pid: number; parent: number; group: number; started: string }
+
+const OWNERSHIP_ENV = 'AGENT_COCKPIT_COPILOT_SCOPE';
+
+export function spawnCopilotProcess(command: string, args: string[], options: SpawnOptions): {
+  proc: ChildProcess; scope: CopilotProcessScope;
+} {
+  const token = crypto.randomUUID();
+  const proc = spawn(command, args, {
+    ...options,
+    env: { ...(options.env || process.env), [OWNERSHIP_ENV]: token },
+    detached: process.platform !== 'win32',
+    windowsHide: true,
+  });
+  return { proc, scope: new CopilotProcessScope(proc, token) };
+}
 
 export class CopilotProcessScope {
   private identities = new Map<number, Identity>();
@@ -11,7 +27,7 @@ export class CopilotProcessScope {
   private stopping: Promise<void> | undefined;
   private closed = false;
 
-  constructor(private child: ChildProcess) {
+  constructor(private child: ChildProcess, private ownershipToken?: string) {
     child.once('close', () => { this.closed = true; });
     child.once('error', () => { this.closed = true; });
     if (process.platform !== 'win32' && child.pid && child.exitCode === null) {
@@ -51,16 +67,24 @@ export class CopilotProcessScope {
       });
       return;
     }
-    const table = await this.scan();
+    const table = await this.cleanupSnapshot();
     if (!this.signal(table, 'SIGTERM')) {
       if (!this.closed) this.child.kill('SIGTERM');
       if (this.closed) return;
     }
     await new Promise(resolve => setTimeout(resolve, 750));
-    this.signal(await this.scan(), 'SIGKILL');
+    this.signal(await this.cleanupSnapshot(), 'SIGKILL');
     if (!this.closed) this.child.kill('SIGKILL');
     // Pipes can remain open in a launcher even after its native child was killed.
     await new Promise(resolve => setTimeout(resolve, 50));
+  }
+
+  private async cleanupSnapshot(): Promise<Identity[]> {
+    // A pending ancestry-only poll must not replace the ownership scan at stop.
+    await this.scanning;
+    const table = await this.scan(true);
+    // Keep identity/group cleanup available if environment enumeration fails.
+    return table.length > 0 || !this.ownershipToken ? table : this.scan();
   }
 
   private signal(table: Identity[], signal: NodeJS.Signals): boolean {
@@ -91,10 +115,14 @@ export class CopilotProcessScope {
     return groups;
   }
 
-  private scan(): Promise<Identity[]> {
+  private scan(includeOwnership = false): Promise<Identity[]> {
     if (this.scanning) return this.scanning;
+    const inspectOwnership = includeOwnership && this.ownershipToken !== undefined;
+    const args = inspectOwnership
+      ? ['eww', '-U', String(process.getuid!()), '-o', 'pid=,ppid=,pgid=,lstart=,command=']
+      : ['-axo', 'pid=,ppid=,pgid=,lstart='];
     this.scanning = new Promise<Identity[]>(resolve => {
-      execFile('ps', ['-axo', 'pid=,ppid=,pgid=,lstart='], { timeout: 500, maxBuffer: 8 * 1024 * 1024 }, (err, stdout) => {
+      execFile('ps', args, { timeout: 500, maxBuffer: 8 * 1024 * 1024, env: { ...process.env, LC_ALL: 'C' } }, (err, stdout) => {
         if (err) {
           log.warn('Cannot enumerate Copilot descendants', { error: err.message });
           // Each POSIX spawn owns a detached group, including npm's native child.
@@ -105,8 +133,17 @@ export class CopilotProcessScope {
           return;
         }
         const table = stdout.split('\n').flatMap(line => {
-          const match = line.trim().match(/^(\d+)\s+(\d+)\s+(\d+)\s+(.+)$/);
-          return match ? [{ pid: Number(match[1]), parent: Number(match[2]), group: Number(match[3]), started: match[4] }] : [];
+          const match = line.trim().match(inspectOwnership
+            ? /^(\d+)\s+(\d+)\s+(\d+)\s+(\S+\s+\S+\s+\d+\s+\S+\s+\d{4})(?:\s+(.*))?$/
+            : /^(\d+)\s+(\d+)\s+(\d+)\s+(.+)$/);
+          if (!match) return [];
+          const entry = { pid: Number(match[1]), parent: Number(match[2]), group: Number(match[3]), started: match[4].replace(/\s+/g, ' ') };
+          // The inherited token survives orphaning and detached group-leader exit.
+          // Do not retain or log command/environment text from the snapshot.
+          if (inspectOwnership && match[5]?.split(/\s+/).includes(`${OWNERSHIP_ENV}=${this.ownershipToken}`)) {
+            this.identities.set(entry.pid, entry);
+          }
+          return [entry];
         });
         const root = table.find(entry => entry.pid === this.child.pid);
         const previous = this.identities.get(this.child.pid!);

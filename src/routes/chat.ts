@@ -670,7 +670,9 @@ export function createChatRouter({ chatService, backendRegistry, updateService, 
   let wsFns: Pick<WsFunctions, 'send' | 'isConnected' | 'isStreamAlive' | 'clearBuffer' | 'forEachConnected' | 'startStreamGracePeriod'> | null = null;
 
   function hasInFlightTurn(convId: string): boolean {
-    return streamSupervisor.hasInFlightTurn(convId);
+    const workspaceId = chatService.getWorkspaceIdForConv(convId);
+    return streamSupervisor.hasInFlightTurn(convId)
+      || !!workspaceId && streamSupervisor.resettingWorkspaces.has(workspaceId);
   }
 
   function hasAnyInFlightTurn(): boolean {
@@ -678,6 +680,10 @@ export function createChatRouter({ chatService, backendRegistry, updateService, 
   }
 
   function hasInFlightTurnForWorkspace(hash: string): boolean {
+    if (streamSupervisor.resettingWorkspaces.has(hash)) return true;
+    for (const convId of streamSupervisor.resettingConversations) {
+      if (chatService.getWorkspaceIdForConv(convId) === hash) return true;
+    }
     for (const convId of activeStreams.keys()) {
       if (chatService.getWorkspaceIdForConv(convId) === hash) return true;
     }
@@ -1213,6 +1219,7 @@ export function createChatRouter({ chatService, backendRegistry, updateService, 
     isWorkspaceOperationRunning: (workspaceId) => workspaceContextService.isRunning(workspaceId),
   }));
   router.use(createWorktreeIsolationRouter(chatService, {
+    streamSupervisor,
     hasInFlightTurnForWorkspace,
     clearWsBuffer: (convId) => { if (wsFns) wsFns.clearBuffer(convId); },
     backendRegistry,

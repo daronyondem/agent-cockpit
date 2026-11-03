@@ -1,5 +1,6 @@
 import { execFileSync, spawn, type ChildProcess } from 'child_process';
 import { EventEmitter } from 'events';
+import crypto from 'crypto';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
@@ -122,11 +123,87 @@ require('fs').writeFileSync(${JSON.stringify(pidFile)},String(child.pid));setInt
   }
 });
 
+posix('reaps an orphan whose detached shell exited before the first ownership snapshot', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'copilot-orphan-'));
+  const pidFile = path.join(dir, 'worker.pid');
+  const worker = path.join(dir, 'worker.cjs');
+  const token = crypto.randomUUID();
+  fs.writeFileSync(worker, `
+process.on('SIGTERM', () => {});
+require('fs').writeFileSync(${JSON.stringify(pidFile)}, String(process.pid));
+setInterval(() => {}, 1000);
+`);
+  const quote = (value: string) => `'${value.replace(/'/g, `'\\''`)}'`;
+  const command = `${quote(process.execPath)} ${quote(worker)} </dev/null >/dev/null 2>&1 &`;
+  const root = spawn(process.execPath, ['-e', `
+require('child_process').spawnSync('/bin/sh', ['-c', ${JSON.stringify(command)}], { detached: true, stdio: 'ignore' });
+`], { detached: true, stdio: 'ignore', env: { ...process.env, AGENT_COCKPIT_COPILOT_SCOPE: token } });
+  const unrelated = spawn(process.execPath, ['-e', 'setInterval(()=>{},1000)'], {
+    stdio: 'ignore', env: { ...process.env, AGENT_COCKPIT_COPILOT_SCOPE: `${token}-other-run` },
+  });
+  let scope: CopilotProcessScope | undefined;
+  let workerPid: number | undefined;
+  try {
+    await new Promise(resolve => root.once('close', resolve));
+    for (let i = 0; i < 100 && !fs.existsSync(pidFile); i += 1) await sleep(20);
+    workerPid = Number(fs.readFileSync(pidFile, 'utf8'));
+    expect(alive(workerPid)).toBe(true);
+    // Neither the launcher nor the detached group leader exists when discovery starts.
+    scope = new CopilotProcessScope(root, token);
+    await scope.stop();
+    expect(alive(workerPid)).toBe(false);
+    expect(alive(unrelated.pid!)).toBe(true);
+  } finally {
+    await scope?.stop();
+    root.kill('SIGKILL');
+    unrelated.kill('SIGKILL');
+    if (workerPid && alive(workerPid)) process.kill(workerPid, 'SIGKILL');
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 describe('Copilot process containment edges', () => {
   const platform = Object.getOwnPropertyDescriptor(process, 'platform')!;
   afterEach(() => {
     Object.defineProperty(process, 'platform', platform);
     jest.dontMock('child_process');
+  });
+
+  posix.each([false, true])('checks exact run ownership after an in-flight ancestry scan (environment failure=%s)', async failure => {
+    const kill = jest.spyOn(process, 'kill').mockImplementation(() => true);
+    const root = Object.assign(new EventEmitter(), { pid: 100, exitCode: null, kill: jest.fn() });
+    const birth = 'Mon Nov  2 10:00:00 2026';
+    const rootRow = `100 1 100 ${birth}`;
+    const token = crypto.randomUUID();
+    let initial!: (err: Error | null, stdout: string) => void;
+    let first = true;
+    const execFile = jest.fn((_command, args, _options, callback) => {
+      if (first) { first = false; initial = callback; return; }
+      if (args.includes('eww')) {
+        callback(failure ? new Error('environment unavailable') : null, [
+          `${rootRow} root AGENT_COCKPIT_COPILOT_SCOPE=${token}`,
+          `101 1 99 ${birth} orphan AGENT_COCKPIT_COPILOT_SCOPE=${token}`,
+          `200 1 200 ${birth} other AGENT_COCKPIT_COPILOT_SCOPE=${token}-other`,
+          `201 1 201 ${birth} other XAGENT_COCKPIT_COPILOT_SCOPE=${token}`,
+        ].join('\n'));
+      } else callback(null, `${rootRow}\n101 100 99 ${birth}\n`);
+    });
+    let Scope!: typeof CopilotProcessScope;
+    try {
+      jest.isolateModules(() => {
+        jest.doMock('child_process', () => ({ execFile }));
+        Scope = require('../src/services/backends/copilotProcess').CopilotProcessScope;
+      });
+      const scope = new Scope(root as unknown as ChildProcess, token);
+      const stopped = scope.stop();
+      initial(null, `${rootRow}\n`);
+      await stopped;
+      expect(kill).toHaveBeenCalledWith(101, 'SIGKILL');
+      expect(kill.mock.calls.some(call => [200, -200, 201, -201].includes(call[0]))).toBe(false);
+      expect(execFile.mock.calls.filter(call => call[1].includes('eww'))).toHaveLength(2);
+    } finally {
+      kill.mockRestore();
+    }
   });
 
   test.each([false, true])('Windows uses bounded taskkill tree cleanup (failure=%s)', async fail => {

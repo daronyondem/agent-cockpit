@@ -141,6 +141,10 @@ The PWA currently covers:
   Delegated prose/activity cannot contaminate the root stream. Copilot-specific
   mobile browser validation remains pending; shared metadata wiring is not a
   claim of fully verified native mobile parity.
+  Session reset waits for backend cleanup before replacing its session/checkout.
+  During that interval, the server rejects concurrent sends/resets and worktree
+  changes with `409`; a workspace mode change reserves all its conversations.
+  These shared server guarantees require no PWA bundle, metadata, or asset change.
 - Active/archived conversation list via `GET /api/chat/conversations`.
 - Workspace-level archives are respected by the shared conversation-list contract: archived workspaces are excluded from the mobile active and archived conversation lists unless a caller explicitly asks for `includeArchivedWorkspaces`, which the PWA does not do. The PWA does not expose workspace archive management, remapping, file snapshot restore, or archived-data deletion; those remain desktop filesystem-management workflows.
 - Flat latest-first conversation list with a workspace select filter. `All conversations` is the default; choosing a workspace filters the list to that `workspaceId` without introducing collapsible workspace groups. Each card renders the workspace label in the header and keeps the timestamp in the footer beside message count/live status so the date appears only once.

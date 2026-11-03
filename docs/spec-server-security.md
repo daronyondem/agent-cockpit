@@ -118,6 +118,17 @@ Signal handlers for `SIGTERM`/`SIGINT`:
 4. Close WebSocket connections/server, await HTTP closure, clear the forced-exit timer, and only then exit successfully.
 5. A 10-second forced exit timeout (`.unref()`) remains the safety net. Normal CLI updates use reusable `shutdownAll()` instead of permanent shutdown; Copilot blocks starts during that drain and permits them after completion.
 
+Copilot's focused spawn helper sets an internal, random
+`AGENT_COCKPIT_COPILOT_SCOPE` UUID only in each child's copied environment. It is
+an ownership marker, not a credential or user setting. POSIX cleanup can inspect
+untruncated current-user process environments to find marked workers whose
+parent/group leader disappeared. These snapshots are bounded (500 ms, 8 MiB),
+parsed only in memory, and never logged or stored; periodic ancestry scans do
+not inspect environments. Unavailable/removed environment markers still require
+observable PID/start/group ownership. Reset and worktree-mode routes reserve
+admission and await backend cleanup before changing any session or checkout;
+cleanup rejection leaves that state unchanged and releases the reservation.
+
 On the next process start, normal durable job reconciliation converts those finalizing shutdown jobs into one persisted assistant `streamError` when the accepted user message exists.
 
 ## 6.3 Authentication

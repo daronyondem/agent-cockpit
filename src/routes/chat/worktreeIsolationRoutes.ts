@@ -4,6 +4,7 @@ import type { BackendRegistry } from '../../services/backends/registry';
 import type { ChatService } from '../../services/chatService';
 import type { KbSearchMcpServer } from '../../services/kbSearchMcp';
 import type { MemoryMcpServer } from '../../services/memoryMcp';
+import type { StreamJobSupervisor } from '../../services/streamJobSupervisor';
 import { isWorktreeIsolationError } from '../../services/chat/worktreeIsolationService';
 import { validateSetWorktreeIsolationRequest } from '../../contracts/worktreeIsolation';
 import { isContractValidationError } from '../../contracts/validation';
@@ -13,6 +14,7 @@ import { isCliProfileResolutionError, param } from './routeUtils';
 type CliRuntime = Awaited<ReturnType<ChatService['resolveCliProfileRuntime']>> | null;
 
 interface WorktreeIsolationRouteOptions {
+  streamSupervisor: StreamJobSupervisor;
   hasInFlightTurnForWorkspace: (workspaceId: string) => boolean;
   clearWsBuffer: (convId: string) => void;
   backendRegistry: BackendRegistry;
@@ -25,6 +27,7 @@ interface WorktreeIsolationRouteOptions {
 
 interface WorktreeSessionResetTarget {
   convId: string;
+  backendId: string;
   sessionNumber: number;
   runtime: CliRuntime;
 }
@@ -49,7 +52,7 @@ export function createWorktreeIsolationRouter(
         if (isCliProfileResolutionError(err)) throw err;
         throw err;
       }
-      targets.push({ convId: conv.id, sessionNumber: conv.sessionNumber, runtime });
+      targets.push({ convId: conv.id, backendId: conv.backend, sessionNumber: conv.sessionNumber, runtime });
     }
     return targets;
   }
@@ -59,9 +62,6 @@ export function createWorktreeIsolationRouter(
       await opts.enqueueSessionSummaryFinalizer(workspaceId, target.convId, target.sessionNumber, target.runtime);
       await opts.enqueueMemoryFinalizer(workspaceId, target.convId, target.sessionNumber, target.runtime);
       await opts.enqueueWorkspaceContextFinalizer(workspaceId, target.convId, target.sessionNumber, 'session_reset');
-
-      const adapter = target.runtime ? opts.backendRegistry.get(target.runtime.backendId) : null;
-      if (adapter) await adapter.onSessionReset(target.convId);
 
       opts.memoryMcp.revokeMemoryMcpSession(target.convId);
       opts.kbSearchMcp.revokeKbSearchSession(target.convId);
@@ -81,6 +81,7 @@ export function createWorktreeIsolationRouter(
   });
 
   router.put('/workspaces/:workspaceId/worktree-isolation', csrfGuard, async (req: Request, res: Response) => {
+    let releaseReset: (() => void) | null = null;
     try {
       const body = validateSetWorktreeIsolationRequest(req.body);
       const workspaceRef = param(req, 'workspaceId');
@@ -96,10 +97,18 @@ export function createWorktreeIsolationRouter(
           }],
         });
       }
+      releaseReset = opts.streamSupervisor.tryBeginWorkspaceReset(workspaceId);
+      if (!releaseReset) return res.status(409).json({ error: 'Workspace sessions are resetting' });
       const beforeStatus = await chatService.getWorkspaceWorktreeIsolationStatus(workspaceId);
       const resetTargets = beforeStatus.enabled !== body.enabled
         ? await getWorkspaceResetTargets(workspaceId)
         : [];
+      // All old runtimes must stop before any conversation checkout is replaced.
+      for (const target of resetTargets) {
+        for (const backendId of new Set([target.backendId, target.runtime?.backendId])) {
+          if (backendId) await opts.backendRegistry.get(backendId)?.onSessionReset(target.convId);
+        }
+      }
       for (const target of resetTargets) opts.clearWsBuffer(target.convId);
       const status = await chatService.setWorkspaceWorktreeIsolation(workspaceId, body.enabled, {
         confirmedSessionReset: body.confirmedSessionReset,
@@ -122,6 +131,8 @@ export function createWorktreeIsolationRouter(
         });
       }
       res.status(500).json({ error: (err as Error).message });
+    } finally {
+      releaseReset?.();
     }
   });
 

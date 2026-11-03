@@ -610,6 +610,18 @@ describe('Copilot lifecycle regressions', () => {
     return events;
   }
 
+  test('gives chat and one-shot children distinct inherited ownership without changing the profile environment', async () => {
+    const backend = adapter(proc => proc.finish());
+    const profile = copilotProfile({ env: { FIXTURE_ENV: 'preserved' } });
+    await collect(backend.sendMessage('chat', { ...options(), cliProfile: profile }).stream);
+    await backend.runOneShot('one-shot', { cliProfile: profile });
+    const [chat, oneShot] = spawn.mock.calls.map(call => call[2].env);
+    expect(chat.AGENT_COCKPIT_COPILOT_SCOPE).toMatch(/^[a-f0-9-]{36}$/);
+    expect(oneShot.AGENT_COCKPIT_COPILOT_SCOPE).not.toBe(chat.AGENT_COCKPIT_COPILOT_SCOPE);
+    expect(chat.FIXTURE_ENV).toBe('preserved');
+    expect(profile.env).toEqual({ FIXTURE_ENV: 'preserved' });
+  });
+
   test('does not spawn a stream cancelled before consumption', async () => {
     const result = adapter(proc => proc.finish()).sendMessage('hi', options());
     result.abort();

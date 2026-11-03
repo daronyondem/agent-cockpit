@@ -185,6 +185,10 @@ tool is unavailable.
   Live tracked children remain discovery roots after their launcher exits.
   The owned group also survives leader exit. Permanent server shutdown blocks
   late starts; reusable update shutdown blocks starts only during its drain.
+  Give every spawn its own inherited ownership marker to recover between-scan
+  orphans; do not log inspected process environments. Reserve reset admission
+  and await all ending backend cleanup before changing sessions or worktrees.
+  See ADR-0096.
 - Claude Code Interactive is a separate protocol/backend path requiring real CLI
   compatibility checks when protocol behavior changes.
 - Do not auto-update Claude Code CLI as part of Claude Code Interactive

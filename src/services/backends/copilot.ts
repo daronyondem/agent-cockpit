@@ -1,4 +1,4 @@
-import { spawn, type ChildProcess } from 'child_process';
+import type { ChildProcess } from 'child_process';
 import crypto from 'crypto';
 import fs from 'fs';
 import os from 'os';
@@ -6,7 +6,7 @@ import path from 'path';
 import { BaseBackendAdapter, type BackendCallOptions, type RunOneShotAttachment, type RunOneShotOptions } from './base';
 import { extractToolOutcome, shortenPath } from './toolUtils';
 import { copilotTurnUsage, copilotUsageCheckpoint, readCopilotUsageBaseline } from './copilotUsage';
-import { CopilotProcessScope } from './copilotProcess';
+import { CopilotProcessScope, spawnCopilotProcess } from './copilotProcess';
 import {
   buildNativeSessionRecovery,
   buildSessionRecoveryEvent,
@@ -303,6 +303,7 @@ export class CopilotAdapter extends BaseBackendAdapter {
       return;
     }
     let proc: ChildProcess;
+    let scope: CopilotProcessScope;
     let exitPromise: Promise<{ code: number | null; signal: NodeJS.Signals | null; error?: Error }>;
     let workingDir: string;
     let usageBaseline: Usage | null;
@@ -327,13 +328,11 @@ export class CopilotAdapter extends BaseBackendAdapter {
         allowTools: true,
       });
       const invocation = buildCliCommandInvocation(runtime, args);
-      proc = spawn(invocation.command, invocation.args, {
+      ({ proc, scope } = spawnCopilotProcess(invocation.command, invocation.args, {
         cwd: workingDir,
         env: runtime.env,
         stdio: ['ignore', 'pipe', 'pipe'],
-        detached: process.platform !== 'win32',
-        windowsHide: true,
-      });
+      }));
       exitPromise = waitForExit(proc);
     } catch (err: unknown) {
       yield { type: 'error', error: formatCopilotProcessError(err as Error & { code?: string }) };
@@ -341,7 +340,6 @@ export class CopilotAdapter extends BaseBackendAdapter {
       return;
     }
     state.proc = proc;
-    const scope = new CopilotProcessScope(proc);
     state.scope = scope;
     this.scopes.add(scope);
     proc.stdout?.setEncoding('utf8');
@@ -599,14 +597,11 @@ async function runCopilotOnce(runtime: CopilotCliRuntime, args: string[], option
   if (options.abortSignal?.aborted) throw new Error('Copilot command aborted');
   const invocation = buildCliCommandInvocation(runtime, args);
   return await new Promise<CopilotRunResult>((resolve, reject) => {
-    const proc = spawn(invocation.command, invocation.args, {
+    const { proc, scope } = spawnCopilotProcess(invocation.command, invocation.args, {
       cwd: options.cwd || undefined,
       env: runtime.env,
       stdio: ['ignore', 'pipe', 'pipe'],
-      detached: process.platform !== 'win32',
-      windowsHide: true,
     });
-    const scope = new CopilotProcessScope(proc);
     const unregister = options.registerScope?.(scope);
     proc.stdout?.setEncoding('utf8');
     proc.stderr?.setEncoding('utf8');

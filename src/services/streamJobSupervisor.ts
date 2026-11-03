@@ -38,17 +38,33 @@ export class StreamJobSupervisor {
   readonly registry: StreamJobRegistry;
   readonly activeStreams = new Map<string, ActiveStreamEntry>();
   readonly pendingMessageSends = new Map<string, PendingMessageSend>();
+  readonly resettingConversations = new Set<string>();
+  readonly resettingWorkspaces = new Set<string>();
 
   constructor(baseDir: string) {
     this.registry = new StreamJobRegistry(baseDir);
   }
 
   hasInFlightTurn(conversationId: string): boolean {
-    return this.activeStreams.has(conversationId) || this.pendingMessageSends.has(conversationId);
+    return this.activeStreams.has(conversationId) || this.pendingMessageSends.has(conversationId)
+      || this.resettingConversations.has(conversationId);
   }
 
   hasAnyInFlightTurn(): boolean {
-    return this.activeStreams.size > 0 || this.pendingMessageSends.size > 0;
+    return this.activeStreams.size > 0 || this.pendingMessageSends.size > 0
+      || this.resettingConversations.size > 0 || this.resettingWorkspaces.size > 0;
+  }
+
+  tryBeginSessionReset(conversationId: string): (() => void) | null {
+    if (this.hasInFlightTurn(conversationId)) return null;
+    this.resettingConversations.add(conversationId);
+    return () => { this.resettingConversations.delete(conversationId); };
+  }
+
+  tryBeginWorkspaceReset(workspaceId: string): (() => void) | null {
+    if (this.resettingWorkspaces.has(workspaceId)) return null;
+    this.resettingWorkspaces.add(workspaceId);
+    return () => { this.resettingWorkspaces.delete(workspaceId); };
   }
 
   async beginAcceptedTurn(input: AcceptedTurnInput): Promise<PendingMessageSend> {

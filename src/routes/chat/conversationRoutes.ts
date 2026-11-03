@@ -403,12 +403,15 @@ export function createConversationRouter(opts: ConversationRoutesOptions): expre
 
   // ── Reset session ──────────────────────────────────────────────────────────
   router.post('/conversations/:id/reset', csrfGuard, async (req: Request, res: Response) => {
+    let releaseReset: (() => void) | null = null;
     try {
       const body = validateResetConversationRequest(req.body);
       const convId = param(req, 'id');
       if (hasInFlightTurn(convId)) {
         return res.status(409).json({ error: 'Cannot reset session while streaming' });
       }
+      releaseReset = streamSupervisor.tryBeginSessionReset(convId);
+      if (!releaseReset) return res.status(409).json({ error: 'Cannot reset session while streaming' });
       // Capture a usable runtime BEFORE resetting the session, so finalizers and
       // adapter cleanup use the reset-selected replacement when the stored
       // conversation profile has been deleted.
@@ -442,6 +445,12 @@ export function createConversationRouter(opts: ConversationRoutesOptions): expre
         }
       }
 
+      // Drain the ending backend before resetSession can switch the Git branch.
+      // A deleted profile can select a replacement with a different backend.
+      for (const backendId of new Set([preConv?.backend, endingRuntime?.backendId])) {
+        if (backendId) await backendRegistry.get(backendId)?.onSessionReset(convId);
+      }
+
       // Clear any stale event buffer so a subsequent WS connection
       // doesn't replay old-session events into the new session.
       clearWsBuffer(convId);
@@ -455,14 +464,6 @@ export function createConversationRouter(opts: ConversationRoutesOptions): expre
         await enqueueSessionSummaryFinalizer(resetWorkspaceId, convId, result.archivedSession.number, endingRuntime);
         await enqueueMemoryFinalizer(resetWorkspaceId, convId, result.archivedSession.number, endingRuntime);
         await enqueueWorkspaceContextFinalizer(resetWorkspaceId, convId, result.archivedSession.number, 'session_reset');
-      }
-
-      // Let the backend adapter clean up per-conversation state (e.g. ACP processes)
-      const conv = await chatService.getConversation(convId);
-      if (conv) {
-        const runtime = await chatService.resolveCliProfileRuntime(conv.cliProfileId, conv.backend);
-        const adapter = backendRegistry.get(runtime.backendId);
-        if (adapter) await adapter.onSessionReset(convId);
       }
 
       // Revoke any Memory / KB Search MCP tokens issued for this conversation.
@@ -481,6 +482,8 @@ export function createConversationRouter(opts: ConversationRoutesOptions): expre
         return res.status(err.status).json({ error: err.message, code: err.code, blockers: err.blockers });
       }
       res.status(500).json({ error: (err as Error).message });
+    } finally {
+      releaseReset?.();
     }
   });
 
