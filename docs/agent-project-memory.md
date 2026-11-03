@@ -189,6 +189,9 @@ tool is unavailable.
   orphans; do not log inspected process environments. Reserve reset admission
   and await all ending backend cleanup before changing sessions or worktrees.
   See ADR-0096.
+  Archive/delete share that reservation and await backend cleanup before
+  changing archive state or deleting checkouts. Immediate post-Stop Copilot
+  turns await aborted scopes from the same conversation before native reuse.
   Reset admission returns temporary `503` for sends/goal starts/resume, while
   active-stream conflicts retain `409` so clients do not enter phantom streaming.
 - Claude Code Interactive is a separate protocol/backend path requiring real CLI

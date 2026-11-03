@@ -46,6 +46,22 @@ describe('stream supervisor reset admission', () => {
     expect(supervisor.hasAnyInFlightTurn()).toBe(false);
   });
 
+  test('conversation cleanup admits an active runtime but excludes all other lifecycle operations', () => {
+    supervisor.attachRuntime('conversation', runtime('job', jest.fn()));
+    const release = supervisor.tryBeginConversationCleanup('conversation', 'workspace');
+    expect(release).not.toBeNull();
+    expect(supervisor.tryBeginSessionReset('conversation')).toBeNull();
+    expect(supervisor.tryBeginConversationCleanup('conversation', 'workspace')).toBeNull();
+    release!();
+    supervisor.detachRuntime('conversation');
+    const releaseWorkspace = supervisor.tryBeginWorkspaceReset('workspace');
+    expect(supervisor.tryBeginConversationCleanup('conversation', 'workspace')).toBeNull();
+    const releaseOther = supervisor.tryBeginConversationCleanup('other', 'other-workspace');
+    expect(releaseOther).not.toBeNull();
+    releaseOther!();
+    releaseWorkspace!();
+  });
+
   test('a failed durable turn write releases admission so reset can proceed', async () => {
     jest.spyOn(supervisor.registry, 'create').mockRejectedValueOnce(new Error('disk unavailable'));
     await expect(supervisor.beginAcceptedTurn({

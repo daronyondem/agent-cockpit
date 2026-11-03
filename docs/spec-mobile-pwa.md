@@ -147,6 +147,10 @@ The PWA currently covers:
   mobile send pipeline preserves the draft/attachments, removes optimistic
   bubbles, and finishes local streaming when no server stream exists. A
   workspace mode change reserves all its conversations.
+  Archive/delete use the same reservation and wait for backend cleanup; conflicts
+  return `409`, and concurrent sends retain their draft through the existing
+  temporary `503` handling. A send immediately following Copilot Stop waits for
+  the old workers before a new CLI process can start.
   These shared server guarantees require no PWA bundle, metadata, or asset change.
 - Active/archived conversation list via `GET /api/chat/conversations`.
 - Workspace-level archives are respected by the shared conversation-list contract: archived workspaces are excluded from the mobile active and archived conversation lists unless a caller explicitly asks for `includeArchivedWorkspaces`, which the PWA does not do. The PWA does not expose workspace archive management, remapping, file snapshot restore, or archived-data deletion; those remain desktop filesystem-management workflows.

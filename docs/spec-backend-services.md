@@ -1006,6 +1006,16 @@ Tracked children whose start identity still matches remain ancestry-discovery ro
 An original owned process group remains a containment root after its leader exits, including children created between scans; a different live leader at that PID invalidates the group identity. Copilot rejects new starts while reusable shutdown drains and stays permanently closed for `shutdown({ permanent:true })`. Server shutdown blocks HTTP admission and starts listener closure before cleanup, then awaits permanent backend shutdown and HTTP closure before exit. Pending earlier HTTP requests cannot start late Copilot work after the cleanup snapshot.
 Every observed owned child-led group is retained by its leader's start identity as well, so orphan jobs in those groups remain contained after the child leader exits between scans. Shutdown aborts all active one-shot controllers before terminating scopes; a launcher returning code zero cannot turn cancelled partial output into a successful summary/processor result.
 
+An immediately resumed chat turn waits for every aborted scope still tracked
+under the same conversation before usage-baseline loading or native spawn;
+other conversations remain independent. This prevents the fast user-visible
+Stop response from overlapping old workers with the next native turn.
+Archive/delete share the reset admission reservation, capture the attached and
+stored backend IDs before aborting, and await their cleanup hooks before changing
+archive state or removing the conversation/checkout. Conflicts return `409`,
+new turns return temporary `503`, and failure releases the reservation without
+archiving/deleting. This drain also applies after Stop has detached the runtime.
+
 **One-shot calls:** `runOneShot()` validates the working directory and uses the same JSONL transport. Without `allowTools:true` or injected MCP servers, it adds `--allow-all-tools --available-tools none`: the first flag enables non-interactive execution, while the second exposes zero tools to the model. An empty `--available-tools` value is not equivalent and must not replace the literal `none`. Tool-enabled and MCP calls use `--allow-all` instead. Image/PDF attachments map to repeated `--attachment <path>`. Complete final assistant messages take precedence over partial delta text, each message ID is included once, and output is trimmed. JSON failures reject with their diagnostics even on nonzero exits; timeout/abort reject even when termination causes a clean child close. Already-aborted signals never spawn. `generateSummary()` and `generateTitle()` use this restricted path and preserve their supplied fallbacks.
 
 **MCP injection:** When Cockpit passes `mcpServers`, the adapter converts the ACP-shaped `{ name, command, args, env[] }` entries into Copilot local MCP entries (`{ type: 'local', command, args, tools: ['*'], env }`) and injects them via `--additional-mcp-config <json>` for that spawned process only, augmenting the user's `~/.copilot/mcp-config.json` without writing Memory or KB tokens to disk.

@@ -62,6 +62,11 @@ export class StreamJobSupervisor {
 
   tryBeginSessionReset(conversationId: string): (() => void) | null {
     if (this.hasInFlightTurn(conversationId)) return null;
+    return this.tryBeginConversationCleanup(conversationId, null);
+  }
+
+  tryBeginConversationCleanup(conversationId: string, workspaceId: string | null): (() => void) | null {
+    if (this.isResetting(conversationId, workspaceId)) return null;
     this.resettingConversations.add(conversationId);
     return () => { this.resettingConversations.delete(conversationId); };
   }

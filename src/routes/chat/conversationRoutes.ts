@@ -104,6 +104,17 @@ export function createConversationRouter(opts: ConversationRoutesOptions): expre
   } = opts;
   const router = express.Router();
 
+  async function cleanupConversationRuntime(convId: string) {
+    const backendIds = new Set([streamSupervisor.activeStreams.get(convId)?.backend]);
+    const conv = await chatService.getConversation(convId);
+    backendIds.add(conv?.backend);
+    await streamSupervisor.cleanupRuntimeConversation(convId);
+    for (const backendId of backendIds) {
+      if (backendId) await backendRegistry.get(backendId)?.onSessionReset(convId);
+    }
+    return conv;
+  }
+
   async function augmentConversationResponse(conv: NonNullable<Awaited<ReturnType<ChatService['getConversation']>>>): Promise<void> {
     const workspaceId = conv.workspaceId;
     // Augment with KB status so the frontend's composer KB status icon
@@ -257,12 +268,15 @@ export function createConversationRouter(opts: ConversationRoutesOptions): expre
 
   // ── Delete conversation ────────────────────────────────────────────────────
   router.delete('/conversations/:id', csrfGuard, async (req: Request, res: Response) => {
+    let releaseCleanup: (() => void) | null = null;
     try {
       const convId = param(req, 'id');
       if (pendingMessageSends.has(convId)) {
         return res.status(409).json({ error: 'Conversation is already streaming' });
       }
-      await streamSupervisor.cleanupRuntimeConversation(convId);
+      releaseCleanup = streamSupervisor.tryBeginConversationCleanup(convId, chatService.getWorkspaceIdForConv(convId));
+      if (!releaseCleanup) return res.status(409).json({ error: 'Session is resetting. Try again shortly.' });
+      await cleanupConversationRuntime(convId);
       clearWsBuffer(convId);
       memoryWatcher.unwatch(convId);
       memoryFingerprints.delete(convId);
@@ -276,21 +290,25 @@ export function createConversationRouter(opts: ConversationRoutesOptions): expre
         return res.status(err.status).json({ error: err.message, code: err.code, blockers: err.blockers });
       }
       res.status(500).json({ error: (err as Error).message });
+    } finally {
+      releaseCleanup?.();
     }
   });
 
   // ── Archive conversation ───────────────────────────────────────────────────
   router.patch('/conversations/:id/archive', csrfGuard, async (req: Request, res: Response) => {
+    let releaseCleanup: (() => void) | null = null;
     try {
       const convId = param(req, 'id');
       if (pendingMessageSends.has(convId)) {
         return res.status(409).json({ error: 'Conversation is already streaming' });
       }
-      await streamSupervisor.cleanupRuntimeConversation(convId);
+      releaseCleanup = streamSupervisor.tryBeginConversationCleanup(convId, chatService.getWorkspaceIdForConv(convId));
+      if (!releaseCleanup) return res.status(409).json({ error: 'Session is resetting. Try again shortly.' });
+      const preConv = await cleanupConversationRuntime(convId);
       clearWsBuffer(convId);
       memoryWatcher.unwatch(convId);
       memoryFingerprints.delete(convId);
-      const preConv = await chatService.getConversation(convId);
       const ok = await chatService.archiveConversation(convId);
       if (!ok) return res.status(404).json({ error: 'Conversation not found' });
       if (preConv) {
@@ -299,6 +317,8 @@ export function createConversationRouter(opts: ConversationRoutesOptions): expre
       res.json({ ok: true });
     } catch (err: unknown) {
       res.status(500).json({ error: (err as Error).message });
+    } finally {
+      releaseCleanup?.();
     }
   });
 

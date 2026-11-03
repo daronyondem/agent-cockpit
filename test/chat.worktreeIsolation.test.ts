@@ -62,6 +62,9 @@ describe('worktree isolation routes', () => {
         expect((await env.request('POST', `/api/chat/conversations/${conv.id}/${action}`, { objective: 'too early' })).status).toBe(503);
       }
       expect((await env.request('POST', `/api/chat/conversations/${conv.id}/reset`, {})).status).toBe(409);
+      expect((await env.request('DELETE', `/api/chat/conversations/${conv.id}`)).status).toBe(409);
+      expect((await env.request('PATCH', `/api/chat/conversations/${conv.id}/archive`)).status).toBe(409);
+      expect(fs.existsSync(before.executionDir!)).toBe(true);
       expect((await env.request('PUT', `/api/chat/workspaces/${conv.workspaceId}/worktree-isolation`, {
         enabled: false, confirmedSessionReset: true,
       })).status).toBe(409);
@@ -103,6 +106,8 @@ describe('worktree isolation routes', () => {
           expect((await env.request('POST', `/api/chat/conversations/${conv.id}/${action}`, { objective: 'too early' })).status).toBe(503);
         }
         expect((await env.request('POST', `/api/chat/conversations/${conv.id}/reset`, {})).status).toBe(409);
+        expect((await env.request('DELETE', `/api/chat/conversations/${conv.id}`)).status).toBe(409);
+        expect((await env.request('PATCH', `/api/chat/conversations/${conv.id}/archive`)).status).toBe(409);
       }
     } finally {
       release();
@@ -111,6 +116,59 @@ describe('worktree isolation routes', () => {
     expect(resetHook).toHaveBeenCalledWith(first.id);
     expect(resetHook).toHaveBeenCalledWith(second.id);
     expect((await env.chatService.getConversation(first.id))!.sessionNumber).toBe(before.sessionNumber + 1);
+  });
+
+  test.each(['delete', 'archive'])('%s reserves the conversation and drains cleanup before changing it', async action => {
+    const repo = createRepoWithRemote(`${action}-cleanup`);
+    const conv = await env.chatService.createConversation('Lifecycle cleanup', repo);
+    const modeUrl = `/api/chat/workspaces/${conv.workspaceId}/worktree-isolation`;
+    expect((await env.request('PUT', modeUrl, { enabled: true, confirmedSessionReset: true })).status).toBe(200);
+    const before = (await env.chatService.getConversation(conv.id))!;
+    let release!: () => void;
+    let started!: () => void;
+    const cleanup = new Promise<void>(resolve => { release = resolve; });
+    const entered = new Promise<void>(resolve => { started = resolve; });
+    jest.spyOn(env.mockBackend, 'onSessionReset').mockImplementation(async () => { started(); await cleanup; });
+    const change = action === 'delete'
+      ? env.request('DELETE', `/api/chat/conversations/${conv.id}`)
+      : env.request('PATCH', `/api/chat/conversations/${conv.id}/archive`);
+    try {
+      await entered;
+      expect((await env.chatService.getConversation(conv.id))!.archived).not.toBe(true);
+      expect(fs.existsSync(before.executionDir!)).toBe(true);
+      expect((await env.request('POST', `/api/chat/conversations/${conv.id}/message`, { content: 'too early' })).status).toBe(503);
+      expect((await env.request('POST', `/api/chat/conversations/${conv.id}/reset`, {})).status).toBe(409);
+      expect((await env.request('DELETE', `/api/chat/conversations/${conv.id}`)).status).toBe(409);
+      expect((await env.request('PATCH', `/api/chat/conversations/${conv.id}/archive`)).status).toBe(409);
+      expect((await env.request('PUT', modeUrl, { enabled: false, confirmedSessionReset: true })).status).toBe(409);
+    } finally {
+      release();
+      expect((await change).status).toBe(200);
+    }
+    if (action === 'delete') {
+      expect(await env.chatService.getConversation(conv.id)).toBeNull();
+      expect(fs.existsSync(before.executionDir!)).toBe(false);
+    } else {
+      expect((await env.chatService.getConversation(conv.id))!.archived).toBe(true);
+      expect((await env.request('POST', `/api/chat/conversations/${conv.id}/reset`, {})).status).toBe(200);
+    }
+  });
+
+  test.each(['delete', 'archive'])('%s keeps the conversation and releases admission when cleanup fails', async action => {
+    const repo = createRepoWithRemote(`${action}-failed-cleanup`);
+    const conv = await env.chatService.createConversation('Failed lifecycle cleanup', repo);
+    expect((await env.request('PUT', `/api/chat/workspaces/${conv.workspaceId}/worktree-isolation`, {
+      enabled: true, confirmedSessionReset: true,
+    })).status).toBe(200);
+    const before = (await env.chatService.getConversation(conv.id))!;
+    jest.spyOn(env.mockBackend, 'onSessionReset').mockRejectedValueOnce(new Error('Fixture cleanup failed'));
+    const change = () => action === 'delete'
+      ? env.request('DELETE', `/api/chat/conversations/${conv.id}`)
+      : env.request('PATCH', `/api/chat/conversations/${conv.id}/archive`);
+    expect((await change()).status).toBe(500);
+    expect((await env.chatService.getConversation(conv.id))!.archived).not.toBe(true);
+    expect(fs.existsSync(before.executionDir!)).toBe(true);
+    expect((await change()).status).toBe(200);
   });
 
   test.each(['session', 'workspace'])('preserves checkouts and releases the %s reservation when cleanup fails', async operation => {

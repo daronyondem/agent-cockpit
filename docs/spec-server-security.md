@@ -128,6 +128,14 @@ not inspect environments. Unavailable/removed environment markers still require
 observable PID/start/group ownership. Reset and worktree-mode routes reserve
 admission and await backend cleanup before changing any session or checkout;
 cleanup rejection leaves that state unchanged and releases the reservation.
+Archive/delete acquire the same conversation reservation before asynchronous
+work, abort/detach any active turn, then await attached/stored backend cleanup
+before changing archive state or deleting conversation files/worktrees. They
+reject conflicting conversation/workspace cleanup with `409`; new turns use
+the existing temporary `503` during their drain. A cleanup error preserves the
+conversation/checkout and releases admission. An immediate Copilot send after
+Stop waits for aborted scopes from that conversation before reading its usage
+baseline or spawning another CLI process.
 
 On the next process start, normal durable job reconciliation converts those finalizing shutdown jobs into one persisted assistant `streamError` when the accepted user message exists.
 

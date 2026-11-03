@@ -29,7 +29,9 @@ posix.each(['abort', 'iterator-close', 'timeout', 'signal', 'reset', 'shutdown']
     const launcher = path.join(dir, 'copilot');
     const childProgram = `
 process.on('SIGTERM', () => {});
-require('fs').writeFileSync(${JSON.stringify(pidFile)}, String(process.pid));
+const fs = require('fs');
+fs.writeFileSync(${JSON.stringify(pidFile + '.tmp')}, String(process.pid));
+fs.renameSync(${JSON.stringify(pidFile + '.tmp')}, ${JSON.stringify(pidFile)});
 console.log(JSON.stringify({type:'assistant.message_delta',data:{messageId:'ready',deltaContent:'ready'}}));
 setInterval(() => {}, 1000);
 `;
@@ -67,7 +69,20 @@ spawnSync(process.execPath, ['-e', ${JSON.stringify(childProgram)}], { stdio: 'i
       }
       expect(childPid).toBeGreaterThan(0);
       const started = Date.now();
-      if (action === 'abort') turn.abort();
+      if (action === 'abort') {
+        turn.abort();
+        const resumed = backend.sendMessage('resume', {
+          sessionId: 'session', conversationId: 'conversation', isNewSession: false, workingDir: dir, systemPrompt: '', cliProfile: profile,
+        });
+        const iterator = resumed.stream[Symbol.asyncIterator]();
+        try {
+          expect((await iterator.next()).value).toMatchObject({ type: 'backend_runtime' });
+          expect(alive(childPid!)).toBe(false);
+        } finally {
+          resumed.abort();
+          await iterator.return?.(undefined);
+        }
+      }
       if (action === 'signal') controller.abort();
       if (action === 'reset') await backend.onSessionReset('conversation');
       if (action === 'shutdown') {
@@ -99,7 +114,10 @@ posix('tracks detached descendants after their parent exits', async () => {
   const pidFile = path.join(dir, 'pid');
   const root = spawn(process.execPath, ['-e', `
 const child = require('child_process').spawn(process.execPath,['-e','process.on("SIGTERM",()=>{});setInterval(()=>{},1000)'],{detached:true,stdio:'ignore'});
-require('fs').writeFileSync(${JSON.stringify(pidFile)},String(child.pid));setInterval(()=>{},1000);
+const fs = require('fs');
+fs.writeFileSync(${JSON.stringify(pidFile + '.tmp')},String(child.pid));
+fs.renameSync(${JSON.stringify(pidFile + '.tmp')},${JSON.stringify(pidFile)});
+setInterval(()=>{},1000);
 `], { detached: true, stdio: 'ignore' });
   const scope = new CopilotProcessScope(root);
   let childPid: number | undefined;

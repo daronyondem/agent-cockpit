@@ -285,6 +285,12 @@ export class CopilotAdapter extends BaseBackendAdapter {
 
   private async *_streamMessage(message: string, options: SendMessageOptions, state: StreamState): AsyncGenerator<StreamEvent> {
     try {
+      // Stop can detach the stream before native worker termination finishes.
+      for (const [previous, conversationId] of this.turns) {
+        if (previous !== state && conversationId && conversationId === options.conversationId && previous.aborted) {
+          await previous.scope?.stop();
+        }
+      }
       yield* this._streamMessageAttempt(message, options, state, false);
     } finally {
       this.turns.delete(state);

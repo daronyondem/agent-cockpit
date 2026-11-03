@@ -140,6 +140,9 @@ and must never be logged. Keep PID/start and verified-group checks as well.
 Reserve the conversation/workspace before asynchronous reset cleanup, drain all
 ending backends before changing any session or Git checkout, and release the
 reservation on every exit path. See ADR-0096.
+Archive/delete share that reservation and await backend cleanup before changing
+archive state or deleting a checkout. A Copilot turn sent immediately after Stop
+must await aborted scopes for its conversation before resuming native work.
 Send/goal admission blocked by a reset uses temporary `503` with `Retry-After`,
 while active-stream conflicts retain `409`; clients interpret `409` as an
 existing stream and must not attach to a reset reservation.
