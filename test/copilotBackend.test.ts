@@ -31,6 +31,11 @@ function copilotProfile(overrides: Partial<CliProfile> = {}): CliProfile {
 }
 
 describe('Copilot backend metadata', () => {
+  test('profile metadata uses the same declared capabilities as server metadata', async () => {
+    const backend = new CopilotAdapter();
+    expect(await backend.getMetadata({ cliProfile: copilotProfile() })).toEqual(backend.metadata);
+  });
+
   test('advertises thinking, tool activity, and media transport', () => {
     const metadata = new CopilotAdapter().metadata;
     expect(metadata.id).toBe('copilot');
@@ -581,6 +586,7 @@ describe('Copilot lifecycle regressions', () => {
 
   afterEach(() => {
     jest.dontMock('child_process');
+    jest.dontMock('../src/services/backends/copilotUsage');
     fs.rmSync(workdir, { recursive: true, force: true });
   });
 
@@ -629,6 +635,55 @@ describe('Copilot lifecycle regressions', () => {
       { type: 'error', error: 'Copilot turn aborted.', source: 'abort' },
       { type: 'done' },
     ]);
+    expect(spawn).not.toHaveBeenCalled();
+  });
+
+  test('shutdown during asynchronous baseline loading prevents a late native spawn', async () => {
+    let release!: (value: null) => void;
+    jest.doMock('../src/services/backends/copilotUsage', () => ({
+      ...jest.requireActual('../src/services/backends/copilotUsage'),
+      readCopilotUsageBaseline: () => new Promise<null>(resolve => { release = resolve; }),
+    }));
+    const backend = adapter(proc => proc.finish());
+    const turn = backend.sendMessage('resume', { ...options(), isNewSession: false, externalSessionId: 'saved' });
+    const first = turn.stream.next();
+    await backend.shutdown();
+    release(null);
+    expect((await first).value).toEqual({ type: 'error', error: 'Copilot turn aborted.', source: 'abort' });
+    expect(await collect(turn.stream)).toEqual([{ type: 'done' }]);
+    expect(spawn).not.toHaveBeenCalled();
+  });
+
+  test('flushes an unterminated final JSONL message and checkpoint usage when no result frame arrives', async () => {
+    const backend = adapter(proc => {
+      proc.stdout.write(JSON.stringify({ type: 'session.usage_checkpoint', data: {
+        totalPremiumRequests: 1, accountingSnapshot: { tokenDetails: {
+          input: { tokenCount: 10 }, output: { tokenCount: 5 }, cache_read: { tokenCount: 0 }, cache_write: { tokenCount: 0 },
+        } },
+      } }) + '\n');
+      proc.stdout.write(JSON.stringify({ type: 'assistant.message', data: { messageId: 'final', content: 'complete' } }));
+      proc.finish();
+    });
+    const events = await collect(backend.sendMessage('test', options()).stream);
+    expect(events).toEqual(expect.arrayContaining([
+      { type: 'text', content: 'complete', streaming: false },
+      { type: 'usage', usage: { inputTokens: 10, outputTokens: 5, cacheReadTokens: 0, cacheWriteTokens: 0, credits: 1, costUsd: 0, costSource: 'none' } },
+      { type: 'done' },
+    ]));
+  });
+
+  test('stdout read failures remain terminal and close the native process', async () => {
+    const backend = adapter(proc => { proc.stdout.destroy(new Error('stream disconnected')); });
+    const events = await collect(backend.sendMessage('test', options()).stream);
+    expect(events).toEqual(expect.arrayContaining([{ type: 'error', error: 'stream disconnected' }, { type: 'done' }]));
+    expect(processes[0].kill).toHaveBeenCalled();
+  });
+
+  test('rejects a path beneath a regular file before starting native work', async () => {
+    const backend = adapter(proc => proc.finish());
+    const file = path.join(workdir, 'regular-file');
+    fs.writeFileSync(file, 'fixture');
+    await expect(backend.runOneShot('test', { workingDir: path.join(file, 'child') })).rejects.toThrow('not a directory');
     expect(spawn).not.toHaveBeenCalled();
   });
 

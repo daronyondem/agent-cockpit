@@ -126,6 +126,37 @@ describe('worktree isolation routes', () => {
     expect((await mutate()).status).toBe(200);
   });
 
+  test.each(['invalid body', 'backend mismatch', 'runtime failure'])('reset admission recovers after %s before cleanup starts', async failure => {
+    const repo = createRepoWithRemote(`reset-prepare-${failure.replace(/ /g, '-')}`);
+    const conv = await env.chatService.createConversation('Preparation failure', repo);
+    const cleanup = jest.spyOn(env.mockBackend, 'onSessionReset');
+    if (failure === 'runtime failure') {
+      jest.spyOn(env.chatService, 'resolveCliProfileRuntimeForSessionReset').mockRejectedValueOnce(new Error('Runtime unavailable'));
+    }
+    const body = failure === 'invalid body' ? { cliProfileId: 42 }
+      : failure === 'backend mismatch' ? { backend: 'codex' } : {};
+    const response = await env.request('POST', `/api/chat/conversations/${conv.id}/reset`, body);
+    expect(response.status).toBe(failure === 'runtime failure' ? 500 : 400);
+    expect(cleanup).not.toHaveBeenCalled();
+    expect((await env.chatService.getConversation(conv.id))!.sessionNumber).toBe(conv.sessionNumber);
+    expect((await env.request('POST', `/api/chat/conversations/${conv.id}/reset`, {})).status).toBe(200);
+  });
+
+  test.each(['CLI profile unavailable', 'Runtime unavailable'])('workspace reservation releases after preparation fails: %s', async message => {
+    const repo = createRepoWithRemote(`workspace-prepare-${message.replace(/ /g, '-')}`);
+    const conv = await env.chatService.createConversation('Preparation failure', repo);
+    const cleanup = jest.spyOn(env.mockBackend, 'onSessionReset');
+    jest.spyOn(env.chatService, 'resolveCliProfileRuntime').mockRejectedValueOnce(new Error(message));
+    const change = () => env.request('PUT', `/api/chat/workspaces/${conv.workspaceId}/worktree-isolation`, {
+      enabled: true, confirmedSessionReset: true,
+    });
+    expect((await change()).status).toBe(message.startsWith('CLI profile') ? 400 : 500);
+    expect(cleanup).not.toHaveBeenCalled();
+    expect((await env.chatService.getConversation(conv.id))!.sessionNumber).toBe(conv.sessionNumber);
+    expect((await env.chatService.getWorkspaceWorktreeIsolationStatus(conv.workspaceId)).enabled).toBe(false);
+    expect((await change()).status).toBe(200);
+  });
+
   test('reports unavailable for a non-Git workspace', async () => {
     const workspace = path.join(env.tmpDir, 'plain');
     fs.mkdirSync(workspace, { recursive: true });
