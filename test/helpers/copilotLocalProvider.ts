@@ -38,6 +38,8 @@ export async function createCopilotLocalProvider(getPlan: () => CopilotWorkflowP
           return;
         }
         if (memory) { say(plan.memoryOutput); return; }
+        if (text.includes('Summarize this conversation in one concise paragraph.')) { say('Fixture session summary.'); return; }
+        if (text.includes('Generate a concise conversation title')) { say('Copilot fixture chat'); return; }
         if (context) {
           if (plan.contextWait) return;
           if (!plan.destination || request.messages.some(message => message.role === 'tool')) { say(plan.contextOutput); return; }
@@ -52,6 +54,17 @@ console.log('Updated fixture context from listed sources.');`;
           return;
         }
         const toolMessages = request.messages.filter(message => message.role === 'tool');
+        if (text.includes('COPILOT_UI_REPLY')) { say('COPILOT_UI_REPLY_OK'); return; }
+        if (text.includes('COPILOT_UI_WAIT')) {
+          if (toolMessages.length) { say('COPILOT_UI_WAIT_DONE'); return; }
+          const quote = (value: string) => `'${value.replace(/'/g, `'\\''`)}'`;
+          const program = `const fs=require('fs');
+fs.writeFileSync(${JSON.stringify(path.join(workspace, 'ui-worker.pid.tmp'))},String(process.pid));
+fs.renameSync(${JSON.stringify(path.join(workspace, 'ui-worker.pid.tmp'))},${JSON.stringify(path.join(workspace, 'ui-worker.pid'))});
+setTimeout(()=>fs.writeFileSync(${JSON.stringify(path.join(workspace, 'ui-worker-finished'))},'unexpected'),45000);`;
+          call('bash', { command: `${quote(process.execPath)} -e ${quote(program)}`, description: 'Run synthetic cancellable work', initial_wait: 1000 });
+          return;
+        }
         if (text.includes('WORKFLOW_CONTEXT_RECALL_ONLY') && toolMessages.length === 0) {
           const quote = (value: string) => `'${value.replace(/'/g, `'\\''`)}'`;
           const program = `const fs=require('fs');

@@ -152,6 +152,19 @@ integration suite in `test/copilotMemoryContext.test.ts` and native
 and fixed local model responses to test production MCP, governance, persistence,
 and managed Context file paths. Record the actual CLI/OS/revision and keep this
 evidence separate from hosted-model reasoning, account auth, and browser UX.
+Windows Copilot spawns use `copilotWindowsProcess.ts` to assign a hidden wrapper
+to an unnamed kill-on-close Job Object before launching native work. Preserve
+its sole non-inheritable job handle, fail startup if containment cannot be
+established, and pass raw standard handles with `CreateProcessW`; no-console
+`ProcessStartInfo` launches lose the inherited JSONL pipes. Keep
+`test/copilotWindowsProcess.test.ts` passing on native Windows CI. Those Node
+process fixtures do not certify the real Windows Copilot CLI. See ADR-0097.
+Run `test/copilotContextTriggers.test.ts` and `test/copilotKbRoutines.test.ts`
+for automatic Context and processor workflow changes. Run
+`npm run e2e:copilot-ui` for desktop/mobile lifecycle changes; it uses real
+Copilot with fixed local model replies, isolated auth/data, and its own PM2
+home. Keep full Jest asset-build fixtures separate from browser runs and rebuild
+production assets after the full suite before checking the bundle budget.
 
 # Grok Build Protocol Compatibility
 

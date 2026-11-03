@@ -252,6 +252,7 @@ export function App(){
   const onRestoreConv = React.useCallback(async (id) => {
     try {
       await AgentApi.restoreConversation(id);
+      StreamStore.patchConv(id, { archived: false });
       /* Conv leaves the archived view; if user is on the active view it
          was never present anyway. removeConvListItem is a no-op then. */
       StreamStore.removeConvListItem(id);

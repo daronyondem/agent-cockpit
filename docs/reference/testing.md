@@ -56,3 +56,22 @@ folder that holds their compatibility report.
 Review the Grok Build compatibility guidance in [AGENTS.md](../../AGENTS.md)
 and [spec-grok-build.md](../spec-grok-build.md) before changing that backend
 path.
+
+## GitHub Copilot Compatibility
+
+```bash
+npm test -- test/copilotProcess.test.ts test/copilotWindowsProcess.test.ts --runInBand
+npm test -- test/copilotMemoryContext.test.ts test/copilotContextTriggers.test.ts test/copilotKbRoutines.test.ts --runInBand
+npm run e2e:copilot-workflows
+npm run e2e:copilot-ui
+```
+
+The application tests use a spawned JSONL fixture and need no Copilot login.
+The native workflow and browser suites require Copilot 1.0.105 and use isolated
+temporary auth plus fixed local model replies, with no hosted subscription or
+CLI update. Set `COPILOT_UI_CLI` to an explicit binary path when needed. The UI
+runner builds both clients, creates its own PM2 home/server/data, runs Chromium
+on desktop and mobile viewports, and prints the report/log directory. Keep full
+Jest asset-build fixtures separate from browser runs. Windows CI separately
+checks actual Job Object process cleanup and raw pipes with Node fixtures; this
+does not certify the real Windows Copilot CLI.

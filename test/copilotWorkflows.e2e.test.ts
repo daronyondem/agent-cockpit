@@ -1,6 +1,7 @@
 import fs from 'fs';
 import path from 'path';
 import { execFileSync } from 'child_process';
+import { WorkspaceContextScheduler } from '../src/services/workspaceContext/service';
 import { createCopilotWorkflowEnv, MEMORY_MARKER, prepareWorkflowContext, REFERENCE_MARKER, saveWorkflowNote, type CopilotWorkflowEnv } from './helpers/copilotWorkflowEnv';
 
 const native = process.env.COPILOT_WORKFLOWS_E2E === '1' && process.platform !== 'win32' ? describe : describe.skip;
@@ -84,5 +85,39 @@ native('real Copilot Memory and Workspace Context workflows with a local model f
     expect((await env.workspaceContextService.getState(env.conv.workspaceId)).lastRun?.status).toBe('failed');
     env.plan.contextOutput = output;
     expect((await env.workspaceContextService.processWorkspace(env.conv.workspaceId, { source: 'maintenance', forceAll: true })).summary).toContain('Consumed 1 Memory entry');
+  }, 90_000);
+
+  test('scheduled maintenance hands the real Memory inbox to Copilot automatically', async () => {
+    const filename = await saveWorkflowNote(env);
+    await prepareWorkflowContext(env, [filename]);
+    // Prime scan cadence without conversation sources; maintenance remains due.
+    await env.workspaceContextService.processWorkspace(env.conv.workspaceId, { source: 'initial_scan' });
+    const scheduler = new WorkspaceContextScheduler({ chatService: env.chatService, processor: env.workspaceContextService, now: () => new Date(Date.now() + 60_000) });
+    await scheduler.tick();
+    const deadline = Date.now() + 45_000;
+    while (Date.now() < deadline) {
+      const state = await env.workspaceContextService.getState(env.conv.workspaceId);
+      if (state.lastRun?.source === 'maintenance' && state.lastRun.status === 'completed' && !env.workspaceContextService.isRunning(env.conv.workspaceId)) break;
+      await new Promise(resolve => setTimeout(resolve, 20));
+    }
+    expect((await env.workspaceContextService.getState(env.conv.workspaceId)).lastRun).toMatchObject({ source: 'maintenance', status: 'completed' });
+    expect((await env.chatService.getWorkspaceMemory(env.conv.workspaceId))!.files).toHaveLength(0);
+    expect(fs.readFileSync(env.plan.destination!, 'utf8')).toContain(MEMORY_MARKER);
+  }, 90_000);
+
+  test('session reset automatically queues a real Copilot Context final pass over the ended session', async () => {
+    await prepareWorkflowContext(env, []);
+    await env.chatService.setWorkspaceMemoryEnabled(env.conv.workspaceId, false);
+    await env.chatService.addMessage(env.conv.id, 'user', 'NATIVE_ENDED_SESSION_571', 'copilot');
+    env.plan.sources = [env.chatService.getConversationSessionFilePath(env.conv.workspaceId, env.conv.id, 1)];
+    env.sessionFinalizers.stop();
+    expect((await env.request('POST', `/api/chat/conversations/${env.conv.id}/reset`, {})).status).toBe(200);
+    await env.chatService.addMessage(env.conv.id, 'user', 'NATIVE_REPLACEMENT_SESSION_571', 'copilot');
+    await env.sessionFinalizers.start();
+    await env.sessionFinalizers.waitForIdle(45_000);
+    const text = fs.readFileSync(env.plan.destination!, 'utf8');
+    expect(text).toContain('NATIVE_ENDED_SESSION_571');
+    expect(text).not.toContain('NATIVE_REPLACEMENT_SESSION_571');
+    expect((await env.workspaceContextService.getState(env.conv.workspaceId)).lastRun).toMatchObject({ source: 'session_reset', status: 'completed' });
   }, 90_000);
 });

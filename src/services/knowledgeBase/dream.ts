@@ -1372,13 +1372,10 @@ export class KbDreamService {
 
     // Parse failed — one more CLI attempt.
     const second = await this._runCliWithRetry(adapter, prompt, options);
-    if (!second) {
-      this._writeParseFailureLog(hash, phase, [first]);
-      return parsedFirst;
-    }
-    const parsedSecond = parse(second);
+    const parsedSecond = second ? parse(second) : parsedFirst;
     if (hasParseFailure(parsedSecond.warnings)) {
-      this._writeParseFailureLog(hash, phase, [first, second]);
+      this._writeParseFailureLog(hash, phase, second ? [first, second] : [first]);
+      throw new Error(`Invalid ${phase} output after retry: ${parsedSecond.warnings.join('; ')}`);
     }
     return parsedSecond;
   }

@@ -236,3 +236,11 @@ The generated app is served from:
 ```
 
 When `WEB_BUILD_MODE=auto`, `MobileBuildService` verifies `public/mobile-built/.agent-cockpit-build.json` at server startup and rebuilds from `mobile/AgentCockpitPWA/` when the source or lockfiles are stale. The service uses `npm.cmd` through the shared `.cmd` wrapper on Windows and `npm` elsewhere. Dev self-update installs mobile dependencies and forces this build before restarting PM2; production self-update installs mobile dependencies in the staged release and runs the same build preflight only when the packaged mobile marker/assets are missing or stale.
+
+Copilot browser regression coverage in `test/e2e/copilot.ui.pw.ts` uses the real
+CLI with fixed local replies and an isolated PM2 fixture server. Mobile cases
+exercise profile selection, streamed Memory tool/result presentation, native
+Stop followed by immediate send and reload, draft/attachment preservation on a
+temporary reset rejection, and reset/archive/restore/delete navigation. Memory
+management panels and live Memory bubbles remain deferred; this coverage does
+not add those surfaces. See `npm run e2e:copilot-ui` and the testing spec.

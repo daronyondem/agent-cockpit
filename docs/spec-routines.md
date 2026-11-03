@@ -412,6 +412,13 @@ Focused coverage:
   install/edit/background run/delete, token redaction and clearing, Telegram
   destination pairing routes, and routine output/persistent-state explorer
   scopes.
+- `test/copilotKbRoutines.test.ts`: actual Copilot adapter/process-boundary
+  integration with a JSONL fixture. Disabled Routines create no scaffolding or
+  process. Enabled runs validate proposal containment, read routine markdown,
+  write authorized output artifacts/final markdown/history, and keep
+  notifications off. Overlapping runs fail; backend cancellation records a
+  failed run, releases the reservation, and permits a later successful run.
+  This is normal-CI wiring/persistence evidence, not native model judgment.
 - `test/frontendRoutes.test.ts`: static route/UI coverage for routines API
   helpers, Workspace Settings tab, proposal parsing/card, output and persistent
   state browser scopes, Telegram destination pairing UI, polling behavior, and

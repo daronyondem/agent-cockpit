@@ -15,6 +15,7 @@ export interface CopilotWorkflowPlan {
   contextOutput: string;
   contextError?: boolean;
   contextWait?: boolean;
+  contextRelease?: string;
   sources: string[];
   destination?: string;
   instructions?: string;
@@ -66,21 +67,29 @@ process.exit(result.status ?? 1);
       fs.writeFileSync(launcher, `#!${process.execPath}
 const fs = require('fs');
 ${record}
-const plan = JSON.parse(fs.readFileSync(${JSON.stringify(planPath)},'utf8'));
 const args = process.argv.slice(2);
 const prompt = args[args.indexOf('-p') + 1];
 const memory = prompt.includes('You are the Memory Librarian');
+const context = /Workspace Context (Catch-Up|Maintenance)/.test(prompt);
+const plan = JSON.parse(fs.readFileSync(${JSON.stringify(planPath)},'utf8'));
+if (context && plan.contextWait) {
+  const timer = setInterval(() => {
+    if (plan.contextRelease && fs.existsSync(plan.contextRelease)) { clearInterval(timer); complete(); }
+  }, 10);
+} else complete();
+function complete() {
+const plan = JSON.parse(fs.readFileSync(${JSON.stringify(planPath)},'utf8'));
 if ((memory && plan.memoryError) || (!memory && plan.contextError)) { console.error('Fixture processor failed'); process.exit(1); }
-if (!memory && plan.contextWait) { setInterval(()=>{},1000); return; }
-if (!memory && plan.destination) {
+if (context && plan.destination) {
   if (!args.includes('--allow-all')) throw new Error('Context tools unavailable');
   if (!fs.readFileSync(require('path').join(process.cwd(),'AGENTS.md'),'utf8').includes(plan.instructions)) throw new Error('Missing Context instruction pointer');
   fs.readFileSync(plan.instructions,'utf8');
   fs.writeFileSync(plan.destination, '# Fixture project\\n\\n' + plan.sources.map(file => fs.readFileSync(file,'utf8')).join('\\n\\n'));
 }
-const output = memory ? plan.memoryOutput : plan.contextOutput;
+const output = memory ? plan.memoryOutput : context ? plan.contextOutput : 'Fixture session summary.';
 console.log(JSON.stringify({type:'assistant.message',data:{messageId:'fixture-final',content:output}}));
 console.log(JSON.stringify({type:'result',exitCode:0,usage:{}}));
+}
 `);
     }
     fs.chmodSync(launcher, 0o755);

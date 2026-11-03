@@ -5,6 +5,34 @@ on:
     branches: [main]
 
 jobs:
+  copilot-browser:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm --prefix mobile/AgentCockpitPWA ci
+      - run: npm install --prefix "$RUNNER_TEMP/copilot-cli" --no-save @github/copilot@1.0.105
+      - run: npx playwright install --with-deps chromium
+      - run: npm run e2e:copilot-ui
+        env:
+          COPILOT_UI_CLI: ${{ runner.temp }}/copilot-cli/node_modules/.bin/copilot
+          PLAYWRIGHT_USE_SYSTEM_CHROME: '0'
+          TMPDIR: ${{ runner.temp }}
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: copilot-browser-evidence
+          path: |
+            test-results/
+            ${{ runner.temp }}/cockpit-copilot-ui-*/compatibility-report.json
+            ${{ runner.temp }}/cockpit-copilot-ui-*/server-out.log
+            ${{ runner.temp }}/cockpit-copilot-ui-*/server-error.log
+
   copilot-windows:
     runs-on: windows-latest
     timeout-minutes: 10
