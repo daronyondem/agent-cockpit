@@ -1,6 +1,7 @@
 import { execFile, spawn, type ChildProcess, type SpawnOptions } from 'child_process';
 import crypto from 'crypto';
 import { logger } from '../../utils/logger';
+import { spawnWindowsCopilotProcess } from './copilotWindowsProcess';
 
 const log = logger.child({ module: 'copilot-process' });
 interface Identity { pid: number; parent: number; group: number; started: string }
@@ -11,7 +12,8 @@ export function spawnCopilotProcess(command: string, args: string[], options: Sp
   proc: ChildProcess; scope: CopilotProcessScope;
 } {
   const token = crypto.randomUUID();
-  const proc = spawn(command, args, {
+  const launch = process.platform === 'win32' ? spawnWindowsCopilotProcess : spawn;
+  const proc = launch(command, args, {
     ...options,
     env: { ...(options.env || process.env), [OWNERSHIP_ENV]: token },
     detached: process.platform !== 'win32',

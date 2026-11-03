@@ -1,10 +1,10 @@
 ---
 id: 0096
 title: Track Copilot orphan ownership and drain before session changes
-status: Accepted
+status: Superseded
 date: 2026-11-02
 supersedes: [0095]
-superseded-by: null
+superseded-by: 0097
 tags: [backends, copilot, lifecycle, testing]
 affects:
   - src/services/backends/copilotProcess.ts
