@@ -142,8 +142,11 @@ The PWA currently covers:
   mobile browser validation remains pending; shared metadata wiring is not a
   claim of fully verified native mobile parity.
   Session reset waits for backend cleanup before replacing its session/checkout.
-  During that interval, the server rejects concurrent sends/resets and worktree
-  changes with `409`; a workspace mode change reserves all its conversations.
+  During that interval, sends and goal starts/resume return temporary `503` with
+  `Retry-After: 1`; repeat resets and worktree changes retain busy `409`. The
+  mobile send pipeline preserves the draft/attachments, removes optimistic
+  bubbles, and finishes local streaming when no server stream exists. A
+  workspace mode change reserves all its conversations.
   These shared server guarantees require no PWA bundle, metadata, or asset change.
 - Active/archived conversation list via `GET /api/chat/conversations`.
 - Workspace-level archives are respected by the shared conversation-list contract: archived workspaces are excluded from the mobile active and archived conversation lists unless a caller explicitly asks for `includeArchivedWorkspaces`, which the PWA does not do. The PWA does not expose workspace archive management, remapping, file snapshot restore, or archived-data deletion; those remain desktop filesystem-management workflows.

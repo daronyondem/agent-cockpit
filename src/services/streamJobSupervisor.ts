@@ -55,6 +55,11 @@ export class StreamJobSupervisor {
       || this.resettingConversations.size > 0 || this.resettingWorkspaces.size > 0;
   }
 
+  isResetting(conversationId: string, workspaceId: string | null): boolean {
+    return this.resettingConversations.has(conversationId)
+      || !!workspaceId && this.resettingWorkspaces.has(workspaceId);
+  }
+
   tryBeginSessionReset(conversationId: string): (() => void) | null {
     if (this.hasInFlightTurn(conversationId)) return null;
     this.resettingConversations.add(conversationId);

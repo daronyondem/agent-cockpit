@@ -1217,12 +1217,12 @@ describe('queue', () => {
     expect(bodies[bodies.length - 1]).toEqual([{ content: 'edited tail', attachments: [] }]);
   });
 
-  test('queued send 409 restores original head with attachments and active-stream state', async () => {
+  test.each([409, 503])('queued send %s restores the queue and only attaches a real active stream', async status => {
     const ws = await openWs('c1');
     const Store = (window as any).StreamStore;
     const api = (global as any).AgentApi;
-    const err = new Error('Conversation is already streaming') as Error & { status?: number };
-    err.status = 409;
+    const err = new Error(status === 409 ? 'Conversation is already streaming' : 'Session is resetting. Try again shortly.') as Error & { status?: number };
+    err.status = status;
 
     await startAcceptedStream('c1', ws);
     api.fetch
@@ -1237,9 +1237,9 @@ describe('queue', () => {
 
     const state = Store.getState('c1');
     expect(state.queue).toEqual([{ content: 'queued text', attachments: [attachment] }]);
-    expect(state.streaming).toBe(true);
-    expect(state.uiState).toBe('streaming');
-    expect(state.streamError).toBeNull();
+    expect(state.streaming).toBe(status === 409);
+    expect(state.uiState).toBe(status === 409 ? 'streaming' : 'error');
+    expect(state.streamError).toBe(status === 409 ? null : err.message);
     expect(state.messages.some((m: any) => String(m.id).startsWith('pending-'))).toBe(false);
   });
 
@@ -1852,23 +1852,23 @@ describe('draft persistence', () => {
     expect(JSON.parse(raw!)).toEqual({ text: 'my message', attachments: [] });
   });
 
-  test('POST 409 rolls back optimistic send and returns to active-stream state', async () => {
+  test.each([409, 503])('POST %s preserves the draft and only attaches a real active stream', async status => {
     await openWs('c1');
     const Store = (window as any).StreamStore;
     const api = (global as any).AgentApi;
 
     Store.setInput('c1', 'raced message');
-    const err = new Error('Conversation is already streaming') as Error & { status?: number };
-    err.status = 409;
+    const err = new Error(status === 409 ? 'Conversation is already streaming' : 'Session is resetting. Try again shortly.') as Error & { status?: number };
+    err.status = status;
     api.fetch.mockRejectedValueOnce(err);
 
     await Store.send('c1', 'raced message');
 
     const state = Store.getState('c1');
     expect(state.input).toBe('raced message');
-    expect(state.streaming).toBe(true);
-    expect(state.uiState).toBe('streaming');
-    expect(state.streamError).toBeNull();
+    expect(state.streaming).toBe(status === 409);
+    expect(state.uiState).toBe(status === 409 ? 'streaming' : 'error');
+    expect(state.streamError).toBe(status === 409 ? null : err.message);
     expect(state.messages.some((m: any) => String(m.id).startsWith('pending-'))).toBe(false);
   });
 

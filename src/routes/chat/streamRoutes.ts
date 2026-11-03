@@ -184,6 +184,9 @@ export function createStreamRouter(opts: StreamRoutesOptions): express.Router {
     let conv = await chatService.getConversation(convId);
     if (!conv) return res.status(404).json({ error: 'Conversation not found' });
     let executionDir = conversationExecutionDir(conv);
+    if (streamSupervisor.isResetting(convId, chatService.getWorkspaceIdForConv(convId))) {
+      return res.set('Retry-After', '1').status(503).json({ error: 'Session is resetting. Try again shortly.' });
+    }
     if (hasInFlightTurn(convId)) {
       return res.status(409).json({ error: 'Conversation is already streaming' });
     }

@@ -18,10 +18,13 @@ describe('stream supervisor reset admission', () => {
     expect(release).not.toBeNull();
     expect(supervisor.hasInFlightTurn('conversation')).toBe(true);
     expect(supervisor.hasInFlightTurn('other')).toBe(false);
+    expect(supervisor.isResetting('conversation', null)).toBe(true);
+    expect(supervisor.isResetting('other', null)).toBe(false);
     expect(supervisor.hasAnyInFlightTurn()).toBe(true);
     expect(supervisor.tryBeginSessionReset('conversation')).toBeNull();
     release!();
     expect(supervisor.hasInFlightTurn('conversation')).toBe(false);
+    expect(supervisor.isResetting('conversation', null)).toBe(false);
     expect(supervisor.hasAnyInFlightTurn()).toBe(false);
   });
 
@@ -35,6 +38,8 @@ describe('stream supervisor reset admission', () => {
     const release = supervisor.tryBeginWorkspaceReset('workspace');
     expect(release).not.toBeNull();
     expect(supervisor.resettingWorkspaces.has('workspace')).toBe(true);
+    expect(supervisor.isResetting('conversation', 'workspace')).toBe(true);
+    expect(supervisor.isResetting('conversation', 'other')).toBe(false);
     expect(supervisor.hasAnyInFlightTurn()).toBe(true);
     expect(supervisor.tryBeginWorkspaceReset('workspace')).toBeNull();
     release!();

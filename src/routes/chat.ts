@@ -672,7 +672,7 @@ export function createChatRouter({ chatService, backendRegistry, updateService, 
   function hasInFlightTurn(convId: string): boolean {
     const workspaceId = chatService.getWorkspaceIdForConv(convId);
     return streamSupervisor.hasInFlightTurn(convId)
-      || !!workspaceId && streamSupervisor.resettingWorkspaces.has(workspaceId);
+      || streamSupervisor.isResetting(convId, workspaceId);
   }
 
   function hasAnyInFlightTurn(): boolean {

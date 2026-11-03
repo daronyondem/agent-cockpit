@@ -189,6 +189,8 @@ tool is unavailable.
   orphans; do not log inspected process environments. Reserve reset admission
   and await all ending backend cleanup before changing sessions or worktrees.
   See ADR-0096.
+  Reset admission returns temporary `503` for sends/goal starts/resume, while
+  active-stream conflicts retain `409` so clients do not enter phantom streaming.
 - Claude Code Interactive is a separate protocol/backend path requiring real CLI
   compatibility checks when protocol behavior changes.
 - Do not auto-update Claude Code CLI as part of Claude Code Interactive

@@ -5,8 +5,11 @@ import { loadMobileModule } from './mobileModuleLoader';
 
 type PendingInteraction = { kind: 'question' | 'plan'; prompt: string; options?: unknown[] };
 
+class MockApiError extends Error {
+  constructor(message: string, readonly status: number) { super(message); }
+}
 const { useSendPipeline } = loadMobileModule('useSendPipeline.ts', {
-  react: require('react'), './api': {}, './appModel': {},
+  react: require('react'), './api': { AgentAPIError: MockApiError }, './appModel': loadMobileModule('appModel.ts'),
 });
 
 async function renderPipeline(first: PendingInteraction, sendInput: jest.Mock) {
@@ -76,4 +79,47 @@ test('mobile keeps the interaction available when input delivery fails', async (
     expect(view.current.interaction).toBe(question);
     expect(view.onError).toHaveBeenCalledWith(error);
   } finally { await view.close(); }
+});
+
+test('mobile reset admission failures restore the draft without attaching a phantom stream', async () => {
+  (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
+  const container = document.createElement('div');
+  const root = createRoot(container);
+  const error = new MockApiError('Session is resetting. Try again shortly.', 503);
+  const sendMessage = jest.fn().mockRejectedValue(error);
+  const recoverActiveStream = jest.fn().mockResolvedValue(false);
+  const onError = jest.fn();
+  const attachment = { id: 'attachment', name: 'image.png', status: 'done', result: { name: 'image.png', path: '/tmp/image.png', kind: 'image' } };
+  let draft = 'Keep this draft';
+  let attachments = [attachment];
+  let streaming = false;
+  let conversation: any = { id: 'fixture', backend: 'copilot', cliProfileId: 'profile', messages: [] };
+  const activeConversationRef = { current: conversation };
+  const markStreamFinished = jest.fn(() => { streaming = false; });
+  let pipeline: any;
+  function Harness() {
+    pipeline = useSendPipeline({
+      activeConversation: conversation, activeConversationRef,
+      clientRef: { current: { sendMessage } }, pendingAttachments: attachments,
+      draft, isStreaming: streaming, goalMode: false, hasUploadingAttachments: false,
+      setDraft: (value: string) => { draft = value; },
+      setPendingAttachments: (value: typeof attachments) => { attachments = value; },
+      setErrorMessage: jest.fn(), setPendingInteraction: jest.fn(), setStreamText: jest.fn(),
+      setShowStreamPlaceholder: jest.fn(), setIsStreaming: (value: boolean) => { streaming = value; },
+      setActiveStreamIDs: jest.fn(), setActiveConversation: (update: (value: any) => any) => { conversation = update(conversation); },
+      recoverActiveStream, markStreamFinished, onError,
+    });
+    return null;
+  }
+  try {
+    await act(async () => { root.render(createElement(Harness)); });
+    await act(async () => { await pipeline.sendDraft(); });
+    expect(draft).toBe('Keep this draft');
+    expect(attachments).toEqual([attachment]);
+    expect(streaming).toBe(false);
+    expect(conversation.messages).toEqual([]);
+    expect(recoverActiveStream).toHaveBeenCalledWith('fixture', { onlyIfServerActive: true });
+    expect(markStreamFinished).toHaveBeenCalledWith('fixture');
+    expect(onError).toHaveBeenCalledWith(error);
+  } finally { await act(async () => { root.unmount(); }); }
 });

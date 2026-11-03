@@ -54,7 +54,13 @@ describe('worktree isolation routes', () => {
       await entered;
       expect(git(before.executionDir!, ['branch', '--show-current']).trim()).toBe(branch);
       expect((await env.chatService.getConversation(conv.id))!.sessionNumber).toBe(before.sessionNumber);
-      expect((await env.request('POST', `/api/chat/conversations/${conv.id}/message`, { content: 'too early' })).status).toBe(409);
+      const send = await env.request('POST', `/api/chat/conversations/${conv.id}/message`, { content: 'too early' });
+      expect(send.status).toBe(503);
+      expect(send.headers['retry-after']).toBe('1');
+      expect(send.body.error).toContain('resetting');
+      for (const action of ['goal', 'goal/resume']) {
+        expect((await env.request('POST', `/api/chat/conversations/${conv.id}/${action}`, { objective: 'too early' })).status).toBe(503);
+      }
       expect((await env.request('POST', `/api/chat/conversations/${conv.id}/reset`, {})).status).toBe(409);
       expect((await env.request('PUT', `/api/chat/workspaces/${conv.workspaceId}/worktree-isolation`, {
         enabled: false, confirmedSessionReset: true,
@@ -92,7 +98,10 @@ describe('worktree isolation routes', () => {
       expect((await env.chatService.getWorkspaceWorktreeIsolationStatus(first.workspaceId)).enabled).toBe(!enabled);
       expect((await env.chatService.getConversation(first.id))!.sessionNumber).toBe(before.sessionNumber);
       for (const conv of [first, second]) {
-        expect((await env.request('POST', `/api/chat/conversations/${conv.id}/message`, { content: 'too early' })).status).toBe(409);
+        expect((await env.request('POST', `/api/chat/conversations/${conv.id}/message`, { content: 'too early' })).status).toBe(503);
+        for (const action of ['goal', 'goal/resume']) {
+          expect((await env.request('POST', `/api/chat/conversations/${conv.id}/${action}`, { objective: 'too early' })).status).toBe(503);
+        }
         expect((await env.request('POST', `/api/chat/conversations/${conv.id}/reset`, {})).status).toBe(409);
       }
     } finally {
