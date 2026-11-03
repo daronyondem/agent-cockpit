@@ -130,7 +130,9 @@ posix('reaps an orphan whose detached shell exited before the first ownership sn
   const token = crypto.randomUUID();
   fs.writeFileSync(worker, `
 process.on('SIGTERM', () => {});
-require('fs').writeFileSync(${JSON.stringify(pidFile)}, String(process.pid));
+const fs = require('fs');
+fs.writeFileSync(${JSON.stringify(pidFile + '.tmp')}, String(process.pid));
+fs.renameSync(${JSON.stringify(pidFile + '.tmp')}, ${JSON.stringify(pidFile)});
 setInterval(() => {}, 1000);
 `);
   const quote = (value: string) => `'${value.replace(/'/g, `'\\''`)}'`;
@@ -154,7 +156,7 @@ require('child_process').spawnSync('/bin/sh', ['-c', ${JSON.stringify(command)}]
     expect(alive(workerPid)).toBe(false);
     expect(alive(unrelated.pid!)).toBe(true);
   } finally {
-    await scope?.stop();
+    await (scope || new CopilotProcessScope(root, token)).stop();
     root.kill('SIGKILL');
     unrelated.kill('SIGKILL');
     if (workerPid && alive(workerPid)) process.kill(workerPid, 'SIGKILL');

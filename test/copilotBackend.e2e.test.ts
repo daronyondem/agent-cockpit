@@ -30,7 +30,9 @@ native('real Copilot CLI compatibility', () => {
     const worker = path.join(fixtureDir, 'worker.cjs');
     fs.writeFileSync(worker, `
 process.on('SIGTERM', () => {});
-require('fs').writeFileSync(${JSON.stringify(pidFile)}, String(process.pid));
+const fs = require('fs');
+fs.writeFileSync(${JSON.stringify(pidFile + '.tmp')}, String(process.pid));
+fs.renameSync(${JSON.stringify(pidFile + '.tmp')}, ${JSON.stringify(pidFile)});
 setInterval(() => {}, 1000);
 `);
     const quote = (value: string) => `'${value.replace(/'/g, `'\\''`)}'`;
