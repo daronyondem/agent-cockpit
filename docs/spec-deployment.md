@@ -252,7 +252,7 @@ and `current` is a symlink to the active release. Mutable runtime data lives
 under `<install-root>/data`.
 
 The installer exits unless `uname -s` is `Darwin`, the CPU is `arm64` or
-`x86_64`, and `curl`, `tar`, and `shasum` are available. When Node.js 22+ and
+`x86_64`, and `curl`, `tar`, and `shasum` are available. When Node.js 22.12.0+ and
 npm are already available on `PATH`, the installer uses them. Otherwise it
 downloads the latest official Node.js 22 macOS tarball for the detected
 architecture from `https://nodejs.org/dist/latest-v22.x/`, downloads
@@ -368,7 +368,7 @@ under `<install-root>/data`.
 The installer exits unless `uname -s` is `Linux`, `uname -m` is `x86_64`, and
 `curl`, `tar`, and `sha256sum` are available. It rejects musl-based systems when
 `ldd --version` reports musl, because the first supported runtime path uses
-official glibc-linked Node.js Linux binaries. When Node.js 22+ and npm are
+official glibc-linked Node.js Linux binaries. When Node.js 22.12.0+ and npm are
 already available on `PATH`, the installer uses them. Otherwise it downloads the
 latest official Node.js 22 Linux x64 tarball from
 `https://nodejs.org/dist/latest-v22.x/`, downloads `SHASUMS256.txt`, verifies
@@ -439,7 +439,7 @@ Node.js runtimes live under `runtime\node-v<version>-win-x64`.
 
 The Windows installer exits unless it is running on Windows x64. Windows arm64
 is rejected until runtime dependencies and backend CLIs are validated there.
-When Node.js 22+ and npm are already available on `PATH`, the installer uses
+When Node.js 22.12.0+ and npm are already available on `PATH`, the installer uses
 them unless `-InstallNode` is supplied. Otherwise it downloads the latest
 official Node.js 22 Windows ZIP from `https://nodejs.org/dist/latest-v22.x/`,
 downloads `SHASUMS256.txt`, verifies the ZIP with `Get-FileHash -Algorithm

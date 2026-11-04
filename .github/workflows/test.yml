@@ -1,10 +1,38 @@
 name: Tests
 
 on:
+  workflow_dispatch:
   pull_request:
     branches: [main]
 
 jobs:
+  copilot-sdk:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-15, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm install --prefix "${{ runner.temp }}/copilot-sdk-cli" --no-save @github/copilot@1.0.105
+      - run: npm run e2e:copilot-sdk
+        env:
+          COPILOT_SDK_CLI_PATH: ${{ runner.temp }}/copilot-sdk-cli/node_modules/@github/copilot/npm-loader.js
+          TMPDIR: ${{ runner.temp }}
+          TEMP: ${{ runner.temp }}
+          TMP: ${{ runner.temp }}
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: copilot-sdk-${{ matrix.os }}
+          path: ${{ runner.temp }}/copilot-sdk-compat-*/
+
   copilot-browser:
     runs-on: ubuntu-24.04
     timeout-minutes: 15

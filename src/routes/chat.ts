@@ -1548,7 +1548,7 @@ export function createChatRouter({ chatService, backendRegistry, updateService, 
     sessionFinalizers.stop();
     memoryWatcher.unwatchAll();
     memoryFingerprints.clear();
-    cliProfileAuth.shutdown();
+    await cliProfileAuth.shutdown();
     if (updateService) updateService.stop();
     if (cliUpdateService) cliUpdateService.stop();
   }

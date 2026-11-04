@@ -138,9 +138,12 @@ The PWA currently covers:
   No Copilot-specific PWA assets, manifest, or service-worker changes are needed.
   Gemini's unverified effort options are also hidden. Auto routing is not
   eligible for media processors; explicit verified `gpt-6.1-sol` is required.
-  Delegated prose/activity cannot contaminate the root stream. Copilot-specific
-  mobile browser validation remains pending; shared metadata wiring is not a
-  claim of fully verified native mobile parity.
+  Delegated prose/activity cannot contaminate the root stream. The shared
+  desktop/mobile browser suite verifies eight lifecycle cases on macOS and
+  Ubuntu 24.04 using real Copilot with fixed local replies. Native SDK controls
+  and hosted-account behavior remain outside that evidence. Server-side profile
+  checks now distinguish credentials from catalog access using existing result
+  fields; mobile has no account-management screen to update in this step.
   Session reset waits for backend cleanup before replacing its session/checkout.
   During that interval, sends and goal starts/resume return temporary `503` with
   `Retry-After: 1`; repeat resets and worktree changes retain busy `409`. The

@@ -42,6 +42,9 @@ describe('Windows installer script', () => {
   });
 
   test('reuses existing private Node runtimes during repair reruns', () => {
+    expect(source).toContain("$NodeMinimumVersion = [version]'22.12.0'");
+    expect(source).toContain('if ([version]$version -ge $NodeMinimumVersion)');
+    expect(source).toContain('if ([version]$actualVersion -lt $NodeMinimumVersion)');
     expect(source).toContain('function Use-PrivateNodeRuntime');
     expect(source).toContain('function Invoke-NativeOutput');
     expect(source).toContain('$code = if ($null -eq $LASTEXITCODE) { 0 } else { $LASTEXITCODE }');

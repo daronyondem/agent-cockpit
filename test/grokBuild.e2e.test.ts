@@ -44,7 +44,7 @@ realGrok('authenticated Grok Build ACP compatibility', () => {
       expect(await service.checkProfile(invalid)).toMatchObject({ available: true, authenticated: null, status: 'ok' });
       await expect(adapter.runOneShot('Reply exactly AUTH_OK', { workingDir: cwd, model: 'grok-4.7', timeoutMs: 20_000, cliProfile: invalid })).rejects.toThrow();
       expect(await checkGrokAuthentication()).toBe(true);
-    } finally { service.shutdown(); }
+    } finally { await service.shutdown(); }
   }, 60_000);
 
   test('cancels a real isolated device-login job without changing terminal credentials', async () => {
@@ -62,7 +62,7 @@ realGrok('authenticated Grok Build ACP compatibility', () => {
       expect(promptSeen).toBe(true);
       expect(service.cancelJob(job.id).status).toBe('cancelled');
       expect(await checkGrokAuthentication()).toBe(true);
-    } finally { service.shutdown(); }
+    } finally { await service.shutdown(); }
   }, 60_000);
 
   test('hard CLI exit cleans native shell descendants and preserves next-turn recovery', async () => {

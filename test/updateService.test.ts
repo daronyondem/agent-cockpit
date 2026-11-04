@@ -183,7 +183,7 @@ function makeProductionInstall(rootPrefix = 'agent-cockpit-install-') {
   return { installDir, releasesDir, previousDir, currentLink, dataDir, status };
 }
 
-function makeReleaseFixture(version = '1.1.0', minimumNodeMajor = 22) {
+function makeReleaseFixture(version = '1.1.0', minimumNodeMajor = 22, engine = `>=${minimumNodeMajor}`) {
   const tarballName = `agent-cockpit-v${version}.tar.gz`;
   const tarballBytes = Buffer.from(`release tarball ${version}`);
   const tarballSha = crypto.createHash('sha256').update(tarballBytes).digest('hex');
@@ -193,7 +193,7 @@ function makeReleaseFixture(version = '1.1.0', minimumNodeMajor = 22) {
     packageRoot: `agent-cockpit-v${version}`,
     requiredRuntime: {
       node: {
-        engine: `>=${minimumNodeMajor}`,
+        engine,
         minimumMajor: minimumNodeMajor,
       },
     },
@@ -1178,22 +1178,24 @@ describe('UpdateService', () => {
       }
     });
 
-    test('updates a private Node.js runtime before production dependency install when required major increases', async () => {
+    test.each([
+      { change: 'major', currentVersion: '22.22.3', nodeVersion: '23.9.0', minimumMajor: 23, engine: '>=23' },
+      { change: 'minor', currentVersion: '22.11.9', nodeVersion: '22.23.4', minimumMajor: 22, engine: '>=22.12.0' },
+    ])('updates private Node before dependencies when the required $change increases', async ({ currentVersion, nodeVersion, minimumMajor, engine }) => {
       mockWriteFileSync.mockImplementation((...args: Parameters<typeof fs.writeFileSync>) => originalWriteFileSync(...args));
       const restorePlatform = mockProcessPlatform('darwin');
       const install = makeProductionInstall('agent-cockpit-prod-node-update-');
       const nodeArch = process.arch === 'arm64' ? 'arm64' : 'x64';
-      const nodeVersion = '23.9.0';
       (install.status as any).nodeRuntime = {
         source: 'private',
-        version: '22.22.3',
+        version: currentVersion,
         npmVersion: '10.9.8',
         binDir: path.join(install.installDir, 'runtime', 'node', 'bin'),
         runtimeDir: path.join(install.installDir, 'runtime', 'node'),
         requiredMajor: 22,
         updatedAt: '2026-05-11T00:00:00.000Z',
       };
-      const release = makeReleaseFixture('1.1.0', 23);
+      const release = makeReleaseFixture('1.1.0', minimumMajor, engine);
       const nodeTarballName = `node-v${nodeVersion}-darwin-${nodeArch}.tar.gz`;
       const nodeTarballBytes = Buffer.from('node runtime tarball');
       const nodeTarballSha = crypto.createHash('sha256').update(nodeTarballBytes).digest('hex');
@@ -1241,7 +1243,7 @@ describe('UpdateService', () => {
             }
             const packageDir = path.join(extractDir, release.manifest.packageRoot);
             writeText(path.join(packageDir, 'server.ts'), 'console.log("server");\n');
-            writeJson(path.join(packageDir, 'package.json'), { version: '1.1.0', engines: { node: '>=23' } });
+            writeJson(path.join(packageDir, 'package.json'), { version: '1.1.0', engines: { node: engine } });
             writeText(path.join(packageDir, 'public/v2-built/index.html'), '<!doctype html>\n');
             writeText(path.join(packageDir, 'public/mobile-built/index.html'), '<!doctype html>\n');
             cb(null, 'extracted\n', '');
@@ -1277,7 +1279,7 @@ describe('UpdateService', () => {
           nodeRuntime: expect.objectContaining({
             source: 'private',
             version: nodeVersion,
-            requiredMajor: 23,
+            requiredMajor: minimumMajor,
             binDir: path.join(install.installDir, 'runtime', 'node', 'bin'),
           }),
         }));

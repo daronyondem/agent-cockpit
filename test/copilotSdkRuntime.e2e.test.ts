@@ -1,0 +1,180 @@
+import fs from 'fs';
+import os from 'os';
+import path from 'path';
+import http from 'http';
+import { startCopilotSdkRuntime, type CopilotSdkRuntime } from '../src/services/backends/copilotSdkRuntime';
+import { resolveCopilotCliRuntime } from '../src/services/backends/copilotRuntime';
+import { CopilotAdapter } from '../src/services/backends/copilot';
+
+const native = process.env.COPILOT_SDK_E2E === '1' ? describe : describe.skip;
+
+native('real Copilot owned SDK runtime with fixed local model responses', () => {
+  let dir: string;
+  let runtime: CopilotSdkRuntime | undefined;
+  let provider: http.Server;
+  let baseUrl: string;
+  let scenario: 'text' | 'question' | 'steer' | 'delegate';
+  let requests: Array<Record<string, unknown>>;
+  let events: Array<Record<string, unknown>>;
+  let releaseSteer: (() => void) | undefined;
+  let question: unknown;
+  let cliVersion: string;
+  let nativeEnv: NodeJS.ProcessEnv;
+
+  beforeEach(async () => {
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), 'copilot-sdk-native-'));
+    scenario = 'text'; requests = []; events = []; releaseSteer = undefined; question = undefined;
+    provider = http.createServer((req, res) => {
+      let body = '';
+      req.on('data', chunk => { body += chunk.toString(); });
+      req.on('end', () => {
+        const data = JSON.parse(body);
+        const messages = data.messages as Array<{ role: string; content: unknown }>;
+        requests.push(data);
+        const tools = (data.tools || []).map((tool: { function?: { name: string }; name?: string }) => tool.function || tool);
+        const reply = (delta: object, finish = 'stop') => {
+          res.writeHead(200, { 'Content-Type': 'text/event-stream' });
+          for (const [part, reason] of [[delta, null], [{}, finish]]) res.write(`data: ${JSON.stringify({ id: 'fixture', object: 'chat.completion.chunk', created: 1, model: 'gpt-4', choices: [{ index: 0, delta: part, finish_reason: reason }] })}\n\n`);
+          res.end('data: [DONE]\n\n');
+        };
+        const say = (content: string) => reply({ role: 'assistant', content });
+        const call = (name: string, args: object) => {
+          if (!tools.some((tool: { name: string }) => tool.name === name)) { res.writeHead(400); res.end('Fixture tool missing'); return; }
+          reply({ role: 'assistant', tool_calls: [{ index: 0, id: `fixture-${name}`, type: 'function', function: { name, arguments: JSON.stringify(args) } }] }, 'tool_calls');
+        };
+        const hasTool = messages.some(message => message.role === 'tool');
+        if (scenario === 'question' && !hasTool) call('ask_user', { question: 'Choose a fixture answer', choices: ['Alpha', 'Beta'] });
+        else if (scenario === 'steer' && !hasTool) {
+          releaseSteer = () => {
+            releaseSteer = undefined;
+            const shell = process.platform === 'win32' && tools.some((tool: { name: string }) => tool.name === 'powershell') ? 'powershell' : 'bash';
+            call(shell, { command: 'echo SDK_STEER_CHECKPOINT', description: 'Synthetic steering checkpoint', initial_wait: 1000 });
+          };
+        } else if (scenario === 'delegate') {
+          const lastUser = JSON.stringify(messages.filter(message => message.role === 'user').at(-1)?.content);
+          if (lastUser.includes('SDK_CHILD_ONLY')) say('SDK_CHILD_OK');
+          else if (!hasTool) call('task', { name: 'fixture-child', agent_type: 'general-purpose', prompt: 'SDK_CHILD_ONLY', description: 'Run local delegate fixture' });
+          else say('SDK_PARENT_OK');
+        } else if (scenario === 'steer') say(JSON.stringify(messages).includes('SDK_CORRECTION') ? 'SDK_STEER_OK' : 'SDK_STEER_MISSING');
+        else if (scenario === 'question') say(JSON.stringify(messages.at(-1)?.content));
+        else say('SDK_TEXT_OK');
+      });
+    });
+    await new Promise<void>(resolve => provider.listen(0, '127.0.0.1', resolve));
+    baseUrl = `http://127.0.0.1:${(provider.address() as { port: number }).port}/v1`;
+    const resolved = resolveCopilotCliRuntime({ id: 'native-sdk', name: 'Native SDK fixture', harness: 'copilot', authMode: 'server-configured', command: process.env.COPILOT_SDK_CLI_PATH || 'copilot', createdAt: '', updatedAt: '' });
+    nativeEnv = {
+      PATH: process.env.PATH, SystemRoot: process.env.SystemRoot, ComSpec: process.env.ComSpec,
+      SHELL: process.env.SHELL, TMPDIR: os.tmpdir(), TEMP: os.tmpdir(), TMP: os.tmpdir(),
+      HOME: dir, USERPROFILE: dir, APPDATA: path.join(dir, 'AppData', 'Roaming'), LOCALAPPDATA: path.join(dir, 'AppData', 'Local'),
+      COPILOT_HOME: path.join(dir, 'home'), GH_CONFIG_DIR: path.join(dir, 'gh'), COPILOT_DISABLE_KEYTAR: '1',
+    };
+    runtime = await startCopilotSdkRuntime({ ...resolved, env: nativeEnv }, dir);
+    const status = await runtime.client.getStatus();
+    cliVersion = status.version;
+    if (process.env.COPILOT_SDK_REPORT_DIR) {
+      fs.mkdirSync(process.env.COPILOT_SDK_REPORT_DIR, { recursive: true });
+      fs.writeFileSync(path.join(process.env.COPILOT_SDK_REPORT_DIR, 'runtime.json'), JSON.stringify({ cli: cliVersion, protocolVersion: status.protocolVersion }));
+    }
+  });
+
+  afterEach(async () => {
+    releaseSteer?.();
+    await runtime?.stop();
+    runtime = undefined;
+    provider.closeAllConnections();
+    await new Promise<void>(resolve => provider.close(() => resolve()));
+    if (process.env.COPILOT_SDK_REPORT_DIR) {
+      fs.mkdirSync(process.env.COPILOT_SDK_REPORT_DIR, { recursive: true });
+      const label = expect.getState().currentTestName!.replace(/[^a-z0-9]+/gi, '-');
+      fs.writeFileSync(path.join(process.env.COPILOT_SDK_REPORT_DIR, `${label}.json`), JSON.stringify({ cli: cliVersion, events, requests }, null, 2));
+    }
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  const config = () => ({
+    model: 'gpt-4', streaming: true, workingDirectory: dir, trustWorkingDirectory: 'session' as const,
+    provider: { type: 'openai' as const, baseUrl }, memory: { enabled: false },
+    onPermissionRequest: () => ({ kind: 'approve-once' as const }),
+    onUserInputRequest: (request: unknown) => { question = request; return { answer: 'Beta', wasFreeform: false }; },
+    onEvent: (event: unknown) => { events.push(event as Record<string, unknown>); },
+  });
+
+  test('verifies native status, empty authentication, same-ID session resume, and context APIs', async () => {
+    const status = await runtime!.client.getStatus();
+    console.info('Copilot SDK compatibility evidence', { ...status, sdk: '1.0.28', platform: process.platform, arch: process.arch, node: process.version });
+    expect(status).toMatchObject({ protocolVersion: 3 });
+    expect(await runtime!.client.getAuthStatus()).toMatchObject({ isAuthenticated: false });
+    await expect(runtime!.client.listModels()).rejects.toThrow(/authenticated/i);
+    let session = await runtime!.client.createSession(config());
+    expect((await session.sendAndWait({ prompt: 'SDK_SMOKE' }))?.data.content).toBe('SDK_TEXT_OK');
+    const id = session.sessionId;
+    await session.disconnect();
+    session = await runtime!.client.resumeSession(id, config());
+    expect(session.sessionId).toBe(id);
+    expect((await session.sendAndWait({ prompt: 'SDK_RESUME' }))?.data.content).toBe('SDK_TEXT_OK');
+    expect(await session.rpc.metadata.contextInfo({ promptTokenLimit: 128000, outputTokenLimit: 4096 })).toMatchObject({ contextInfo: { modelName: 'gpt-4', totalTokens: expect.any(Number), limit: expect.any(Number) } });
+    await session.disconnect();
+  }, 45000);
+
+  test('round-trips a native structured question through the official SDK callback', async () => {
+    scenario = 'question';
+    const session = await runtime!.client.createSession(config());
+    const result = await session.sendAndWait({ prompt: 'Ask the fixture question' });
+    expect(question).toMatchObject({ question: 'Choose a fixture answer', choices: ['Alpha', 'Beta'] });
+    expect(result?.data.content).toContain('User selected: Beta');
+    expect(events.some(event => event.type === 'user_input.completed')).toBe(true);
+    await session.disconnect();
+  }, 45000);
+
+  test('resumes an existing JSONL conversation through the owned SDK runtime', async () => {
+    const legacy = new CopilotAdapter({ workingDir: dir });
+    const env = Object.fromEntries(Object.entries(nativeEnv).filter((entry): entry is [string, string] => typeof entry[1] === 'string'));
+    const profile = { id: 'legacy-interop', name: 'Legacy interop', harness: 'copilot' as const, authMode: 'server-configured' as const,
+      command: process.env.COPILOT_SDK_CLI_PATH || 'copilot', createdAt: '', updatedAt: '',
+      env: { ...env, COPILOT_GITHUB_TOKEN: '', GH_TOKEN: '', GITHUB_TOKEN: '', COPILOT_PROVIDER_TYPE: 'openai', COPILOT_PROVIDER_BASE_URL: baseUrl, COPILOT_PROVIDER_API_KEY: '', COPILOT_MODEL: 'gpt-4' } };
+    let sessionId: string | undefined;
+    try {
+      const sent = legacy.sendMessage('SDK_JSONL_SEED', { sessionId: 'fixture', conversationId: 'interop', isNewSession: true, systemPrompt: 'Synthetic compatibility fixture.', workingDir: dir, model: 'gpt-4', cliProfile: profile });
+      for await (const event of sent.stream) {
+        if (event.type === 'external_session') sessionId = event.sessionId;
+        expect(event.type).not.toBe('error');
+      }
+      expect(sessionId).toBeDefined();
+      const session = await runtime!.client.resumeSession(sessionId!, config());
+      expect(session.sessionId).toBe(sessionId);
+      expect((await session.sendAndWait({ prompt: 'SDK_AFTER_JSONL' }))?.data.content).toBe('SDK_TEXT_OK');
+      const last = requests.at(-1)!.messages as Array<{ role: string; content: unknown }>;
+      expect(JSON.stringify(last)).toContain('SDK_JSONL_SEED');
+      await session.disconnect();
+    } finally { await legacy.shutdown(); }
+  }, 45000);
+
+  test('steers an active native tool loop without starting a second queued request', async () => {
+    scenario = 'steer';
+    const session = await runtime!.client.createSession(config());
+    const completed = session.sendAndWait({ prompt: 'SDK_INITIAL' });
+    const deadline = Date.now() + 10000;
+    while (!releaseSteer && Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, 10));
+    expect(releaseSteer).toBeDefined();
+    await session.send({ prompt: 'SDK_CORRECTION', mode: 'immediate' });
+    releaseSteer!();
+    expect((await completed)?.data.content).toBe('SDK_STEER_OK');
+    const corrections = events.filter(event => event.type === 'user.message' && (event.data as { content?: string }).content === 'SDK_CORRECTION');
+    expect(corrections).toHaveLength(1);
+    expect(corrections[0]).toMatchObject({ data: { delivery: 'steering' } });
+    expect(requests.length).toBeGreaterThanOrEqual(2);
+    await session.disconnect();
+  }, 45000);
+
+  test('preserves native child identities and the separate parent answer', async () => {
+    scenario = 'delegate';
+    const session = await runtime!.client.createSession(config());
+    expect((await session.sendAndWait({ prompt: 'SDK_DELEGATE_PARENT' }))?.data.content).toBe('SDK_PARENT_OK');
+    const started = events.find(event => event.type === 'subagent.started')!;
+    expect(started).toMatchObject({ agentId: expect.any(String), data: { toolCallId: expect.any(String), agentName: 'general-purpose' } });
+    expect(events).toContainEqual(expect.objectContaining({ type: 'subagent.completed', agentId: started.agentId }));
+    expect(events).toContainEqual(expect.objectContaining({ type: 'assistant.message', agentId: started.agentId, data: expect.objectContaining({ content: 'SDK_CHILD_OK' }) }));
+    await session.disconnect();
+  }, 45000);
+});

@@ -140,7 +140,7 @@ posix('Grok profiles, auth, and billing integration', () => {
     for (let i = 0; i < 100 && status.status === 'running'; i++) { await new Promise(resolve => setTimeout(resolve, 30)); status = service.getJob(job.id)!; }
     expect(status.status).toBe('succeeded');
     expect(status.events.some(event => event.text.includes('FIXTURE-CODE'))).toBe(true);
-    service.shutdown();
+    await service.shutdown();
   });
 
   test('Welcome setup accepts Grok and retains the system auth home', async () => {

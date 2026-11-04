@@ -1,5 +1,4 @@
 import type { ChildProcess } from 'child_process';
-import crypto from 'crypto';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
@@ -13,11 +12,12 @@ import {
   createRecoverySnapshot,
   isMissingNativeSessionError,
 } from './sessionRecovery';
-import { buildCliCommandInvocation, resolveCliCommandForRuntime, type CliCommandResolution } from '../cliCommandResolver';
+import { buildCliCommandInvocation } from '../cliCommandResolver';
+import { resolveCopilotCliRuntime, type CopilotCliRuntime } from './copilotRuntime';
+export { resolveCopilotCliRuntime, type CopilotCliRuntime } from './copilotRuntime';
 import { logger } from '../../utils/logger';
 import type {
   BackendMetadata,
-  CliProfile,
   EffortLevel,
   McpServerConfig,
   ModelCapabilities,
@@ -97,40 +97,6 @@ const COPILOT_MODELS: ModelOption[] = COPILOT_MODEL_SEEDS.map(seed => ({
     reasoning: seed.reasoning !== false,
   },
 }));
-
-export interface CopilotCliRuntime extends CliCommandResolution {
-  command: string;
-  env: NodeJS.ProcessEnv;
-  configDir?: string;
-  profileKey: string;
-}
-
-export function resolveCopilotCliRuntime(profile?: CliProfile): CopilotCliRuntime {
-  if (profile && profile.harness !== 'copilot') {
-    throw new Error(`CLI profile harness ${profile.harness} is not copilot`);
-  }
-
-  const requestedCommand = profile?.command?.trim() || 'copilot';
-  const env: NodeJS.ProcessEnv = { ...process.env };
-  if (profile?.env) {
-    for (const [key, value] of Object.entries(profile.env)) {
-      env[key] = value;
-    }
-  }
-
-  const hash = crypto.createHash('sha1').update(JSON.stringify({
-    id: profile?.id || null,
-    command: requestedCommand,
-    env: profile?.env || {},
-  })).digest('hex').slice(0, 12);
-  const commandResolution = resolveCliCommandForRuntime('copilot', requestedCommand, env);
-
-  return {
-    ...commandResolution,
-    env,
-    profileKey: profile ? `${profile.id}:${hash}` : `server-configured:${hash}`,
-  };
-}
 
 interface CopilotRunResult {
   text: string;

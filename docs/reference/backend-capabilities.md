@@ -87,8 +87,9 @@ Native compatibility is verified on Grok Build 1.0.52, macOS arm64. See the
 
 - direct `copilot -p <prompt> --output-format json` CLI spawn per message;
 - self-configured authentication that reuses the `copilot` CLI login under
-  `~/.copilot` (sign in with `copilot` then `/login`); Agent Cockpit checks
-  availability with `copilot --version` but does not manage the login;
+  `~/.copilot` (sign in with `copilot login`); the profile check verifies
+  installation, native credential status and enabled-model catalog access
+  separately, while login remains a terminal operation;
 - static curated Claude/GPT/Gemini catalog, not live account-specific discovery;
 - default `auto` routing plus explicit account-dependent model selections;
 - reasoning effort through `copilot --reasoning-effort <low|medium|high|xhigh>`
@@ -116,11 +117,21 @@ Native compatibility is verified on Grok Build 1.0.52, macOS arm64. See the
   watch. Copilot memory integration uses Agent Cockpit's Memory MCP tools.
 
 Native image/PDF/MCP/text/stream/resume/usage compatibility is verified with Copilot
-CLI 1.0.103-0 and 1.0.105 on macOS arm64 through `npm run e2e:copilot`. Windows package resolution
-has unit coverage; native Windows/Linux compatibility is not claimed.
-The fixture MCP check is not full Memory governance/KB workflow verification.
-Workspace Context, Routines, file delivery, and desktop/mobile harness flows are
-wired but still need comprehensive Copilot-specific end-to-end evidence.
+CLI 1.0.103-0 and 1.0.105 on macOS arm64 through `npm run e2e:copilot`.
+Six production Memory/Context workflows pass on macOS with fixed local replies;
+eight desktop/mobile Chromium cases pass on macOS and Ubuntu 24.04 x64.
+KB/Routine workflow coverage uses executable fixtures. Windows Job ownership has
+native process-fixture evidence, not real Windows Copilot certification.
+Hosted account/model behavior remains separate from local-model integration.
+
+The internal SDK foundation uses pinned SDK 1.0.28 and an authenticated
+Cockpit-owned headless runtime. Five opt-in native cases through
+`npm run e2e:copilot-sdk` cover session resume/context, JSONL-session migration,
+questions, steering and child identity on macOS arm64 with CLI 1.0.105 and fixed
+local replies, including Node 22.23.4. Profile checks use this runtime; chat
+still uses JSONL and does not expose those controls. Native goal clear is removed
+in that CLI, and switching autopilot on does not resume a paused objective.
+See the [SDK evaluation](../research/copilot-sdk-parity-evaluation.md).
 Named profiles share terminal authentication and do not isolate accounts.
 Anthropic `max` effort is not advertised until selection-specific verification.
 Native installations have a manual updater but no background update discovery.

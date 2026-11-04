@@ -166,6 +166,25 @@ Copilot with fixed local model replies, isolated auth/data, and its own PM2
 home. Keep full Jest asset-build fixtures separate from browser runs and rebuild
 production assets after the full suite before checking the bundle budget.
 
+For the SDK runtime foundation, review `test/copilotSdkRuntime.test.ts` and run
+`npm run e2e:copilot-sdk` with the selected real CLI (optionally set
+`COPILOT_SDK_CLI_PATH`). Keep SDK connections attached to a Cockpit-owned
+headless process with a fresh loopback connection token; never select the SDK's
+bundled/in-process runtime or bypass the existing process/Windows Job boundary.
+The native suite isolates auth and uses fixed local replies, so it is not
+hosted-account or model-judgment evidence. Record actual CLI/SDK/OS/revision.
+Review `test/copilotProfileStatus.test.ts`, `test/cliProfileAuthService.test.ts`
+and the profile-auth route tests for credential/catalog checks. Preserve the
+distinction between installed CLI, authenticated credentials and enabled-model
+access; static fallback metadata must not overwrite native access failures.
+Await auth-service shutdown so pending SDK probes cannot outlive server cleanup.
+Native autopilot mode alone is not goal-action parity: 1.0.105 removes clear,
+and switching autopilot on does not resume a paused objective. See ADR-0098.
+SDK dependency upgrades must keep the app Node engine, all platform installer
+eligibility checks, Install Doctor and self-update engine-floor validation
+aligned. Preserve major-only legacy manifests and test macOS activation when
+changing runtime requirements.
+
 # Grok Build Protocol Compatibility
 
 Grok Build uses ACP plus native extensions through the focused

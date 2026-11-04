@@ -21,7 +21,7 @@ bash /tmp/install-agent-cockpit.sh --channel dev
 
 ## Runtime Requirements
 
-Manual development installs require Node.js 22+. The macOS release installer
+Manual development installs require Node.js 22.12.0+. The macOS release installer
 can install a private Node.js runtime automatically when Node/npm are missing or
 too old.
 

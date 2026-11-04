@@ -4,7 +4,10 @@ import fs from 'fs';
 import os from 'os';
 import path from 'path';
 import { CliProfileAuthService, redactCliAuthText, type CliAuthJobSnapshot } from '../src/services/cliProfileAuthService';
+import { probeCopilotProfile } from '../src/services/backends/copilotProfileStatus';
 import type { CliProfile, Settings } from '../src/types';
+
+jest.mock('../src/services/backends/copilotProfileStatus', () => ({ probeCopilotProfile: jest.fn() }));
 
 class FakeChild extends EventEmitter {
   stdout = new EventEmitter();
@@ -26,6 +29,7 @@ describe('CliProfileAuthService', () => {
 
   beforeEach(() => {
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cli-profile-auth-'));
+    jest.mocked(probeCopilotProfile).mockResolvedValue({ authenticated: false, modelsAvailable: false, modelCount: 0 });
   });
 
   afterEach(() => {
@@ -184,12 +188,12 @@ describe('CliProfileAuthService', () => {
   });
 
   describe('checkProfile', () => {
-    test('checks Copilot availability without claiming authentication', async () => {
+    test('checks Copilot installation and native account status separately', async () => {
       const spawn = createSpawn(call => closeSoon(call, { stdout: 'GitHub Copilot CLI 1.0.103-0' }));
       const service = makeService(spawn);
       const profile = makeProfile({ harness: 'copilot', authMode: 'server-configured' });
       expect(await service.checkProfile(profile)).toMatchObject({
-        harness: 'copilot', available: true, authenticated: null, status: 'ok',
+        harness: 'copilot', available: true, authenticated: false, status: 'not-authenticated', modelsAvailable: false,
       });
       expect(spawn).toHaveBeenCalledWith(path.join(tmpDir, 'copilot'), ['--version'], expect.any(Object));
       await expect(service.startAuth(profile)).rejects.toThrow('Remote authentication is not supported for GitHub Copilot');
@@ -200,6 +204,67 @@ describe('CliProfileAuthService', () => {
       expect(await service.checkProfile(makeProfile({ harness: 'copilot' }))).toMatchObject({
         available: true, authenticated: null, status: 'error', exitCode: 2,
       });
+    });
+
+    test('reports successful Copilot catalog access separately from installation', async () => {
+      jest.mocked(probeCopilotProfile).mockResolvedValue({ authenticated: true, modelsAvailable: true, modelCount: 3 });
+      const service = makeService(createSpawn(call => closeSoon(call, { stdout: 'GitHub Copilot CLI 1.0.105' })));
+      expect(await service.checkProfile(makeProfile({ harness: 'copilot' }))).toMatchObject({
+        available: true, authenticated: true, status: 'ok', modelsAvailable: true, modelCount: 3,
+        output: expect.stringContaining('model catalog access verified'),
+      });
+      await service.shutdown();
+    });
+
+    test('preserves authenticated but denied Copilot access and redacts diagnostics', async () => {
+      jest.mocked(probeCopilotProfile).mockResolvedValue({ authenticated: true, modelsAvailable: false, modelCount: 0, modelListError: 'HTTP 403; Bearer fixture-secret' });
+      const service = makeService(createSpawn(call => closeSoon(call, { stdout: 'Copilot 1.0.105' })));
+      const result = await service.checkProfile(makeProfile({ harness: 'copilot' }));
+      expect(result).toMatchObject({ available: true, authenticated: true, status: 'error', modelsAvailable: false, modelCount: 0, modelListError: 'HTTP 403; Bearer [REDACTED]' });
+      expect(JSON.stringify(result)).not.toContain('fixture-secret');
+      await service.shutdown();
+    });
+
+    test('an SDK failure does not turn installed Copilot into a missing CLI or usable catalog', async () => {
+      jest.mocked(probeCopilotProfile).mockRejectedValue(new Error('Unsupported protocol'));
+      const service = makeService(createSpawn(call => closeSoon(call, { stdout: 'Copilot installed' })));
+      expect(await service.checkProfile(makeProfile({ harness: 'copilot' }))).toMatchObject({ available: true, authenticated: null, status: 'error', modelsAvailable: false, modelCount: 0, error: 'Unsupported protocol' });
+      await service.shutdown();
+    });
+
+    test('shutdown aborts native Copilot checks, waits for cleanup, and blocks later work', async () => {
+      let started!: () => void;
+      const checking = new Promise<void>(resolve => { started = resolve; });
+      jest.mocked(probeCopilotProfile).mockImplementation((_profile, signal) => new Promise((_resolve, reject) => {
+        signal.addEventListener('abort', () => { setTimeout(() => reject(new Error('Probe cancelled after cleanup')), 20); }, { once: true });
+        started();
+      }));
+      const service = makeService(createSpawn(call => closeSoon(call, { stdout: 'Copilot installed' })));
+      const pending = service.checkProfile(makeProfile({ harness: 'copilot' }));
+      await checking;
+      let stopped = false;
+      const ending = service.shutdown().then(() => { stopped = true; });
+      await Promise.resolve();
+      expect(stopped).toBe(false);
+      await ending;
+      expect(await pending).toMatchObject({ available: true, status: 'error', error: 'Probe cancelled after cleanup' });
+      expect(await service.checkProfile(makeProfile({ harness: 'copilot' }))).toMatchObject({ status: 'error', error: expect.stringContaining('shutting down') });
+      await expect(service.startAuth(makeProfile())).rejects.toThrow('shutting down');
+    });
+
+    test('a version check completing after shutdown cannot start a new SDK worker', async () => {
+      let finish!: () => void;
+      let started!: () => void;
+      const checking = new Promise<void>(resolve => { started = resolve; });
+      const service = makeService(createSpawn(call => { finish = () => closeSoon(call, { stdout: 'Copilot installed' }); started(); }));
+      const probe = jest.mocked(probeCopilotProfile);
+      probe.mockClear();
+      const pending = service.checkProfile(makeProfile({ harness: 'copilot' }));
+      await checking;
+      await service.shutdown();
+      finish();
+      expect(await pending).toMatchObject({ available: true, status: 'error', error: expect.stringContaining('shutting down') });
+      expect(probe).not.toHaveBeenCalled();
     });
 
     test('parses noisy Claude auth JSON with loggedIn=true', async () => {
@@ -410,7 +475,7 @@ describe('CliProfileAuthService', () => {
       const first = await service.startAuth(makeProfile({ id: 'first', name: 'First' }));
       const second = await service.startAuth(makeProfile({ id: 'second', name: 'Second' }));
 
-      service.shutdown();
+      await service.shutdown();
 
       expect(service.getJob(first.id)).toMatchObject({
         status: 'cancelled',

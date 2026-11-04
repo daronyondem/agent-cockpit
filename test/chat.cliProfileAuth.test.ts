@@ -5,6 +5,7 @@ import { EventEmitter } from 'events';
 import { createChatRouterEnv, destroyChatRouterEnv, type ChatRouterEnv } from './helpers/chatEnv';
 import { CliProfileAuthService, redactCliAuthText } from '../src/services/cliProfileAuthService';
 import { OpenCodeAdapter } from '../src/services/backends/opencode';
+import { CopilotAdapter } from '../src/services/backends/copilot';
 
 let env: ChatRouterEnv;
 const originalPlatformDescriptor = Object.getOwnPropertyDescriptor(process, 'platform');
@@ -62,6 +63,24 @@ async function waitForServiceJob(service: CliProfileAuthService, jobId: string):
 }
 
 describe('CLI profile auth endpoints', () => {
+  test('preserves denied Copilot access instead of replacing it with the curated fallback catalog', async () => {
+    const adapter = new CopilotAdapter();
+    env.backendRegistry.register(adapter);
+    const metadata = jest.spyOn(adapter, 'getMetadata');
+    const check = jest.spyOn(CliProfileAuthService.prototype, 'checkProfile').mockResolvedValue({
+      profileId: 'copilot-denied', harness: 'copilot', command: 'copilot', available: true,
+      authenticated: true, status: 'error', output: 'Credentials found; catalog unavailable.',
+      modelsAvailable: false, modelCount: 0, modelListError: 'HTTP 403', error: 'HTTP 403',
+    });
+    try {
+      await addProfile({ id: 'copilot-denied', name: 'Copilot denied', harness: 'copilot', authMode: 'server-configured', createdAt: '', updatedAt: '' });
+      const response = await env.request('POST', '/api/chat/cli-profiles/copilot-denied/test');
+      expect(response.status).toBe(200);
+      expect(response.body.result).toMatchObject({ available: true, authenticated: true, modelsAvailable: false, modelCount: 0, modelListError: 'HTTP 403' });
+      expect(metadata).not.toHaveBeenCalled();
+    } finally { check.mockRestore(); metadata.mockRestore(); }
+  });
+
   test('checks an account profile and creates a default config directory', async () => {
     const command = writeExecutable('fake-claude-status.sh', [
       '#!/bin/sh',
@@ -615,7 +634,7 @@ describe('CLI profile auth endpoints', () => {
     const first = await service.startAuth(profile);
     await expect(service.startAuth(profile)).rejects.toThrow('Authentication is already running');
     service.cancelJob(first.id);
-    service.shutdown();
+    await service.shutdown();
   });
 
   test('fails an auth job when final status never verifies', async () => {
@@ -650,7 +669,7 @@ describe('CLI profile auth endpoints', () => {
     expect(job.status).toBe('failed');
     expect(job.error).toContain('did not verify before timeout');
     expect(job.error).toContain('not logged in');
-    service.shutdown();
+    await service.shutdown();
   });
 
   test('fails a Claude auth job when final status JSON still reports logged out', async () => {
@@ -685,7 +704,7 @@ describe('CLI profile auth endpoints', () => {
     expect(job.status).toBe('failed');
     expect(job.error).toContain('did not verify before timeout');
     expect(job.error).toContain('"loggedIn":false');
-    service.shutdown();
+    await service.shutdown();
   });
 
   test('fails a long-running auth job after timeout', async () => {
@@ -715,7 +734,7 @@ describe('CLI profile auth endpoints', () => {
 
     expect(job.status).toBe('failed');
     expect(job.error).toContain('authentication timed out');
-    service.shutdown();
+    await service.shutdown();
   });
 
   test('redacts tokens from auth output', () => {

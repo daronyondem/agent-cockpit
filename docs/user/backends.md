@@ -130,19 +130,19 @@ npm install -g @github/copilot
 ```
 
 Run `copilot login` (or start `copilot` and use `/login`) to sign in
-with your GitHub account. Agent Cockpit reuses that CLI login from `~/.copilot`;
-it checks availability with `copilot --version` but does not manage the login
-itself. Use the **Check GitHub Copilot** button on the profile to confirm the
-CLI is available.
-This does not check credentials, subscription entitlement, account identity, or
-model permissions. Multiple named profiles still share the same terminal login;
-they are not independent accounts.
+with your GitHub account. Agent Cockpit reuses that CLI login from `~/.copilot`.
+Use **Check GitHub Copilot** on the profile to check installation,
+credentials and model catalog access. Credentials can be recognized while
+catalog access is denied; Settings reports that distinction and the returned
+error. This check does not run paid inference or prove access to every model.
+Login remains a terminal operation. Multiple named profiles still share the
+same terminal login; they are not independent accounts.
 
 Agent Cockpit talks to GitHub Copilot through non-interactive runs
 (`copilot -p <prompt> --output-format json`), streams visible thinking and tool
-activity, and resumes later turns through Copilot session IDs. Because the CLI
-exposes no machine-readable model listing, Agent Cockpit ships a curated catalog
-of Copilot's Claude and GPT model identifiers. The default **auto** choice lets
+activity, and resumes later turns through Copilot session IDs. The chat picker
+still uses a curated catalog of Copilot's Claude and GPT model identifiers.
+The default **auto** choice lets
 Copilot select an available model; explicit choices depend on your subscription
 and administrator policy. Reasoning effort is available for explicit reasoning
 models, not auto, Haiku, or the unverified Gemini catalog entry. The catalog is
@@ -166,9 +166,11 @@ Text-only one-shot jobs, such as title generation, run with no tools exposed.
 CLI updates stay under Agent Cockpit's update controls rather than being
 downloaded implicitly during a chat turn.
 Non-npm installations offer **Run updater**, but do not receive background
-update-available notifications. The native suite covers direct adapter
-transport; full Memory/KB/Context/Routine workflows and desktop/mobile browser
-parity still need end-to-end verification with Copilot.
+update-available notifications. Native local-model checks cover adapter
+transport and Memory/Context workflows on macOS. Desktop/mobile lifecycle
+browser cases pass on macOS and Ubuntu. KB/Routine coverage uses executable
+fixtures; hosted account/model behavior and native Windows CLI qualification
+remain separate work.
 
 ## Backend Switching
 

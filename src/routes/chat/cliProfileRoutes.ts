@@ -102,7 +102,7 @@ export function createCliProfileRouter(opts: CliProfileRoutesOptions): express.R
       try {
         const runtime = await chatService.resolveCliProfileRuntime(profile.id);
         const adapter = backendRegistry.get(runtime.backendId);
-        if (adapter) {
+        if (adapter && runtime.backendId !== 'copilot') {
           const metadata = await adapter.getMetadata({ cliProfile: runtime.profile });
           const modelCount = Array.isArray(metadata.models) ? metadata.models.length : 0;
           result.modelsAvailable = modelCount > 0;

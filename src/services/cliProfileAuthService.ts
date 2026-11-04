@@ -8,6 +8,7 @@ import { resolveCodexCliRuntime } from './backends/codex';
 import { resolveOpenCodeCliRuntime } from './backends/opencode';
 import { grokAuthenticationStatus, resolveGrokCliRuntime } from './backends/grokRuntime';
 import { resolveCopilotCliRuntime } from './backends/copilot';
+import { probeCopilotProfile } from './backends/copilotProfileStatus';
 import { buildCliCommandInvocation, type CliCommandResolution } from './cliCommandResolver';
 import { isSetupAccountCliProfile } from './cliProfiles';
 
@@ -73,6 +74,8 @@ export class CliProfileAuthService {
   private readonly _statusPollTimeoutMs: number;
   private readonly _statusPollIntervalMs: number;
   private readonly _jobs = new Map<string, { snapshot: CliAuthJobSnapshot; child?: ChildProcess; timeout?: NodeJS.Timeout }>();
+  private readonly _copilotChecks = new Map<AbortController, Promise<void>>();
+  private _closed = false;
 
   constructor(baseDir: string, opts: {
     spawn?: SpawnLike;
@@ -132,6 +135,7 @@ export class CliProfileAuthService {
 
   async checkProfile(profile: CliProfile): Promise<CliAuthCheckResult> {
     try {
+      if (this._closed) throw new Error('CLI authentication service is shutting down.');
       this._assertSupported(profile);
       const runtime = await this._runtimeFor(profile);
       if (profile.harness === 'grok-build') {
@@ -149,6 +153,11 @@ export class CliProfileAuthService {
       const result = await this._runCommand(invocation.command, invocation.args, runtime.env, 15_000);
       const rawOutput = [result.stdout, result.stderr].filter(Boolean).join('\n');
       const output = redactCliAuthText(rawOutput);
+      if (profile.harness === 'copilot' && result.code === 0) {
+        return this._checkCopilotAccess(profile, { profileId: profile.id, harness: profile.harness,
+          command: runtime.displayCommand || runtime.command, available: result.spawned,
+          authenticated: null, status: 'ok', output, exitCode: result.code });
+      }
       const status = interpretCliAuthStatus(profile, result.code, rawOutput);
       let onboardingOutput = '';
       if (status.authenticated === true) {
@@ -199,6 +208,7 @@ export class CliProfileAuthService {
   }
 
   async startAuth(profile: CliProfile): Promise<CliAuthJobSnapshot> {
+    if (this._closed) throw new Error('CLI authentication service is shutting down.');
     this._assertCanAuth(profile);
     for (const { snapshot } of this._jobs.values()) {
       if (snapshot.profileId === profile.id && snapshot.status === 'running') {
@@ -278,7 +288,8 @@ export class CliProfileAuthService {
     return this._cloneSnapshot(entry.snapshot);
   }
 
-  shutdown(): void {
+  shutdown(): Promise<void> {
+    this._closed = true;
     for (const [jobId, entry] of this._jobs) {
       if (entry.snapshot.status !== 'running') continue;
       if (entry.timeout) clearTimeout(entry.timeout);
@@ -287,6 +298,34 @@ export class CliProfileAuthService {
       entry.snapshot.error = 'Authentication cancelled because the server is shutting down.';
       entry.child?.kill('SIGTERM');
       this._jobs.set(jobId, { snapshot: entry.snapshot });
+    }
+    const checks = [...this._copilotChecks.values()];
+    for (const controller of this._copilotChecks.keys()) controller.abort();
+    return Promise.all(checks).then(() => {});
+  }
+
+  private async _checkCopilotAccess(profile: CliProfile, base: CliAuthCheckResult): Promise<CliAuthCheckResult> {
+    if (this._closed) return { ...base, status: 'error', modelsAvailable: false, modelCount: 0, error: 'CLI authentication service is shutting down.' };
+    const controller = new AbortController();
+    let settled!: () => void;
+    this._copilotChecks.set(controller, new Promise<void>(resolve => { settled = resolve; }));
+    const timer = setTimeout(() => controller.abort(), 15_000);
+    try {
+      const status = await probeCopilotProfile(profile, controller.signal);
+      const modelListError = status.modelListError ? redactCliAuthText(status.modelListError) : undefined;
+      const output = !status.authenticated ? 'Copilot account authentication is required. Sign in with copilot login.'
+        : status.modelsAvailable ? `Copilot credentials and model catalog access verified (${status.modelCount} models).`
+          : 'Copilot credentials were found, but model catalog access could not be verified.';
+      return { ...base, ...status, status: !status.authenticated ? 'not-authenticated' : status.modelsAvailable ? 'ok' : 'error',
+        output: [base.output, output].filter(Boolean).join('\n'),
+        ...(modelListError ? { modelListError, error: modelListError } : {}) };
+    } catch (error) {
+      const message = redactCliAuthText(error instanceof Error ? error.message : String(error));
+      return { ...base, status: 'error', modelsAvailable: false, modelCount: 0, modelListError: message, error: message };
+    } finally {
+      clearTimeout(timer);
+      this._copilotChecks.delete(controller);
+      settled();
     }
   }
 

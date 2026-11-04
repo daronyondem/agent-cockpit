@@ -20,6 +20,15 @@ Agent Cockpit supports multiple CLI backends. Not all backends expose the same m
 | Mid-turn user input (stdin) | Yes | No | Yes (`turn/steer`) | No | Yes, native interject | No | Claude Code writes additional lines to the CLI's stdin. Codex appends text to the in-flight turn via the JSON-RPC `turn/steer` request (no-op when no turn is active). Grok Build sends input through the native `_x.ai/interject` extension when no question or plan is pending. |
 | Interactive user questions | Yes (`AskUserQuestion`) | No | Yes (`item/tool/requestUserInput`) | No | Yes, native reverse RPC | No | Codex's user-question request is EXPERIMENTAL and v2-only. The cockpit surfaces only the first question (matching Claude Code's UI), and the user's answer is sent back via the request's JSON-RPC response (`{answers: {<questionId>: {answers: [text]}}}`) rather than as new turn input. Grok Build presents multiple native questions one at a time and returns all answers in one reverse-RPC response. GitHub Copilot disables questions with --no-ask-user. |
 
+Copilot profile checks use the official SDK through a Cockpit-owned headless
+process to distinguish installation, authenticated credentials and enabled-model
+catalog access. A denied catalog remains an error even when credentials are
+recognized. This does not populate the chat picker, perform inference or manage
+login; named profiles still share terminal auth. Chat and restricted one-shots
+continue to use JSONL. The SDK foundation's native session/question/steering/child
+tests do not enable those controls in the table above. See the
+[versioned evaluation](docs/research/copilot-sdk-parity-evaluation.md).
+
 ## Codex: feature-flag and deferred-work tracker
 
 `codex features list` exposes feature flags that gate certain capabilities. Some of those flags affect cockpit features; this table records the cockpit's stance on each so we can revisit when Codex's defaults change.

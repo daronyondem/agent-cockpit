@@ -106,7 +106,7 @@ Conversation upload image normalization is owned by focused chat modules rather 
 | `getSettings()` | Returns settings from disk or defaults. Fresh defaults have no default backend/profile and an empty CLI profile list. Persisted legacy `defaultBackend` values are migrated in memory to a matching server-configured profile. If enabled profiles exist but no default is selected, the first enabled profile is promoted as `defaultCliProfileId`. Persisted Welcome setup account profiles (`setup-codex-account*`, `setup-claude-code-account*`) are migrated at this boundary by removing `configDir` plus auth-home env keys (`CODEX_HOME`, `CLAUDE_CONFIG_DIR`) and saving the stripped settings so stale private setup auth cannot survive. |
 | `saveSettings(settings)` | Normalizes CLI profiles, keeps `defaultBackend` synchronized with a valid `defaultCliProfileId`, promotes the first enabled CLI profile when no default is selected, aligns Memory/KB/Workspace Context profile selections with legacy backend mirrors, clamps Workspace Context scan and maintenance intervals/concurrency, migrates legacy `contextMap` settings into `workspaceContext`, forces Kiro profiles to self-configured mode with no runtime overrides, strips setup account profile auth homes as described above, writes settings to disk, and returns the normalized settings. |
 
-`src/services/cliProfileAuthService.ts` owns remote account-auth jobs for CLI profiles. It supports Codex and Claude Code account profiles only; self-configured profiles are treated as already managed on the server, and Kiro remains unsupported until it has a safe dedicated profile/config directory. `profileWithAuthDefaults(settings, profileId)` looks up the profile and, when an explicit non-setup account profile has no `configDir`, assigns a deterministic directory under `data/cli-profiles/<slug>-<sha1>/` so future runtime spawns and the auth job use the same isolated home. For Welcome setup account profiles, the same helper removes stale `configDir`, `CODEX_HOME`, and `CLAUDE_CONFIG_DIR` values instead of assigning a private directory. `checkProfile(profile)` runs the harness status command (`codex login status` or `claude auth status --json`) with the profile command/env/config directory and returns availability/authentication status plus redacted output; Codex is exit-code based, while Claude Code parses the JSON status body and requires `loggedIn: true` so a logged-out exit-0 response does not become a false verified state. On Windows those commands are built from the shared CLI resolver, so installer-managed Codex uses `node.exe <installDir>\cli-tools\node_modules\@openai\codex\bin\codex.js ...` and installer-managed Claude uses the package `claude.exe` before any npm `.cmd` shim fallback. The route-level `/cli-profiles/:id/test` wrapper also asks the registered harness adapter for `getMetadata({ cliProfile })` so the profile-specific model catalog is warmed/read during the check. `startAuth(profile)` starts one in-memory job per profile using `codex login --device-auth` or `claude auth login --claudeai`, captures redacted stdout/stderr/info/exit events, and leaves recent job snapshots pollable by ID. A running auth job has a 15-minute timeout; timeout marks it `failed`, records an actionable message, and sends `SIGTERM` to the login process. When the login process exits successfully, the service polls the harness status command before marking the job `succeeded`; Claude Code polling also requires `loggedIn: true`. Status timeout, nonzero status, or repeated logged-out Claude JSON leaves the job `failed` with the last redacted status output. `cancelJob(jobId)` marks a running job cancelled and sends `SIGTERM`; `shutdown()` cancels any running auth jobs during server shutdown.
+`src/services/cliProfileAuthService.ts` owns remote account-auth jobs for CLI profiles. It supports Codex and Claude Code account profiles only; self-configured profiles are treated as already managed on the server, and Kiro remains unsupported until it has a safe dedicated profile/config directory. `profileWithAuthDefaults(settings, profileId)` looks up the profile and, when an explicit non-setup account profile has no `configDir`, assigns a deterministic directory under `data/cli-profiles/<slug>-<sha1>/` so future runtime spawns and the auth job use the same isolated home. For Welcome setup account profiles, the same helper removes stale `configDir`, `CODEX_HOME`, and `CLAUDE_CONFIG_DIR` values instead of assigning a private directory. `checkProfile(profile)` runs the harness status command (`codex login status` or `claude auth status --json`) with the profile command/env/config directory and returns availability/authentication status plus redacted output; Codex is exit-code based, while Claude Code parses the JSON status body and requires `loggedIn: true` so a logged-out exit-0 response does not become a false verified state. On Windows those commands are built from the shared CLI resolver, so installer-managed Codex uses `node.exe <installDir>\cli-tools\node_modules\@openai\codex\bin\codex.js ...` and installer-managed Claude uses the package `claude.exe` before any npm `.cmd` shim fallback. The route-level `/cli-profiles/:id/test` wrapper also asks the registered harness adapter for `getMetadata({ cliProfile })` so the profile-specific model catalog is warmed/read during the check, except for Copilot: its owned SDK check supplies native credential/catalog results, which static fallback metadata must not overwrite. `startAuth(profile)` starts one in-memory job per profile using `codex login --device-auth` or `claude auth login --claudeai`, captures redacted stdout/stderr/info/exit events, and leaves recent job snapshots pollable by ID. A running auth job has a 15-minute timeout; timeout marks it `failed`, records an actionable message, and sends `SIGTERM` to the login process. When the login process exits successfully, the service polls the harness status command before marking the job `succeeded`; Claude Code polling also requires `loggedIn: true`. Status timeout, nonzero status, or repeated logged-out Claude JSON leaves the job `failed` with the last redacted status output. `cancelJob(jobId)` marks a running job cancelled and sends `SIGTERM`; `shutdown()` closes admission, cancels running auth jobs, aborts active Copilot SDK checks and returns a promise that resolves after those checks clean up. Copilot checks first verify installation with `--version`, then distinguish native authentication from enabled-model catalog access; guided login and account isolation remain unsupported. See the Copilot SDK runtime section below.
 
 `src/routes/chat/cliProfileRoutes.ts` also exposes Welcome/setup auth wrappers at `/cli-profiles/setup-auth/:harness/test` and `/cli-profiles/setup-auth/:harness/start` ([ADR-0060](adr/0060-use-cli-profile-auth-for-setup-login.md), [ADR-0064](adr/0064-use-system-cli-auth-for-welcome-setup.md), [ADR-0065](adr/0065-normalize-setup-profile-auth-homes-at-settings-boundary.md)). These routes intentionally do not call `profileWithAuthDefaults()`: for `codex` and `claude-code`, they reuse the first enabled system-home account profile for the harness or create a first-run account profile (`setup-codex-account` / `setup-claude-code-account`) without `configDir`, then delegate to `checkProfile()` or `startAuth()`. Existing setup profiles from earlier releases that still have generated auth homes are migrated by settings normalization and by the direct profile-auth helper before any check/job so Welcome auth uses the user's normal CLI home and matches terminal `codex` / `claude` behavior no matter whether the UI calls the setup-auth route or the direct profile route; setup-auth route selection also ignores non-setup account profiles that still have `configDir`, `CLAUDE_CONFIG_DIR`, or `CODEX_HOME` so explicit isolated profiles remain isolated. If the current default profile is that harness's server-configured profile, the created setup account profile becomes the default so the completed login is used by new conversations. On Windows, once system-home Claude Code auth verifies with `loggedIn: true`, `CliProfileAuthService` ensures the user's `%USERPROFILE%\.claude.json` contains `hasCompletedOnboarding: true`; this repairs the case where `claude auth status --json` succeeds but plain terminal `claude` still shows Claude Code's first-run login method selector. The onboarding write is skipped for isolated profiles with `CLAUDE_CONFIG_DIR`. `kiro` remains a `400` response because Kiro has no dedicated safe config-home override.
 
@@ -1024,11 +1024,73 @@ archiving/deleting. This drain also applies after Stop has detached the runtime.
 
 **Initial scope and evidence:** Native questions, delegation, plan mode, and goal/autopilot exist in Copilot; the per-turn adapter deliberately does not integrate interactive controls or grouped child presentation. ACP is a possible future transport, not evidence of equivalent controls. Multiple named profiles share host auth and do not provide account isolation; `--version` checks only availability, not credentials, entitlement, model permissions, or account identity. Guided device login/account profiles, remaining quotas/resets/context occupancy, native memory import, and native sequential `runSessionShot()` are follow-ups. Sequential gleaning currently uses the base transcript-replay fallback and remains functional.
 
-The authenticated native suite verifies direct image/PDF transport, fixture MCP calls, text/stream/later-session resume, and usage. The separate `npm run e2e:copilot-workflows` suite exercises the production chat router, Memory stdio shim/HTTP routes, Copilot governance processor, durable Memory search, workspace update frames, Workspace Context maintenance, and a fresh chat reading managed Context instructions/files. Four native cases cover successful note/search and recall, Memory-to-Context consumption plus reference ingestion, rejected Memory governance without fallback files, and invalid Context output preserving the inbox until a successful retry. It runs the real CLI with an isolated temporary auth home and fixed local OpenAI-compatible model responses, without hosted accounts, live model reasoning, or CLI updates. The evidence is Copilot 1.0.105 on macOS arm64; each run prints CLI/OS/architecture/revision evidence. Normal CI runs `test/copilotMemoryContext.test.ts` against the real adapter, MCP shim, routes and stores with an executable JSONL fixture instead of requiring Copilot. It additionally checks duplicate governance, persisted metadata/reload, workspace isolation, disabled writes, reset token revocation, restricted governance versus tool-enabled Context arguments, unaccepted-note retention, processor failures, and cancellation/retry. These checks validate integration and persistence, not model quality or account/entitlement behavior.
+The authenticated native suite verifies direct image/PDF transport, fixture MCP calls, text/stream/later-session resume, and usage. The separate `npm run e2e:copilot-workflows` suite exercises the production chat router, Memory stdio shim/HTTP routes, Copilot governance processor, durable Memory search, workspace update frames, Workspace Context maintenance, and a fresh chat reading managed Context instructions/files. Six native cases cover successful note/search and recall, Memory-to-Context consumption plus reference ingestion, rejected Memory governance without fallback files, invalid Context output preserving the inbox until a successful retry, automatic scheduled maintenance, and reset finalization over the ended session. It runs the real CLI with an isolated temporary auth home and fixed local OpenAI-compatible model responses, without hosted accounts, live model reasoning, or CLI updates. The evidence is Copilot 1.0.105 on macOS arm64; each run prints CLI/OS/architecture/revision evidence. Normal CI runs `test/copilotMemoryContext.test.ts` against the real adapter, MCP shim, routes and stores with an executable JSONL fixture instead of requiring Copilot. It additionally checks duplicate governance, persisted metadata/reload, workspace isolation, disabled writes, reset token revocation, restricted governance versus tool-enabled Context arguments, unaccepted-note retention, processor failures, and cancellation/retry. These checks validate integration and persistence, not model quality or account/entitlement behavior.
 
-Full KB digestion/dreaming/gleaning, Routine execution, file downloads, actual server-restart/missing-session recovery, Context scheduling/session finalizers, and desktop/mobile browser interaction remain outside this Copilot workflow certification. Native installs expose a runnable updater without background latest-version discovery; npm installs support discovery with full prerelease semver precedence. Compatibility evidence must record CLI version, OS/architecture, and revision, without extending macOS evidence to native Windows/Linux.
+KB digestion/dreaming/gleaning and Routine workflows have separate executable-fixture integration coverage. Context scheduling/session finalizers are covered by both fixture and native suites; eight desktop/mobile lifecycle browser cases pass with real CLI/local replies on macOS and Ubuntu 24.04. File downloads and actual server-restart/missing-session recovery remain outside that native certification. Native installs expose a runnable updater without background latest-version discovery; npm installs support discovery with full prerelease semver precedence. Compatibility evidence must record CLI version, OS/architecture, and revision, without extending macOS evidence to native Windows/Linux.
 
 **Memory:** GitHub Copilot has no confirmed native durable-memory directory that maps to Cockpit's `extractMemory(workspacePath)` / `getMemoryDir(workspacePath)` adapter API. The Copilot adapter therefore inherits the base `null` native-memory behavior. Memory-enabled Copilot conversations use Cockpit's Memory MCP tools (`memory_search` / `memory_note`) for durable workspace memory.
+
+### Copilot SDK runtime foundation
+
+`copilotRuntime.ts` owns the shared CLI command/environment resolver;
+`copilot.ts` preserves its existing resolver/type re-exports. Runtime identity
+continues to hash profile ID, requested command and profile environment, with
+the existing server-configured/shared-auth behavior unchanged.
+
+`copilotSdkRuntime.ts` introduces `startCopilotSdkRuntime(runtime, workingDir,
+{ abortSignal?, startupTimeoutMs? })`. It returns the official SDK client, owned
+ChildProcess, a `closed: Promise<Error>`, and an idempotent awaited `stop()`.
+The pinned SDK is 1.0.28, with CLI 1.0.105/protocol 3 native evidence; the app's
+Node minimum is 22.12.0 to satisfy that dependency. Dynamic import preserves the
+server's CommonJS build while loading the SDK's ESM declarations/runtime.
+
+Launch the resolved CLI through `spawnCopilotProcess` with `--headless
+--no-auto-update --log-level none`, ignored stdin and piped stdout/stderr. Set a
+fresh random `COPILOT_CONNECTION_TOKEN`, overriding an inherited value. Read the
+announced port from a bounded 8192-character stdout tail; connect only to
+`127.0.0.1:<port>` through SDK `RuntimeConnection.forUri`, supplying the same
+token. SDK default/bundled and in-process runtime selection are never used.
+The SDK does not spawn a second CLI. Existing POSIX ownership and Windows Job
+Object launch/argument/stdio behavior remain unchanged.
+
+Port discovery and protocol handshake have separate 15-second default deadlines.
+Already-aborted calls do not spawn. Exit/error/cancellation resolves `closed`
+immediately, even when descendants retain output pipes, and initiates awaited
+cleanup. Startup failures always drain the scope. Stop removes its abort
+listener, permits at most one second for SDK disconnect, awaits process-tree
+termination, and bounds SDK force-close to one second. CLI stderr and inspected
+environments are not retained in this layer.
+
+`copilotProfileStatus.ts` uses this connection for profile checks. After the
+existing installation/version probe succeeds, query `getAuthStatus()`. A native
+`isAuthenticated:false` returns `authenticated:false`, `modelsAvailable:false`,
+and `modelCount:0` without querying models. For authenticated credentials, call
+`listModels()` and count entries whose policy state is not `disabled`. A
+nonempty list verifies catalog access; an empty list reports no enabled models.
+Catalog errors retain `authenticated:true` and report unavailable models rather
+than relabeling the user logged out. Native HTTP errors are reduced to their
+status/body (without response headers), then redacted by the auth service.
+Every outcome awaits runtime cleanup.
+
+`CliProfileAuthService` bounds the complete native check with a 15-second abort
+timer and tracks its completion separately from login jobs. `shutdown()` closes
+admission synchronously, aborts checks, cancels login jobs, and returns a promise
+that the chat router awaits before completing shutdown. A version probe that
+finishes after shutdown cannot start a headless process. SDK/transport failure
+preserves the successful installation result with unknown authentication and an
+error; it must not imply missing credentials. `/cli-profiles/:id/test` skips
+Copilot's static adapter metadata warm-up so curated fallback models cannot
+overwrite denied or failed native catalog results. The existing response fields
+and persistence formats are unchanged; checks do not populate the chat picker.
+
+Existing user chat and processor one-shots still use the verified JSONL adapter,
+with their existing capabilities. Settings distinguishes authenticated
+credentials with unavailable catalog access. Mobile has no account-management
+surface, new assets or stream-frame changes in this step. Five native SDK cases
+exercise local-provider sessions directly, including resuming a JSONL-created
+session with the same native ID and prior history; these do not certify browser
+controls or hosted-account access. See [ADR-0098](adr/0098-connect-copilot-interactive-sessions-through-an-owned-sdk-runtime.md)
+and the [versioned evaluation](research/copilot-sdk-parity-evaluation.md).
 
 ### ClaudeCodeAdapter (`src/services/backends/claudeCode.ts`)
 
@@ -1405,8 +1467,11 @@ Production-channel sequence:
    `server.ts`, then atomically rename it to the manifest `packageRoot`.
 7. Resolve the release-required Node major from
    `manifest.requiredRuntime.node.minimumMajor`, falling back to the extracted
-   release's `package.json` `engines.node`, then to Node 22. If the current
-   runtime already satisfies the major, record a `verify Node.js runtime` step;
+   release's `package.json` `engines.node`, then to Node 22. Evaluate the full
+   `>=major[.minor[.patch]]` engine floor through `nodeRuntimeRequirement.ts`;
+   do not accept Node 22.11 for a release requiring >=22.12.0. Legacy manifests
+   with only a major remain valid. If the current runtime satisfies the floor,
+   record a `verify Node.js runtime` step;
    installer-owned Windows runtimes must also contain `node.exe`, `npm.cmd`,
    `npx.cmd`, and npm's `npm-cli.js`, `npx-cli.js`, and `npm-prefix.js`
    entrypoints, and must be able to report both Node and npm versions through
@@ -1588,7 +1653,7 @@ does not execute real local CLIs.
 }
 ```
 
-Required checks currently cover Node.js 22+, npm, local PM2, writable
+Required checks currently cover Node.js 22.12.0+, npm, local PM2, writable
 `<AGENT_COCKPIT_DATA_DIR>`, and the desktop V2 build shell at
 `public/v2-built/index.html`. Optional/warning checks cover app-directory
 writability for future updates, platform user-session startup registration,

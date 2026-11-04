@@ -6,6 +6,7 @@ import { useDialog } from '../dialog.jsx';
 import { useToasts } from '../toast.jsx';
 import { CliUpdateStore } from '../cliUpdateStore.js';
 import { cliConfigDirField } from './cliProfileConfigDir.js';
+import { cliProfileAuthStateLabel as authStateLabel } from './cliProfileAuthState.js';
 
 const MigrationTab = React.lazy(() => import('./settingsMigrationTab.jsx').then(mod => ({ default: mod.MigrationTab })));
 const ArchivedWorkspacesPanel = React.lazy(() => import('./archivedWorkspaces.jsx').then(mod => ({ default: mod.ArchivedWorkspacesPanel })));
@@ -1175,19 +1176,6 @@ function CliProfilesTab({ settings, backends, onPatch, onSave, saving, onValidat
     } finally {
       setProfileAuthBusy(profile.id, false);
     }
-  }
-
-  function authStateLabel(state){
-    if (!state) return 'not checked';
-    if (state.message) return state.message;
-    if (state.error) return 'error';
-    if (state.kind === 'check' && state.result) {
-      if (state.result.authenticated === true) return 'authenticated';
-      if (state.result.status === 'not-authenticated') return 'not authenticated';
-      return state.result.status || 'checked';
-    }
-    if (state.job) return state.job.status;
-    return state.status || 'unknown';
   }
 
   function authStateText(state){

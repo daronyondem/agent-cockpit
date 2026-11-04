@@ -170,7 +170,7 @@ This has three important consequences:
 
 ## Prerequisites
 
-- Node.js 22+ for manual development installs. The macOS, Linux, and Windows
+- Node.js 22.12.0+ for manual development installs. The macOS, Linux, and Windows
   release installers can install a private Node.js runtime automatically when
   Node/npm are missing.
 - At least one CLI backend installed and authenticated on the same machine:
