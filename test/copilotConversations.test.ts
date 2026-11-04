@@ -53,6 +53,32 @@ describe('Copilot SDK conversation ownership through an executable RPC peer', ()
     expect(alive(peer.calls()[0].pid)).toBe(false);
   }, 15000);
 
+  test('passes explicit uploads through SDK send on first and recovered turns', async () => {
+    for (const recovered of [false, true]) {
+      const frames = await collect(conversations.sendMessage('Inspect.\n\n[Uploaded files: /tmp/a.png, /tmp/note.txt]', options({ model: 'gpt-6.1-sol',
+        ...(recovered ? { isNewSession: false, externalSessionId: 'missing-media' } : {}),
+      })).stream);
+      expect(frames.some(frame => frame.type === 'error')).toBe(false);
+      const sent = peer.calls().filter(call => call.method === 'session.send').at(-1)!.params!;
+      expect(sent.attachments).toEqual([{ type: 'file', path: '/tmp/a.png', displayName: 'a.png' }, { type: 'file', path: '/tmp/note.txt', displayName: 'note.txt' }]);
+      if (!recovered) expect(sent.prompt).toBe('System instructions:\nfixture rules\n\nUser message:\nInspect.');
+      else expect(frames.some(frame => frame.type === 'session_recovery')).toBe(true);
+    }
+  }, 15000);
+
+  test('refuses unverified media before session creation or prompt execution', async () => {
+    const frames = await collect(conversations.sendMessage('[Uploaded files: /tmp/a.png]', options({ model: 'auto' })).stream);
+    expect(frames).toContainEqual({ type: 'error', error: expect.stringContaining('verified image input') });
+    expect(peer.calls().some(call => call.method === 'session.create' || call.method === 'session.send')).toBe(false);
+  }, 15000);
+
+  test('a native exit during a partial output frame closes the stream and its owned process', async () => {
+    const frames = await collect(conversations.sendMessage('PARTIAL_EXIT', options()).stream);
+    expect(frames).toContainEqual({ type: 'error', error: 'Copilot runtime exited (7).', source: 'transport' });
+    expect(frames.at(-1)).toEqual({ type: 'done' });
+    expect(alive(peer.calls()[0].pid)).toBe(false);
+  }, 15000);
+
   test('resumes the persisted ID without replay and subtracts the saved cumulative usage', async () => {
     const transcript = path.join(dir, 'home', 'session-state', 'saved', 'events.jsonl');
     fs.mkdirSync(path.dirname(transcript), { recursive: true });
@@ -286,10 +312,10 @@ describe('Copilot SDK conversation ownership through an executable RPC peer', ()
     expect(frames).toContainEqual(expect.objectContaining({ type: 'usage', usage: expect.objectContaining({ inputTokens: 110, credits: 4 }) }));
   }, 15000);
 
-  test.each(['resume after child work', 'after send'])('never recovers/replays %s', async stage => {
+  test.each(['resume after child work', 'resume after artifact', 'after send'])('never recovers/replays %s', async stage => {
     const snapshot = jest.fn();
     const frames = await collect(conversations.sendMessage(stage === 'after send' ? 'FAIL_AFTER_SEND' : 'request', options({ isNewSession: false,
-      externalSessionId: stage === 'after send' ? 'saved' : 'missing-after-tool', sessionRecovery: { createSnapshot: snapshot } })).stream);
+      externalSessionId: stage === 'after send' ? 'saved' : stage === 'resume after artifact' ? 'missing-after-artifact' : 'missing-after-tool', sessionRecovery: { createSnapshot: snapshot } })).stream);
     expect(frames.some(frame => frame.type === 'error')).toBe(true);
     expect(snapshot).not.toHaveBeenCalled();
     expect(peer.calls().some(call => call.method === 'session.create')).toBe(false);

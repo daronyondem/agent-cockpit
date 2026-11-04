@@ -160,11 +160,20 @@ stale data and measurement times. When the native compatibility API does not
 establish quota units, the panel says so. Custom providers have no Copilot account
 quota. Account readings can lag current activity; missing data does not block chat.
 
-Image and PDF one-shot workflows, including attachment OCR and Knowledge Base
-image conversion, are sent through `copilot --attachment` with a multimodal
-explicitly verified `gpt-6.1-sol` selected. Auto routing and other unverified
-models are excluded from media-dependent processor choices; this conservative
-gate does not mean those models lack native media capabilities.
+Chat uploads use explicit SDK file attachments. Media requires a verified model
+and provider: custom OpenAI-compatible `gpt-6.1-sol` supports images, while
+custom Anthropic `claude-sonnet-4.6` supports images and PDFs. Hosted SDK PDF
+input remains gated pending separate qualification. Unsupported uploads keep
+your draft/files and show a selection error. Unknown/automatic selections do
+not inherit media from a model name or native vision flag.
+
+One-shot workflows, including attachment OCR and Knowledge Base image conversion,
+retain `copilot --attachment` and independently verified media selections.
+Native tools can return image/file bytes as persistent artifact cards with
+preview and download/share on desktop/mobile. Completed outputs survive Stop
+and reload; stopped desktop output may be inside its expandable progress group.
+Ordinary requested file delivery remains supported. Native image
+generation is unavailable.
 
 Text-only one-shot jobs, such as title generation, run with no tools exposed.
 CLI updates stay under Agent Cockpit's update controls rather than being

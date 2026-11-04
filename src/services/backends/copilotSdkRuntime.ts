@@ -4,6 +4,7 @@ import type { CopilotClient } from '@github/copilot-sdk' with { 'resolution-mode
 import { buildCliCommandInvocation } from '../cliCommandResolver';
 import { spawnCopilotProcess } from './copilotProcess';
 import type { CopilotCliRuntime } from './copilotRuntime';
+import { connectCopilotClient } from './copilotJsonRpc';
 
 export interface CopilotSdkRuntime {
   client: CopilotClient;
@@ -107,7 +108,7 @@ export async function startCopilotSdkRuntime(
     const port = await deadline(listeningPort(proc, closed), startupTimeoutMs, 'Copilot runtime did not announce a port.');
     if (stopping) throw new Error('Copilot runtime startup aborted.');
     client = new CopilotClient({ connection: RuntimeConnection.forUri(`127.0.0.1:${port}`, { connectionToken }) });
-    await deadline(Promise.race([client.start(), closed.then(error => { throw error; })]), startupTimeoutMs, 'Copilot SDK handshake timed out.');
+    await deadline(Promise.race([connectCopilotClient(client), closed.then(error => { throw error; })]), startupTimeoutMs, 'Copilot SDK handshake timed out.');
     if (stopping) throw new Error('Copilot runtime startup aborted.');
     return { client, process: proc, closed, stop };
   } catch (error) {

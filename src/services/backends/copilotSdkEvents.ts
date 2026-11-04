@@ -34,7 +34,10 @@ export function reduceCopilotSdkEvent(previous: CopilotSdkEventState, event: Ses
   if (!event.agentId && !data.parentToolCallId && (event.type === 'user.message' || event.type === 'assistant.turn_start' || output)) state.started = true;
   const work = reduceCopilotWork(state.work, event);
   state.work = work.state;
-  if (work.handled) return { state, events: work.events };
+  if (work.handled) {
+    if (work.events.some(frame => frame.type === 'artifact')) state.hasOutput = true;
+    return { state, events: work.events };
+  }
   if (event.agentId || data.parentToolCallId) return { state, events };
 
   switch (event.type) {

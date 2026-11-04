@@ -69,9 +69,19 @@ export const COPILOT_MODELS: ModelOption[] = COPILOT_MODEL_SEEDS.map(seed => ({
 /** Explicit environment models remain usable on self-configured compatibility paths. */
 export function copilotFallbackModels(env: NodeJS.ProcessEnv = {}): ModelOption[] {
   const configured = env.COPILOT_MODEL?.trim();
-  return configured && !COPILOT_MODELS.some(model => model.id === configured)
+  const models = configured && !COPILOT_MODELS.some(model => model.id === configured)
     ? [...COPILOT_MODELS, { id: configured, label: configured, family: 'custom', capabilities: { input: { text: true }, output: { text: true } } }]
     : COPILOT_MODELS;
+  if (!env.COPILOT_PROVIDER_BASE_URL) return models;
+  // 1.0.105 OpenAI-compatible providers send PDF file paths, not document bytes.
+  // Sonnet 4.6's Anthropic image/document transport is independently verified.
+  const anthropic = env.COPILOT_PROVIDER_TYPE === 'anthropic';
+  const openai = !env.COPILOT_PROVIDER_TYPE || env.COPILOT_PROVIDER_TYPE === 'openai';
+  return models.map(model => ({ ...model, capabilities: { ...model.capabilities, input: {
+    ...model.capabilities?.input,
+    image: (openai && model.id === 'gpt-6.1-sol') || (anthropic && model.id === 'claude-sonnet-4.6'),
+    pdf: anthropic && model.id === 'claude-sonnet-4.6',
+  } } }));
 }
 
 /** Runtime effort lists are authoritative; a model name is never effort evidence. */

@@ -930,3 +930,18 @@ See Section 4.6 (`CodexPlanUsageService`) for the spawn / RPC / kill semantics.
 | `503` | Temporarily unavailable | Reset admission: `{ error: "Session is resetting. Try again shortly." }` with `Retry-After: 1`; server shutdown: `{ error: "Server is shutting down." }` |
 
 Unauthenticated requests to `/api/*` return `401 { error: "Not authenticated" }` as JSON so the client can react without trying to parse an HTML login page. All other unauthenticated requests redirect to `/auth/login`.
+
+### Copilot upload admission and artifact frames
+
+`POST /conversations/:id/message` also validates trailing uploaded image/PDF
+paths for Copilot against the effective selected model and provider/transport.
+Unknown/unverified media returns actionable `400` before a user message or
+native turn is created. SDK PDF requires its separate transport evidence;
+legacy CLI one-shot eligibility does not enable it. Existing text-upload wire
+format, queue content, response shape and draft-retention behavior are unchanged.
+
+Native Copilot tool outputs use the existing `artifact` browser frame with the
+saved ConversationArtifact descriptor. No base64 payload or arbitrary resource
+URI crosses that frame boundary. Existing `GET /conversations/:id/files/:filename`
+serves stored images/PDFs/files for preview/download; workspace-file delivery
+continues through its existing scoped route. No new media endpoint is added.

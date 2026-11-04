@@ -9,7 +9,7 @@ class CopilotCatalogBackend extends MockBackendAdapter {
   async getMetadata(): Promise<BackendMetadata> {
     return { ...this.metadata, modelCatalog: { source: 'runtime' }, models: [
       { id: 'auto', label: 'Auto', family: 'auto', default: true },
-      { id: 'account-model', label: 'Account model', family: 'account', supportedEffortLevels: ['low', 'max'] },
+      { id: 'account-model', label: 'Account model', family: 'account', supportedEffortLevels: ['low', 'max'], capabilities: { input: { image: true, pdf: true } } },
       { id: 'text-model', label: 'Text model', family: 'text' },
     ] };
   }
@@ -57,6 +57,19 @@ describe('Copilot catalog HTTP admission', () => {
     const response = await env.request('POST', `/api/chat/conversations/${conv.id}/message`, { content: 'valid selection', effort: 'low' });
     expect(response.status).toBe(200);
     expect(adapter._lastOptions).toMatchObject({ model: 'account-model', effort: 'low', cliProfile: { id: 'catalog-profile' } });
+  });
+
+  test.each(['auto', 'text-model'])('refuses %s media before persistence or inference, and accepts a corrected selection', async model => {
+    const conv = await create(model);
+    const content = 'Please inspect.\n\n[Uploaded files: /tmp/upload.png]';
+    const response = await env.request('POST', `/api/chat/conversations/${conv.id}/message`, { content });
+    expect(response.status).toBe(400);
+    expect(response.body.error).toContain('verified image input');
+    expect(adapter._lastMessage).toBeNull();
+    expect((await env.chatService.getConversation(conv.id))?.messages).toEqual([]);
+    const retry = await env.request('POST', `/api/chat/conversations/${conv.id}/message`, { content, model: 'account-model' });
+    expect(retry.status).toBe(200);
+    expect(adapter._lastMessage).toContain(content);
   });
 
   test('an explicit effort clear removes the previous value when the new model has no effort control', async () => {

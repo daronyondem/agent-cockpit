@@ -24,6 +24,31 @@ describe('Copilot facade runtime dispatch and shared lifecycle', () => {
   });
   afterEach(async () => { await adapter.shutdown(); fs.rmSync(dir, { recursive: true, force: true }); });
 
+  test('one-shot media uses the configured effective model when selection is auto or omitted', async () => {
+    const profile = peer.profile({ COPILOT_PROVIDER_BASE_URL: 'http://127.0.0.1:1', COPILOT_MODEL: 'gpt-6.1-sol' });
+    for (const model of [undefined, 'auto']) {
+      expect(await adapter.runOneShot('media', { cliProfile: profile, model, attachments: [{ kind: 'image', path: '/tmp/image.png' }] })).toBe('jsonl:media');
+    }
+    const args = peer.calls().filter(call => call.method === 'spawn').map(call => call.args!);
+    expect(args).toHaveLength(2);
+    for (const invocation of args) {
+      expect(invocation).toContain('--attachment'); expect(invocation).toContain('/tmp/image.png');
+      expect(invocation[invocation.indexOf('--available-tools') + 1]).toBe('none');
+    }
+  }, 15000);
+
+  test('JSONL chat attaches verified media and refuses an automatic selection before launch', async () => {
+    const message = 'Inspect files.\n\n[Uploaded files: /tmp/image.png, /tmp/report.pdf, /tmp/notes.txt]';
+    const frames = await collect(adapter.sendMessage(message, { ...options(false), model: 'gpt-6.1-sol' }).stream);
+    expect(frames.some(frame => frame.type === 'text' && frame.content.includes(message))).toBe(true);
+    const args = peer.calls().find(call => call.method === 'spawn')!.args!;
+    expect(args.filter(arg => arg === '--attachment')).toHaveLength(2);
+    expect(args).toContain('/tmp/image.png'); expect(args).toContain('/tmp/report.pdf');
+    const refused = await collect(adapter.sendMessage(message, options(false)).stream);
+    expect(refused).toContainEqual({ type: 'error', error: expect.stringContaining('verified image input') });
+    expect(peer.calls().filter(call => call.method === 'spawn')).toHaveLength(1);
+  }, 15000);
+
   test('uses SDK for normal CLI profiles and explicit providers; preserves opaque command overrides', () => {
     expect(copilotChatTransport({ ...peer.profile(), command: 'copilot' })).toBe('sdk');
     expect(copilotChatTransport({ ...peer.profile(), command: undefined })).toBe('sdk');

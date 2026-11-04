@@ -1,6 +1,7 @@
 import fs from 'fs';
 import path from 'path';
 import type { CliProfile } from '../../src/types';
+import { copilotPng, copilotPdf } from './copilotMediaFixtures';
 
 /** Executable RPC peer, reached through the official SDK and real process scope. */
 export function writeCopilotSdkPeer(dir: string) {
@@ -51,6 +52,7 @@ net.createServer(socket => {
    if(process.env.COPILOT_FIXTURE_LEDGER==='resume-only') emit(params.sessionId,'session.usage_checkpoint',checkpoint);
    if(params.sessionId.startsWith('missing')) {
     if(params.sessionId==='missing-after-tool') emit(params.sessionId,'tool.execution_start',{toolCallId:'already-ran',toolName:'bash'},'child');
+    if(params.sessionId==='missing-after-artifact') emit(params.sessionId,'tool.execution_complete',{toolCallId:'already-output',success:true,result:{content:'',contents:[{type:'image',mimeType:'image/png',data:${JSON.stringify(copilotPng.toString('base64'))}}]}});
     emit(params.sessionId,'session.error',{message:'Session not found',errorType:'query'});
     throw new rpc.ResponseError(-32603,'Session not found');
    }
@@ -92,6 +94,11 @@ net.createServer(socket => {
    const id = params.sessionId;
    if(goal?.status==='active'){goal.turnCount++;saveGoal(id);}
    const prompt = params.prompt;
+   if(prompt.includes('PARTIAL_EXIT')) {
+    socket.write('Content-Length: 100000\\r\\n\\r\\n{"jsonrpc":"2.0",');
+    setTimeout(()=>process.exit(7),20);
+    return {messageId:'user-'+id};
+   }
    if(prompt.includes('ACK_BEFORE_START')) {
     record({method:'ack',sessionId:id});
     const timer=setInterval(()=>{if(fs.existsSync(release)){
@@ -104,6 +111,12 @@ net.createServer(socket => {
    if(prompt.includes('EARLY_IDLE')) emit(id,'session.idle');
    emit(id,'user.message',{content:prompt,messageId:'user-'+id,delivery:'idle'});
    emit(id,'assistant.turn_start',{turnId:'0'});
+   if(process.env.COPILOT_FIXTURE_ARTIFACTS==='1') {
+    emit(id,'tool.execution_start',{toolCallId:'native-media',toolName:'mcp__fixture__media_output'});
+    const result={content:'',contents:[{type:'image',data:${JSON.stringify(copilotPng.toString('base64'))},mimeType:'image/png'},{type:'resource',resource:{uri:'fixture:///report.pdf',mimeType:'application/pdf',blob:${JSON.stringify(copilotPdf().toString('base64'))}}}],binaryResultsForLlm:[{type:'image',data:${JSON.stringify(copilotPng.toString('base64'))},mimeType:'image/png'}]};
+    emit(id,'tool.execution_complete',{toolCallId:'native-media',success:true,result});
+    emit(id,'tool.execution_complete',{toolCallId:'native-media',success:true,result});
+   }
    if(prompt.includes('FAIL_AFTER_SEND')) {
     emit(id,'tool.execution_start',{toolCallId:'ran',toolName:'bash',arguments:{command:'synthetic'}},'child');
     emit(id,'session.error',{message:'Session not found',errorType:'query'});

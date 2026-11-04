@@ -331,3 +331,26 @@ and cancels its timer on unmount. Label stale account readings and unknown quota
 units; retain native percentage, unlimited and reset metadata. Account timestamps
 explicitly allow delayed service aggregation. Context persists through reload.
 Usage and account quota use separate collapsed disclosures to preserve chat/composer space. Expanded usage has two columns; quota uses full-width rows. Values wrap, and expanded contents scroll within 180px rather than truncating measurement times or unknown-unit labels. No manifest, service worker, PWA installation or public asset policy changes.
+
+### Copilot media and live artifacts
+
+The existing upload/send pipeline keeps its wire format and draft/file retention
+on an actionable media-admission `400`. SDK image/PDF eligibility is exact to
+the effective model and provider, with unknown transports gated server-side.
+PDF support is not implied by a vision flag.
+
+`chatStreamEvents.ts` accepts a stored descriptor from an `artifact` browser
+frame and emits `append-stream-artifact` plus removal of the writing placeholder.
+`useChatStreamConnection.ts` owns `streamArtifacts`; the pure `liveArtifacts.ts`
+append helper deduplicates by filename and sourceToolId without mutating prior
+state. Starting/replaying a stream, receiving its saved assistant message, or
+ending the stream clears live artifacts. Stale sockets/conversations retain the
+existing event guards. Saved assistant content blocks replace live cards, so
+reconnect/reload and Stop do not duplicate outputs.
+
+ChatScreen renders live artifact FileCards with the same artifact references,
+Preview and Share behavior as saved history. Artifact filename changes participate
+in scroll-follow signatures; cards alone keep the streaming response visible.
+Already-delivered files are persisted by the server before the frame is sent.
+Normal FILE_DELIVERY cards and the composer remain available. No PWA manifest,
+service-worker, static public/mobile, or installation behavior changes.

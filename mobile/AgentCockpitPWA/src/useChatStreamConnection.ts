@@ -11,8 +11,9 @@ import {
 } from './appModel';
 import { useVisibleStreamResume } from './useMobileLifecycle';
 import type { AgentCockpitAPI } from './api';
-import type { Conversation, ConversationListItem, PendingInteraction, StreamEvent, ThreadGoal, ToolActivity } from './types';
+import type { Conversation, ConversationArtifact, ConversationListItem, PendingInteraction, StreamEvent, ThreadGoal, ToolActivity } from './types';
 import { applyLiveToolFrame } from './liveToolActivities';
+import { appendLiveArtifact } from './liveArtifacts';
 
 type UseChatStreamConnectionOptions = {
   activeConversationRef: RefObject<Conversation | null>;
@@ -38,6 +39,7 @@ export function useChatStreamConnection(options: UseChatStreamConnectionOptions)
   const [isStreaming, setIsStreamingState] = useState(false);
   const [inputTurnId, setInputTurnId] = useState<string | null>(null);
   const [streamTools, setStreamTools] = useState<ToolActivity[]>([]);
+  const [streamArtifacts, setStreamArtifacts] = useState<ConversationArtifact[]>([]);
 
   resumeStreamConnectionRef.current = resumeStreamConnection;
 
@@ -49,7 +51,7 @@ export function useChatStreamConnection(options: UseChatStreamConnectionOptions)
   });
 
   function setIsStreaming(value: boolean) {
-    if (!value) { setInputTurnId(null); setStreamTools([]); }
+    if (!value) { setInputTurnId(null); setStreamTools([]); setStreamArtifacts([]); }
     setIsStreamingState(value);
     isStreamingRef.current = value;
   }
@@ -64,6 +66,7 @@ export function useChatStreamConnection(options: UseChatStreamConnectionOptions)
   function startStream(conversationID: string) {
     closeStreamSocket();
     setStreamTools([]);
+    setStreamArtifacts([]);
     setShowStreamPlaceholder(true);
     setIsStreaming(true);
     options.setActiveStreamIDs((current) => new Set(current).add(conversationID));
@@ -208,6 +211,12 @@ export function useChatStreamConnection(options: UseChatStreamConnectionOptions)
       case 'update-stream-tools':
         setStreamTools(current => applyLiveToolFrame(current, action.frame, Date.now()));
         break;
+      case 'clear-stream-artifacts':
+        setStreamArtifacts([]);
+        break;
+      case 'append-stream-artifact':
+        setStreamArtifacts(current => appendLiveArtifact(current, action.artifact));
+        break;
       case 'set-input-turn':
         setInputTurnId(action.turnId);
         break;
@@ -265,6 +274,7 @@ export function useChatStreamConnection(options: UseChatStreamConnectionOptions)
   return {
     streamText,
     streamTools,
+    streamArtifacts,
     setStreamText,
     showStreamPlaceholder,
     setShowStreamPlaceholder,

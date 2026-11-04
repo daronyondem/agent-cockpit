@@ -1,6 +1,7 @@
 import type { SessionEvent } from '@github/copilot-sdk' with { 'resolution-mode': 'import' };
 import type { StreamEvent, ToolOutcome } from '../../types';
 import { copilotToolStartEvents, copilotToolCompleteEvents } from './copilotTools';
+import { copilotToolArtifacts } from './copilotArtifacts';
 
 interface Tool { name: string; rawId: string; owner: string | null }
 interface Agent { id: string; cardId: string; rootCardId: string; rawId: string; ended: boolean; summary?: string }
@@ -88,7 +89,7 @@ export function reduceCopilotWork(previous: CopilotWorkState, event: SessionEven
         ...(agent ? { parentAgentId: agent.rootCardId } : {}) });
       events.push({ type: 'tool_outcomes', outcomes: [{ toolUseId: id, isError: true, outcome: 'failed', status: 'error',
         summary: summary(event.data.error?.message || event.data.result?.content || 'No native subagent lifecycle was reported.') }] });
-    } else events.push(...copilotToolCompleteEvents({ ...event.data, toolCallId: id, toolName: tool?.name }));
+    } else events.push(...copilotToolCompleteEvents({ ...event.data, toolCallId: id, toolName: tool?.name }), ...copilotToolArtifacts(event.data, id));
     state.tools.delete(id);
   }
   return result();

@@ -13,6 +13,7 @@ import type { SendMessageOptions, StreamEvent } from '../src/types';
 import { waitForCopilotPeer } from './helpers/copilotSdkPeer';
 import { addToUsage, emptyUsage } from '../src/services/chat/usageLedgerStore';
 import { CopilotQuotaCache } from '../src/services/backends/copilotQuota';
+import { copilotPng, copilotPdf, writeCopilotMediaTool } from './helpers/copilotMediaFixtures';
 
 const native = process.env.COPILOT_SDK_E2E === '1' ? describe : describe.skip;
 
@@ -21,7 +22,7 @@ native('real Copilot owned SDK runtime with fixed local model responses', () => 
   let runtime: CopilotSdkRuntime | undefined;
   let provider: http.Server;
   let baseUrl: string;
-  let scenario: 'text' | 'question' | 'questions' | 'steer' | 'delegate' | 'delegation' | 'wait' | 'goal';
+  let scenario: 'text' | 'question' | 'questions' | 'steer' | 'delegate' | 'delegation' | 'wait' | 'goal' | 'media';
   let goalDelegation: boolean;
   let delegationMode: 'parallel' | 'nested' | 'background' | 'error' | 'cancel';
   let releaseDelegate: (() => void) | undefined;
@@ -48,6 +49,15 @@ native('real Copilot owned SDK runtime with fixed local model responses', () => 
         const tools = (data.tools || []).map((tool: { function?: { name: string }; name?: string }) => tool.function || tool);
         const reply = (delta: object, finish = 'stop') => {
           res.writeHead(200, { 'Content-Type': 'text/event-stream' });
+          if (req.url?.split('?')[0].endsWith('/messages')) {
+            const emit = (type: string, payload: object) => res.write(`event: ${type}\ndata: ${JSON.stringify({ type, ...payload })}\n\n`);
+            emit('message_start', { message: { id: 'fixture', type: 'message', role: 'assistant', model: data.model, content: [], stop_reason: null, stop_sequence: null, usage: { input_tokens: 120, output_tokens: 0 } } });
+            emit('content_block_start', { index: 0, content_block: { type: 'text', text: '' } });
+            emit('content_block_delta', { index: 0, delta: { type: 'text_delta', text: 'SDK_MEDIA_OK' } });
+            emit('content_block_stop', { index: 0 });
+            emit('message_delta', { delta: { stop_reason: 'end_turn', stop_sequence: null }, usage: { output_tokens: 30 } });
+            emit('message_stop', {}); res.end(); return;
+          }
           for (const [part, reason] of [[delta, null], [{}, finish]]) res.write(`data: ${JSON.stringify({ id: `fixture-${requests.length}`, object: 'chat.completion.chunk', created: 1, model: 'gpt-4', choices: [{ index: 0, delta: part, finish_reason: reason }],
             ...(reason ? { usage: { prompt_tokens: 120, completion_tokens: 30, total_tokens: 150, prompt_tokens_details: { cached_tokens: 40 } } } : {}) })}\n\n`);
           res.end('data: [DONE]\n\n');
@@ -60,6 +70,11 @@ native('real Copilot owned SDK runtime with fixed local model responses', () => 
         const hasTool = messages.some(message => message.role === 'tool');
         const currentUserIndex = messages.reduce((last, message, index) => message.role === 'user' ? index : last, -1);
         const currentHasTool = messages.slice(currentUserIndex).some(message => message.role === 'tool');
+        if (scenario === 'media') {
+          const mediaTool = tools.find((tool: { name?: string }) => tool.name?.endsWith('media_output'));
+          if (!hasTool && mediaTool) call(mediaTool.name, {}); else say('SDK_MEDIA_OK');
+          return;
+        }
         if ((scenario === 'goal' || goalDelegation) && requests.length > 12) {
           res.writeHead(400, { 'Content-Type': 'application/json' });
           res.end(JSON.stringify({ error: { message: 'Goal fixture request deadline', type: 'invalid_request_error' } })); return;
@@ -180,6 +195,99 @@ native('real Copilot owned SDK runtime with fixed local model responses', () => 
     for (const frame of frames) if (frame.type === 'usage') addToUsage(total, frame.usage);
     return total;
   };
+
+  test('transports native SDK image bytes without file tools', async () => {
+    scenario = 'media';
+    const session = await runtime!.client.createSession({ ...config(), model: 'gpt-6.1-sol', availableTools: [] });
+    const image = path.join(dir, 'image.png');
+    fs.writeFileSync(image, copilotPng);
+    await session.send({ prompt: '', attachments: [{ type: 'file', path: image }] });
+    await waitForCopilotPeer(() => events.some(event => event.type === 'session.idle'));
+    expect(events.some(event => event.type === 'tool.execution_start')).toBe(false);
+    expect(requests).toHaveLength(1);
+    expect(JSON.stringify(requests[0])).toContain(`data:image/png;base64,${copilotPng.toString('base64')}`);
+  }, 30000);
+
+  test('exposes native MCP image and PDF output bytes', async () => {
+    scenario = 'media';
+    await runtime!.stop(); runtime = undefined;
+    fs.writeFileSync(path.join(nativeEnv.COPILOT_HOME!, 'mcp-config.json'), JSON.stringify({ mcpServers: {
+      'fixture-media': { type: 'local', command: process.execPath, args: [writeCopilotMediaTool(dir)], tools: ['*'] },
+    } }));
+    const adapter = new CopilotAdapter({ workingDir: dir });
+    try {
+      const frames = await collectConversation(adapter.sendMessage('SDK_MEDIA_OUTPUT', conversationOptions({ model: 'gpt-6.1-sol' })).stream);
+      expect(frames.some(frame => frame.type === 'error')).toBe(false);
+      const artifacts = frames.filter(frame => frame.type === 'artifact');
+      expect(artifacts).toHaveLength(2);
+      expect(artifacts).toMatchObject([{ mimeType: 'image/png', dataBase64: copilotPng.toString('base64') },
+        { mimeType: 'application/pdf', filename: 'report.pdf', dataBase64: copilotPdf().toString('base64') }]);
+    } finally { await adapter.shutdown(); }
+  }, 30000);
+
+  test('transports native PDF through an Anthropic provider without file tools', async () => {
+    scenario = 'media';
+    const session = await runtime!.client.createSession({ ...config(), model: 'claude-sonnet-4.6',
+      provider: { type: 'anthropic', baseUrl, apiKey: 'synthetic-local-key' }, availableTools: [] });
+    const pdf = path.join(dir, 'report.pdf'); fs.writeFileSync(pdf, copilotPdf());
+    await session.send({ prompt: 'SDK_MEDIA_PDF', attachments: [{ type: 'file', path: pdf }] });
+    await waitForCopilotPeer(() => events.some(event => event.type === 'session.idle'));
+    expect(events.some(event => event.type === 'tool.execution_start')).toBe(false);
+    expect(JSON.stringify(requests)).toContain(copilotPdf().toString('base64'));
+    events = [];
+    const image = path.join(dir, 'image.png'); fs.writeFileSync(image, copilotPng);
+    await session.send({ prompt: 'SDK_MEDIA_IMAGE', attachments: [{ type: 'file', path: image }] });
+    await waitForCopilotPeer(() => events.some(event => event.type === 'session.idle'));
+    expect(JSON.stringify(requests.at(-1))).toContain(copilotPng.toString('base64'));
+  }, 30000);
+
+  test('chat sends image attachments across cold resume and gates an OpenAI-provider PDF before model work', async () => {
+    scenario = 'media'; await runtime!.stop(); runtime = undefined;
+    const image = path.join(dir, 'chat.png'); fs.writeFileSync(image, copilotPng);
+    const adapter = new CopilotAdapter({ workingDir: dir });
+    const options = conversationOptions({ model: 'gpt-6.1-sol' });
+    try {
+      const first = await collectConversation(adapter.sendMessage(`SDK_MEDIA_CHAT\n\n[Uploaded files: ${image}]`, options).stream);
+      expect(first.some(frame => frame.type === 'error')).toBe(false);
+      const id = first.find(frame => frame.type === 'external_session')!.sessionId;
+      const second = await collectConversation(adapter.sendMessage(`[Uploaded files: ${image}]`, { ...options, isNewSession: false, externalSessionId: String(id) }).stream);
+      expect(second.some(frame => frame.type === 'error')).toBe(false);
+      expect(requests).toHaveLength(2);
+      for (const request of requests) expect(JSON.stringify(request)).toContain(`data:image/png;base64,${copilotPng.toString('base64')}`);
+      const refused = await collectConversation(adapter.sendMessage(`[Uploaded files: ${path.join(dir, 'report.pdf')}]`, options).stream);
+      expect(refused).toContainEqual({ type: 'error', error: expect.stringContaining('verified pdf input') });
+      expect(requests).toHaveLength(2);
+    } finally { await adapter.shutdown(); }
+  }, 30000);
+
+  test('chat sends PDF bytes through the verified Anthropic selection', async () => {
+    scenario = 'media'; await runtime!.stop(); runtime = undefined;
+    const pdf = path.join(dir, 'chat.pdf'); fs.writeFileSync(pdf, copilotPdf());
+    const options = conversationOptions({ model: 'claude-sonnet-4.6' });
+    options.cliProfile!.env = { ...options.cliProfile!.env, COPILOT_PROVIDER_TYPE: 'anthropic', COPILOT_PROVIDER_API_KEY: 'synthetic-local-key', COPILOT_MODEL: 'claude-sonnet-4.6' };
+    const adapter = new CopilotAdapter({ workingDir: dir });
+    try {
+      const frames = await collectConversation(adapter.sendMessage(`SDK_MEDIA_PDF\n\n[Uploaded files: ${pdf}]`, options).stream);
+      expect(frames.some(frame => frame.type === 'error')).toBe(false);
+      expect(requests).toHaveLength(1);
+      expect(JSON.stringify(requests[0])).toContain(copilotPdf().toString('base64'));
+    } finally { await adapter.shutdown(); }
+  }, 30000);
+
+  test('restricted one-shots transport a PDF through Anthropic with zero file tools', async () => {
+    scenario = 'media'; await runtime!.stop(); runtime = undefined;
+    const pdf = path.join(dir, 'one-shot.pdf'); fs.writeFileSync(pdf, copilotPdf());
+    const options = conversationOptions({ model: 'claude-sonnet-4.6' });
+    options.cliProfile!.env = { ...options.cliProfile!.env, COPILOT_PROVIDER_TYPE: 'anthropic', COPILOT_PROVIDER_API_KEY: 'synthetic-local-key', COPILOT_MODEL: 'claude-sonnet-4.6' };
+    const adapter = new CopilotAdapter({ workingDir: dir });
+    try {
+      expect(await adapter.runOneShot('SDK_MEDIA_ONESHOT', { model: options.model, cliProfile: options.cliProfile,
+        attachments: [{ path: pdf, kind: 'pdf' }], allowTools: false, timeoutMs: 20000 })).toBe('SDK_MEDIA_OK');
+      expect(requests).toHaveLength(1);
+      expect(JSON.stringify(requests[0])).toContain(copilotPdf().toString('base64'));
+      expect(requests[0].tools || []).toHaveLength(0);
+    } finally { await adapter.shutdown(); }
+  }, 30000);
 
   test('reports native context and credit availability without inventing an unauthenticated quota', async () => {
     await expect(runtime!.client.rpc.account.getQuota({})).rejects.toThrow();

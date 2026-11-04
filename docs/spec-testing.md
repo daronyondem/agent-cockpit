@@ -117,6 +117,7 @@ Test HTTP servers that are contacted through `127.0.0.1` bind explicitly to `127
 | `test/copilotCatalog.test.ts` | Pure account-model projection, exact SDK effort intersections, policy/duplicate filtering, conservative media, effective selection validation, cache TTL/bounds/copies/profile/env/executable/auth scope, failure provenance/redaction, timeout/late-start/shutdown cleanup and failed-cleanup admission barriers. |
 | `test/copilotCatalog.integration.test.ts` | Official SDK plus strict executable RPC peer: new account IDs/max effort reach native session config and restricted JSONL argv; cached discovery reuse/refresh; invalid IDs/efforts rejected before session/prompt creation; direct media gates; Stop/update drains during discovery. |
 | `test/chat.copilotCatalog.test.ts` | HTTP 400 for unavailable IDs/efforts before user-message/tool creation, saved selection preservation, exact effort persistence for newly discovered models, explicit effort clears and automatic-selection effort rejection. |
+| `test/copilotMedia.test.ts`, `test/copilotArtifacts.test.ts`, `test/chat.copilotArtifacts.test.ts` | Exact upload parsing and effective model/provider gates; conservative SDK PDF versus legacy CLI transport; canonical native bytes and overlapping-view deduplication; scoped delegated/root output, duplicate/late completion rejection; real SDK peer through production chat storage, cancellation and reload. Companion conversation/facade tests cover send attachments, recovery, JSONL flags, and configured-model one-shots. Mobile event tests cover live descriptor dedupe and saved/replay replacement. |
 | `test/copilotBackend.test.ts` | Metadata and current curated model catalog with default `auto`, no effort for auto/Haiku, image/PDF transport, resume capabilities, runtime command/env and Windows npm-loader resolution. Argument construction explicitly enables streaming, disables implicit updates, restricts no-tool calls with `--available-tools none`, and passes model/effort/media/MCP/resume flags. JSONL translation covers text/thinking/tools/outcomes, retained tool names when native completions omit them, Memory MCP names, and structured failures. Final-message reconstruction prefers complete text without duplication. Lifecycle regressions cover pre-start/in-flight cancellation, iterator cleanup, timeout/abort with clean child exit, structured failures on zero/nonzero process exits, split UTF-8 decoding, one missing-session recovery retry with a snapshot, and saved-checkpoint usage subtraction after adapter restarts. |
 | `test/copilotAdapterRuntime.test.ts` | Facade dispatch uses owned SDK for the normal CLI/visible providers and JSONL for opaque custom commands; restricted one-shots remain JSONL. Tests prevent fallback/replay after SDK errors, reject overlap across transports, await Stop before switching profile/transport, drain reset and reusable shutdown, release unstarted iterator admission, and block both paths after permanent shutdown. |
 | `test/copilotSdkRuntime.test.ts` | Official SDK connects to a real fixture JSON-RPC server owned by the existing process scope: split port announcement, invocation/cwd/UTF-8 env preservation, token handshake, idempotent cleanup, pre-start/live abort, port and handshake deadlines, invalid port, protocol mismatch, launcher exit and missing executable. Unexpected process exit and requested abort force-close the SDK connection before process cleanup rather than writing graceful detach requests to an ended socket; a live SDK spy verifies no graceful teardown is attempted. |
@@ -381,3 +382,58 @@ maintainability, 187-route spec drift and 97-ADR lint pass.
 Reports: native `copilot-sdk-compat-xj8cgU`, browser `cockpit-copilot-ui-A1P284`
 under the system temp directory. Reports preserve actual pre-commit revision
 `cb7d250` plus dirty state; they are not relabeled after committing.
+
+### Copilot media and artifact qualification
+
+Normal-CI tests now cover `copilotMedia.ts`, `copilotArtifacts.ts`, production
+chat artifact storage through an executable SDK peer, and mobile live artifact
+state/actions. Admission tests verify refusals before user-message persistence
+or tools. Facade/conversation tests verify explicit attachments, configured-model
+one-shots, missing-session recovery, conservative SDK PDF qualification, and
+JSONL compatibility flags. Repeated completions and overlapping native output
+views cannot duplicate a tool's bytes; late/unknown children cannot deliver them.
+
+The native SDK suite adds six fixed-provider cases: image-only input with no
+tools; MCP image/PDF bytes using normal native config discovery; Anthropic PDF
+and image byte transport without tools; image chat across cold resume plus PDF
+refusal; Anthropic chat PDF; and a restricted PDF one-shot with zero tools.
+Evidence uses selected CLI 1.0.105/SDK 1.0.28/Node 22.23.4/macOS arm64. Both raw
+model requests and projected bytes are checked, not just fixed reply text.
+
+The browser suite adds eight desktop/mobile cases: repeated image uploads and
+reload; a refused OpenAI-provider PDF with retained draft/files; native output
+plus FILE_DELIVERY; and output surviving Stop/reload. Downloads are byte-equal
+to original PNG/PDF fixtures and saved descriptors retain scoped tool IDs.
+Stopped desktop turns are expanded through their existing progress breadcrumb.
+Initial fixture-home and locator errors remain in their reports; the final
+qualification below identifies successful evidence separately. Hosted SDK PDF,
+real account/model judgment and native Windows/Linux SDK media remain unverified.
+
+Final review adds a completion-only artifact replay regression: a missing-session
+error after output must not snapshot/recover or submit another prompt. Both the
+pure projection and executable SDK peer regressions fail before the fix and pass
+after it. Open-handle diagnosis identified unused top-level native canvas import
+through chat upload normalization. Canvas now loads only for DNG previews that
+actually need resizing; focused DNG/parser/upload checks preserve existing behavior.
+
+`test/copilotJsonRpc.test.ts` covers the scoped public reader workaround for
+vscode-jsonrpc 8.2.1's recurring partial-message timer after disposal. Other
+readers retain their defaults; complete fragmented messages still decode. A
+separate actual SDK subprocess receives a deliberately truncated frame and must
+exit naturally within 10 seconds, making dependency drift fail promptly. The
+conversation suite also verifies terminal transport frames and process cleanup.
+The native image GC diagnostic was removed by lazy DNG-only canvas initialization;
+subsequent inspector diagnosis identified the recurring JSON-RPC timer as the
+remaining process-exit blocker. No forced-exit test setting is used.
+
+Phase 9 final evidence: full coverage exits 0 with 170 suites / 3,018 tests (68
+skipped), 88.92% statements/lines, 77.19% branches and 93.82% functions. Floors
+are 88.85% statements/lines, 76.95% branches and 93.75% functions. All 34 native
+SDK cases pass (`copilot-sdk-compat-HVrO0s`); all 44 recorded runtime PIDs are
+gone. Six native Memory/Context workflows pass. All 38 rebuilt Chromium
+desktop/mobile cases pass (`cockpit-copilot-ui-lecidK`, 71 SDK launches); fixture
+PM2 and its three recorded tool workers are stopped. Reports retain their actual
+f6c694e revision plus dirty state. Desktop budget is 906.1/907 KiB JS and
+201.8/230 KiB CSS, with other caps unchanged. Typechecks, zero-warning lint,
+maintainability, spec drift and ADR lint pass. Hosted account/SDK PDF and native
+Windows/Linux SDK qualification remain outstanding.

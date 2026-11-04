@@ -1,6 +1,8 @@
 import { test, expect, type APIRequestContext, type Page } from '@playwright/test';
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import { copilotPng, copilotPdf } from '../helpers/copilotMediaFixtures';
+import type { ConversationArtifact } from '../../src/types';
 
 const workspace = process.env.COPILOT_UI_WORKSPACE || '';
 const profileId = process.env.COPILOT_UI_PROFILE_ID || 'copilot-browser';
@@ -29,9 +31,94 @@ async function send(page: Page, prompt: string) {
   await page.getByLabel('Send', { exact: true }).click();
 }
 
+async function createMedia(request: APIRequestContext, title: string) {
+  const conv = await create(request, title, 'gpt-6.1-sol');
+  expect((await request.put(`/api/chat/conversations/${conv.id}`, { headers: await headers(request), data: { title: conv.title } })).ok()).toBeTruthy();
+  return conv;
+}
+async function attach(page: Page, mobile: boolean, name: string, mimeType: string, buffer: Buffer) {
+  const choosing = page.waitForEvent('filechooser');
+  await page.getByLabel(mobile ? 'Attach' : 'Attach files', { exact: true }).click();
+  await (await choosing).setFiles({ name, mimeType, buffer });
+  await expect(page.getByLabel('Send', { exact: true })).toBeEnabled();
+}
+function savedArtifacts(saved: { messages: Array<{ contentBlocks?: Array<{ type: string; artifact?: ConversationArtifact }> }> }) {
+  return saved.messages.flatMap(message => (message.contentBlocks || []).flatMap(block => block.type === 'artifact' && block.artifact ? [block.artifact] : []));
+}
+
 for (const mobile of [false, true]) {
   const client = mobile ? 'mobile' : 'desktop';
   const assistant = mobile ? '.message.assistant' : '.msg-agent';
+
+  test(`${client} uploads native image bytes across cold resume and reload`, async ({ page, request }) => {
+    const conv = await createMedia(request, `Copilot ${client} image input`);
+    await open(page, conv.title, mobile);
+    for (let i = 0; i < 2; i++) {
+      await attach(page, mobile, 'input.png', 'image/png', copilotPng);
+      await send(page, 'COPILOT_UI_MEDIA_INPUT');
+      await expect(page.getByLabel('Send', { exact: true })).toBeVisible();
+      await expect(page.locator(assistant).filter({ hasText: 'COPILOT_UI_MEDIA_INPUT_OK' })).toHaveCount(i + 1);
+    }
+    await open(page, conv.title, mobile);
+    await expect(page.locator(assistant).filter({ hasText: 'COPILOT_UI_MEDIA_INPUT_OK' })).toHaveCount(2);
+    const saved = await (await request.get(`/api/chat/conversations/${conv.id}`)).json();
+    expect(saved.messages.filter((message: { role: string; content: string }) => message.role === 'user' && message.content.includes('[Uploaded files:'))).toHaveLength(2);
+    await page.screenshot({ path: test.info().outputPath(`${client}-media-input.png`), fullPage: true });
+  });
+
+  test(`${client} retains a PDF draft when the selected provider cannot transport document bytes`, async ({ page, request }) => {
+    const conv = await createMedia(request, `Copilot ${client} gated PDF`);
+    await open(page, conv.title, mobile);
+    await attach(page, mobile, 'unverified.pdf', 'application/pdf', copilotPdf());
+    const refused = page.waitForResponse(response => response.url().endsWith(`/conversations/${conv.id}/message`) && response.status() === 400);
+    await send(page, 'COPILOT_UI_MEDIA_INPUT_PDF'); await refused;
+    await expect(page.getByPlaceholder(/Message Agent Cockpit/)).toHaveValue('COPILOT_UI_MEDIA_INPUT_PDF');
+    await expect(page.getByText('unverified.pdf', { exact: true })).toBeVisible();
+    await expect(page.getByText(/does not have verified pdf input/)).toBeVisible();
+    expect((await (await request.get(`/api/chat/conversations/${conv.id}`)).json()).messages).toHaveLength(0);
+    await page.screenshot({ path: test.info().outputPath(`${client}-media-gated.png`), fullPage: true });
+  });
+
+  for (const stop of [false, true]) test(`${client} persists native artifacts ${stop ? 'after Stop' : 'with file delivery'} without duplicate cards`, async ({ page, request }) => {
+    await fs.rm(path.join(workspace, 'ui-artifact-ready'), { force: true });
+    await fs.rm(path.join(workspace, 'ui-artifact-release'), { force: true });
+    const conv = await createMedia(request, `Copilot ${client} artifacts ${stop ? 'Stop' : 'complete'}`);
+    await open(page, conv.title, mobile);
+    await send(page, stop ? 'COPILOT_UI_MEDIA_OUTPUT_STOP' : 'COPILOT_UI_MEDIA_OUTPUT');
+    const pdfCard = page.locator(`${assistant} .file-card`).filter({ hasText: 'report.pdf' });
+    await expect(pdfCard).toHaveCount(1);
+    await expect(pdfCard).toBeVisible();
+    await expect(page.locator(`${assistant} .file-card`).filter({ hasText: 'Tool output' })).toHaveCount(1);
+    if (stop) {
+      await expect.poll(async () => fs.readFile(path.join(workspace, 'ui-artifact-ready'), 'utf8').catch(() => '')).toBe('ready');
+      await page.screenshot({ path: test.info().outputPath(`${client}-media-live.png`), fullPage: true });
+      await page.getByRole('button', { name: mobile ? 'Stop' : 'Stop agent', exact: true }).click();
+    } else await expect(page.locator(assistant).filter({ hasText: 'COPILOT_UI_MEDIA_OUTPUT_OK' })).toBeVisible();
+    await expect(page.getByLabel('Send', { exact: true })).toBeVisible();
+    let saved = await (await request.get(`/api/chat/conversations/${conv.id}`)).json();
+    await expect.poll(async () => {
+      saved = await (await request.get(`/api/chat/conversations/${conv.id}`)).json(); return savedArtifacts(saved).length;
+    }).toBe(2);
+    const artifacts = savedArtifacts(saved);
+    expect(new Set(artifacts.map(artifact => artifact.filename)).size).toBe(2);
+    for (const artifact of artifacts) {
+      expect(artifact.sourceToolId).toMatch(/^copilot:/);
+      const download = await request.get(`/api/chat/conversations/${conv.id}/files/${encodeURIComponent(artifact.filename)}?mode=download`);
+      expect(download.ok()).toBeTruthy();
+      expect(await download.body()).toEqual(artifact.kind === 'image' ? copilotPng : copilotPdf());
+    }
+    await open(page, conv.title, mobile);
+    // Stopped desktop turns retain their existing collapsed progress grouping.
+    if (stop && !mobile) await page.getByRole('button', { name: '1 segment', exact: true }).click();
+    await expect(pdfCard).toHaveCount(1);
+    await expect(page.locator(`${assistant} .file-card`).filter({ hasText: 'Tool output' })).toHaveCount(1);
+    if (!stop) {
+      await expect(page.locator(`${assistant} .file-card`).filter({ hasText: 'copilot-delivery.txt' })).toHaveCount(1);
+      const download = await request.get(`/api/chat/conversations/${conv.id}/workspace-file?path=${encodeURIComponent(path.join(workspace, 'copilot-delivery.txt'))}`);
+      expect(await download.text()).toBe('COPILOT_FILE_DELIVERY_BYTES');
+    }
+    await page.screenshot({ path: test.info().outputPath(`${client}-media-${stop ? 'stopped' : 'complete'}.png`), fullPage: true });
+  });
 
   test(`${client} retains native context and separate billing units after cold resume`, async ({ page, request }) => {
     const conv = await create(request, `Copilot ${client} usage`);

@@ -5,7 +5,8 @@ import type { ChatService } from '../../services/chatService';
 import type { BackendRegistry } from '../../services/backends/registry';
 import type { BaseBackendAdapter } from '../../services/backends/base';
 import { assertCopilotSelection } from '../../services/backends/copilotCatalog';
-import { resolveCopilotCliRuntime } from '../../services/backends/copilotRuntime';
+import { copilotChatTransport, resolveCopilotCliRuntime } from '../../services/backends/copilotRuntime';
+import { copilotMessageInput } from '../../services/backends/copilotMedia';
 import { ACTIVE_STREAM_JOB_STATES } from '../../services/streamJobRegistry';
 import { StreamJobSupervisor, type PendingMessageSend } from '../../services/streamJobSupervisor';
 import type { MemoryMcpServer } from '../../services/memoryMcp';
@@ -262,6 +263,7 @@ export function createStreamRouter(opts: StreamRoutesOptions): express.Router {
       try {
         const metadata = await backendRegistry.get(backendId)!.getMetadata({ cliProfile: runtime.profile });
         assertCopilotSelection(metadata, { model: conv.model, effort: conv.effort }, resolveCopilotCliRuntime(runtime.profile).env);
+        copilotMessageInput(content, metadata.models || [], conv.model, resolveCopilotCliRuntime(runtime.profile).env, copilotChatTransport(runtime.profile));
       } catch (error) { return sendError(res, 400, error); }
     }
     await streamSupervisor.markPreparing(jobId, {

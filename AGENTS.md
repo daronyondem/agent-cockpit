@@ -173,6 +173,11 @@ headless process with a fresh loopback connection token; never select the SDK's
 bundled/in-process runtime or bypass the existing process/Windows Job boundary.
 The native suite isolates auth and uses fixed local replies, so it is not
 hosted-account or model-judgment evidence. Record actual CLI/SDK/OS/revision.
+Keep the pinned `vscode-jsonrpc` compatibility shim in `copilotJsonRpc.ts`:
+disable recurring partial-message diagnostics through the public reader option
+only within our SDK connection's async scope. Preserve other readers' defaults
+and Cockpit's actual request/startup deadlines. Review `test/copilotJsonRpc.test.ts`
+and the partial-frame exit case before removing this workaround after upgrades.
 SDK conversation ownership lives in `copilotConversations.ts`; keep native event
 projection pure in `copilotSdkEvents.ts` and shared model/tool/config helpers in
 their focused Copilot modules. Review `test/copilotConversations.test.ts`,
@@ -224,6 +229,14 @@ map native model capabilities in `copilotModels.ts`. Review
 `test/chat.copilotCatalog.test.ts` when changing catalog scope or validation.
 Preserve missing saved model IDs in both clients, expose fallback provenance,
 and never infer new media support from a native vision flag alone.
+Keep upload parsing and transport gates in `copilotMedia.ts` and explicit native
+tool-byte projection in `copilotArtifacts.ts`. SDK PDF transport needs its own
+provider/model evidence; a CLI attachment flag or vision capability is insufficient.
+Deduplicate overlapping native output views per owned tool, preserve scoped
+`sourceToolId`, and send bytes through the shared artifact store. Never scrape
+tool text or fetch resource links to invent an artifact. Review
+`test/copilotMedia.test.ts`, `test/copilotArtifacts.test.ts`,
+`test/chat.copilotArtifacts.test.ts`, and native SDK/browser media cases.
 Review `test/copilotProfileStatus.test.ts`, `test/cliProfileAuthService.test.ts`
 and the profile-auth route tests for credential/catalog checks. Preserve the
 distinction between installed CLI, authenticated credentials and enabled-model

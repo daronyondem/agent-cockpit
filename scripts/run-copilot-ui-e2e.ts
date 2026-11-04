@@ -5,6 +5,7 @@ import net from 'net';
 import { spawn, spawnSync, type ChildProcess } from 'child_process';
 import { createCopilotLocalProvider } from '../test/helpers/copilotLocalProvider';
 import { MEMORY_MARKER, type CopilotWorkflowPlan } from '../test/helpers/copilotWorkflowEnv';
+import { writeCopilotMediaTool } from '../test/helpers/copilotMediaFixtures';
 
 async function main(): Promise<void> {
   if (process.platform === 'win32') throw new Error('The UI fixture launcher currently supports macOS/Linux. Run native Windows process tests separately.');
@@ -17,6 +18,10 @@ async function main(): Promise<void> {
   if (versionResult.status !== 0) throw new Error(`Copilot CLI preflight failed: ${versionResult.error?.message || versionResult.stderr}`);
   const version = versionResult.stdout.split('\n')[0];
   await fs.mkdir(workspace, { recursive: true });
+  await fs.mkdir(path.join(root, 'copilot-home'), { recursive: true });
+  await fs.writeFile(path.join(root, 'copilot-home', 'mcp-config.json'), JSON.stringify({ mcpServers: {
+    'fixture-media': { type: 'local', command: process.execPath, args: [writeCopilotMediaTool(workspace)], tools: ['*'] },
+  } }));
   await fs.mkdir(path.join(data, 'chat'), { recursive: true });
   await fs.writeFile(path.join(workspace, 'AGENTS.md'), '# Browser fixture\nOnly perform synthetic fixture work. Report Memory failures without writing fallback memory files.\n');
   const plan: CopilotWorkflowPlan = {

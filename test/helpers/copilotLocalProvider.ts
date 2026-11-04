@@ -1,5 +1,6 @@
 import http from 'http';
 import fs from 'fs';
+import { copilotPng } from './copilotMediaFixtures';
 import path from 'path';
 import type { CopilotWorkflowPlan } from './copilotWorkflowEnv';
 
@@ -67,6 +68,27 @@ console.log('Updated fixture context from listed sources.');`;
         }
         const toolMessages = request.messages.filter(message => message.role === 'tool');
         const lastUser = String(request.messages.filter(message => message.role === 'user').at(-1)?.content || '');
+        if (text.includes('COPILOT_UI_MEDIA_INPUT')) {
+          const content = JSON.stringify(request.messages.filter(message => message.role === 'user').at(-1)?.content);
+          const hasImage = content?.includes(`data:image/png;base64,${copilotPng.toString('base64')}`);
+          fs.appendFileSync(path.join(workspace, 'ui-media-input.jsonl'), JSON.stringify({ hasImage }) + '\n');
+          say(hasImage ? 'COPILOT_UI_MEDIA_INPUT_OK' : 'COPILOT_UI_MEDIA_INPUT_MISSING'); return;
+        }
+        if (text.includes('COPILOT_UI_MEDIA_OUTPUT')) {
+          if (!toolMessages.length) call('media_output', {});
+          else {
+            const deliver = () => {
+              const delivery = path.join(workspace, 'copilot-delivery.txt');
+              if (toolMessages.length === 1) {
+                const quote = (value: string) => `'${value.replace(/'/g, `'\\''`)}'`;
+                const program = `require('fs').writeFileSync(${JSON.stringify(delivery)},'COPILOT_FILE_DELIVERY_BYTES');`;
+                call('bash', { command: `${quote(process.execPath)} -e ${quote(program)}`, description: 'Create requested synthetic deliverable', initial_wait: 1000 });
+              } else say(`COPILOT_UI_MEDIA_OUTPUT_OK\n<!-- FILE_DELIVERY:${delivery} -->`);
+            };
+            if (text.includes('COPILOT_UI_MEDIA_OUTPUT_STOP')) hold('artifact', deliver); else deliver();
+          }
+          return;
+        }
         if (text.includes('COPILOT_UI_GOAL')) {
           if (text.includes('COPILOT_UI_GOAL_PAUSE') && !fs.existsSync(path.join(workspace, 'ui-goal-release'))) {
             const quote = (value: string) => `'${value.replace(/'/g, `'\\''`)}'`;

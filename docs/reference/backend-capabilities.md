@@ -102,9 +102,14 @@ Native compatibility is verified on Grok Build 1.0.52, macOS arm64. See the
   `tool.execution_complete` events;
 - session continuity through persisted Copilot session IDs, resumed through SDK
   or `copilot --resume <sessionId>` on the compatibility path;
-- one-shot image/PDF attachments through `copilot --attachment <path>` with
-  explicitly verified `gpt-6.1-sol`; auto and unverified models are not eligible
-  for media processors;
+- explicit SDK image attachments and provider/model-specific PDF transport;
+  one-shots retain `copilot --attachment <path>`. Hosted SDK PDF is gated
+  separately from legacy CLI evidence. Verified custom selections are OpenAI
+  `gpt-6.1-sol` images and Anthropic `claude-sonnet-4.6` images/PDFs; unverified
+  selections fail closed;
+- native tool image/embedded-file bytes persist as artifact cards on desktop
+  and mobile, including after Stop/reload; normal file delivery remains available.
+  This does not enable native image generation;
 - Memory and Knowledge Base MCP injection through SDK session config or JSONL
   `copilot --additional-mcp-config <json>`;
 - per-turn input/output/cache tokens and premium-request credits, derived by

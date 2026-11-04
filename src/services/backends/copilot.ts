@@ -21,6 +21,8 @@ import { CopilotQuotaCache } from './copilotQuota';
 import { COPILOT_GOALS, type CopilotGoalRun } from './copilotGoals';
 import { parseGoalAiCreditLimit } from '../../contracts/goals';
 import { checkOneShotMediaInput } from './mediaCapabilities';
+import { copilotMessageInput } from './copilotMedia';
+import { attachmentKindFromPath } from '../chat/attachments';
 export { resolveCopilotCliRuntime, type CopilotCliRuntime } from './copilotRuntime';
 import { logger } from '../../utils/logger';
 import type {
@@ -210,9 +212,11 @@ export class CopilotAdapter extends BaseBackendAdapter {
       const metadata = await this.getMetadata({ cliProfile: options.cliProfile });
       signal.throwIfAborted();
       assertCopilotSelection(metadata, options, runtime.env);
+      const requested = options.model?.trim();
+      const mediaModel = requested && requested !== 'auto' ? requested : runtime.env.COPILOT_MODEL?.trim() || 'auto';
       for (const modality of ['image', 'pdf'] as const) {
         if (!options.attachments?.some(attachment => attachment.kind === modality)) continue;
-        const check = checkOneShotMediaInput(metadata, options.model, modality);
+        const check = checkOneShotMediaInput(metadata, mediaModel, modality);
         if (!check.ok) throw new Error(check.message);
       }
       const args = buildCopilotRunArgs(prompt, {
@@ -332,6 +336,9 @@ export class CopilotAdapter extends BaseBackendAdapter {
         externalSessionId: options.isNewSession ? null : options.externalSessionId,
         mcpServers: options.mcpServers,
         allowTools: true,
+        attachments: copilotMessageInput(message, copilotFallbackModels(runtime.env), options.model, runtime.env, 'jsonl').attachments
+          ?.map(file => ({ path: file.path, kind: attachmentKindFromPath(file.path) }))
+          .filter((file): file is { path: string; kind: 'image' | 'pdf' } => file.kind === 'image' || file.kind === 'pdf'),
       });
       const invocation = buildCliCommandInvocation(runtime, args);
       ({ proc, scope } = spawnCopilotProcess(invocation.command, invocation.args, {

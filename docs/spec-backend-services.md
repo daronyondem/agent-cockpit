@@ -16,6 +16,12 @@ Chat API route registration is split by domain. `src/routes/chat.ts` owns depend
 
 Conversation upload image normalization is owned by focused chat modules rather than `uploadRoutes.ts`. `src/services/chat/dngPreview.ts` is a pure TIFF/DNG parser for the supported baseline TIFF layout (`II`/`MM` endian markers, TIFF magic 42, 32-bit IFD offsets). It scans IFD0, linked IFDs, and SubIFDs up to a bounded depth, considers only single-strip JPEG preview candidates (`Compression=7` or JPEG SOI bytes) with non-linear-raw photometric interpretation and 8-bit-or-smaller samples, parses JPEG SOF dimensions without fully decoding pixels, trims at JPEG EOI when present, and returns the largest readable candidate. Linear raw subimages (`PhotometricInterpretation=34892`) are intentionally skipped; Agent Cockpit does not demosaic RAW sensor data for chat uploads. `src/services/chat/uploadImageNormalization.ts` applies this parser only to `.dng` uploads, writes `<original>.preview.jpg`, and caps the generated JPEG to `CHAT_UPLOAD_IMAGE_MAX_LONG_EDGE_PX = 2576` with `@napi-rs/canvas`/JPEG quality 92 when the embedded preview exceeds the cap. Other upload formats pass through unchanged. The generated JPEG sidecar is the only `AttachmentMeta` returned to clients for the upload, while the original DNG remains on disk until the sidecar is deleted. This decision is captured in [ADR-0083](adr/0083-extract-dng-embedded-previews-for-chat-uploads.md).
 
+`uploadImageNormalization.ts` imports native canvas only after a DNG preview
+exceeds the 2576px long-edge limit and actually needs resizing. Ordinary
+uploads and already-small DNG previews do not initialize its native GC worker.
+The resize/decoding behavior and stored preview format remain unchanged.
+
+
 ### Methods
 
 | Method | Description |
@@ -998,7 +1004,7 @@ in [ADR-0092](adr/0092-integrate-grok-build-through-acp-and-native-extensions.md
 - Discovery starts an owned, token-authenticated headless connection in the server working directory, calls `client.listModels()` without creating a session or sending a prompt, and awaits cleanup before returning. The discovery budget is ten seconds, including startup; abort also drains late startup before returning. SDK chat can use the already-owned turn connection for discovery before native session create/resume, avoiding another process when no metadata probe is pending. A pending metadata probe is shared with that turn and simultaneous metadata reads.
 - Project unique nonempty model IDs, using native `name` as the label (ID if empty). Entries with an explicit policy must be `enabled`; `disabled` and `unconfigured` are excluded. Missing policy remains eligible. A nonempty eligible catalog prepends conservative text-only `auto` as default. An authoritative empty catalog remains empty and cannot silently expand to the fallback list.
 - Copy reasoning efforts only when `capabilities.supports.reasoningEffort===true`, intersecting `supportedReasoningEfforts` with SDK 1.0.28's `low|medium|high|xhigh|max` in that order. Missing lists never inherit guessed effort from model names. Native `max` can therefore appear for discovered models, while the curated fallback keeps its earlier four levels. Known IDs retain curated family/cost-tier display hints; unknown IDs use the first hyphen-delimited ID segment as family. Billing multipliers do not become USD estimates.
-- Native vision alone does not establish Cockpit media transport support. Image/PDF input stays true only for the previously verified explicit `gpt-6.1-sol` AND native `supports.vision===true`. Other discovered models remain text-only pending selection/transport qualification. `auto` fails media gates closed. The fallback retains the prior explicit-model media evidence; it does not add new verified models.
+- Native vision alone does not establish Cockpit media transport support. Image/PDF input stays true only for the previously verified explicit `gpt-6.1-sol` AND native `supports.vision===true`. Other discovered models remain text-only pending selection/transport qualification. `auto` fails media gates closed. The hosted fallback retains that earlier CLI evidence. Provider-specific media narrowing and independently verified SDK PDF transport are described under Copilot media input and tool artifacts below.
 - Opaque custom-command JSONL profiles return a fallback reason without probing SDK. Explicit `COPILOT_PROVIDER_BASE_URL` runtimes use a marked custom-provider fallback because GitHub account discovery does not describe their endpoint. A non-curated explicit `COPILOT_MODEL` is appended to fallback catalogs as text-only, including self-configured wrappers, without effort/media claims. Authoritative runtime catalogs never append an unavailable environment model. Existing curated entries are suggestions rather than endpoint availability certification.
 - Discovery errors return the curated fallback. Native HTTP failures expose only the numeric status and a generic access instruction, never native error bodies, headers or environment values. Startup/transport/time-budget failures use a generic unavailable reason. Failed discovery does not assert failed credentials. Successful empty results remain authoritative as above.
 - Cache entries expire after 60 seconds and are capped at 32 insertion-ordered entries. Identity is a SHA-256 digest of the profile runtime key, sorted effective server/profile environment, resolved executable/argument-prefix file stats, Copilot auth-home `config.json` stats, and GitHub CLI `hosts.yml` stats. File stats include inode, size, mtime and ctime; bare commands resolve through effective PATH for their signature. Credential values are hashed, not exposed. Returned cache copies cannot mutate later callers. CLI changes at a stable managed path also invoke reusable adapter shutdown. Keychain-only/remote policy changes are observed on expiry or an explicit profile test; these are not push subscriptions.
@@ -1185,6 +1191,28 @@ exercise local-provider sessions and production ownership directly, including re
 session with the same native ID and prior history; these do not certify browser
 controls or hosted-account access. See [ADR-0098](adr/0098-connect-copilot-interactive-sessions-through-an-owned-sdk-runtime.md)
 and the [versioned evaluation](research/copilot-sdk-parity-evaluation.md).
+
+#### Copilot JSON-RPC partial-frame cleanup
+
+`copilotJsonRpc.ts` is a compatibility boundary for the pinned direct dependency
+`vscode-jsonrpc@8.2.1`, also used by SDK 1.0.28. Its reader rearms a 10-second
+partial-message diagnostic timer even after disposal if a connection ends
+mid-frame. `CopilotClient` does not expose its reader or consume these diagnostics.
+Large/fragmented output and cancellation must not retain that timer.
+
+Wrap the public StreamMessageReader.listen method once and use an
+AsyncLocalStorage scope around `client.start()`. Only readers listening within
+that owned connection scope receive public `partialMessageTimeout=0`; all other
+readers preserve normal diagnostics and defaults. The wrapper invokes the
+original listen implementation without changing framing, callbacks, or data.
+The SDK runtime calls `connectCopilotClient`, preserving its existing handshake
+deadline/race and process cleanup. Request/startup deadlines, native process
+exit handling and transport errors remain active. No private SDK fields, global
+timer monkeypatch, dependency fork, forced process exit or unrefed leak is used.
+Reevaluate the public compatibility wrapper when the SDK/dependency changes.
+Focused tests cover incomplete/disposed frames, other-reader defaults and valid
+fragmented JSON, plus an actual SDK subprocess that must exit naturally within
+a bounded deadline after a truncated frame. See ADR-0098.
 
 #### SDK conversation ownership and dispatch
 
@@ -1517,6 +1545,74 @@ Native fixed-model checks prove cold resume/history, cache-disjoint per-turn
 accounting, aggregate delegated usage exactly once, managed instruction discovery,
 opaque-wrapper JSONL compatibility, and real tool-worker cancellation/replacement.
 They do not prove hosted billing, account entitlement or browser SDK controls.
+
+#### Copilot media input and tool artifacts
+
+`copilotMedia.ts` interprets the existing terminal `[Uploaded files: <absolute
+path>, ...]` tag through `parseUploadedFilesTag`. Only the final strict tag is
+parsed; ordinary prose containing that phrase is preserved. The comma-delimited
+wire format and persisted user content are unchanged. Ordinary SDK sends remove the tag
+from the model prompt and pass unique file paths as `{type:'file', path,
+displayName:<basename>}` attachments, including text/code files. An attachment-only
+message may have an empty SDK prompt. First turns and cold resume retain current
+attachments. Missing-session recovery preserves the original current-request text
+inside its recovery wrapper, including path references, and supplies the same
+current attachments explicitly; prior uploads are not resubmitted.
+Unreadable or rejected native attachments fail the turn without replay.
+
+Before HTTP user-message persistence, validate model/effort and media against the
+selected profile's current metadata. The SDK owner repeats validation against
+its runtime catalog before creating/resuming a session or submitting a prompt.
+Resolve the explicit trimmed model, or `COPILOT_MODEL` when the requested model
+is omitted/`auto`, otherwise keep `auto` unverified. Every image/PDF path requires
+that exact model's input modality. SDK PDF additionally requires separately
+verified provider transport: custom Anthropic `claude-sonnet-4.6` is currently
+qualified on 1.0.105/SDK 1.0.28. Hosted SDK PDF remains refused until separately
+qualified. Native vision alone never certifies PDF bytes. A refusal returns an
+actionable `400` at HTTP admission, or an error/done stream for a direct call;
+desktop/mobile retain the submitted draft and attachments.
+
+For configured providers, fallback metadata is narrowed to verified selections:
+OpenAI-compatible `gpt-6.1-sol` permits images and refuses PDFs; Anthropic
+`claude-sonnet-4.6` permits images and PDFs. Azure and other unverified
+provider/model combinations expose neither media modality. OpenAI-compatible
+1.0.105 PDF attachments can become `<tagged_files>` path references even when
+tools are disabled; a successful text reply is not transport evidence. Existing
+hosted CLI one-shot media evidence is separate: restricted one-shots retain
+literal `--available-tools none`, model modality checks, and explicit
+`--attachment` flags. One-shot checks resolve the effective configured model as
+well. JSONL compatibility chat validates uploads and adds explicit image/PDF
+attachments while retaining its existing prompt/file-tool references.
+
+`copilotArtifacts.ts` projects successful native `tool.execution_complete`
+output bytes. It reads image `result.contents`, embedded resource blobs, and
+inline `result.binaryResultsForLlm` bytes. Canonical base64 is required; empty or
+malformed bytes, omitted/asset-only references and resource links produce no
+artifact. It does not inspect prose/structured JSON for paths, read private
+native storage or fetch URIs. A usable resource URI supplies only its decoded
+basename. Otherwise the name is `copilot-<first 16 SHA256 hex digits><MIME
+extension>`. The existing artifact store sanitizes names and handles collisions.
+Titles are the resource basename or `Tool output`, without claiming image
+generation. Deduplicate by decoded-byte SHA256 within a tool, including overlap
+between native timeline and model-facing output views.
+
+Artifact projection runs inside the existing owned-tool completion reducer in
+`copilotAgents.ts`. Root/child tools retain the namespaced
+`copilot:<turn UUID>:<owner/raw ID pair>` as `sourceToolId`. Duplicate completions,
+unknown/ended children and events after root idle/error cannot produce new
+outputs. Even a completion without a prior start marks received artifacts as
+observable output; a subsequent missing-session error cannot create/replay a
+replacement session. Successful child bytes may be delivered without leaking child prose
+into the root answer. Task acknowledgements themselves are not artifacts.
+
+Each output uses the unchanged backend-neutral artifact event. `processStream`
+awaits the shared store's byte copy into the conversation artifact directory,
+emits only the stored descriptor to browsers, and persists ordered artifact
+content blocks, including artifact-only or subsequently aborted turns. Stop
+preserves already-delivered bytes; it never retries unfinished tool work. Both
+clients render the same saved descriptors after reload and use the existing
+authenticated files/download routes. `FILE_DELIVERY` workspace-file markers
+remain supported. No native image-generation capability is advertised.
 
 ### ClaudeCodeAdapter (`src/services/backends/claudeCode.ts`)
 

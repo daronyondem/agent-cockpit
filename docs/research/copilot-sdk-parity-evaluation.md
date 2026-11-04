@@ -386,3 +386,43 @@ floors, with clean exit after deferring the skipped media suite's native canvas
 import. Successful hosted billing and real two-account/Windows/Linux validation
 remain outstanding. Reports retain their actual pre-commit revision plus dirty
 state.
+
+## Phase 9 media and artifact findings
+
+Pinned 1.0.105/SDK 1.0.28 probes distinguish input attachment metadata from actual
+model-facing bytes. OpenAI-compatible gpt-6.1-sol sends explicit PNG data URLs,
+including attachment-only sends, first chat turns and cold resume. PDF path and
+blob inputs on that provider did not become native documents: path inputs became
+tagged_files references with supportedNativeDocumentMimeTypes empty, despite zero
+available tools. Those successful fixed text replies are not PDF evidence.
+Anthropic claude-sonnet-4.6 sends actual PDF base64 document blocks and image
+bytes without tools; restricted CLI PDF one-shots also send those bytes with
+zero tools. Hosted SDK PDF remains gated independently of earlier CLI evidence.
+Azure and unverified provider/model combinations remain media-disabled.
+
+A real MCP tool returns an image and an embedded PDF resource in both
+result.contents and binaryResultsForLlm. Projection must deduplicate those views
+per owned tool. Invalid PNG fixture bytes were correctly omitted by native CLI
+normalization; the final fixture uses a valid deterministic 32px PNG, without
+loading native canvas in skipped suites. URI links, omitted/asset-only references
+and arbitrary tool prose are not deliverable bytes. No native image-generation
+API is enabled or claimed.
+
+Normal-CI SDK-peer/route tests cover scoped root/delegated output, overlapping
+views and repeated completions, late/ended events, saved copies, cancellation and
+reload. Native provider checks cover actual bytes and shared MCP config discovery.
+Desktop/mobile browser checks cover input resume, PDF refusal with retained
+draft/files, live output, Stop, saved downloads/reload and ordinary FILE_DELIVERY.
+The fixed-provider evidence does not certify hosted reasoning, entitlement, or
+native Windows/Linux SDK media.
+
+Phase 9 qualified native report `copilot-sdk-compat-HVrO0s` passes all 34 cases
+on 1.0.105/1.0.28/Node 22.23.4/macOS arm64. All 44 recorded runtime PIDs are
+gone. Browser report `cockpit-copilot-ui-lecidK` passes all 38 desktop/mobile
+Chromium cases, recording 71 SDK launches with Node 26.0.0; its PM2 daemon and
+three recorded tool workers are stopped. Full CI-style coverage exits normally
+with 3,018 passing tests and raised floors; six native application workflows
+pass. Reports retain f6c694e plus dirty state. The scoped public JSON-RPC
+compatibility layer also has a deterministic actual-SDK subprocess exit check
+for a truncated frame; this addresses a real reader timer leak exposed during
+media qualification, independently of model output quality.

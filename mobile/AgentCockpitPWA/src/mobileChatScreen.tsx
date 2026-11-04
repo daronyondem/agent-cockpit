@@ -45,6 +45,7 @@ import type {
   BackendMetadata,
   ContentBlock,
   Conversation,
+  ConversationArtifact,
   EffortLevel,
   Message,
   PendingAttachment,
@@ -65,6 +66,7 @@ export function ChatScreen(props: {
   setDraft: (value: string) => void;
   streamText: string;
   streamTools?: ToolActivity[];
+  streamArtifacts?: ConversationArtifact[];
   showStreamPlaceholder: boolean;
   isStreaming: boolean;
   isSending: boolean;
@@ -129,6 +131,7 @@ export function ChatScreen(props: {
   );
   const scrollKey = [
     props.streamTools?.map(tool => `${tool.id}:${tool.outcome}:${tool.summary?.length}`).join('|'),
+    props.streamArtifacts?.map(artifact => artifact.filename).join('|'),
     conversation?.id || '',
     conversation?.messages.length || 0,
     lastMessage?.id || '',
@@ -300,7 +303,7 @@ export function ChatScreen(props: {
                 onShareFile={props.onShareFile}
               />
             ))}
-            {props.isStreaming && (props.streamText || props.showStreamPlaceholder || props.streamTools?.length) ? (
+            {props.isStreaming && (props.streamText || props.showStreamPlaceholder || props.streamTools?.length || props.streamArtifacts?.length) ? (
               <div className={`message assistant${props.streamText ? '' : ' stream-placeholder'}`}>
                 <div className="message-heading">
                   <AssistantIdentity
@@ -312,7 +315,7 @@ export function ChatScreen(props: {
                 </div>
                 {props.streamText ? (
                   <MarkdownContent content={props.streamText} />
-                ) : !props.streamTools?.length ? (
+                ) : !props.streamTools?.length && !props.streamArtifacts?.length ? (
                   <span className="streaming-dots" aria-label="Assistant is writing">
                     <span />
                     <span />
@@ -320,6 +323,10 @@ export function ChatScreen(props: {
                   </span>
                 ) : null}
                 {props.streamTools?.map((activity, index) => <ToolActivityView key={activity.id || index} activity={activity}/>)}
+                {props.streamArtifacts?.map(artifact => {
+                  const reference = makeConversationArtifactReference(props.client, conversation, artifact);
+                  return <FileCard key={reference.id} reference={reference} onOpen={props.onOpenFile} onShare={props.onShareFile}/>;
+                })}
                 <span className="meta">Streaming...</span>
               </div>
             ) : null}

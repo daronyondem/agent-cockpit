@@ -8,6 +8,8 @@ superseded-by: null
 tags: [backends, copilot, lifecycle, protocol, testing]
 affects:
   - src/services/backends/copilotSdkRuntime.ts
+  - src/services/backends/copilotJsonRpc.ts
+  - test/copilotJsonRpc.test.ts
   - src/services/backends/copilotRuntime.ts
   - src/services/backends/copilotProfileStatus.ts
   - src/services/backends/copilotConversations.ts
@@ -33,6 +35,12 @@ affects:
   - test/copilotGoalRoutes.test.ts
   - src/services/backends/copilotInputs.ts
   - src/services/backends/copilotAgents.ts
+  - src/services/backends/copilotMedia.ts
+  - src/services/backends/copilotArtifacts.ts
+  - test/copilotMedia.test.ts
+  - test/copilotArtifacts.test.ts
+  - test/chat.copilotArtifacts.test.ts
+  - mobile/AgentCockpitPWA/src/liveArtifacts.ts
   - src/services/backends/copilotModels.ts
   - src/services/backends/copilotCatalog.ts
   - src/contracts/responses.ts
@@ -78,6 +86,25 @@ ADR-0097. The SDK also bundles an optional native runtime; silently selecting
 that runtime would separate execution from Cockpit's configured CLI and updater.
 
 ## Decision
+
+Keep a focused compatibility shim for the pinned vscode-jsonrpc 8.2.1 reader:
+its partial-message diagnostic timer can recur after a truncated connection is
+disposed. The SDK does not consume those diagnostics and does not expose its
+reader. Wrap the public listen method with an AsyncLocalStorage scope around
+our SDK start, and set only those readers' public partialMessageTimeout to zero.
+Other readers retain their defaults; Cockpit's real request/startup deadlines
+remain active. This avoids private SDK fields, dependency forks, or merely
+unrefing a leaked timer. Reevaluate the shim when upgrading the SDK/dependency.
+
+Translate the existing upload tag into explicit SDK file attachments. Require
+provider/model evidence for document bytes independently of vision and the
+legacy CLI attachment flag. Unknown SDK PDF transport remains gated; Anthropic
+Sonnet 4.6 has native fixed-provider image/PDF evidence. Custom OpenAI-compatible
+PDF path references are insufficient, including when no tools are available.
+Keep parsing/gates in `copilotMedia.ts` and native tool output extraction in
+`copilotArtifacts.ts`. Preserve existing artifact storage and browser frames;
+deduplicate explicit bytes within each owned tool and never fetch an output URI
+or scrape prose for a file. Native image generation remains unsupported.
 
 Introduce a focused SDK runtime foundation while retaining the existing chat
 and restricted one-shot behavior until their individual migrations are tested.

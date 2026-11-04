@@ -1,5 +1,6 @@
 import type {
   ConversationListItem,
+  ConversationArtifact,
   Message,
   PendingInteraction,
   StreamEvent,
@@ -17,6 +18,8 @@ export type ChatStreamEventAction =
   | { type: 'append-stream-text'; content: string }
   | { type: 'set-stream-text'; value: string }
   | { type: 'clear-stream-tools' }
+  | { type: 'clear-stream-artifacts' }
+  | { type: 'append-stream-artifact'; artifact: ConversationArtifact }
   | { type: 'update-stream-tools'; frame: Extract<StreamEvent, { type: 'tool_activity' | 'tool_outcomes' }> }
   | { type: 'upsert-message'; message: Message }
   | { type: 'set-pending-interaction'; interaction: PendingInteraction }
@@ -94,6 +97,13 @@ export function chatStreamEventActions(event: StreamEvent): ChatStreamEventActio
       actions.push({ type: 'set-stream-text', value: '' });
       actions.push({ type: 'set-stream-placeholder', value: false });
       actions.push({ type: 'clear-stream-tools' });
+      actions.push({ type: 'clear-stream-artifacts' });
+      break;
+    case 'artifact':
+      if (event.artifact?.filename) {
+        actions.push({ type: 'set-stream-placeholder', value: false });
+        actions.push({ type: 'append-stream-artifact', artifact: event.artifact });
+      }
       break;
     case 'tool_activity': {
       if (event.isPlanMode && (event.planContent || event.planAction === 'exit')) {
@@ -154,6 +164,7 @@ export function chatStreamEventActions(event: StreamEvent): ChatStreamEventActio
     case 'replay_start':
       actions.push({ type: 'set-input-turn', turnId: null });
       actions.push({ type: 'clear-stream-tools' });
+      actions.push({ type: 'clear-stream-artifacts' });
       actions.push({ type: 'set-stream-text', value: '' });
       actions.push({ type: 'set-stream-placeholder', value: true });
       break;

@@ -4,6 +4,7 @@ import { logger } from '../../utils/logger';
 import { resolveCopilotCliRuntime, resolveCopilotWorkingDir } from './copilotRuntime';
 import { startCopilotSdkRuntime, type CopilotSdkRuntime } from './copilotSdkRuntime';
 import { copilotSessionConfig, composePrompt } from './copilotSessionConfig';
+import { copilotMessageInput } from './copilotMedia';
 import { createCopilotSdkEventState, reduceCopilotSdkEvent } from './copilotSdkEvents';
 import { copilotContextUsage, copilotUsageMetrics } from './copilotUsage';
 import { CopilotLiveUsage } from './copilotLiveUsage';
@@ -195,6 +196,7 @@ export class CopilotConversations {
       const catalog = await this.wait(this.catalog.forRuntime(runtime, turn.runtime.client, turn.controller.signal), turn);
       turn.controller.signal.throwIfAborted();
       assertCopilotSelection(catalog, options, runtime.env);
+      const input = copilotMessageInput(message, catalog.models, options.model, runtime.env);
       const queued: StreamEvent[] = [];
       let liveUsage: CopilotLiveUsage | undefined;
       let complete = false;
@@ -237,7 +239,7 @@ export class CopilotConversations {
         request => turn.inputs ? turn.inputs.ask(request) : Promise.reject(new Error('Copilot input is not ready.'))), onEvent };
       let session: CopilotSession;
       let recovered: SessionRecoveryMetadata | undefined;
-      let prompt = composePrompt(message, options.systemPrompt, options.isNewSession);
+      let prompt = composePrompt(input.prompt, options.systemPrompt, options.isNewSession);
       if (!options.isNewSession && options.externalSessionId) {
         try {
           session = await this.wait(turn.runtime.client.resumeSession(options.externalSessionId, { ...config, continuePendingWork: false }), turn);
@@ -290,7 +292,7 @@ export class CopilotConversations {
       if (complete) throw new Error(state.error || 'Copilot session closed before prompt submission.');
       // Completion may arrive before the send acknowledgement. Never enqueue a
       // second request or finish before admission has settled.
-      void this.wait(session.send({ prompt, ...(displayPrompt ? { displayPrompt } : {}) }), turn).then(() => {
+      void this.wait(session.send({ prompt, ...(input.attachments ? { attachments: input.attachments } : {}), ...(displayPrompt ? { displayPrompt } : {}) }), turn).then(() => {
         admitted = true;
         enableSteering();
         if (state.idle) finishInputs();

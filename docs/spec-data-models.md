@@ -2516,3 +2516,16 @@ are omitted. Supported actions are clear:false, stopTurn/pause/resume:true.
 `ResumeGoalRequest` and `parseGoalAiCreditLimit` in `src/contracts/goals.ts`
 share the explicit positive-finite resume window across server and clients.
 See [native control/projection semantics](spec-backend-services.md#copilot-native-goals-copilotgoalsts).
+
+### Copilot tool output lineage
+
+Copilot uses the existing ConversationArtifact and artifact ContentBlock shapes;
+no migration or new browser frame is introduced. `sourceToolId` is the scoped
+`copilot:<turn UUID>:<owner/raw ID pair>` tool ID. Explicit native image/resource
+bytes are copied to `chat/artifacts/<conversationId>/`; resource URI basenames
+are sanitized by the shared store and other names include a SHA256 prefix.
+Overlapping native views are deduplicated within each tool. Distinct subsequent
+tools/turns may intentionally produce separate files; normal store collision
+suffixing is preserved. Backend base64 payloads and native resource URIs are not
+stored as browser-frame artifact descriptors. Saved blocks retain path, filename,
+kind, size, MIME, title and sourceToolId after Stop or reload.

@@ -482,3 +482,22 @@ percentage/reset, original fetched time, stale state and service-delay caveat.
 Unknown units remain `quota units (unit not reported)`; no missing amount implies
 zero or exhausted access. No account percentage is projected across a guessed
 billing cycle.
+
+### Copilot media and artifact delivery
+
+The upload wire format remains a trailing `[Uploaded files: ...]` tag; the
+server's Copilot SDK path translates it into actual file attachments. Admission
+validates the effective profile/model/provider before saving a user message. A
+media refusal is a normal actionable `400`, so the existing send-error path
+retains draft text and uploaded chips. Runtime PDF support is independent of
+vision and the one-shot media transport; see the backend media contract.
+
+Native tool bytes arrive as ordinary browser `artifact` frames containing only
+a saved ConversationArtifact descriptor. The existing stream reducer appends
+artifact blocks to the current placeholder, and saved assistant messages replace
+the placeholder. GeneratedArtifact uses the authenticated conversation files
+route for image thumbnails, View, and Download. Ordered saved blocks survive
+reload, including already-delivered output from cancelled turns. Stopped desktop
+turns keep their existing collapsed progress breadcrumb; expanding it exposes
+the saved artifact cards. Existing FILE_DELIVERY workspace cards remain unchanged. Neither the card nor Copilot
+model metadata claims native image generation.
