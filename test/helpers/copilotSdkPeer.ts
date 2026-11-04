@@ -68,6 +68,15 @@ net.createServer(socket => {
    sent = true;
    const id = params.sessionId;
    const prompt = params.prompt;
+   if(prompt.includes('ACK_BEFORE_START')) {
+    record({method:'ack',sessionId:id});
+    const timer=setInterval(()=>{if(fs.existsSync(release)){
+     clearInterval(timer);record({method:'turn-start'});
+     emit(id,'user.message',{content:prompt,messageId:'user-'+id,delivery:'idle'});
+     emit(id,'assistant.turn_start',{turnId:'0'});
+    }},10);
+    return {messageId:'user-'+id};
+   }
    if(prompt.includes('EARLY_IDLE')) emit(id,'session.idle');
    emit(id,'user.message',{content:prompt,messageId:'user-'+id,delivery:'idle'});
    emit(id,'assistant.turn_start',{turnId:'0'});

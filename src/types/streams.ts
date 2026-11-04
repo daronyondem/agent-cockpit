@@ -37,6 +37,7 @@ export interface ToolActivityEvent {
   planAction?: 'enter' | 'exit';
   isQuestion?: boolean;
   questions?: ToolQuestion[];
+  inputRequestId?: string;
 }
 
 export interface ToolOutcomesEvent {
@@ -134,6 +135,7 @@ export interface BackendRuntimeEvent {
 }
 
 export type StreamEvent =
+  | { type: 'input_ready'; turnId: string | null }
   | TextEvent
   | ThinkingEvent
   | ToolActivityEvent
@@ -201,10 +203,21 @@ export interface StreamJobFile {
   jobs: DurableStreamJob[];
 }
 
+export interface BackendInputRequest {
+  text: string;
+  requestId?: string;
+  turnId?: string;
+  inputId?: string;
+}
+
+export type BackendInputResult = { accepted: true }
+  | { accepted: false; status: 400 | 409 | 503; error: string };
+
 export interface ActiveStreamEntry {
   stream: AsyncGenerator<StreamEvent>;
   abort: () => void;
   sendInput: (text: string) => void;
+  deliverInput?: (input: BackendInputRequest) => Promise<BackendInputResult>;
   backend: string;
   needsTitleUpdate: boolean;
   titleUpdateMessage: string | null;

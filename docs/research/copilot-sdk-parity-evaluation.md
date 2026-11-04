@@ -16,8 +16,8 @@ not hosted model quality or Copilot account access.
 | Catalog | models.list rejects unauthenticated access; normal authenticated credentials return an explicit HTTP 403 | Successful account-dependent model lists |
 | Session create/resume | Same native ID resumes and answers another prompt; JSONL-created session resumes through SDK with original history; facade dispatch uses SDK | Hosted account and platform qualification |
 | Conversation owner | Production facade cold-resumes ID/history across owned processes; cancellation reaps a real tool worker before immediate replacement | Windows/Linux SDK qualification |
-| Questions | Native ask_user calls SDK onUserInputRequest; Beta reaches the next model request | Desktop/mobile request ownership and reload |
-| Steering | An immediate message sent during an in-flight model request reaches the next tool-loop iteration | Boundary-to-enqueue behavior and both clients |
+| Questions | Production UUID-correlated callbacks handle repeated questions/freeform, stale refusal, active reload and Stop in desktop/mobile | Hosted models and Windows/Linux |
+| Steering | Production consumption correlation, paused boundary withdrawal and cold resume prevent late follow-up execution; desktop/mobile draft/file preservation passes | Hosted models and Windows/Linux |
 | Delegation | Native task starts/completes a child with agentId and root toolCallId; root finishes separately | Parallel/nested/background display and cleanup |
 | Context | metadata.contextInfo returns token categories, totalTokens and prompt limit | Native live UI, supported versions, hosted models |
 | Usage | Measured local-provider totals survive cold resume; cache-inclusive input is split into fresh/cache buckets; delegated usage is included once | Hosted billing/entitlements, nano-AIU display, quota/context UI |
@@ -55,8 +55,8 @@ limited to a failed resume before observable work or prompt submission. Native
 checks cold-resume through this owner and retain actual history, then separately
 abort a TERM-resistant native tool worker and immediately resume the same native session without starting that worker again.
 Normal production chat now uses SDK; explicit opaque command overrides retain
-JSONL. This transport migration does not expose question/steering/child controls
-in either browser client.
+JSONL. The subsequent structured-input checkpoint exposes questions and explicit
+steering in both clients. Grouped child presentation remains pending.
 
 The published SDK's generated checkpoint schema differs from the older JSONL
 accounting shape. A measured native 1.0.105 probe supplied 120 input tokens,
@@ -127,10 +127,10 @@ to per-run temporary folders referenced by `sdk-evidence-path.txt` and
 `owned-evidence-path.txt`; ACP evidence is referenced by
 `acp-evidence-path.txt`. These temporary paths are not shipped data stores.
 
-`npm run e2e:copilot-sdk` retains nine reproducible native cases and emits a
+`npm run e2e:copilot-sdk` retains fourteen reproducible native cases and emits a
 temporary compatibility report with CLI/SDK/OS/Node/revision/dirty metadata,
 plus per-case local requests and native events (or explicitly labeled Cockpit
-frames for the conversation-owner/facade cases). The nine-case run passes on
+frames for the conversation-owner/facade cases). The fourteen-case run passes on
 Node 22.23.4/macOS arm64. The test workflow adds a pinned 1.0.105 matrix on
 macOS 15, Ubuntu 24.04 and Windows; until those jobs run, their presence is not
 platform certification. Machine-local evidence does not substitute for
@@ -176,3 +176,41 @@ and reject their probe sends without inference, while the existing eight retain
 real SDK/local-provider behavior. Production web JS totals 898.5 KiB under the
 unchanged 900 KiB total budget. Browser screenshots show the unavailable
 selection/fallback status without layout overflow.
+
+## Structured input implementation checkpoint — 2026-11-04
+
+SDK 1.0.28 / CLI 1.0.105 confirms two queue boundaries which are not implied
+by a successful send RPC. First, initial send admission can arrive before
+native execution starts; pausing queue drain immediately after admission stalls
+the initial prompt. Wait for root `assistant.turn_start` as well. Second,
+unconsumed immediate input is promoted into the native follow-up lane at idle.
+Pause that lane, correlate the correction's native steering-delivery ID, and
+withdraw unconsumed input with `queue.withdrawMessage` before ending the owned
+runtime. Native tests prove the final-boundary fixture performs one model call,
+rejects the late input, and cold-resumes without that correction in history or
+an automatic second execution. Normal steering can still produce background
+shell iterations before root idle.
+
+Production callback tests prove repeated identical prompts have distinct IDs,
+old IDs resolve no later question, and choice/freeform answers reach the native
+model. Stop while a question was pending initially exposed an extra model
+request: graceful detach allowed the callback's cancellation error to reach the
+native tool. Force-close SDK transport before rejecting callbacks. The native
+regression now proves Stop plus cold resume makes only the intended initial
+and replacement calls, with no cancelled input replay.
+
+Fourteen native SDK checks, six native application workflows and eighteen
+rebuilt Chromium cases pass locally. The browser cases include active reload,
+repeated requests, freeform answers, Stop with a retained draft/file, consumed
+steering and refused late steering on desktop/mobile. The first browser run
+revealed idle-placeholder assumptions in test selectors; target the composer
+independently of its current status. Choices-only enforcement and failure races
+also have deterministic controller/client coverage. Full CI-style coverage
+passes 2,915 tests at 88.71% statements/lines, 76.32% branches and 93.68%
+functions. The feature adds about 2.4 KiB minified desktop JS; budgets become
+903 KiB total / 263 KiB entry, with other limits unchanged.
+
+The [official steering and queueing documentation](https://github.com/github/copilot-sdk/blob/main/docs/features/steering-and-queueing.md)
+and installed public SDK declarations inform the integration; the selected
+native runtime establishes actual queue semantics. Successful hosted accounts,
+auth isolation and real Windows/Linux qualification remain outstanding.

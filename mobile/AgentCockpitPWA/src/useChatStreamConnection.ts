@@ -35,6 +35,7 @@ export function useChatStreamConnection(options: UseChatStreamConnectionOptions)
   const [streamText, setStreamText] = useState('');
   const [showStreamPlaceholder, setShowStreamPlaceholder] = useState(false);
   const [isStreaming, setIsStreamingState] = useState(false);
+  const [inputTurnId, setInputTurnId] = useState<string | null>(null);
 
   resumeStreamConnectionRef.current = resumeStreamConnection;
 
@@ -46,11 +47,13 @@ export function useChatStreamConnection(options: UseChatStreamConnectionOptions)
   });
 
   function setIsStreaming(value: boolean) {
+    if (!value) setInputTurnId(null);
     setIsStreamingState(value);
     isStreamingRef.current = value;
   }
 
   function closeStreamSocket() {
+    setInputTurnId(null);
     const socket = socketRef.current;
     socketRef.current = null;
     socket?.close();
@@ -74,6 +77,7 @@ export function useChatStreamConnection(options: UseChatStreamConnectionOptions)
       socket.send(JSON.stringify({ type: 'reconnect' }));
     };
     socket.onmessage = (event) => {
+      if (socketRef.current !== socket || options.activeConversationRef.current?.id !== conversationID) return;
       try {
         handleStreamEvent(conversationID, JSON.parse(event.data) as StreamEvent);
       } catch {
@@ -195,6 +199,13 @@ export function useChatStreamConnection(options: UseChatStreamConnectionOptions)
       case 'set-pending-interaction':
         options.setPendingInteraction(action.interaction);
         break;
+      case 'set-input-turn':
+        setInputTurnId(action.turnId);
+        break;
+      case 'resolve-input-requests':
+        options.setPendingInteraction(current => current?.kind === 'question' && current.requestId
+          && action.requestIds.includes(current.requestId) ? null : current);
+        break;
       case 'update-title':
         options.setActiveConversation((current) => (current && current.id === conversationID ? { ...current, title: action.title || current.title } : current));
         options.setConversations((items) => items.map((item) => (item.id === conversationID ? { ...item, title: action.title || item.title } : item)));
@@ -229,6 +240,7 @@ export function useChatStreamConnection(options: UseChatStreamConnectionOptions)
   }
 
   function markStreamFinished(conversationID: string) {
+    options.setPendingInteraction(current => current?.kind === 'question' && current.requestId ? null : current);
     clearStreamReconnectTimer();
     streamReconnectAttemptsRef.current = 0;
     setIsStreaming(false);
@@ -247,6 +259,7 @@ export function useChatStreamConnection(options: UseChatStreamConnectionOptions)
     showStreamPlaceholder,
     setShowStreamPlaceholder,
     isStreaming,
+    inputTurnId,
     setIsStreaming,
     closeStreamSocket,
     startStream,

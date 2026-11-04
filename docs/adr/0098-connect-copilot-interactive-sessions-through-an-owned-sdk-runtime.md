@@ -15,10 +15,12 @@ affects:
   - src/services/backends/copilotUsage.ts
   - src/services/backends/copilotSdkEvents.ts
   - src/services/backends/copilotSessionConfig.ts
+  - src/services/backends/copilotInputs.ts
   - src/services/backends/copilotModels.ts
   - src/services/backends/copilotCatalog.ts
   - src/contracts/responses.ts
   - src/contracts/streams.ts
+  - src/contracts/streamFrames.ts
   - src/services/backends/copilotTools.ts
   - src/services/backends/copilotProcess.ts
   - src/services/cliProfileAuthService.ts
@@ -122,6 +124,21 @@ message boundary so changing to a model without effort cannot retain a stale
 stored selection in either client. This closes static-catalog UI drift without
 claiming successful hosted account or media certification.
 
+Keep questions and steering in a focused input owner. Give each question a
+unique request ID, resolve it once through its native callback, and never turn
+a stale answer into a new message. Expose steering as an explicit action while
+retaining Enter's existing Cockpit queue behavior. Pause native follow-up drain
+only after initial send acknowledgement and root turn start; pausing earlier
+can stall that first prompt. Accept steering only when its native message ID
+is delivered as steering. At idle, withdraw any unconsumed immediate message
+while the native queued lane stays paused, then retain the user's draft/files.
+Reject uncertain delivery and stop without replay. Close the SDK input channel
+before rejecting question callbacks during Stop to prevent a native error
+response from releasing another iteration. Reconstruct exact pending questions
+from stream replay on desktop/mobile, preserving newer questions/answers during
+late HTTP acknowledgements. These semantics are verified against the selected
+CLI, rather than inferred from SDK send acceptance.
+
 ## Alternatives Considered
 
 - **SDK-owned stdio process:** direct and port-free, but bypasses existing
@@ -138,6 +155,10 @@ claiming successful hosted account or media certification.
 - **Force every command wrapper onto SDK:** breaks wrappers whose provider
   environment is private. Extracting process environments would add sensitive,
   platform-dependent inspection. Preserve their existing JSONL path instead.
+- **Let native steering auto-enqueue or change Enter to steer:** native
+  unconsumed messages can start an unexpected second execution and compete with
+  Cockpit's persisted queue. Explicit steering plus paused withdrawal preserves
+  the existing queue semantics and leaves rejected input reviewable.
 
 ## Consequences
 

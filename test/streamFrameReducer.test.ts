@@ -73,6 +73,21 @@ function replayFrames(
 }
 
 describe('streamFrameReducer', () => {
+  test('replays only the current correlated question and clears turn readiness at stream boundaries', () => {
+    const question = (id: string): BrowserStreamFrame => ({ type: 'tool_activity', isQuestion: true, inputRequestId: id,
+      questions: [{ question: 'Same question?', options: [{ label: 'Beta' }], allowFreeform: false }] });
+    const answered: BrowserStreamFrame = { type: 'tool_outcomes', outcomes: [{ toolUseId: 'first', outcome: 'answered', isError: false, status: 'success' }] };
+    const current = replayFrames(baseState({ streaming: true }), [
+      { type: 'replay_start' }, { type: 'input_ready', turnId: 'turn' }, question('first'), answered, question('second'), answered, { type: 'replay_end' },
+    ]).state;
+    expect(current.inputTurnId).toBe('turn');
+    expect(current.pendingInteraction).toMatchObject({ requestId: 'second', allowFreeform: false });
+    for (const frame of [{ type: 'done' }, { type: 'error', error: 'Stopped' }, { type: 'replay_start' }] as BrowserStreamFrame[]) {
+      const next = reduceStreamFrame(current, frame, { nowMs: 1 }).state;
+      expect(next.inputTurnId).toBeNull();
+      expect(next.pendingInteraction).toBeNull();
+    }
+  });
   test('builds placeholder content blocks from streamed frames', () => {
     const initial = baseState({ conv: baseConversation(), streaming: true, uiState: 'streaming' });
 

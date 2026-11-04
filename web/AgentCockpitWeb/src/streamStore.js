@@ -259,6 +259,9 @@ import { reduceStreamFrame } from './stream/streamFrameReducer.ts';
       uiState: null,
       unread: false,
       pendingInteraction: null,
+      inputTurnId: null,
+      inputError: null,
+      steeringPending: false,
       respondPending: false,
       composerCliProfileId: null,
       composerBackend: null,
@@ -874,6 +877,8 @@ import { reduceStreamFrame } from './stream/streamFrameReducer.ts';
       streamingMsgId: null,
       pendingInteraction: null,
       goal: freshSession ? null : next.goal,
+      inputTurnId: null,
+      inputError: freshSession ? null : next.inputError,
       goalMode: freshSession ? false : next.goalMode,
       planModeActive: false,
       replayActive: false,
@@ -1284,7 +1289,7 @@ import { reduceStreamFrame } from './stream/streamFrameReducer.ts';
        wiped state. On POST failure we keep this copy intact for refresh. */
     flushDraftNow(convId);
 
-    update(convId, { sending: true, streamError: null, streamErrorSource: null, pendingInteraction: null, pendingAttachments: [] });
+    update(convId, { sending: true, streamError: null, streamErrorSource: null, pendingInteraction: null, pendingAttachments: [], inputTurnId: null, inputError: null });
 
     try {
       await ensureWsOpen(convId);
@@ -1405,7 +1410,7 @@ import { reduceStreamFrame } from './stream/streamFrameReducer.ts';
     if (!objective) return;
     flushDraftNow(convId);
 
-    update(convId, { sending: true, streamError: null, streamErrorSource: null, pendingInteraction: null, pendingAttachments: [] });
+    update(convId, { sending: true, streamError: null, streamErrorSource: null, pendingInteraction: null, pendingAttachments: [], inputTurnId: null, inputError: null });
 
     try {
       await ensureWsOpen(convId);
@@ -1908,6 +1913,7 @@ import { reduceStreamFrame } from './stream/streamFrameReducer.ts';
         streamingMsgId: null,
         pendingInteraction: null,
         planModeActive: false,
+        inputTurnId: null,
         replayActive: false,
         uiState: 'error',
         messages: cur.streamingMsgId
@@ -1956,7 +1962,7 @@ import { reduceStreamFrame } from './stream/streamFrameReducer.ts';
     const s = states.get(convId);
     if (!s || s.sending || s.streaming) return;
     const prevGoal = s.goal;
-    update(convId, { sending: true, streamError: null, streamErrorSource: null, pendingInteraction: null });
+    update(convId, { sending: true, streamError: null, streamErrorSource: null, pendingInteraction: null, inputTurnId: null, inputError: null });
     try {
       await ensureWsOpen(convId);
     } catch (err) {
@@ -2082,7 +2088,7 @@ import { reduceStreamFrame } from './stream/streamFrameReducer.ts';
       persistQueue(convId, restoredQueue).catch(() => {});
     };
 
-    update(convId, { sending: true, streamError: null, streamErrorSource: null, pendingInteraction: null });
+    update(convId, { sending: true, streamError: null, streamErrorSource: null, pendingInteraction: null, inputTurnId: null, inputError: null });
     try {
       await ensureWsOpen(convId);
     } catch (err) {
@@ -2212,20 +2218,25 @@ import { reduceStreamFrame } from './stream/streamFrameReducer.ts';
     if (!s.pendingInteraction) return;
     const interaction = s.pendingInteraction;
 
-    update(convId, { respondPending: true });
+    update(convId, { respondPending: true, inputError: null });
 
     let mode;
     try {
       const streamActive = s.streaming || s.sending;
       /** @type {ConversationInputRequest} */
-      const body = { text, streamActive };
+      const body = { text, streamActive, ...(interaction.requestId ? { requestId: interaction.requestId } : {}) };
       const res = await AgentApi.fetch(
         'conversations/' + encodeURIComponent(convId) + '/input',
         { method: 'POST', body }
       );
       const data = await res.json();
       mode = data && data.mode;
+      if (interaction.requestId && mode !== 'stdin') throw new Error('This question is no longer accepting an answer.');
     } catch (err) {
+      if (interaction.requestId) {
+        update(convId, { inputError: err.message || String(err), respondPending: false });
+        return;
+      }
       update(convId, { streamError: err.message || String(err), streamErrorSource: null, respondPending: false, uiState: 'error' });
       return;
     }
@@ -2248,6 +2259,34 @@ import { reduceStreamFrame } from './stream/streamFrameReducer.ts';
 
     update(convId, { pendingInteraction: null, respondPending: false, uiState: null });
     await send(convId, text);
+  }
+
+  async function steer(convId){
+    const s = states.get(convId);
+    if (!s?.streaming || !s.inputTurnId || s.steeringPending || s.pendingInteraction) return;
+    const draft = s.input;
+    const attachments = s.pendingAttachments || [];
+    if (attachments.some(attachment => attachment.status === 'uploading')) return;
+    const text = composeWireContent({ content: draft.trim(), attachments: attachments.filter(attachment => attachment.status === 'done').map(attachment => attachment.result).filter(Boolean) });
+    if (!text) return;
+    flushDraftNow(convId);
+    update(convId, { steeringPending: true, inputError: null });
+    try {
+      const res = await AgentApi.fetch('conversations/' + encodeURIComponent(convId) + '/input', {
+        method: 'POST', body: { text, streamActive: true, turnId: s.inputTurnId, inputId: Date.now() + '-' + Math.random() },
+      });
+      const data = await res.json();
+      if (data?.mode !== 'stdin') throw new Error('Steering was not confirmed. Your draft was preserved.');
+      update(convId, cur => ({ ...cur,
+        input: cur.input === draft ? '' : cur.input,
+        pendingAttachments: cur.pendingAttachments.filter(attachment => !attachments.includes(attachment)),
+      }));
+      scheduleDraftSave(convId);
+    } catch (err) {
+      update(convId, { inputError: err.message || String(err) });
+    } finally {
+      update(convId, { steeringPending: false });
+    }
   }
 
   function patchConv(convId, patch){
@@ -2445,6 +2484,7 @@ export const StreamStore = {
     setGoalMode,
     refreshGoal,
     respond,
+    steer,
     setInput,
     setComposerCliProfile,
     setComposerBackend,

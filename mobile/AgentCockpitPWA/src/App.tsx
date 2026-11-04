@@ -132,6 +132,7 @@ export default function App() {
     showStreamPlaceholder,
     setShowStreamPlaceholder,
     isStreaming,
+    inputTurnId,
     setIsStreaming,
     closeStreamSocket,
     startStream,
@@ -203,6 +204,9 @@ export default function App() {
   });
   const {
     isSending,
+    steeringPending,
+    interactionPending,
+    steerDraft,
     sendDraft,
     drainNextQueuedMessage,
     submitInteraction,
@@ -234,6 +238,7 @@ export default function App() {
     selectedServiceTier,
     serviceTierEnabled,
     isStreaming,
+    inputTurnId,
     startStream,
     markStreamFinished,
     recoverActiveStream,
@@ -745,6 +750,9 @@ export default function App() {
           showStreamPlaceholder={showStreamPlaceholder}
           isStreaming={isStreaming}
           isSending={isSending}
+          steeringAvailable={!!inputTurnId}
+          steeringPending={steeringPending}
+          interactionPending={interactionPending}
           loading={loading}
           errorMessage={errorMessage}
           goal={goal}
@@ -770,6 +778,7 @@ export default function App() {
             void refreshConversationList();
           }}
           onSend={() => void sendDraft()}
+          onSteer={() => void steerDraft()}
           onStop={() => void stopStream()}
           onGoalModeChange={setGoalMode}
           onRefreshGoal={() => void refreshGoalState()}

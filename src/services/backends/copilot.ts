@@ -22,6 +22,7 @@ export { resolveCopilotCliRuntime, type CopilotCliRuntime } from './copilotRunti
 import { logger } from '../../utils/logger';
 import type {
   BackendMetadata,
+  BackendInputRequest,
   EffortLevel,
   McpServerConfig,
   ModelOption,
@@ -108,7 +109,9 @@ export class CopilotAdapter extends BaseBackendAdapter {
   async getMetadata(options: BackendCallOptions = {}): Promise<BackendMetadata> {
     if (options.refreshModels) await this.catalog.shutdown();
     if (this.closed || this.closing) return this.metadata;
-    return { ...this.metadata, ...await this.catalog.get(options.cliProfile) };
+    const interactive = copilotChatTransport(options.cliProfile) === 'sdk';
+    return { ...this.metadata, capabilities: { ...this.metadata.capabilities, userQuestions: interactive, stdinInput: interactive },
+      ...await this.catalog.get(options.cliProfile) };
   }
 
   sendMessage(message: string, options: SendMessageOptions): SendMessageResult {
@@ -127,6 +130,8 @@ export class CopilotAdapter extends BaseBackendAdapter {
         void this.closeTurn(state).catch(error => copilotLog.warn('Copilot turn cleanup failed', { error: String(error) }));
       },
       sendInput: () => {},
+      ...(copilotChatTransport(options.cliProfile) === 'sdk' ? { deliverInput: (input: BackendInputRequest) => state.sdk?.deliverInput
+        ? state.sdk.deliverInput(input) : Promise.resolve({ accepted: false as const, status: 409 as const, error: 'Copilot input is not active.' }) } : {}),
     };
   }
 

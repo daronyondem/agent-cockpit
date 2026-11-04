@@ -98,7 +98,11 @@ server.listen(0,'127.0.0.1',()=>{
     const controller = new AbortController();
     active = await startCopilotSdkRuntime(runtime(), dir, { abortSignal: controller.signal });
     const pid = active.process.pid!;
+    const graceful = jest.spyOn(active.client, 'stop');
+    const forced = jest.spyOn(active.client, 'forceStop');
     controller.abort();
+    expect(graceful).not.toHaveBeenCalled();
+    expect(forced).toHaveBeenCalled();
     expect((await active.closed).message).toBe('Copilot runtime aborted.');
     await active.stop();
     expect(alive(pid)).toBe(false);

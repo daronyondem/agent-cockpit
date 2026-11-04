@@ -19,7 +19,8 @@ native('real Copilot owned SDK runtime with fixed local model responses', () => 
   let runtime: CopilotSdkRuntime | undefined;
   let provider: http.Server;
   let baseUrl: string;
-  let scenario: 'text' | 'question' | 'steer' | 'delegate' | 'wait';
+  let scenario: 'text' | 'question' | 'questions' | 'steer' | 'delegate' | 'wait';
+  let finalBeforeSteer: boolean;
   let requests: Array<Record<string, unknown>>;
   let events: Array<Record<string, unknown>>;
   let releaseSteer: (() => void) | undefined;
@@ -30,7 +31,7 @@ native('real Copilot owned SDK runtime with fixed local model responses', () => 
   beforeEach(async () => {
     dir = fs.mkdtempSync(path.join(os.tmpdir(), 'copilot-sdk-native-'));
     fs.writeFileSync(path.join(dir, 'AGENTS.md'), '# Synthetic instructions\nSDK_MANAGED_INSTRUCTIONS_MARKER\n');
-    scenario = 'text'; requests = []; events = []; releaseSteer = undefined; question = undefined;
+    scenario = 'text'; requests = []; events = []; releaseSteer = undefined; question = undefined; finalBeforeSteer = false;
     provider = http.createServer((req, res) => {
       let body = '';
       req.on('data', chunk => { body += chunk.toString(); });
@@ -48,10 +49,12 @@ native('real Copilot owned SDK runtime with fixed local model responses', () => 
         const say = (content: string) => reply({ role: 'assistant', content });
         const call = (name: string, args: object) => {
           if (!tools.some((tool: { name: string }) => tool.name === name)) { res.writeHead(400); res.end('Fixture tool missing'); return; }
-          reply({ role: 'assistant', tool_calls: [{ index: 0, id: `fixture-${name}`, type: 'function', function: { name, arguments: JSON.stringify(args) } }] }, 'tool_calls');
+          reply({ role: 'assistant', tool_calls: [{ index: 0, id: `fixture-${name}-${requests.length}`, type: 'function', function: { name, arguments: JSON.stringify(args) } }] }, 'tool_calls');
         };
         const hasTool = messages.some(message => message.role === 'tool');
-        if (scenario === 'question' && !hasTool) call('ask_user', { question: 'Choose a fixture answer', choices: ['Alpha', 'Beta'] });
+        if (scenario === 'questions' && messages.filter(message => message.role === 'tool').length < 2) {
+          call('ask_user', { question: 'Choose a fixture answer', choices: ['Alpha', 'Beta'] });
+        } else if (scenario === 'question' && !hasTool) call('ask_user', { question: 'Choose a fixture answer', choices: ['Alpha', 'Beta'] });
         else if (scenario === 'wait' && !hasTool) {
           const powershell = process.platform === 'win32' && tools.some((tool: { name: string }) => tool.name === 'powershell');
           const quote = (value: string) => powershell ? `'${value.replace(/'/g, "''")}'` : `'${value.replace(/'/g, "'\\''")}'`;
@@ -60,6 +63,7 @@ native('real Copilot owned SDK runtime with fixed local model responses', () => 
         } else if (scenario === 'steer' && !hasTool) {
           releaseSteer = () => {
             releaseSteer = undefined;
+            if (finalBeforeSteer) { say('SDK_FINISHED_BEFORE_CORRECTION'); return; }
             const shell = process.platform === 'win32' && tools.some((tool: { name: string }) => tool.name === 'powershell') ? 'powershell' : 'bash';
             call(shell, { command: 'echo SDK_STEER_CHECKPOINT', description: 'Synthetic steering checkpoint', initial_wait: 1000 });
           };
@@ -70,7 +74,7 @@ native('real Copilot owned SDK runtime with fixed local model responses', () => 
           else say('SDK_PARENT_OK');
         } else if (scenario === 'wait') say('SDK_WAIT_RETURNED');
         else if (scenario === 'steer') say(JSON.stringify(messages).includes('SDK_CORRECTION') ? 'SDK_STEER_OK' : 'SDK_STEER_MISSING');
-        else if (scenario === 'question') say(JSON.stringify(messages.at(-1)?.content));
+        else if (scenario === 'question' || scenario === 'questions') say(JSON.stringify(messages.at(-1)?.content));
         else say('SDK_TEXT_OK');
       });
     });
@@ -256,6 +260,88 @@ native('real Copilot owned SDK runtime with fixed local model responses', () => 
         inputTokens: 240, outputTokens: 90, cacheReadTokens: 120, cacheWriteTokens: 0, credits: 0, costUsd: 0, costSource: 'none',
       } }]);
       expect(delegated.filter(frame => frame.type === 'text').map(frame => frame.content).join('')).toBe('SDK_PARENT_OK');
+    } finally { await adapter.shutdown(); }
+  }, 60000);
+
+  test('production questions retain distinct identities, reject duplicate answers, and accept freeform', async () => {
+    await runtime!.stop(); runtime = undefined;
+    const adapter = new CopilotAdapter({ workingDir: dir });
+    try {
+      scenario = 'questions';
+      const active = adapter.sendMessage('SDK_REPEATED_QUESTIONS', conversationOptions());
+      const pending = collectConversation(active.stream);
+      const questions = () => events.filter(event => event.type === 'tool_activity' && event.inputRequestId);
+      await waitForCopilotPeer(() => questions().length === 1);
+      const first = String(questions()[0].inputRequestId);
+      expect(await active.deliverInput!({ text: 'Beta', requestId: first })).toEqual({ accepted: true });
+      await waitForCopilotPeer(() => questions().length === 2);
+      const second = String(questions()[1].inputRequestId);
+      expect(second).not.toBe(first);
+      expect(await active.deliverInput!({ text: 'Alpha', requestId: first })).toMatchObject({ accepted: false, status: 409 });
+      expect(await active.deliverInput!({ text: 'SDK_FREEFORM', requestId: second })).toEqual({ accepted: true });
+      const frames = await pending;
+      expect(frames.some(frame => frame.type === 'error')).toBe(false);
+      expect(frames.some(frame => frame.type === 'text' && frame.content.includes('SDK_FREEFORM'))).toBe(true);
+      expect(requests).toHaveLength(3);
+    } finally { await adapter.shutdown(); }
+  }, 60000);
+
+  test.each([false, true])('production steering confirms consumption or withdraws the late message (final boundary: %s)', async finalBoundary => {
+    await runtime!.stop(); runtime = undefined;
+    const adapter = new CopilotAdapter({ workingDir: dir });
+    try {
+      scenario = 'steer'; finalBeforeSteer = finalBoundary;
+      const active = adapter.sendMessage('SDK_INITIAL', conversationOptions());
+      const pending = collectConversation(active.stream);
+      const turn = () => events.find(event => event.type === 'input_ready' && event.turnId);
+      await waitForCopilotPeer(() => !!turn() && !!releaseSteer);
+      const delivery = active.deliverInput!({ text: 'SDK_CORRECTION', turnId: String(turn()!.turnId), inputId: 'native-correction' });
+      // Hold the fixture response while the native immediate RPC is admitted.
+      await new Promise(resolve => setTimeout(resolve, 150));
+      releaseSteer!();
+      expect(await delivery).toMatchObject(finalBoundary ? { accepted: false, status: 409 } : { accepted: true });
+      const frames = await pending;
+      expect(frames.some(frame => frame.type === 'error')).toBe(false);
+      expect(frames.filter(frame => frame.type === 'text').map(frame => frame.content).join('')).toBe(finalBoundary ? 'SDK_FINISHED_BEFORE_CORRECTION' : 'SDK_STEER_OK');
+      if (finalBoundary) expect(requests).toHaveLength(1);
+      const session = frames.find(frame => frame.type === 'external_session');
+      if (session?.type !== 'external_session') throw new Error('Missing session ID');
+      scenario = 'text';
+      const resumed = await collectConversation(adapter.sendMessage('SDK_AFTER_CORRECTION', conversationOptions({ isNewSession: false, externalSessionId: session.sessionId })).stream);
+      expect(resumed.some(frame => frame.type === 'error')).toBe(false);
+      expect(resumed.filter(frame => frame.type === 'text').map(frame => frame.content).join('')).toBe('SDK_TEXT_OK');
+      if (finalBoundary) {
+        expect(requests).toHaveLength(2);
+        expect(JSON.stringify(requests.at(-1)?.messages)).not.toContain('SDK_CORRECTION');
+      }
+    } finally { await adapter.shutdown(); }
+  }, 60000);
+
+  test.each(['question', 'steer'] as const)('Stop releases pending %s input and cold resume never replays it', async kind => {
+    await runtime!.stop(); runtime = undefined;
+    const adapter = new CopilotAdapter({ workingDir: dir });
+    try {
+      scenario = kind;
+      const active = adapter.sendMessage('SDK_PENDING_INPUT', conversationOptions());
+      const pending = collectConversation(active.stream);
+      await waitForCopilotPeer(() => kind === 'question'
+        ? events.some(event => event.type === 'tool_activity' && event.inputRequestId)
+        : !!releaseSteer && events.some(event => event.type === 'input_ready' && event.turnId));
+      const sessionId = String(events.find(event => event.type === 'external_session')!.sessionId);
+      const questionId = String(events.find(event => event.inputRequestId)?.inputRequestId);
+      const delivery = kind === 'steer' ? active.deliverInput!({ text: 'SDK_MUST_NOT_REPLAY', inputId: 'cancelled-input',
+        turnId: String(events.find(event => event.type === 'input_ready' && event.turnId)!.turnId) }) : undefined;
+      active.abort();
+      if (delivery) expect(await delivery).toMatchObject({ accepted: false, status: 409 });
+      expect((await pending).some(frame => frame.type === 'error' && frame.source === 'abort')).toBe(true);
+      expect(await active.deliverInput!({ text: 'stale answer', requestId: questionId })).toMatchObject({ accepted: false, status: 409 });
+      releaseSteer?.();
+      scenario = 'text';
+      const resumed = await collectConversation(adapter.sendMessage('SDK_AFTER_INPUT_STOP', conversationOptions({ isNewSession: false, externalSessionId: sessionId })).stream);
+      expect(resumed.some(frame => frame.type === 'error')).toBe(false);
+      expect(resumed.some(frame => frame.type === 'text' && frame.content === 'SDK_TEXT_OK')).toBe(true);
+      expect(requests).toHaveLength(2);
+      expect(JSON.stringify(requests.at(-1)?.messages)).not.toContain('SDK_MUST_NOT_REPLAY');
     } finally { await adapter.shutdown(); }
   }, 60000);
 

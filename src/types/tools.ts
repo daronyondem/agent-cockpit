@@ -30,6 +30,7 @@ export interface ToolQuestionOption {
 export interface ToolQuestion {
   question: string;
   options?: ToolQuestionOption[];
+  allowFreeform?: boolean;
 }
 
 export interface ToolOutcome {

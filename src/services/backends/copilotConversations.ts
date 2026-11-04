@@ -7,6 +7,7 @@ import { copilotSessionConfig, composePrompt } from './copilotSessionConfig';
 import { createCopilotSdkEventState, reduceCopilotSdkEvent } from './copilotSdkEvents';
 import { copilotTurnUsage, copilotUsageMetrics } from './copilotUsage';
 import { CopilotModelCatalog, assertCopilotSelection } from './copilotCatalog';
+import { CopilotInputs } from './copilotInputs';
 import { buildNativeSessionRecovery, buildSessionRecoveryEvent, createRecoverySnapshot, isMissingNativeSessionError } from './sessionRecovery';
 
 const log = logger.child({ module: 'copilot-conversations' });
@@ -19,6 +20,7 @@ interface ConversationTurn {
   runtime?: CopilotSdkRuntime;
   cleanup?: Promise<void>;
   wake?: () => void;
+  inputs?: CopilotInputs;
 }
 
 /** One owned runtime per active conversation; persisted sessions survive process cleanup. */
@@ -50,7 +52,8 @@ export class CopilotConversations {
     // Generator finally blocks do not run when return/throw precedes first next.
     stream.return = async value => { await this.cancel(turn); return close(value); };
     stream.throw = async error => { await this.cancel(turn); return fail(error); };
-    return { stream, sendInput: () => {}, abort: () => {
+    return { stream, sendInput: () => {}, deliverInput: input => turn.inputs && !turn.controller.signal.aborted
+      ? turn.inputs.deliver(input) : Promise.resolve({ accepted: false, status: 409, error: 'Copilot input is not active.' }), abort: () => {
       void this.cancel(turn).catch(error => log.warn('Copilot cancellation cleanup failed', { error: String(error) }));
     } };
   }
@@ -88,6 +91,7 @@ export class CopilotConversations {
   private stop(turn: ConversationTurn): Promise<void> {
     if (turn.cleanup) return turn.cleanup;
     turn.controller.abort();
+    turn.inputs?.cancel();
     turn.wake?.();
     turn.cleanup = (async () => {
       await turn.predecessor;
@@ -132,6 +136,8 @@ export class CopilotConversations {
       let state = createCopilotSdkEventState();
       let complete = false;
       let admitted = false;
+      let started = false;
+      let steeringEnabled = false;
       const notify = () => { turn.wake?.(); };
       const finish = (error?: string, source?: 'transport') => {
         if (complete || !accepting || turn.controller.signal.aborted) return;
@@ -141,17 +147,29 @@ export class CopilotConversations {
         }
         complete = true; notify();
       };
+      const finishInputs = () => {
+        void turn.inputs!.finish().then(() => finish(), () => finish('Copilot input cleanup failed; the turn was stopped.', 'transport'));
+      };
+      const enableSteering = () => {
+        if (!admitted || !started || state.idle || complete || steeringEnabled) return;
+        steeringEnabled = true;
+        void turn.inputs!.enableSteering();
+      };
       const onEvent = (event: SessionEvent) => {
         if (!accepting || complete || turn.controller.signal.aborted) return;
         const projected = reduceCopilotSdkEvent(state, event);
         state = projected.state;
         queued.push(...projected.events);
-        if (state.error || (admitted && state.idle)) finish();
+        turn.inputs?.handle(event);
+        if (!event.agentId && event.type === 'assistant.turn_start') { started = true; enableSteering(); }
+        if (state.error) { turn.inputs?.cancel(); finish(); }
+        else if (admitted && state.idle) finishInputs();
         notify();
       };
       accepting = true;
       void turn.runtime.closed.then(error => finish(error.message, 'transport'));
-      const config = { ...copilotSessionConfig(options, runtime.env, workingDir, catalog.models), onEvent };
+      const config = { ...copilotSessionConfig(options, runtime.env, workingDir, catalog.models,
+        request => turn.inputs ? turn.inputs.ask(request) : Promise.reject(new Error('Copilot input is not ready.'))), onEvent };
       let session: CopilotSession;
       let prompt = composePrompt(message, options.systemPrompt, options.isNewSession);
       if (!options.isNewSession && options.externalSessionId) {
@@ -172,6 +190,9 @@ export class CopilotConversations {
           prompt = composePrompt(recovery.prompt, options.systemPrompt, true);
         }
       } else session = await this.wait(turn.runtime.client.createSession({ ...config, trustWorkingDirectory: 'session' }), turn);
+      turn.inputs = new CopilotInputs(session, event => {
+        if (accepting && !complete && !turn.controller.signal.aborted) { queued.push(event); notify(); }
+      }, pending => this.wait(pending, turn), message => finish(message, 'transport'));
       turn.controller.signal.throwIfAborted();
       if (complete) throw new Error(state.error || 'Copilot session closed before prompt submission.');
       yield { type: 'external_session', sessionId: session.sessionId };
@@ -187,8 +208,9 @@ export class CopilotConversations {
       // second request or finish before admission has settled.
       void this.wait(session.send({ prompt }), turn).then(() => {
         admitted = true;
-        if (state.idle) finish();
-      }, error => finish(String(error)));
+        enableSteering();
+        if (state.idle) finishInputs();
+      }).catch(error => finish(String(error)));
       while (!complete || queued.length) {
         turn.controller.signal.throwIfAborted();
         if (queued.length) yield queued.shift()!;

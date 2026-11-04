@@ -13,7 +13,7 @@ function providerFromEnv(env: NodeJS.ProcessEnv): ProviderConfig | undefined {
     ...(env.COPILOT_PROVIDER_API_KEY ? { apiKey: env.COPILOT_PROVIDER_API_KEY } : {}) };
 }
 
-export function copilotSessionConfig(options: SendMessageOptions, env: NodeJS.ProcessEnv, workingDir: string, models: ModelOption[] = COPILOT_MODELS): SessionConfigBase {
+export function copilotSessionConfig(options: SendMessageOptions, env: NodeJS.ProcessEnv, workingDir: string, models: ModelOption[] = COPILOT_MODELS, onUserInputRequest?: SessionConfigBase['onUserInputRequest']): SessionConfigBase {
   const selection = options.model?.trim();
   const model = selection && selection !== 'auto' ? selection : env.COPILOT_MODEL || undefined;
   const selected = models.find(candidate => candidate.id === model);
@@ -26,7 +26,7 @@ export function copilotSessionConfig(options: SendMessageOptions, env: NodeJS.Pr
     ...(effort ? { reasoningEffort: effort } : {}),
     ...(Object.keys(mcp).length ? { mcpServers: mcp } : {}),
     provider: providerFromEnv(env),
-    excludedTools: ['ask_user'],
+    ...(onUserInputRequest ? { onUserInputRequest } : { excludedTools: ['ask_user'] }),
     onPermissionRequest: () => ({ kind: 'approve-once' }),
   };
 }

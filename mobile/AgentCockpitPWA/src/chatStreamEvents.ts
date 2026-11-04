@@ -18,6 +18,8 @@ export type ChatStreamEventAction =
   | { type: 'set-stream-text'; value: string }
   | { type: 'upsert-message'; message: Message }
   | { type: 'set-pending-interaction'; interaction: PendingInteraction }
+  | { type: 'set-input-turn'; turnId: string | null }
+  | { type: 'resolve-input-requests'; requestIds: string[] }
   | { type: 'update-title'; title: string }
   | { type: 'update-usage'; usage: Usage | undefined; sessionUsage: Usage | undefined }
   | { type: 'apply-goal-snapshot'; goal: ThreadGoal | null }
@@ -97,13 +99,21 @@ export function chatStreamEventActions(event: StreamEvent): ChatStreamEventActio
         const question = event.questions[0];
         actions.push({
           type: 'set-pending-interaction',
-          interaction: { kind: 'question', prompt: question.question, options: question.options || [] },
+          interaction: { kind: 'question', prompt: question.question, options: question.options || [],
+            ...(event.inputRequestId ? { requestId: event.inputRequestId } : {}),
+            ...(question.allowFreeform !== undefined ? { allowFreeform: question.allowFreeform } : {}) },
         });
       }
       const notification = streamEventNotification(event);
       if (notification) actions.push({ type: 'notify', notification });
       break;
     }
+    case 'input_ready':
+      actions.push({ type: 'set-input-turn', turnId: event.turnId });
+      break;
+    case 'tool_outcomes':
+      actions.push({ type: 'resolve-input-requests', requestIds: (event.outcomes || []).map(outcome => outcome.toolUseId) });
+      break;
     case 'title_updated':
       if (event.title) {
         actions.push({ type: 'update-title', title: event.title });
@@ -137,6 +147,7 @@ export function chatStreamEventActions(event: StreamEvent): ChatStreamEventActio
       break;
     }
     case 'replay_start':
+      actions.push({ type: 'set-input-turn', turnId: null });
       actions.push({ type: 'set-stream-text', value: '' });
       actions.push({ type: 'set-stream-placeholder', value: true });
       break;

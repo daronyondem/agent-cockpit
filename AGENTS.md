@@ -176,7 +176,16 @@ hosted-account or model-judgment evidence. Record actual CLI/SDK/OS/revision.
 SDK conversation ownership lives in `copilotConversations.ts`; keep native event
 projection pure in `copilotSdkEvents.ts` and shared model/tool/config helpers in
 their focused Copilot modules. Review `test/copilotConversations.test.ts`,
-`test/copilotSdkEvents.test.ts` and `test/copilotSessionConfig.test.ts` before
+`test/copilotInputs.test.ts` and `test/chat.inputs.test.ts` for correlated input
+changes. Keep native callbacks and steering ownership in `copilotInputs.ts`.
+Pause the native queued lane only after initial prompt acknowledgement and root
+turn start; a send acknowledgement does not prove execution has started. Accept
+steering only on its native delivery event and withdraw unconsumed messages at
+idle while the lane remains paused. Never replay an input or turn a stale
+question into a new message. Stop force-closes the SDK connection before
+rejecting callbacks so native question errors cannot continue work. Run both
+native SDK and desktop/mobile browser suites for these changes.
+Review `test/copilotSdkEvents.test.ts` and `test/copilotSessionConfig.test.ts` before
 switching chat dispatch. Session idle drains attached background work; model
 replies, loop ends and child idle do not. Drain late startups and failed cleanup
 before admitting replacements. Resume must not continue interrupted tool work;

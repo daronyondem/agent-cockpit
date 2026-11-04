@@ -5,6 +5,7 @@ import type { PendingInteraction } from './types';
 export function InteractionCard(props: {
   interaction: PendingInteraction;
   answer: string;
+  pending?: boolean;
   allowPlanFeedback: boolean;
   setAnswer: (value: string) => void;
   onSubmit: (answer?: string) => void;
@@ -15,12 +16,12 @@ export function InteractionCard(props: {
         <strong>Plan Approval</strong>
         <p>{props.interaction.prompt}</p>
         {props.allowPlanFeedback ? (
-          <textarea aria-label="Plan revision feedback" placeholder="Describe changes…" value={props.answer} onChange={(event) => props.setAnswer(event.target.value)} rows={3} />
+          <textarea aria-label="Plan revision feedback" placeholder="Describe changes…" value={props.answer} disabled={props.pending} onChange={(event) => props.setAnswer(event.target.value)} rows={3} />
         ) : null}
         <div className="button-row">
-          {props.allowPlanFeedback ? <Button label="Request changes" disabled={!props.answer.trim()} onClick={() => props.onSubmit()} /> : null}
-          <Button label="Reject" variant="danger" onClick={() => props.onSubmit('no')} />
-          <Button label="Approve & run" variant="primary" onClick={() => props.onSubmit('yes')} />
+          {props.allowPlanFeedback ? <Button label="Request changes" disabled={props.pending || !props.answer.trim()} onClick={() => props.onSubmit()} /> : null}
+          <Button label="Reject" variant="danger" disabled={props.pending} onClick={() => props.onSubmit('no')} />
+          <Button label="Approve & run" variant="primary" disabled={props.pending} onClick={() => props.onSubmit('yes')} />
         </div>
       </section>
     );
@@ -30,10 +31,12 @@ export function InteractionCard(props: {
       <strong>Question</strong>
       <p>{props.interaction.prompt}</p>
       <div className="button-row">
-        {props.interaction.options.map((option) => <Button key={option.label} label={option.label} onClick={() => props.setAnswer(option.label)} />)}
+        {props.interaction.options.map((option) => <Button key={option.label} label={option.label} disabled={props.pending} onClick={() => props.interaction.kind === 'question' && props.interaction.allowFreeform === false ? props.onSubmit(option.label) : props.setAnswer(option.label)} />)}
       </div>
-      <textarea value={props.answer} onChange={(event) => props.setAnswer(event.target.value)} rows={3} />
-      <Button label="Answer" variant="primary" disabled={!props.answer.trim()} onClick={() => props.onSubmit()} />
+      {props.interaction.allowFreeform !== false ? <>
+        <textarea aria-label="Your answer" value={props.answer} disabled={props.pending} onChange={(event) => props.setAnswer(event.target.value)} rows={3} />
+        <Button label="Answer" variant="primary" disabled={props.pending || !props.answer.trim()} onClick={() => props.onSubmit()} />
+      </> : null}
     </section>
   );
 }

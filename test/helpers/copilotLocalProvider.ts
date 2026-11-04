@@ -1,4 +1,5 @@
 import http from 'http';
+import fs from 'fs';
 import path from 'path';
 import type { CopilotWorkflowPlan } from './copilotWorkflowEnv';
 
@@ -7,6 +8,7 @@ interface FixtureRequest { messages: FixtureMessage[]; tools?: Array<{ function?
 
 /** Fixed model responses exercise the real CLI/tools without a hosted account. */
 export async function createCopilotLocalProvider(getPlan: () => CopilotWorkflowPlan, workspace: string, marker: string) {
+  let toolSerial = 0;
   const server = http.createServer((req, res) => {
     let body = '';
     req.on('data', data => { body += data.toString(); });
@@ -28,9 +30,17 @@ export async function createCopilotLocalProvider(getPlan: () => CopilotWorkflowP
         const call = (suffix: string, args: object) => {
           const tool = request.tools?.find(item => item.function?.name.endsWith(suffix));
           if (!tool?.function) throw new Error(`Fixture tool unavailable: ${suffix}`);
-          reply({ role: 'assistant', tool_calls: [{ index: 0, id: `fixture-${suffix}`, type: 'function', function: {
+          reply({ role: 'assistant', tool_calls: [{ index: 0, id: `fixture-${suffix}-${++toolSerial}`, type: 'function', function: {
             name: tool.function.name, arguments: JSON.stringify(args),
           } }] }, 'tool_calls');
+        };
+        const hold = (name: string, send: () => void) => {
+          fs.writeFileSync(path.join(workspace, `ui-${name}-ready`), 'ready');
+          const timer = setInterval(() => {
+            if (!fs.existsSync(path.join(workspace, `ui-${name}-release`))) return;
+            clearInterval(timer); send();
+          }, 20);
+          res.on('close', () => clearInterval(timer));
         };
         if ((memory && plan.memoryError) || (context && plan.contextError)) {
           res.writeHead(400, { 'Content-Type': 'application/json' });
@@ -55,6 +65,21 @@ console.log('Updated fixture context from listed sources.');`;
         }
         const toolMessages = request.messages.filter(message => message.role === 'tool');
         if (text.includes('COPILOT_UI_REPLY')) { say('COPILOT_UI_REPLY_OK'); return; }
+        if (text.includes('COPILOT_UI_QUESTION')) {
+          const ask = () => call('ask_user', { question: 'Choose the fixture answer', choices: ['Alpha', 'Beta'] });
+          if (text.includes('COPILOT_UI_QUESTION_LATE') && !toolMessages.length) hold('question', ask);
+          else if (toolMessages.length < 2) ask();
+          else say('COPILOT_UI_QUESTION_OK ' + JSON.stringify(toolMessages.at(-1)?.content));
+          return;
+        }
+        if (text.includes('COPILOT_UI_STEER')) {
+          if (toolMessages.length) { say(text.includes('COPILOT_UI_CORRECTION') ? 'COPILOT_UI_STEER_OK' : 'COPILOT_UI_STEER_MISSING'); return; }
+          hold('input', () => {
+            if (text.includes('COPILOT_UI_STEER_BOUNDARY')) say('COPILOT_UI_BOUNDARY_DONE');
+            else call('bash', { command: 'echo COPILOT_UI_STEER_CHECKPOINT', description: 'Synthetic steering checkpoint', initial_wait: 1000 });
+          });
+          return;
+        }
         if (text.includes('COPILOT_UI_WAIT')) {
           if (toolMessages.length) { say('COPILOT_UI_WAIT_DONE'); return; }
           const quote = (value: string) => `'${value.replace(/'/g, `'\\''`)}'`;

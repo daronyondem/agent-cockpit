@@ -47,7 +47,7 @@ describe('Copilot SDK conversation ownership through an executable RPC peer', ()
     expect(frames.at(-1)).toEqual({ type: 'done' });
     expect(peer.calls().filter(call => call.method === 'session.send')).toHaveLength(1);
     expect(peer.calls().find(call => call.method === 'session.create')?.params).toMatchObject({
-      reasoningEffort: 'high', streaming: true, workingDirectory: dir, excludedTools: ['ask_user'],
+      reasoningEffort: 'high', streaming: true, workingDirectory: dir, requestUserInput: true,
       mcpServers: { 'agent-cockpit-memory': { command: 'node', args: ['stub.cjs'], tools: ['*'], env: { TOKEN: 'fixture-token' } } },
     });
     expect(alive(peer.calls()[0].pid)).toBe(false);
@@ -68,6 +68,21 @@ describe('Copilot SDK conversation ownership through an executable RPC peer', ()
     const methods = peer.calls().map(call => call.method);
     expect(methods.indexOf('session.usage.getMetrics')).toBeLessThan(methods.indexOf('session.send'));
     expect(methods.lastIndexOf('session.usage.getMetrics')).toBeGreaterThan(methods.indexOf('ack'));
+  }, 15000);
+
+  test('does not pause the queued lane until an acknowledged initial prompt has actually started', async () => {
+    const frames: StreamEvent[] = [];
+    const active = conversations.sendMessage('ACK_BEFORE_START', options());
+    const pending = collect(active.stream, frames);
+    await waitForCopilotPeer(() => peer.calls().some(call => call.method === 'ack'));
+    expect(peer.calls().some(call => call.method === 'session.queue.setDrainPaused')).toBe(false);
+    expect(frames.some(frame => frame.type === 'input_ready')).toBe(false);
+    fs.writeFileSync(peer.release, 'start');
+    await waitForCopilotPeer(() => frames.some(frame => frame.type === 'input_ready' && frame.turnId));
+    const methods = peer.calls().map(call => call.method);
+    expect(methods.indexOf('session.queue.setDrainPaused')).toBeGreaterThan(methods.indexOf('turn-start'));
+    active.abort();
+    await pending;
   }, 15000);
 
   test.each(['error', 'hang'])('metrics %s leaves chat usable and omits uncertain charges', async mode => {

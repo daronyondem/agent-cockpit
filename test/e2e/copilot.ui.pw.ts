@@ -22,7 +22,7 @@ async function open(page: Page, title: string, mobile: boolean) {
     await page.getByLabel('Workspace filter').selectOption({ label: workspace.split('/').slice(-2).join('/') });
     await page.locator('.sb-row').filter({ hasText: title }).click();
   }
-  await expect(page.getByPlaceholder(/Message Agent Cockpit/)).toBeVisible();
+  await expect(page.locator('.composer textarea')).toBeVisible();
 }
 async function send(page: Page, prompt: string) {
   await page.getByPlaceholder(/Message Agent Cockpit/).fill(prompt);
@@ -127,6 +127,98 @@ for (const mobile of [false, true]) {
     else await page.locator('.conversation-card').filter({ hasText: title }).click();
     await expect(page.locator(assistant).filter({ hasText: 'COPILOT_UI_REPLY_OK' })).toBeVisible();
   });
+
+  test(`${client} reloads and answers repeated native questions with exact request ownership`, async ({ page, request }) => {
+    const conv = await create(request, `Copilot ${client} questions`);
+    await open(page, conv.title, mobile);
+    await send(page, 'COPILOT_UI_QUESTION');
+    const card = page.locator(mobile ? '.interaction-card' : '.plan').filter({ hasText: 'Choose the fixture answer' });
+    await expect(card).toBeVisible();
+    // Reopen the active stream and reconstruct its pending request from replay.
+    await open(page, conv.title, mobile);
+    await expect(card).toBeVisible();
+    const answer = card.getByRole('textbox');
+    await card.getByRole('button', { name: 'Beta', exact: true }).click();
+    const firstInput = page.waitForRequest(req => req.url().endsWith(`/conversations/${conv.id}/input`) && req.method() === 'POST');
+    await card.getByRole('button', { name: mobile ? 'Answer' : 'Send', exact: true }).click();
+    const firstBody = (await firstInput).postDataJSON();
+    expect(firstBody.requestId).toEqual(expect.any(String));
+    await expect(card).toBeVisible();
+    await expect(answer).toHaveValue('');
+    // Another client cannot answer the old request or turn it into a message.
+    expect((await request.post(`/api/chat/conversations/${conv.id}/input`, { headers: await headers(request),
+      data: { text: 'Alpha', requestId: firstBody.requestId, streamActive: true } })).status()).toBe(409);
+    await answer.fill('COPILOT_UI_FREEFORM');
+    const secondInput = page.waitForRequest(req => req.url().endsWith(`/conversations/${conv.id}/input`) && req.method() === 'POST');
+    await card.getByRole('button', { name: mobile ? 'Answer' : 'Send', exact: true }).click();
+    expect((await secondInput).postDataJSON().requestId).not.toBe(firstBody.requestId);
+    await expect(page.locator(assistant).filter({ hasText: 'COPILOT_UI_FREEFORM' })).toBeVisible();
+    await expect(card).toHaveCount(0);
+    expect((await (await request.get(`/api/chat/conversations/${conv.id}`)).json()).messages.filter((message: { role: string }) => message.role === 'user')).toHaveLength(1);
+    await page.screenshot({ path: test.info().outputPath(`${client}-questions.png`), fullPage: true });
+  });
+
+  test(`${client} can Stop a native question while retaining a draft and attachment`, async ({ page, request }) => {
+    for (const name of ['ready', 'release']) await fs.rm(path.join(workspace, `ui-question-${name}`), { force: true });
+    const conv = await create(request, `Copilot ${client} question Stop`);
+    await open(page, conv.title, mobile);
+    await send(page, 'COPILOT_UI_QUESTION_LATE');
+    await expect.poll(() => fs.access(path.join(workspace, 'ui-question-ready')).then(() => true, () => false)).toBe(true);
+    const composer = page.locator('.composer textarea');
+    await composer.fill('Keep my next draft');
+    const choosing = page.waitForEvent('filechooser');
+    await page.getByLabel(mobile ? 'Attach' : 'Attach files', { exact: true }).click();
+    await (await choosing).setFiles({ name: 'question.txt', mimeType: 'text/plain', buffer: Buffer.from('Synthetic question draft') });
+    await expect(page.getByText('question.txt', { exact: true })).toBeVisible();
+    await fs.writeFile(path.join(workspace, 'ui-question-release'), 'ask');
+    const card = page.locator(mobile ? '.interaction-card' : '.plan').filter({ hasText: 'Choose the fixture answer' });
+    await expect(card).toBeVisible();
+    await page.getByRole('button', { name: mobile ? 'Stop' : 'Stop agent', exact: true }).click();
+    await expect(card).toHaveCount(0);
+    await expect(composer).toHaveValue('Keep my next draft');
+    await expect(page.getByText('question.txt', { exact: true })).toBeVisible();
+    await expect(page.getByLabel('Send', { exact: true })).toBeEnabled();
+  });
+
+  for (const boundary of [false, true]) {
+    test(`${client} steering ${boundary ? 'retains late drafts and files' : 'redirects the current native turn'}`, async ({ page, request }) => {
+      await fs.rm(path.join(workspace, 'ui-input-ready'), { force: true });
+      await fs.rm(path.join(workspace, 'ui-input-release'), { force: true });
+      const conv = await create(request, `Copilot ${client} steering ${boundary}`);
+      await open(page, conv.title, mobile);
+      await send(page, boundary ? 'COPILOT_UI_STEER_BOUNDARY' : 'COPILOT_UI_STEER');
+      await expect.poll(() => fs.access(path.join(workspace, 'ui-input-ready')).then(() => true, () => false)).toBe(true);
+      if (boundary) {
+        const choosing = page.waitForEvent('filechooser');
+        await page.getByLabel(mobile ? 'Attach' : 'Attach files', { exact: true }).click();
+        await (await choosing).setFiles({ name: 'steering.txt', mimeType: 'text/plain', buffer: Buffer.from('Synthetic steering attachment') });
+        await expect(page.getByText('steering.txt', { exact: true })).toBeVisible();
+      }
+      const composer = page.getByPlaceholder(/Message.*(?:Agent Cockpit|queued)|Agent is running/);
+      await composer.fill('COPILOT_UI_CORRECTION');
+      const steer = page.getByRole('button', { name: 'Steer', exact: true });
+      await expect(steer).toBeEnabled();
+      const submitted = page.waitForRequest(req => req.url().endsWith(`/conversations/${conv.id}/input`) && req.method() === 'POST');
+      const delivered = page.waitForResponse(response => response.url().endsWith(`/conversations/${conv.id}/input`));
+      await steer.click();
+      const body = (await submitted).postDataJSON();
+      expect(body).toMatchObject({ turnId: expect.any(String), inputId: expect.any(String), text: expect.stringContaining('COPILOT_UI_CORRECTION') });
+      await expect(composer).toHaveValue('COPILOT_UI_CORRECTION');
+      // The local provider deliberately holds the current model response until
+      // the native immediate request has had time to enter its steering lane.
+      await new Promise(resolve => setTimeout(resolve, 200));
+      await fs.writeFile(path.join(workspace, 'ui-input-release'), 'continue');
+      expect((await delivered).status()).toBe(boundary ? 409 : 200);
+      await expect(page.locator(assistant).filter({ hasText: boundary ? 'COPILOT_UI_BOUNDARY_DONE' : 'COPILOT_UI_STEER_OK' })).toBeVisible();
+      await expect(page.getByLabel('Send', { exact: true })).toBeVisible();
+      await expect(composer).toHaveValue(boundary ? 'COPILOT_UI_CORRECTION' : '');
+      if (boundary) await expect(page.getByText('steering.txt', { exact: true })).toBeVisible();
+      const saved = await (await request.get(`/api/chat/conversations/${conv.id}`)).json();
+      expect(saved.messageQueue || []).toEqual([]);
+      expect(saved.messages.filter((message: { role: string }) => message.role === 'user')).toHaveLength(1);
+      await page.screenshot({ path: test.info().outputPath(`${client}-steering-${boundary}.png`), fullPage: true });
+    });
+  }
 
   test(`${client} retains its draft and attachment after temporary reset admission rejection`, async ({ page, request }) => {
     const conv = await create(request, `Copilot ${client} retry draft`);

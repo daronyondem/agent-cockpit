@@ -207,8 +207,9 @@ export class AgentCockpitAPI {
     );
   }
 
-  async sendInput(conversationID: string, text: string, streamActive: boolean): Promise<InputResponse> {
-    const body: ConversationInputRequest = { text, streamActive };
+  async sendInput(conversationID: string, text: string, streamActive: boolean,
+    identity: Pick<ConversationInputRequest, 'requestId' | 'turnId' | 'inputId'> = {}): Promise<InputResponse> {
+    const body: ConversationInputRequest = { text, streamActive, ...identity };
     return this.request<InputResponse>('POST', `/api/chat/conversations/${encodeURIComponent(conversationID)}/input`, {
       csrf: true,
       body,

@@ -93,6 +93,9 @@ export async function startCopilotSdkRuntime(
     void stop().catch(() => {});
   };
   const abort = () => {
+    // Close the input channel before rejecting pending question callbacks;
+    // otherwise their error responses can release more native work during Stop.
+    failed = true;
     resolveClosed(new Error('Copilot runtime aborted.'));
     void stop().catch(() => {});
   };

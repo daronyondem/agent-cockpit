@@ -91,9 +91,19 @@ describe('mobile chat stream event projections', () => {
       { type: 'refresh-after-stream' },
     ]);
     expect(events.chatStreamEventActions({ type: 'replay_start' })).toEqual([
+      { type: 'set-input-turn', turnId: null },
       { type: 'set-stream-text', value: '' },
       { type: 'set-stream-placeholder', value: true },
     ]);
+  });
+
+  test('projects correlated questions, readiness and exact question resolution for reload and other browsers', () => {
+    expect(events.chatStreamEventActions({ type: 'tool_activity', isQuestion: true, inputRequestId: 'question',
+      questions: [{ question: 'Choose', options: [{ label: 'Beta' }], allowFreeform: false }] })[0])
+      .toEqual({ type: 'set-pending-interaction', interaction: { kind: 'question', prompt: 'Choose', options: [{ label: 'Beta' }], requestId: 'question', allowFreeform: false } });
+    expect(events.chatStreamEventActions({ type: 'input_ready', turnId: 'turn' })).toEqual([{ type: 'set-input-turn', turnId: 'turn' }]);
+    expect(events.chatStreamEventActions({ type: 'tool_outcomes', outcomes: [{ toolUseId: 'question' }] }))
+      .toEqual([{ type: 'resolve-input-requests', requestIds: ['question'] }]);
   });
 
   test('projects list stream monitor events without open-chat side effects', () => {

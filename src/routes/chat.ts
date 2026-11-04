@@ -563,6 +563,8 @@ export async function processStream(
           activeTurnId: event.activeTurnId,
           processId: event.processId,
         });
+      } else if (event.type === 'input_ready') {
+        emit(event);
       } else if (event.type === 'usage') {
         const skipLedger = backend === 'kiro' && event.usage.credits === undefined;
         const updated = await chatService.addUsage(convId, event.usage, backend, event.model, { skipLedger });
@@ -1319,12 +1321,13 @@ export function createChatRouter({ chatService, backendRegistry, updateService, 
       logUserMessageId = null,
       logUserMessageTimestamp = null,
     } = args;
-    const { stream, abort, sendInput } = sendResult;
+    const { stream, abort, sendInput, deliverInput } = sendResult;
     const startedAt = new Date().toISOString();
     streamSupervisor.attachRuntime(convId, {
       stream,
       abort,
       sendInput,
+      deliverInput,
       backend: backendId,
       needsTitleUpdate,
       titleUpdateMessage,

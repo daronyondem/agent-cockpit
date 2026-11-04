@@ -990,7 +990,7 @@ in [ADR-0092](adr/0092-integrate-grok-build-through-acp-and-native-extensions.md
 
 ### CopilotAdapter (`src/services/backends/copilot.ts`)
 
-**Metadata:** `id: 'copilot'`, label `GitHub Copilot`, inline SVG icon, capabilities `{ thinking:true, planMode:false, agents:false, toolActivity:true, userQuestions:false, stdinInput:false, oneShotMediaInput:{ image:['explicit-attachment'], pdf:['explicit-attachment'] } }`, and later-session resume. Synchronous registry metadata uses a curated fallback with `modelCatalog:{source:'fallback',reason}`. Async profile metadata discovers account models through the selected owned SDK runtime. Discovery does not enable questions, steering, delegation or goals. See [ADR-0098](adr/0098-connect-copilot-interactive-sessions-through-an-owned-sdk-runtime.md) and the catalog contract below.
+**Metadata:** `id: 'copilot'`, label `GitHub Copilot`, inline SVG icon, conservative synchronous capabilities `{ thinking:true, planMode:false, agents:false, toolActivity:true, userQuestions:false, stdinInput:false, oneShotMediaInput:{ image:['explicit-attachment'], pdf:['explicit-attachment'] } }`, and later-session resume. Synchronous registry metadata uses a curated fallback with `modelCatalog:{source:'fallback',reason}`. Async profile metadata discovers account models and enables `userQuestions`/`stdinInput` for the SDK transport; opaque JSONL profiles retain false. Actual steering requires that turn's `input_ready` token, emitted only after queue control succeeds. Delegation UI and goals remain disabled. See [ADR-0098](adr/0098-connect-copilot-interactive-sessions-through-an-owned-sdk-runtime.md) and the contracts below.
 
 **Profile-scoped model catalog (`copilotCatalog.ts`, `copilotModels.ts`):**
 
@@ -1037,7 +1037,7 @@ archiving/deleting. This drain also applies after Stop has detached the runtime.
 
 **Response/retry boundaries:** Envelope `agentId` or `data.parentToolCallId` marks delegated output. Child/grandchild text deltas, final-message fallbacks, reasoning, tool activity/outcomes, and child session errors are suppressed from the root presentation until grouped child UI is implemented. Only root tools clear pre-tool narration in one-shot collection; late child work cannot erase an already-collected root answer. Session-wide native usage aggregates are processed independently of presentation and include delegated work once. Any root or child tool start blocks missing-session replay, even when the child activity is hidden.
 
-**Initial scope and evidence:** Native questions, delegation, plan mode, and goal/autopilot exist in Copilot; the application deliberately does not integrate interactive controls or grouped child presentation. ACP is a possible future transport, not evidence of equivalent controls. Multiple named profiles share host auth and do not provide account isolation; `--version` checks only availability, not credentials, entitlement, model permissions, or account identity. Guided device login/account profiles, remaining quotas/resets/context occupancy, native memory import, and native sequential `runSessionShot()` are follow-ups. Sequential gleaning currently uses the base transcript-replay fallback and remains functional.
+**Scope and evidence:** SDK chat integrates native questions and explicit active-turn steering as specified below. Grouped child presentation, plan mode and native goal controls remain follow-ups. ACP probes do not establish equivalent controls. Multiple named profiles share host auth and do not provide account isolation; `--version` checks only availability, not credentials, entitlement, model permissions, or account identity. Guided device login/account profiles, remaining quotas/resets/context occupancy, native memory import, and native sequential `runSessionShot()` are follow-ups. Sequential gleaning currently uses the base transcript-replay fallback and remains functional.
 
 The authenticated native suite verifies direct image/PDF transport, fixture MCP calls, text/stream/later-session resume, and usage. The separate `npm run e2e:copilot-workflows` suite exercises the production chat router, Memory stdio shim/HTTP routes, Copilot governance processor, durable Memory search, workspace update frames, Workspace Context maintenance, and a fresh chat reading managed Context instructions/files. Six native cases cover successful note/search and recall, Memory-to-Context consumption plus reference ingestion, rejected Memory governance without fallback files, invalid Context output preserving the inbox until a successful retry, automatic scheduled maintenance, and reset finalization over the ended session. It runs the real CLI with an isolated temporary auth home and fixed local OpenAI-compatible model responses, without hosted accounts, live model reasoning, or CLI updates. The evidence is Copilot 1.0.105 on macOS arm64; each run prints CLI/OS/architecture/revision evidence. Normal CI runs `test/copilotMemoryContext.test.ts` against the real adapter, MCP shim, routes and stores with an executable JSONL fixture instead of requiring Copilot. It additionally checks duplicate governance, persisted metadata/reload, workspace isolation, disabled writes, reset token revocation, restricted governance versus tool-enabled Context arguments, unaccepted-note retention, processor failures, and cancellation/retry. These checks validate integration and persistence, not model quality or account/entitlement behavior.
 
@@ -1073,11 +1073,12 @@ Already-aborted calls do not spawn. Exit/error/cancellation resolves `closed`
 immediately, even when descendants retain output pipes, and initiates awaited
 cleanup. Startup failures always drain the scope. Stop removes its abort
 listener, permits at most one second for SDK disconnect, awaits process-tree
-termination, and bounds SDK force-close to one second. On unexpected process
-error/exit, force-close the connection before cleanup instead of sending graceful
-session-detach RPCs to an ended socket; this avoids an unhandled JSON-RPC write
-rejection. Normal completion and requested cancellation retain graceful cleanup. CLI stderr and inspected
-environments are not retained in this layer.
+termination, and bounds SDK force-close to one second. On process error/exit or an aborted owner signal, force-close the connection
+before cleanup instead of sending graceful session-detach RPCs. This prevents
+ended-socket writes and question-error responses that could release another
+native iteration during Stop. Explicit runtime stop without an aborted signal
+retains graceful disconnect. CLI stderr and inspected environments are not
+retained in this layer.
 
 `copilotProfileStatus.ts` uses this connection for profile checks. After the
 existing installation/version probe succeeds, query `getAuthStatus()`. A native
@@ -1117,8 +1118,8 @@ and the [versioned evaluation](research/copilot-sdk-parity-evaluation.md).
 `copilotConversations.ts` implements production SDK chat behind `CopilotAdapter`.
 The class exposes `sendMessage`,
 `onSessionReset` and reusable/permanent `shutdown` with the existing backend
-shapes. No endpoint, browser frame, stored conversation field or capability flag
-changes in this checkpoint. Restricted processor/summary/title one-shots remain
+shapes. Correlated input extends the existing `/input` endpoint and stream
+frames without changing stored conversation fields. Restricted processor/summary/title one-shots remain
 on their existing JSONL execution path.
 
 `copilotChatTransport(profile?)` selects SDK for the normal `copilot` command,
@@ -1168,8 +1169,10 @@ Unknown types in that explicit mapping fail instead of using hosted inference. D
 environment overrides from the parent process. Enable native config discovery
 so managed `AGENTS.md` instructions remain available, and set `coauthorEnabled:false`
 to avoid adding a runtime commit trailer. Chat grants native permission
-requests as `approve-once`, matching existing broad tool access. `ask_user` is
-excluded and `sendInput` remains inert until request ownership/UI integration.
+requests as `approve-once`, matching existing broad tool access. Chat supplies
+`onUserInputRequest` and includes `ask_user`; configuration callers without a
+handler continue excluding that tool. The legacy void `sendInput` remains inert
+for Copilot; the optional awaited `deliverInput` owns its correlated inputs.
 New sessions grant directory trust for that session; resumes explicitly pass
 `continuePendingWork:false` so interrupted native work is not replayed.
 
@@ -1192,6 +1195,71 @@ finishes normal execution, after attached shells and agents drain; assistant
 messages, `assistant.turn_end` and child idle are intermediate. Root native
 errors and aborted idle are terminal, and a terminal projection ignores late
 output. SDK callbacks also stop forwarding once the owner is cancelled/closed.
+
+#### SDK questions and steering
+
+`copilotInputs.ts` owns one UUID turn token, a FIFO of native question callback
+promises, and at most one pending steering request per active turn. Public SDK
+callback types are extracted from `SessionConfigBase.onUserInputRequest`; the
+package does not export those constituent types from its root. The owner and
+facade forward `deliverInput(BackendInputRequest): Promise<BackendInputResult>`.
+`src/types/streams.ts` declares that server-only boundary; the existing void
+`sendInput` API and legacy backends retain their behavior.
+
+Each native question receives a fresh UUID even when its prompt/options match
+a preceding question. Present only the FIFO head as a `tool_activity` frame
+with `isQuestion:true`, `tool:'AskUserQuestion'`, identical `id` and
+`inputRequestId`, and one question containing `question`, optional
+`options:[{label}]`, and `allowFreeform` (default true). Native callback promises
+retain their own SDK/session ownership. An answer requires that exact head's
+`requestId`, trims whitespace, resolves once as `{answer,wasFreeform}`, emits
+`tool_outcomes` for the same ID, and presents the next head. A choice match sets
+`wasFreeform:false`; other text is accepted only when freeform is allowed.
+Reject blank/forbidden answers with 400 and stale/duplicate IDs with 409. A
+correlated answer never becomes steering or a new user message. Question and
+outcome frames replay on active-stream reconnect, so reload/another browser
+reconstructs only the unanswered request. Stop/reset/iterator closure/shutdown
+reject every pending callback and refuse later answers; runtime abort
+force-closes SDK transport before callback rejection to prevent native error
+responses from releasing another model request during Stop.
+
+Steering is an explicit secondary composer action; Enter/send while running
+still uses Cockpit's existing persisted message queue. Initial `session.send`
+acknowledgement alone is insufficient to acquire the native queue pause: wait
+for both acknowledgement and root `assistant.turn_start`, then call
+`session.rpc.queue.setDrainPaused({paused:true})`. Pausing before root start can
+block the initial prompt itself. On success, emit
+`{type:'input_ready',turnId:<UUID>}`. Unsupported/failed queue control leaves
+questions/chat usable without steering readiness. Child starts do not qualify.
+
+`deliverInput` steering requires the current `turnId`, a client-generated unique
+`inputId`, nonblank text, no pending question, and no other pending steering.
+Remember submitted IDs for that turn to reject duplicate requests. Submit once
+with `session.send({prompt:text,mode:'immediate'})`; its returned native
+message ID is an admission acknowledgement. Accept the HTTP input only after a
+root `user.message` with that ID and `delivery:'steering'`. Handle notification
+before acknowledgement as well. Child/unrelated delivery events cannot accept
+the pending input. The delivery request has no consumption timeout; Stop and
+native completion release it. Native RPC admission retains the 30-second bound.
+
+Copilot promotes an unconsumed immediate message into its follow-up queue at
+idle. Hold that lane paused, await admission, and call
+`queue.withdrawMessage({messageId,expectedPrompt})` for the exact unconsumed
+message before finishing. Only `{removed:true,interrupted:false}` proves safe
+withdrawal: return 409 explaining that the turn finished before consuming the
+input. Never release the native pause, append to Cockpit's queue, resend, or
+launch a second execution automatically. The owned runtime closes on completion;
+cold resume uses `continuePendingWork:false` and a fresh turn token. Failed
+admission or uncertain withdrawal returns 503 and stops the turn without retry.
+Readiness clears with `input_ready`/null on completion/cancellation. Inputs are
+recorded by native session history, not added as new Cockpit user messages.
+
+Both clients retain composer text/files while delivery is pending, disable
+duplicate queue/send/steer actions, and leave Stop available. Clear only the
+submitted draft/files after confirmed consumption, preserving edits/new files
+made during the wait. Refusal/transport failure keeps the draft/files and
+shows an input error, without a prompt replay or queue retry. Freeform-disabled
+questions render immediate choice buttons; other questions allow typed answers.
 
 Startup/session initialization and send-admission waits are cancellation-aware;
 session requests have a 30-second default bound. The running tool loop has no

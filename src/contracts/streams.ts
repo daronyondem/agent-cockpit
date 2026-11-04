@@ -1,6 +1,6 @@
 import { parseServiceTierInput, type ContractServiceTier, type ServiceTierInput } from './serviceTier';
 import { parseClaudeCodeModeInput, type ClaudeCodeModeInput, type ContractClaudeCodeMode } from './claudeCodeMode';
-import { asRecord, optionalBoolean, optionalString, optionalStringEnum, requiredNonEmptyString } from './validation';
+import { asRecord, contractError, optionalBoolean, optionalString, optionalStringEnum, requiredNonEmptyString } from './validation';
 import type { Message, StreamJobRuntimeInfo } from './responses';
 import { CONTRACT_EFFORT_LEVELS, type ContractEffortLevel } from './conversations';
 
@@ -22,6 +22,9 @@ export interface ValidatedSendMessageRequest extends Omit<SendMessageRequest, 'c
 export interface ConversationInputRequest {
   text: string;
   streamActive?: boolean;
+  requestId?: string;
+  turnId?: string;
+  inputId?: string;
 }
 
 export interface SendMessageResponse {
@@ -66,8 +69,16 @@ export function validateSendMessageRequest(body: unknown): ValidatedSendMessageR
 
 export function validateConversationInputRequest(body: unknown): ConversationInputRequest {
   const record = asRecord(body);
+  const requestId = optionalString(record, 'requestId');
+  const turnId = optionalString(record, 'turnId');
+  const inputId = optionalString(record, 'inputId');
+  if ([requestId, turnId, inputId].some(id => id !== undefined && !id.trim())) contractError('Input identities must be nonempty.');
+  if ((turnId !== undefined) !== (inputId !== undefined)) contractError('Steering requires turnId and inputId.');
+  if (requestId !== undefined && turnId !== undefined) contractError('An input must answer a question or steer a turn.');
   return {
     text: requiredNonEmptyString(record, 'text', 'Input text required'),
     streamActive: optionalBoolean(record, 'streamActive'),
+    ...(requestId !== undefined ? { requestId } : {}),
+    ...(turnId !== undefined ? { turnId, inputId } : {}),
   };
 }

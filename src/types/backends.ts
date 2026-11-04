@@ -2,7 +2,7 @@
 
 import type { EffortLevel, ClaudeCodeMode, ServiceTier, CliProfile } from './cliProfiles';
 import type { SessionRecoveryOptions } from './sessionRecovery';
-import type { StreamEvent } from './streams';
+import type { BackendInputRequest, BackendInputResult, StreamEvent } from './streams';
 
 export interface BackendCapabilities {
   thinking: boolean;
@@ -149,4 +149,5 @@ export interface SendMessageResult {
   stream: AsyncGenerator<StreamEvent>;
   abort: () => void;
   sendInput: (text: string) => void;
+  deliverInput?: (input: BackendInputRequest) => Promise<BackendInputResult>;
 }

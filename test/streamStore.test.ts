@@ -477,6 +477,45 @@ test('respond() with mode:stdin clears pendingInteraction without a fresh send',
   expect(state.uiState).toBeNull();
 });
 
+test('correlated question answers keep their request identity after reload and never use message fallback', async () => {
+  const ws = await openWs('c1');
+  const Store = (window as any).StreamStore;
+  const api = (global as any).AgentApi;
+  ws.dispatch({ type: 'tool_activity', isQuestion: true, inputRequestId: 'exact-question', questions: [{ question: 'Choose', allowFreeform: false }] });
+  api.fetch.mockResolvedValueOnce(makeResponse({ mode: 'message' }));
+  await Store.respond('c1', 'Beta');
+  expect(api.fetch).toHaveBeenCalledTimes(1);
+  expect(api.fetch.mock.calls[0][1].body).toEqual({ text: 'Beta', streamActive: false, requestId: 'exact-question' });
+  expect(Store.getState('c1').pendingInteraction.requestId).toBe('exact-question');
+  expect(Store.getState('c1').inputError).toContain('no longer accepting');
+});
+
+test.each([true, false])('steering holds its draft/files until consumed and preserves newer edits (accepted: %s)', async accepted => {
+  const ws = await openWs('c1');
+  const Store = (window as any).StreamStore;
+  await startAcceptedStream('c1', ws);
+  const api = (global as any).AgentApi;
+  ws.dispatch({ type: 'input_ready', turnId: 'owned-turn' });
+  Store.setInput('c1', 'Correct it');
+  const attachment = { id: 'file', status: 'done', result: { name: 'input.txt', path: '/tmp/input.txt' } };
+  Store.getState('c1').pendingAttachments.push(attachment);
+  let settle!: (value: unknown) => void;
+  let reject!: (error: Error) => void;
+  api.fetch.mockImplementationOnce(() => new Promise((yes, no) => { settle = yes; reject = no; }));
+  const pending = Store.steer('c1');
+  await Store.steer('c1');
+  expect(api.fetch).toHaveBeenCalledTimes(1);
+  expect(api.fetch.mock.calls[0][1].body).toMatchObject({ text: 'Correct it\n\n[Uploaded files: /tmp/input.txt]', turnId: 'owned-turn', inputId: expect.any(String), streamActive: true });
+  expect(Store.getState('c1')).toMatchObject({ input: 'Correct it', steeringPending: true, pendingAttachments: [attachment] });
+  Store.setInput('c1', 'A newer draft');
+  if (accepted) settle(makeResponse({ mode: 'stdin' })); else reject(new Error('The turn finished before consuming your steering'));
+  await pending;
+  expect(Store.getState('c1')).toMatchObject({ input: 'A newer draft', steeringPending: false, pendingAttachments: accepted ? [] : [attachment] });
+  if (!accepted) expect(Store.getState('c1').inputError).toContain('before consuming');
+  expect(Store.getState('c1').queue).toEqual([]);
+  expect(api.fetch).toHaveBeenCalledTimes(1);
+});
+
 test.each([
   {
     label: 'next question with the same tool ID',
@@ -1588,11 +1627,13 @@ describe('stopStream', () => {
 
     await Store.send('c1', 'hello');
     expect(Store.getState('c1').streaming).toBe(true);
+    ws.dispatch({ type: 'input_ready', turnId: 'old-turn' });
 
     await Store.stopStream('c1');
 
     expect(api.abortConversation).toHaveBeenCalledWith('c1');
     expect(Store.getState('c1').streaming).toBe(false);
+    expect(Store.getState('c1').inputTurnId).toBeNull();
     expect(Store.getState('c1').streamError).toBe('Aborted by user');
     expect(Store.getState('c1').streamErrorSource).toBe('abort');
     expect(Store.getState('c1').uiState).toBe('error');

@@ -495,6 +495,15 @@ export function createStreamRouter(opts: StreamRoutesOptions): express.Router {
     if (!conv) return res.status(404).json({ error: 'Conversation not found' });
 
     const entry = activeStreams.get(convId);
+    const correlated = body.requestId !== undefined || body.turnId !== undefined;
+    if (entry?.deliverInput && (streamActive || correlated)) {
+      if (entry.abortRequested || entry.abortFinalizing || entry.terminalFinalizing) return res.status(409).json({ error: 'This input is no longer active.' });
+      try {
+        const result = await entry.deliverInput(body);
+        return result.accepted ? res.json({ mode: 'stdin' }) : res.status(result.status).json({ error: result.error });
+      } catch { return res.status(503).json({ error: 'Input delivery failed. Do not automatically resend this input.' }); }
+    }
+    if (correlated || entry?.backend === 'copilot') return res.status(409).json({ error: 'This input is no longer active; your draft was preserved.' });
     if (streamActive && entry?.sendInput) {
       log.debug('Delivering interaction input via active stream', { conversationId: convId });
       if (entry.deferPlanApprovalInput) {

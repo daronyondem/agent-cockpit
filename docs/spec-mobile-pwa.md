@@ -132,16 +132,17 @@ The PWA currently covers:
 - GitHub Copilot profiles use the same metadata-driven model picker, assistant
   label/icon, thinking/text/tool frames, session recovery notices, and usage
   counters as desktop. `auto` is the default model; Haiku/auto do not show
-  reasoning-effort choices. Copilot goal, plan, interactive-question, and
-  mid-turn-input controls remain unavailable. Per-turn token/credit accounting
+  reasoning-effort choices. SDK profiles support native questions and explicit
+  steering; opaque JSONL profiles do not. Copilot goal and plan controls remain
+  unavailable. Per-turn token/credit accounting
   is performed on the server, and `costSource:'none'` keeps mobile cost `n/a`.
   No Copilot-specific PWA assets, manifest, or service-worker changes are needed.
   Gemini's unverified effort options are also hidden. Auto routing is not
   eligible for media processors; explicit verified `gpt-6.1-sol` is required.
   Delegated prose/activity cannot contaminate the root stream. The shared
   desktop/mobile browser suite verifies eight lifecycle cases on macOS and
-  Ubuntu 24.04 using real Copilot with fixed local replies. Native SDK controls
-  and hosted-account behavior remain outside that evidence. Server-side profile
+  Ubuntu 24.04 using real Copilot with fixed local replies. That earlier evidence
+  does not qualify SDK questions/steering or hosted accounts. Server-side profile
   checks now distinguish credentials from catalog access using existing result
   fields; mobile has no account-management screen to update in this step.
   Production sends now use owned SDK sessions for the normal CLI and server-visible
@@ -180,6 +181,8 @@ The PWA currently covers:
 - WebSocket replay and live streaming for text, assistant messages, title updates, usage, errors, done, and replay start, with automatic active-stream polling/reconnect on mobile browser resume, network return, and transient socket errors.
 - Assistant message text, assistant content-block text, thinking blocks, and live streaming text render through `marked` with GitHub Flavored Markdown and hard line breaks enabled, then pass through DOMPurify before insertion. Assistant markdown prose uses the same General Sans body typography as the desktop web UI `.prose` treatment, while markdown headings keep the serif prose font. Fenced and indented Markdown code blocks render as bounded monospace panels with a language label, per-block **Copy** button, preserved line breaks, and long-line wrapping (`white-space: pre-wrap` plus break-word/anywhere wrapping) so CLI-supplied text does not create horizontal overflow on narrow screens. Thinking blocks render as full-width dashed Markdown panels rather than inline flex chips so multi-paragraph Claude Code reasoning keeps normal line flow on narrow mobile screens. Assistant/live CLI message headings use the message backend's metadata label and inline SVG icon from `GET /api/chat/backends`, falling back to the Agent Cockpit logo when no backend icon is available. System messages without `goalEvent`, including native-session recovery notices, use the Agent Cockpit logo and **Agent Cockpit** heading instead of the selected harness identity. User-authored message text remains plain text after uploaded-file marker stripping, preserving line breaks and avoiding accidental interpretation of user text as HTML/Markdown.
 - Plan approval and clarifying-question cards from `tool_activity` meta-events, answered through `POST /api/chat/conversations/:id/input`. Plan decisions come only from the explicit approve/reject buttons, so free text is never interpreted as approval; `useSendPipeline.submitInteraction(answer?)` sends a button's decision instead of the typed draft. It captures the submitted interaction object before awaiting the input response and uses a functional state update to clear only that same object after acknowledgement. A subsequent question or replacement plan received while the HTTP request is pending stays visible and answerable, even when questions reuse one native tool ID.
+- Correlated questions retain `inputRequestId` as `PendingInteraction.requestId` and submit it through the optional fourth identity argument of `api.sendInput`. Duplicate submissions are locked while pending; an old acknowledgement never clears a newer question's typed answer. A new request resets the answer, including repeated identical prompts. `allowFreeform:false` hides the textarea/Answer button and submits choices directly; otherwise choices prefill an editable answer. Stale correlated inputs never fall back to a normal message. Active replay reconstructs unanswered questions; matching tool outcomes resolve only their exact ID. Done/terminal errors clear correlated questions while legacy post-stream interactions keep their fallback behavior.
+- `useChatStreamConnection` owns `inputTurnId`, accepts only the current socket/conversation's frames, and clears readiness on reconnect, socket closure and terminal state. `chatStreamEvents.ts` projects input readiness and exact request outcomes. A current Copilot token exposes **Steer** in the composer metadata row; the ordinary Send action remains Queue during streaming. `useSendPipeline.steerDraft` posts the normal text/file wire content with current turn ID and a unique input ID, holds the draft/files until confirmed consumption, and blocks duplicate send/queue/steer operations. Stop stays available in the top bar. On success it removes only submitted unchanged text/files; on refusal/network error it preserves them and shows the existing error banner, without automatic resend or queue append. A conversation switch prevents a late acknowledgement from clearing another conversation's draft.
 - Browser Notification API prompts and hidden-tab notifications for stream done/error and interaction-needed events when permission is granted. This is not remote push.
 - Queue read/write/clear via `GET`, `PUT`, and `DELETE /api/chat/conversations/:id/queue`.
 - Queue auto-drain after clean `done` frames when no plan/question interaction is pending. The queue drainer sends the head without clearing the live composer draft/attachments; if the follow-up send is blocked by a still-active server stream or another send failure, the original queued item is restored at the queue head and persisted back to the server.
@@ -259,3 +262,12 @@ IDs, explicit effort clearing on send, and post-navigation fallback status.
 Ten combined Chromium cases pass locally on macOS: eight real SDK/local-provider
 workflows plus these two catalog fixtures. This does not certify a successful
 hosted catalog or new mobile media transport.
+
+The structured-input checkpoint expands the shared Chromium suite to eighteen
+cases (sixteen real SDK/local-provider workflows plus two catalog fixtures).
+Both clients pass repeated questions after reload, stale answer rejection,
+freeform input, Stop during a question with a retained draft/file, native
+steering consumption, and late-steering draft/file preservation. The CLI is
+1.0.105 on macOS arm64; these checks do not certify hosted access or native
+Windows/Linux SDK behavior. No public/mobile assets, manifest, service-worker,
+or offline caching behavior changes are required.

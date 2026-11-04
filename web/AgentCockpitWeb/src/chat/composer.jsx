@@ -25,6 +25,9 @@ function selectChatComposerState(s){
     sending: s.sending,
     streaming: s.streaming,
     pendingInteraction: s.pendingInteraction,
+    inputTurnId: s.inputTurnId,
+    steeringPending: s.steeringPending,
+    inputError: s.inputError,
     composerCliProfileId: s.composerCliProfileId,
     composerBackend: s.composerBackend,
     composerModel: s.composerModel,
@@ -172,11 +175,11 @@ export const ChatComposer = React.memo(function ChatComposer({ convId, profileLo
   const activeGoal = state.goal || null;
   const hasContent = !!input.trim() || hasDoneFiles;
   const effectiveHasContent = goalMode ? !!input.trim() : hasContent;
-  const canSend = effectiveHasContent && !sending && !streaming && !awaiting && !hasUploadingFiles;
+  const canSend = effectiveHasContent && !sending && !state.steeringPending && !streaming && !awaiting && !hasUploadingFiles;
   /* While the agent is streaming, Enter enqueues instead of sending. The
      send button turns into a stop-styled affordance; clicking it enqueues
      whatever is in the composer so the user can stack follow-ups. */
-  const canEnqueue = hasContent && !sending && !awaiting && !hasUploadingFiles && streaming;
+  const canEnqueue = hasContent && !sending && !state.steeringPending && !awaiting && !hasUploadingFiles && streaming;
 
   function openFilePicker(){ if (fileInputRef.current) fileInputRef.current.click(); }
 
@@ -398,6 +401,7 @@ export const ChatComposer = React.memo(function ChatComposer({ convId, profileLo
           />
         ) : null}
         <div className="composer-box">
+          {state.inputError ? <div role="alert" className="u-warn" style={{padding:'8px 12px'}}>{state.inputError}</div> : null}
           <textarea
             ref={composerTextRef}
             rows={3}
@@ -511,8 +515,13 @@ export const ChatComposer = React.memo(function ChatComposer({ convId, profileLo
                 <span>Goal</span>
               </label>
             ) : null}
+            {streaming && state.inputTurnId && hasContent && !awaiting ? (
+              <button className="btn" disabled={!canEnqueue} onClick={() => StreamStore.steer(convId)} title="Redirect the current run">
+                {state.steeringPending ? 'Steering…' : 'Steer'}
+              </button>
+            ) : null}
             {streaming ? (
-              hasContent ? (
+              hasContent && !state.steeringPending && !awaiting ? (
                 <button
                   className="send"
                   onClick={doEnqueue}

@@ -142,7 +142,7 @@ export function InteractionCard({ convId, interaction, respondPending, allowPlan
     return <PlanApprovalCard convId={convId} planContent={interaction.planContent} respondPending={respondPending} allowFeedback={allowPlanFeedback}/>;
   }
   if (interaction.type === 'userQuestion') {
-    return <QuestionCard convId={convId} question={interaction.question} options={interaction.options} respondPending={respondPending}/>;
+    return <QuestionCard key={interaction.requestId || interaction.question} convId={convId} question={interaction.question} options={interaction.options} allowFreeform={interaction.allowFreeform} respondPending={respondPending}/>;
   }
   return null;
 }
@@ -199,7 +199,7 @@ function PlanApprovalCard({ convId, planContent, respondPending, allowFeedback }
   );
 }
 
-function QuestionCard({ convId, question, options, respondPending }){
+function QuestionCard({ convId, question, options, allowFreeform, respondPending }){
   const [text, setText] = React.useState('');
   const inputRef = React.useRef(null);
   React.useEffect(() => { if (inputRef.current) inputRef.current.focus(); }, []);
@@ -209,6 +209,7 @@ function QuestionCard({ convId, question, options, respondPending }){
     StreamStore.respond(convId, text.trim());
   }
   function pick(label){
+    if (allowFreeform === false) { StreamStore.respond(convId, label); return; }
     setText(label);
     if (inputRef.current) inputRef.current.focus();
   }
@@ -239,7 +240,7 @@ function QuestionCard({ convId, question, options, respondPending }){
           })}
         </div>
       ) : null}
-      <input
+      {allowFreeform !== false ? <><input
         ref={inputRef}
         type="text"
         value={text}
@@ -267,6 +268,7 @@ function QuestionCard({ convId, question, options, respondPending }){
           onClick={submit}
         >{respondPending ? 'Sending…' : 'Send'}</button>
       </div>
+      </> : null}
     </div>
   );
 }

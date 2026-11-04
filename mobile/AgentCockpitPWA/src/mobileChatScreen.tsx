@@ -64,6 +64,9 @@ export function ChatScreen(props: {
   showStreamPlaceholder: boolean;
   isStreaming: boolean;
   isSending: boolean;
+  steeringAvailable?: boolean;
+  steeringPending?: boolean;
+  interactionPending?: boolean;
   loading: boolean;
   errorMessage: string | null;
   goal: ThreadGoal | null;
@@ -83,6 +86,7 @@ export function ChatScreen(props: {
   client: AgentCockpitAPI;
   onBack: () => void;
   onSend: () => void;
+  onSteer?: () => void;
   onStop: () => void;
   onGoalModeChange: (enabled: boolean) => void;
   onRefreshGoal: () => void;
@@ -240,6 +244,7 @@ export function ChatScreen(props: {
     (!props.draft.trim() && !completedAttachmentMetas(props.pendingAttachments).length) ||
     props.hasUploadingAttachments ||
     props.isSending ||
+    props.steeringPending ||
     !!props.pendingInteraction ||
     (props.goalMode && props.isStreaming);
   const composerPlaceholder = props.goalMode
@@ -340,6 +345,7 @@ export function ChatScreen(props: {
         <InteractionCard
           interaction={props.pendingInteraction}
           answer={props.interactionAnswer}
+          pending={props.interactionPending}
           allowPlanFeedback={conversation.backend === 'grok-build'}
           setAnswer={props.setInteractionAnswer}
           onSubmit={props.onSubmitInteraction}
@@ -364,6 +370,9 @@ export function ChatScreen(props: {
             {props.selectedEffort ? <span>/ {props.selectedEffort}</span> : null}
             {props.selectedServiceTier === 'fast' ? <span>/ Fast</span> : null}
           </button>
+          {props.isStreaming && props.steeringAvailable && !props.pendingInteraction ? (
+            <Button label={props.steeringPending ? 'Steering…' : 'Steer'} disabled={!!sendDisabled} onClick={() => props.onSteer?.()} />
+          ) : null}
           {props.goalCapable ? (
             <button
               className={`goal-toggle ${props.goalMode ? 'enabled' : ''}`}

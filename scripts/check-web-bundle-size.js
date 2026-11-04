@@ -8,12 +8,13 @@ const DEFAULT_BUILD_DIR = path.join(ROOT, 'public', 'v2-built');
 const KIB = 1024;
 
 const DEFAULT_BUDGETS = {
-  totalJs: 900 * KIB,
+  // Correlated questions and steering add ~2.4 KiB to the catalog baseline.
+  totalJs: 903 * KIB,
   totalCss: 230 * KIB,
   maxJsAsset: 230 * KIB,
   maxCssAsset: 230 * KIB,
   assets: {
-    'index.js': 260 * KIB,
+    'index.js': 263 * KIB,
     'react-vendor.js': 230 * KIB,
     'markdown-vendor.js': 160 * KIB,
     'kbBrowser.js': 115 * KIB,

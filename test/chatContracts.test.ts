@@ -28,6 +28,16 @@ import {
 } from '../src/contracts/validation';
 
 describe('chat API contracts', () => {
+  test('keeps question and steering identities distinct and rejects incomplete or empty identities', () => {
+    expect(validateConversationInputRequest({ text: 'Beta', requestId: 'question', streamActive: false }))
+      .toEqual({ text: 'Beta', requestId: 'question', streamActive: false });
+    expect(validateConversationInputRequest({ text: 'Correct it', turnId: 'turn', inputId: 'input' }))
+      .toMatchObject({ text: 'Correct it', turnId: 'turn', inputId: 'input' });
+    for (const identity of [{ requestId: '' }, { requestId: ' ' }, { turnId: '' }, { inputId: '' }, { turnId: 't' },
+      { inputId: 'i' }, { requestId: 'q', turnId: 't', inputId: 'i' }, { requestId: 4 }]) {
+      expect(() => validateConversationInputRequest({ text: 'answer', ...identity })).toThrow();
+    }
+  });
   test('parses service tier payload values', () => {
     expect(parseServiceTierInput(undefined)).toBeUndefined();
     expect(parseServiceTierInput(null)).toBeNull();

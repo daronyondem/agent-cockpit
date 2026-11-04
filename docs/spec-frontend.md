@@ -184,15 +184,17 @@ After a Worktrees enable or disable succeeds, `workspaceSettings.jsx` refreshes 
   explicit models, and model-dependent effort picker; auto/Haiku/Gemini do not show
   effort choices. Text/thinking/tool/session-recovery frames and per-turn
   token/credit counters use the normal desktop stream pipeline. Unsupported
-  plan/goal/question/mid-turn-input controls stay hidden; Copilot USD cost and
+  plan/goal/grouped-child controls stay hidden; SDK profiles support questions
+  and explicit steering as specified below. Copilot USD cost and
   estimated cost remain unavailable.
-  Model metadata is static and account-dependent, not a successful auth check.
+  Profile metadata discovers account models with a marked fallback; a catalog
+  fallback is not a successful auth check.
   Media processors require explicit verified `gpt-6.1-sol`; default auto routing
   fails closed. Named Copilot profiles share auth rather than isolating accounts.
   Child text/thinking/tools are suppressed from the root response pending
   grouped child UI. Eight shared desktop/mobile lifecycle browser cases pass
   with real Copilot and fixed local replies on macOS and Ubuntu 24.04; SDK
-  steering, questions, goals and account management remain outside that evidence.
+  goals and account management remain outside that earlier evidence.
   Production sends use owned SDK sessions for the normal CLI and server-visible
   custom providers; opaque command overrides retain JSONL. Both paths preserve
   these browser frames and shared Stop/reset admission. Eight SDK browser cases
@@ -306,16 +308,42 @@ After a Worktrees enable or disable succeeds, `workspaceSettings.jsx` refreshes 
 
   **Card rendering (inside `<ChatLive>`):** when `state.pendingInteraction` is set, `<ChatLive>` renders an `<InteractionCard>` at the bottom of the feed (after messages, before `streamError`). The card dispatches on interaction type:
   - `PlanApprovalCard` — amber-top `.plan` card with a `NEEDS YOU` chip, the rendered `planContent` inside a `.prose` container (via the same `marked + DOMPurify` pipeline used for message bodies), and `.plan-actions` with `Reject` (danger) / `Approve & run` (primary) buttons. Clicking either calls `StreamStore.respond(convId, 'yes' | 'no')`. Grok Build conversations also render a `Plan revision feedback` textarea and `Request changes` button, sending trimmed non-empty feedback through the same input route. Submission disables the feedback/actions; the next native plan requests a fresh approval. Other harnesses retain their existing controls.
-  - `QuestionCard` — accent-top `.plan` card with a `Clarifying question` header, the question text as `.plan-title`, an optional row of option buttons (each pre-fills the answer input when clicked; `title` attribute carries the option description), a focused `<input>` for free-form typing, and a `Send` button. Enter submits. The submit calls `StreamStore.respond(convId, text)`.
+  - `QuestionCard` — accent-top `.plan` card with a `Clarifying question` header, question text as `.plan-title`, option buttons, and (unless `allowFreeform:false`) a focused answer input with `Send`/Enter submission. Options prefill the answer input when freeform is allowed; otherwise clicking a choice submits it directly. `title` carries option descriptions. The card is keyed by `requestId` when present, resetting typed answers even for repeated identical questions. Submission calls `StreamStore.respond(convId, text)`.
 
   While `pendingInteraction` is set, the composer's textarea is disabled with placeholder `"Answer the prompt above to continue…"` and the send button is disabled (`awaiting` joins `sending`/`streaming` in `canSend`'s guard). Users cannot send an ordinary composer message while an interaction is pending — they must click Approve/Reject or answer the question.
 
   **Answer delivery (`StreamStore.respond`):**
   1. Capture the current `pendingInteraction` object and set `respondPending = true` (disables card buttons; shows `Sending…` in the primary button).
-  2. `POST /api/chat/conversations/:id/input` with `{ text, streamActive: streaming || sending }`. The `streamActive` hint tells the server whether the client still considers the CLI stream live, so the server can avoid racing a just-finished stream.
+  2. `POST /api/chat/conversations/:id/input` with `{ text, streamActive: streaming || sending, requestId? }`. Preserve the exact native `inputRequestId` as `requestId`; the server can resolve that request after reload independently of the local streaming hint. Correlated questions never fall back to `/message`.
   3. On `{ mode: 'stdin' }` — the server piped the answer straight into the CLI's stdin; the existing stream will produce more frames. Clear `pendingInteraction` only if it is still the captured object, and reset `respondPending`. A subsequent question or revised plan received before the HTTP acknowledgement remains pending and keeps `uiState='awaiting'`, including sequential questions that reuse one tool ID. Otherwise set `uiState` back to `'streaming'` (if still streaming), `'error'` (if already errored), or `null`.
   4. On `{ mode: 'message' }` — the stream has already ended. Clear `pendingInteraction`, reset `respondPending`, then delegate to `StreamStore.send(convId, text)` which runs the normal send flow (optimistic user message, POST `/message`, fresh stream via the existing WS).
   5. On network/HTTP error — surface via `streamError` and flip `uiState` to `'error'`.
+
+  Copilot question/input failures instead set `inputError`, shown as an alert in
+  the composer without the stream-error card's prompt-retry action. The pending
+  question remains until resolved/cancelled. `tool_outcomes` clears only the
+  pending question whose request ID matches, preserving a newer question during
+  delayed acknowledgements or replay. Terminal errors/done clear correlated
+  questions; legacy post-stream plan/question fallback behavior remains intact.
+
+  **Copilot steering:** `input_ready` stores/revokes `inputTurnId` in the pure
+  reducer. Replay start clears the previous token/question before reconstructing
+  buffered frames; done/terminal errors clear readiness. With active readiness
+  and a nonempty draft/completed files, the composer adds **Steer** beside the
+  existing Queue action. Enter continues queueing. `StreamStore.steer` snapshots
+  the draft/files, flushes draft persistence, posts their normal wire content
+  with `{turnId,inputId,streamActive:true}`, and sets `steeringPending`. Duplicate
+  queue/send/steer actions are disabled while it awaits native consumption;
+  Stop remains available. On confirmed stdin acceptance, clear only unchanged
+  submitted text and submitted files, leaving newer edits/files intact. Refusal
+  or network failure preserves everything and shows `inputError`, with no new
+  message, automatic retry or queue append. A late request withdrawn by the
+  backend explains that the turn finished before consuming it. Native answers
+  and steering do not add separate Cockpit transcript user bubbles.
+
+  This feature adds about 2.4 KiB of minified desktop JS to the runtime-catalog
+  baseline. The measured budgets become 903 KiB total JS and 263 KiB for the
+  entry chunk (previously 900/260); CSS/vendor/other chunk limits are unchanged.
 
   **Lifecycle edges:**
   - `reset(convId)` clears `pendingInteraction` and `uiState` along with the rest of the session.
