@@ -66,7 +66,7 @@ describe('CLI profile auth endpoints', () => {
   test('preserves denied Copilot access instead of replacing it with the curated fallback catalog', async () => {
     const adapter = new CopilotAdapter();
     env.backendRegistry.register(adapter);
-    const metadata = jest.spyOn(adapter, 'getMetadata');
+    const metadata = jest.spyOn(adapter, 'getMetadata').mockResolvedValue(adapter.metadata);
     const check = jest.spyOn(CliProfileAuthService.prototype, 'checkProfile').mockResolvedValue({
       profileId: 'copilot-denied', harness: 'copilot', command: 'copilot', available: true,
       authenticated: true, status: 'error', output: 'Credentials found; catalog unavailable.',
@@ -77,7 +77,7 @@ describe('CLI profile auth endpoints', () => {
       const response = await env.request('POST', '/api/chat/cli-profiles/copilot-denied/test');
       expect(response.status).toBe(200);
       expect(response.body.result).toMatchObject({ available: true, authenticated: true, modelsAvailable: false, modelCount: 0, modelListError: 'HTTP 403' });
-      expect(metadata).not.toHaveBeenCalled();
+      expect(metadata).toHaveBeenCalledWith({ cliProfile: expect.objectContaining({ id: 'copilot-denied' }), refreshModels: true });
     } finally { check.mockRestore(); metadata.mockRestore(); }
   });
 

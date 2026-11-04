@@ -8,9 +8,9 @@ test.skip(process.env.COPILOT_UI_E2E !== '1', 'Use the isolated PM2/local-model 
 test.use({ actionTimeout: 15_000 });
 
 async function headers(request: APIRequestContext) { return { 'x-csrf-token': (await (await request.get('/api/csrf-token')).json()).csrfToken }; }
-async function create(request: APIRequestContext, title: string) {
+async function create(request: APIRequestContext, title: string, model = 'auto') {
   if (!workspace) throw new Error('COPILOT_UI_WORKSPACE is required');
-  const response = await request.post('/api/chat/conversations', { headers: await headers(request), data: { title, workingDir: workspace, cliProfileId: profileId, model: 'auto' } });
+  const response = await request.post('/api/chat/conversations', { headers: await headers(request), data: { title, workingDir: workspace, cliProfileId: profileId, model } });
   expect(response.ok(), await response.text()).toBeTruthy();
   return response.json();
 }
@@ -32,6 +32,52 @@ async function send(page: Page, prompt: string) {
 for (const mobile of [false, true]) {
   const client = mobile ? 'mobile' : 'desktop';
   const assistant = mobile ? '.message.assistant' : '.msg-agent';
+
+  test(`${client} preserves unavailable selections, follows discovered efforts and labels fallback models`, async ({ page, request }) => {
+    let fallback = false;
+    await page.route(`**/api/chat/cli-profiles/${profileId}/metadata`, async route => {
+      const response = await route.fetch();
+      const data = await response.json();
+      await route.fulfill({ response, json: { ...data, backend: { ...data.backend,
+        models: [{ id: 'account-model', label: 'Account model', supportedEffortLevels: ['low', 'max'] }, { id: 'text-model', label: 'Text model' }],
+        modelCatalog: fallback ? { source: 'fallback', reason: 'Account model discovery is unavailable.' } : { source: 'runtime' },
+      } } });
+    });
+    const conv = await create(request, `Copilot ${client} catalog`, 'retired-model');
+    await open(page, conv.title, mobile);
+    if (mobile) {
+      await page.locator('.composer-profile').click();
+      const settings = page.getByRole('dialog').filter({ hasText: 'Run Settings' });
+      await expect(settings).toContainText('retired-model is unavailable');
+      await settings.getByRole('button', { name: 'Account model', exact: true }).click();
+      await expect(settings.getByRole('button', { name: 'max', exact: true })).toBeVisible();
+      await expect(settings.getByRole('button', { name: 'high', exact: true })).toHaveCount(0);
+      await settings.getByRole('button', { name: 'Text model', exact: true }).click();
+      await expect(settings.getByRole('button', { name: 'max', exact: true })).toHaveCount(0);
+      await settings.getByRole('button', { name: 'Close', exact: true }).click();
+    } else {
+      await expect(page.getByLabel('Model', { exact: true })).toHaveValue('retired-model');
+      await expect(page.getByLabel('Model', { exact: true }).locator('option:checked')).toContainText('unavailable');
+      await page.getByLabel('Model', { exact: true }).selectOption('account-model');
+      await expect(page.getByLabel('Adaptive reasoning effort').locator('option')).toHaveText(['Low', 'Max']);
+      await page.getByLabel('Model', { exact: true }).selectOption('text-model');
+      await expect(page.getByLabel('Adaptive reasoning effort')).toHaveCount(0);
+    }
+    await page.route(`**/api/chat/conversations/${conv.id}/message`, route => route.fulfill({ status: 400, json: { error: 'Fixture catalog rejection' } }));
+    const submission = page.waitForRequest(request => request.url().endsWith(`/conversations/${conv.id}/message`) && request.method() === 'POST');
+    await send(page, 'Catalog selection wire check');
+    expect((await submission).postDataJSON()).toMatchObject({ model: 'text-model', effort: null });
+    // Picker reconciliation must never rewrite a saved conversation merely
+    // because account/catalog access changed.
+    expect((await (await request.get(`/api/chat/conversations/${conv.id}`)).json()).model).toBe('retired-model');
+    fallback = true;
+    await open(page, conv.title, mobile);
+    if (mobile) {
+      await page.locator('.composer-profile').click();
+      await expect(page.getByRole('dialog').filter({ hasText: 'Run Settings' })).toContainText('Fallback models. Account model discovery is unavailable.');
+    } else await expect(page.getByText('Fallback models', { exact: true })).toBeVisible();
+    await page.screenshot({ path: test.info().outputPath(`${client}-catalog.png`), fullPage: true });
+  });
 
   test(`${client} selects Copilot and renders production Memory tools and replies`, async ({ page, request }) => {
     const conv = await create(request, `Copilot ${client} Memory`);

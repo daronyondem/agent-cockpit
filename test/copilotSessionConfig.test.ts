@@ -19,6 +19,12 @@ test.each(['auto', 'claude-haiku-5.5', 'gemini-3.8-flash', 'unknown'])('keeps un
   expect(copilotSessionConfig({ ...options, model, effort: 'high' }, {}, '/tmp').reasoningEffort).toBeUndefined();
 });
 
+test('sends effort for a discovered model without relying on the curated fallback', () => {
+  const models = [{ id: 'account-model', label: 'Account model', family: 'account', supportedEffortLevels: ['max' as const] }];
+  expect(copilotSessionConfig({ ...options, model: 'account-model', effort: 'max' }, {}, '/tmp', models).reasoningEffort).toBe('max');
+  expect(copilotSessionConfig({ ...options, model: 'account-model', effort: 'high' }, {}, '/tmp', models).reasoningEffort).toBeUndefined();
+});
+
 test('maps the existing local provider environment without using it as profile identity', () => {
   const config = copilotSessionConfig(options, { COPILOT_PROVIDER_TYPE: 'openai', COPILOT_PROVIDER_BASE_URL: 'http://127.0.0.1:123/v1', COPILOT_PROVIDER_API_KEY: 'fixture-key', COPILOT_MODEL: 'fixture-model' }, '/tmp');
   expect(config).toMatchObject({ model: 'fixture-model', provider: { type: 'openai', baseUrl: 'http://127.0.0.1:123/v1', apiKey: 'fixture-key' } });

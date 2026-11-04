@@ -3,7 +3,7 @@ import os from 'os';
 import path from 'path';
 import { BaseBackendAdapter, type BackendCallOptions, type RunOneShotAttachment, type RunOneShotOptions } from './base';
 import { copilotToolStartEvents, copilotToolCompleteEvents, canonicalCopilotToolName } from './copilotTools';
-import { COPILOT_MODELS, COPILOT_EFFORT_SET } from './copilotModels';
+import { COPILOT_MODELS, COPILOT_EFFORT_SET, copilotFallbackModels } from './copilotModels';
 import { copilotMcpConfig, composePrompt } from './copilotSessionConfig';
 import { copilotTurnUsage, copilotUsageCheckpoint, readCopilotUsageBaseline } from './copilotUsage';
 import { CopilotProcessScope, spawnCopilotProcess } from './copilotProcess';
@@ -16,12 +16,15 @@ import {
 import { buildCliCommandInvocation } from '../cliCommandResolver';
 import { copilotChatTransport, resolveCopilotCliRuntime, resolveCopilotWorkingDir, type CopilotCliRuntime } from './copilotRuntime';
 import { CopilotConversations } from './copilotConversations';
+import { CopilotModelCatalog, assertCopilotSelection } from './copilotCatalog';
+import { checkOneShotMediaInput } from './mediaCapabilities';
 export { resolveCopilotCliRuntime, type CopilotCliRuntime } from './copilotRuntime';
 import { logger } from '../../utils/logger';
 import type {
   BackendMetadata,
   EffortLevel,
   McpServerConfig,
+  ModelOption,
   SendMessageOptions,
   SendMessageResult,
   StreamEvent,
@@ -63,6 +66,7 @@ interface CopilotLineInfo {
 export class CopilotAdapter extends BaseBackendAdapter {
   private turns = new Set<StreamState>();
   private conversations: CopilotConversations;
+  private catalog = new CopilotModelCatalog();
   private scopes = new Set<CopilotProcessScope>();
   private closing: Promise<void> | null = null;
   private closed = false;
@@ -70,7 +74,7 @@ export class CopilotAdapter extends BaseBackendAdapter {
   constructor(options: { workingDir?: string } = {}) {
     super(options);
     this.workingDir = options.workingDir || path.resolve(os.homedir(), '.agent-cockpit', 'workspace');
-    this.conversations = new CopilotConversations({ workingDir: this.workingDir });
+    this.conversations = new CopilotConversations({ workingDir: this.workingDir, catalog: this.catalog });
   }
 
   get metadata(): BackendMetadata {
@@ -97,11 +101,14 @@ export class CopilotAdapter extends BaseBackendAdapter {
         sessionResumeReason: 'The adapter persists Copilot session IDs via external_session and cold-resumes them through the SDK or the custom-command JSONL compatibility path.',
       },
       models: COPILOT_MODELS,
+      modelCatalog: { source: 'fallback', reason: 'Select a CLI profile to discover its available models.' },
     };
   }
 
-  async getMetadata(_options: BackendCallOptions = {}): Promise<BackendMetadata> {
-    return this.metadata;
+  async getMetadata(options: BackendCallOptions = {}): Promise<BackendMetadata> {
+    if (options.refreshModels) await this.catalog.shutdown();
+    if (this.closed || this.closing) return this.metadata;
+    return { ...this.metadata, ...await this.catalog.get(options.cliProfile) };
   }
 
   sendMessage(message: string, options: SendMessageOptions): SendMessageResult {
@@ -129,7 +136,7 @@ export class CopilotAdapter extends BaseBackendAdapter {
     for (const controller of this.oneShots) controller.abort();
     this.closing = settleCopilotCleanup([
       ...[...this.turns].map(state => this.closeTurn(state)),
-      ...[...this.scopes].map(scope => scope.stop()), this.conversations.shutdown(options),
+      ...[...this.scopes].map(scope => scope.stop()), this.conversations.shutdown(options), this.catalog.shutdown(),
     ])
       .finally(() => { this.closing = null; });
     return this.closing;
@@ -143,21 +150,32 @@ export class CopilotAdapter extends BaseBackendAdapter {
     if (this.closed || this.closing) throw new Error('Copilot is shutting down.');
     const workingDir = resolveCopilotWorkingDir(options.workingDir || this.workingDir || process.cwd());
     const runtime = resolveCopilotCliRuntime(options.cliProfile);
-    const args = buildCopilotRunArgs(prompt, {
-      workingDir,
-      model: options.model,
-      effort: options.effort,
-      allowTools: options.allowTools,
-      mcpServers: options.mcpServers,
-      attachments: options.attachments,
-    });
     const controller = new AbortController();
+    const signal = options.abortSignal ? AbortSignal.any([options.abortSignal, controller.signal]) : controller.signal;
     this.oneShots.add(controller);
     try {
+      signal.throwIfAborted();
+      const metadata = await this.getMetadata({ cliProfile: options.cliProfile });
+      signal.throwIfAborted();
+      assertCopilotSelection(metadata, options, runtime.env);
+      for (const modality of ['image', 'pdf'] as const) {
+        if (!options.attachments?.some(attachment => attachment.kind === modality)) continue;
+        const check = checkOneShotMediaInput(metadata, options.model, modality);
+        if (!check.ok) throw new Error(check.message);
+      }
+      const args = buildCopilotRunArgs(prompt, {
+        workingDir,
+        model: options.model,
+        effort: options.effort,
+        allowTools: options.allowTools,
+        mcpServers: options.mcpServers,
+        attachments: options.attachments,
+        models: metadata.models,
+      });
       const result = await runCopilotOnce(runtime, args, {
         cwd: workingDir,
         timeoutMs: options.timeoutMs ?? COPILOT_EXEC_TIMEOUT_MS,
-        abortSignal: options.abortSignal ? AbortSignal.any([options.abortSignal, controller.signal]) : controller.signal,
+        abortSignal: signal,
         registerScope: scope => {
           this.scopes.add(scope);
           return () => this.scopes.delete(scope);
@@ -215,7 +233,11 @@ export class CopilotAdapter extends BaseBackendAdapter {
       if (copilotChatTransport(options.cliProfile) === 'sdk') {
         state.sdk = this.conversations.sendMessage(message, { ...options, conversationId: state.key });
         yield* state.sdk.stream;
-      } else yield* this._streamMessageAttempt(message, options, state, false);
+      } else {
+        const runtime = resolveCopilotCliRuntime(options.cliProfile);
+        assertCopilotSelection({ models: copilotFallbackModels(runtime.env) }, options, runtime.env);
+        yield* this._streamMessageAttempt(message, options, state, false);
+      }
     } catch (error) {
       yield { type: 'error', error: error instanceof Error ? error.message : String(error) }; yield { type: 'done' };
     } finally {
@@ -446,6 +468,7 @@ function buildCopilotRunArgs(prompt: string, options: {
   mcpServers?: McpServerConfig[];
   allowTools?: boolean;
   attachments?: RunOneShotAttachment[];
+  models?: ModelOption[];
 }): string[] {
   const args = ['-p', prompt, '--output-format', 'json', '--no-ask-user', '--no-color', '--log-level', 'none', '--stream', 'on', '--no-auto-update'];
 
@@ -459,7 +482,7 @@ function buildCopilotRunArgs(prompt: string, options: {
   const model = options.model?.trim();
   if (model) args.push('--model', model);
 
-  const selectedModel = COPILOT_MODELS.find(candidate => candidate.id === model);
+  const selectedModel = (options.models || COPILOT_MODELS).find(candidate => candidate.id === model);
   if (options.effort && COPILOT_EFFORT_SET.has(options.effort)
     && selectedModel?.supportedEffortLevels?.includes(options.effort)) {
     args.push('--reasoning-effort', options.effort);

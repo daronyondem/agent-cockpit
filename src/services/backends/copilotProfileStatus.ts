@@ -21,7 +21,7 @@ export async function probeCopilotProfile(profile: CliProfile, abortSignal: Abor
     if (!auth.isAuthenticated) return { authenticated: false, modelsAvailable: false, modelCount: 0 };
     try {
       const models = await runtime.client.listModels();
-      const count = models.filter(model => model.policy?.state !== 'disabled').length;
+      const count = models.filter(model => !model.policy || model.policy.state === 'enabled').length;
       return { authenticated: true, modelsAvailable: count > 0, modelCount: count,
         ...(count ? {} : { modelListError: 'Copilot returned no enabled models for this account.' }) };
     } catch (error) {

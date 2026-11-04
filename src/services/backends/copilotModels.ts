@@ -1,7 +1,9 @@
+import type { ModelInfo } from '@github/copilot-sdk' with { 'resolution-mode': 'import' };
 import type { ModelCapabilities, ModelOption } from '../../types';
 
 export const COPILOT_EFFORT_ORDER = ['low', 'medium', 'high', 'xhigh'] as const;
-export const COPILOT_EFFORT_SET = new Set<string>(COPILOT_EFFORT_ORDER);
+export const COPILOT_SDK_EFFORT_ORDER = [...COPILOT_EFFORT_ORDER, 'max'] as const;
+export const COPILOT_EFFORT_SET = new Set<string>(COPILOT_SDK_EFFORT_ORDER);
 
 const TEXT_MODEL_CAPABILITIES: ModelCapabilities = {
   input: { text: true },
@@ -19,8 +21,8 @@ interface CopilotModelSeed {
   mediaVerified?: boolean;
 }
 
-// Curated fallback for the current chat/one-shot paths; SDK profile checks
-// discover account access separately. New capabilities require native evidence.
+// Curated fallback when account discovery is unavailable. Capability additions
+// still require model/transport-specific native evidence.
 const COPILOT_MODEL_SEEDS: CopilotModelSeed[] = [
   { id: 'auto', family: 'auto', costTier: 'medium', description: 'Let GitHub Copilot choose an available model', default: true, reasoning: false },
   { id: 'claude-sonnet-5.5', family: 'claude', costTier: 'medium', description: 'Balanced Claude Sonnet model for everyday agentic coding' },
@@ -63,3 +65,33 @@ export const COPILOT_MODELS: ModelOption[] = COPILOT_MODEL_SEEDS.map(seed => ({
     reasoning: seed.reasoning !== false,
   },
 }));
+
+/** Explicit environment models remain usable on self-configured compatibility paths. */
+export function copilotFallbackModels(env: NodeJS.ProcessEnv = {}): ModelOption[] {
+  const configured = env.COPILOT_MODEL?.trim();
+  return configured && !COPILOT_MODELS.some(model => model.id === configured)
+    ? [...COPILOT_MODELS, { id: configured, label: configured, family: 'custom', capabilities: { input: { text: true }, output: { text: true } } }]
+    : COPILOT_MODELS;
+}
+
+/** Runtime effort lists are authoritative; a model name is never effort evidence. */
+export function copilotRuntimeModels(models: ModelInfo[]): ModelOption[] {
+  const seen = new Set<string>(['auto']);
+  const available: ModelOption[] = [];
+  for (const model of models) {
+    const id = model.id?.trim();
+    if (!id || seen.has(id) || (model.policy && model.policy.state !== 'enabled')) continue;
+    seen.add(id);
+    const fallback = COPILOT_MODELS.find(candidate => candidate.id === id);
+    const efforts = model.capabilities?.supports?.reasoningEffort === true
+      ? COPILOT_SDK_EFFORT_ORDER.filter(effort => model.supportedReasoningEfforts?.includes(effort)) : [];
+    const verifiedMedia = fallback?.capabilities?.input?.image === true && model.capabilities?.supports?.vision === true;
+    available.push({
+      id, label: model.name?.trim() || id, family: fallback?.family || id.split('-')[0],
+      ...(fallback?.costTier ? { costTier: fallback.costTier } : {}),
+      ...(efforts.length ? { supportedEffortLevels: efforts } : {}),
+      capabilities: { input: { text: true, image: verifiedMedia, pdf: verifiedMedia }, output: { text: true }, reasoning: efforts.length > 0 },
+    });
+  }
+  return available.length ? [COPILOT_MODELS[0], ...available] : [];
+}

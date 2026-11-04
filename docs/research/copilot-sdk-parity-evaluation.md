@@ -135,3 +135,44 @@ Node 22.23.4/macOS arm64. The test workflow adds a pinned 1.0.105 matrix on
 macOS 15, Ubuntu 24.04 and Windows; until those jobs run, their presence is not
 platform certification. Machine-local evidence does not substitute for
 platform/account qualification.
+
+## Runtime catalog implementation checkpoint — 2026-11-04
+
+The selected SDK 1.0.28 exposes `ModelInfo.id/name/policy`, native vision and
+reasoning-effort flags, and `supportedReasoningEfforts` including `max`. Runtime
+projection and a profile/runtime/auth-scoped bounded cache now feed metadata,
+SDK session configuration, restricted JSONL one-shots, HTTP admission and both
+clients. Policy-disabled/unconfigured models are excluded, and new IDs do not
+inherit media or effort from names. Fallback provenance is explicit; a native
+vision flag is insufficient to certify a new Cockpit image/PDF selection.
+
+Executable RPC-peer evidence verifies distinct profile catalogs, exact efforts
+for new IDs, validation before session/prompt creation, direct media gates,
+cache reuse/refresh, Stop during discovery, and update shutdown. It establishes
+application behavior with public SDK types and transport, not real hosted
+account availability. Nine native SDK cases still pass on CLI 1.0.105 / Node
+22.23.4 / macOS arm64, including the isolated unauthenticated-catalog fallback.
+The native wrapper case caught an over-strict fallback check: an explicitly
+configured COPILOT_MODEL absent from the curated list must remain available as
+a text-only compatibility entry. Authoritative account catalogs remain strict.
+
+A fresh read-only normal-terminal account probe reports authenticated via
+GitHub CLI and a catalog HTTP 403. The production catalog returns a generic,
+clearly marked fallback without native response bodies/headers. No inference
+was performed. Successful hosted account catalogs and a genuine two-account
+comparison remain unverified. The implementation adds no new image/PDF model
+qualification or Windows/Linux native certification.
+
+Protocol references: the [official Node SDK model API](https://github.com/github/copilot-sdk/blob/main/nodejs/README.md)
+and [BYOK model listing guidance](https://docs.github.com/en/copilot/how-tos/copilot-sdk/auth/byok).
+Installed 1.0.28 type declarations and selected 1.0.105 runtime results, rather
+than newer upstream main behavior, define this checkpoint.
+
+Qualification for this checkpoint: 155 normal-CI suites / 2,886 tests pass;
+coverage is 88.66% lines/statements, 76.17% branches and 93.71% functions. Nine
+native SDK checks and six real application workflows pass. Ten rebuilt
+desktop/mobile browser cases pass; the two new catalog cases inject model lists
+and reject their probe sends without inference, while the existing eight retain
+real SDK/local-provider behavior. Production web JS totals 898.5 KiB under the
+unchanged 900 KiB total budget. Browser screenshots show the unavailable
+selection/fallback status without layout overflow.

@@ -32,9 +32,10 @@ function copilotProfile(overrides: Partial<CliProfile> = {}): CliProfile {
 }
 
 describe('Copilot backend metadata', () => {
-  test('profile metadata uses the same declared capabilities as server metadata', async () => {
+  test('custom command metadata preserves capabilities and identifies the fallback catalog', async () => {
     const backend = new CopilotAdapter();
-    expect(await backend.getMetadata({ cliProfile: copilotProfile() })).toEqual(backend.metadata);
+    expect(await backend.getMetadata({ cliProfile: copilotProfile() })).toEqual({ ...backend.metadata,
+      modelCatalog: { source: 'fallback', reason: 'Custom command compatibility mode; account model discovery is unavailable.' } });
   });
 
   test('advertises thinking, tool activity, and media transport', () => {
@@ -605,6 +606,7 @@ describe('Copilot lifecycle regressions', () => {
       jest.doMock('child_process', () => ({ spawn }));
       const { CopilotAdapter: IsolatedAdapter } = require('../src/services/backends/copilot');
       result = new IsolatedAdapter({ workingDir: workdir });
+      jest.spyOn(result, 'getMetadata').mockResolvedValue(result.metadata);
     });
     return result;
   }

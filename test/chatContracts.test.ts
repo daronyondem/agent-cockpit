@@ -104,6 +104,7 @@ describe('chat API contracts', () => {
       content: 'hello',
       claudeCodeMode: null,
     });
+    expect(validateSendMessageRequest({ content: 'hello', effort: null })).toMatchObject({ effort: null });
     expect(validateConversationInputRequest({ text: 'answer', streamActive: false })).toEqual({
       text: 'answer',
       streamActive: false,

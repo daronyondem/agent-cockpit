@@ -4,6 +4,8 @@ import { csrfGuard } from '../../middleware/csrf';
 import type { ChatService } from '../../services/chatService';
 import type { BackendRegistry } from '../../services/backends/registry';
 import type { BaseBackendAdapter } from '../../services/backends/base';
+import { assertCopilotSelection } from '../../services/backends/copilotCatalog';
+import { resolveCopilotCliRuntime } from '../../services/backends/copilotRuntime';
 import { ACTIVE_STREAM_JOB_STATES } from '../../services/streamJobRegistry';
 import { StreamJobSupervisor, type PendingMessageSend } from '../../services/streamJobSupervisor';
 import type { MemoryMcpServer } from '../../services/memoryMcp';
@@ -24,7 +26,7 @@ import type {
 } from '../../types';
 import { logger } from '../../utils/logger';
 import { buildMemoryMcpAddendum, buildMemoryMcpResumeReminder } from './memoryPrompt';
-import { conversationHasMissingCliProfile, isCliProfileResolutionError, param } from './routeUtils';
+import { conversationHasMissingCliProfile, isCliProfileResolutionError, param, sendError } from './routeUtils';
 
 const log = logger.child({ module: 'stream-routes' });
 
@@ -255,6 +257,12 @@ export function createStreamRouter(opts: StreamRoutesOptions): express.Router {
     const backendId = runtime.backendId;
     if (cliProfileId && backend && backend !== backendId) {
       return res.status(400).json({ error: `CLI profile backend ${backendId} does not match requested backend ${backend}` });
+    }
+    if (backendId === 'copilot') {
+      try {
+        const metadata = await backendRegistry.get(backendId)!.getMetadata({ cliProfile: runtime.profile });
+        assertCopilotSelection(metadata, { model: conv.model, effort: conv.effort }, resolveCopilotCliRuntime(runtime.profile).env);
+      } catch (error) { return sendError(res, 400, error); }
     }
     await streamSupervisor.markPreparing(jobId, {
       backend: backendId,

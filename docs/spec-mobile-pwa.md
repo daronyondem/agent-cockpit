@@ -128,7 +128,7 @@ The PWA currently covers:
 - Current-user display via `GET /api/me`.
 - Settings/default loading via `GET /api/chat/settings`.
 - Backend metadata loading via `GET /api/chat/backends`.
-- Profile-specific backend metadata loading via `GET /api/chat/cli-profiles/:profileId/metadata`.
+- Profile-specific backend metadata loading via `GET /api/chat/cli-profiles/:profileId/metadata`. Copilot refreshes selected-profile metadata on a 60-second timer and window focus, cancels stale selection/unmount callbacks, and derives effort choices from that model's runtime list. Run Settings displays **Fallback models** and its reason when discovery is unavailable/custom. A saved Copilot model missing from the current catalog remains selected; Run Settings explains that it is unavailable and asks the user to choose from the list. No catalog render writes a replacement to saved conversation state. Copilot sends `effort:null` when the effort control is absent/cleared, removing an old stored effort rather than retaining it on the next message. The server rejects unavailable model/effort requests before adding a user message. There are no PWA asset, manifest, or service-worker changes.
 - GitHub Copilot profiles use the same metadata-driven model picker, assistant
   label/icon, thinking/text/tool frames, session recovery notices, and usage
   counters as desktop. `auto` is the default model; Haiku/auto do not show
@@ -252,3 +252,10 @@ Stop followed by immediate send and reload, draft/attachment preservation on a
 temporary reset rejection, and reset/archive/restore/delete navigation. Memory
 management panels and live Memory bubbles remain deferred; this coverage does
 not add those surfaces. See `npm run e2e:copilot-ui` and the testing spec.
+
+The runtime model-catalog checkpoint adds a browser case per client using an
+injected account/fallback catalog, including exact effort choices, missing saved
+IDs, explicit effort clearing on send, and post-navigation fallback status.
+Ten combined Chromium cases pass locally on macOS: eight real SDK/local-provider
+workflows plus these two catalog fixtures. This does not certify a successful
+hosted catalog or new mobile media transport.

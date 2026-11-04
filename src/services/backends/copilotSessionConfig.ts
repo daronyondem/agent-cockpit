@@ -1,6 +1,6 @@
 import type { SessionConfigBase, MCPServerConfig, ProviderConfig } from '@github/copilot-sdk' with { 'resolution-mode': 'import' };
-import type { McpServerConfig, SendMessageOptions } from '../../types';
-import { COPILOT_MODELS, COPILOT_EFFORT_ORDER } from './copilotModels';
+import type { McpServerConfig, ModelOption, SendMessageOptions } from '../../types';
+import { COPILOT_MODELS, COPILOT_SDK_EFFORT_ORDER } from './copilotModels';
 
 /** Preserve the existing CLI environment contract for explicit custom providers. */
 function providerFromEnv(env: NodeJS.ProcessEnv): ProviderConfig | undefined {
@@ -13,12 +13,12 @@ function providerFromEnv(env: NodeJS.ProcessEnv): ProviderConfig | undefined {
     ...(env.COPILOT_PROVIDER_API_KEY ? { apiKey: env.COPILOT_PROVIDER_API_KEY } : {}) };
 }
 
-export function copilotSessionConfig(options: SendMessageOptions, env: NodeJS.ProcessEnv, workingDir: string): SessionConfigBase {
+export function copilotSessionConfig(options: SendMessageOptions, env: NodeJS.ProcessEnv, workingDir: string, models: ModelOption[] = COPILOT_MODELS): SessionConfigBase {
   const selection = options.model?.trim();
   const model = selection && selection !== 'auto' ? selection : env.COPILOT_MODEL || undefined;
-  const selected = COPILOT_MODELS.find(candidate => candidate.id === model);
+  const selected = models.find(candidate => candidate.id === model);
   const effort = options.effort && selected?.supportedEffortLevels?.includes(options.effort)
-    ? COPILOT_EFFORT_ORDER.find(candidate => candidate === options.effort) : undefined;
+    ? COPILOT_SDK_EFFORT_ORDER.find(candidate => candidate === options.effort) : undefined;
   const mcp = copilotMcpServers(options.mcpServers);
   return {
     clientName: 'agent-cockpit', model, workingDirectory: workingDir, streaming: true,

@@ -1325,7 +1325,7 @@ import { reduceStreamFrame } from './stream/streamFrameReducer.ts';
       if (sendCliProfileId) body.cliProfileId = sendCliProfileId;
       if (sendBackend) body.backend = sendBackend;
       if (sendModel)   body.model   = sendModel;
-      if (sendEffort)  body.effort  = sendEffort;
+      if (sendEffort || sendBackend === 'copilot') body.effort = sendEffort;
       if (sendClaudeCodeMode.shouldSend) body.claudeCodeMode = sendClaudeCodeMode.bodyValue;
       if (sendBackend === 'codex' && sendServiceTier) body.serviceTier = sendServiceTier;
       const res = await AgentApi.fetch('conversations/' + encodeURIComponent(convId) + '/message', {
@@ -1345,7 +1345,7 @@ import { reduceStreamFrame } from './stream/streamFrameReducer.ts';
             cliProfileId: sendCliProfileId || cur.conv.cliProfileId,
             backend: sendBackend || cur.conv.backend,
             model:   sendModel   !== null ? sendModel   : cur.conv.model,
-            effort:  sendEffort  !== null ? sendEffort  : cur.conv.effort,
+            effort:  sendBackend === 'copilot' ? (sendEffort || undefined) : sendEffort !== null ? sendEffort : cur.conv.effort,
             claudeCodeMode: sendClaudeCodeMode.persistedValue,
             serviceTier: sendServiceTier === 'fast' ? 'fast' : undefined,
           } : cur.conv,
@@ -2126,7 +2126,7 @@ import { reduceStreamFrame } from './stream/streamFrameReducer.ts';
       if (sendCliProfileId) body.cliProfileId = sendCliProfileId;
       if (sendBackend) body.backend = sendBackend;
       if (sendModel)   body.model   = sendModel;
-      if (sendEffort)  body.effort  = sendEffort;
+      if (sendEffort || sendBackend === 'copilot') body.effort = sendEffort;
       if (sendClaudeCodeMode.shouldSend) body.claudeCodeMode = sendClaudeCodeMode.bodyValue;
       if (sendBackend === 'codex' && sendServiceTier) body.serviceTier = sendServiceTier;
       const res = await AgentApi.fetch('conversations/' + encodeURIComponent(convId) + '/message', {
@@ -2144,7 +2144,7 @@ import { reduceStreamFrame } from './stream/streamFrameReducer.ts';
             cliProfileId: sendCliProfileId || cur.conv.cliProfileId,
             backend: sendBackend || cur.conv.backend,
             model: sendModel !== null ? sendModel : cur.conv.model,
-            effort: sendEffort !== null ? sendEffort : cur.conv.effort,
+            effort: sendBackend === 'copilot' ? (sendEffort || undefined) : sendEffort !== null ? sendEffort : cur.conv.effort,
             claudeCodeMode: sendClaudeCodeMode.persistedValue,
             serviceTier: sendServiceTier === 'fast' ? 'fast' : undefined,
           } : cur.conv,

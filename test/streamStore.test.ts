@@ -565,6 +565,17 @@ test('send() posts selected CLI profile with its harness backend', async () => {
   });
 });
 
+test('Copilot sends an explicit effort clear when the selected model has no effort control', async () => {
+  await openWs('c1');
+  const Store = (window as any).StreamStore;
+  const api = (global as any).AgentApi;
+  Store.setComposerCliProfile('c1', 'profile-copilot', 'copilot');
+  Store.setComposerModel('c1', 'text-model');
+  api.fetch.mockResolvedValueOnce(makeResponse({ userMessage: null }));
+  await Store.send('c1', 'text only');
+  expect(api.fetch.mock.calls[0][1].body).toMatchObject({ backend: 'copilot', model: 'text-model', effort: null });
+});
+
 test('reset() replaces stale composer profile selections with the reset conversation profile', async () => {
   const Store = (window as any).StreamStore;
   const api = (global as any).AgentApi;
@@ -1185,6 +1196,23 @@ describe('queue', () => {
     expect(postCall![1].method).toBe('POST');
     expect(postCall![1].body.content).toBe('queued text\n\n[Uploaded files: /tmp/x.png]');
     expect(Store.getState('c1').queue).toEqual([]);
+  });
+
+  test('Copilot queued sends retain an explicit effort clear', async () => {
+    const ws = await openWs('c1');
+    const Store = (window as any).StreamStore;
+    const api = (global as any).AgentApi;
+    Store.setComposerCliProfile('c1', 'profile-copilot', 'copilot');
+    await startAcceptedStream('c1', ws);
+    api.fetch.mockClear();
+    api.fetch.mockResolvedValueOnce(makeResponse({ ok: true }))
+      .mockResolvedValueOnce(makeResponse({ userMessage: null }))
+      .mockResolvedValueOnce(makeResponse({ ok: true }));
+    await Store.enqueue('c1', 'queued text', []);
+    ws.dispatch({ type: 'done' });
+    await new Promise(resolve => setTimeout(resolve, 5));
+    const post = api.fetch.mock.calls.find((call: unknown[]) => call[0] === 'conversations/c1/message');
+    expect(post?.[1].body).toMatchObject({ backend: 'copilot', effort: null });
   });
 
   test('queued send success persists edits made to later queue items while head is in flight', async () => {

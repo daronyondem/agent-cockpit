@@ -18,7 +18,7 @@ integration('Copilot Memory and Workspace Context application integration', () =
     const snapshot = (await env.chatService.getWorkspaceMemory(env.conv.workspaceId))!;
     expect(snapshot.files).toHaveLength(1);
     expect(snapshot.files[0].metadata).toMatchObject({ status: 'active', sourceConversationId: env.conv.id });
-    expect(calls()[0].args).toEqual(expect.arrayContaining(['--available-tools', 'none', '--model', 'gpt-4']));
+    expect(calls()[0].args).toEqual(expect.arrayContaining(['--available-tools', 'none', '--model', env.model]));
     expect(calls()[0].args).not.toContain('--allow-all');
     expect(calls()[0].cwd).toBe(fs.realpathSync(env.workspace));
     const recall = await callMemory(server(), 'memory_search', { query: MEMORY_MARKER });

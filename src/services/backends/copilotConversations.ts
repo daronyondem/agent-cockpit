@@ -6,6 +6,7 @@ import { startCopilotSdkRuntime, type CopilotSdkRuntime } from './copilotSdkRunt
 import { copilotSessionConfig, composePrompt } from './copilotSessionConfig';
 import { createCopilotSdkEventState, reduceCopilotSdkEvent } from './copilotSdkEvents';
 import { copilotTurnUsage, copilotUsageMetrics } from './copilotUsage';
+import { CopilotModelCatalog, assertCopilotSelection } from './copilotCatalog';
 import { buildNativeSessionRecovery, buildSessionRecoveryEvent, createRecoverySnapshot, isMissingNativeSessionError } from './sessionRecovery';
 
 const log = logger.child({ module: 'copilot-conversations' });
@@ -28,10 +29,12 @@ export class CopilotConversations {
   private closed = false;
   private readonly startRuntime: typeof startCopilotSdkRuntime;
   private readonly requestTimeoutMs: number;
+  private readonly catalog: CopilotModelCatalog;
 
-  constructor(private options: { workingDir?: string; startRuntime?: typeof startCopilotSdkRuntime; requestTimeoutMs?: number } = {}) {
+  constructor(private options: { workingDir?: string; startRuntime?: typeof startCopilotSdkRuntime; requestTimeoutMs?: number; catalog?: CopilotModelCatalog } = {}) {
     this.startRuntime = options.startRuntime || startCopilotSdkRuntime;
     this.requestTimeoutMs = options.requestTimeoutMs ?? 30_000;
+    this.catalog = options.catalog || new CopilotModelCatalog();
   }
 
   sendMessage(message: string, options: SendMessageOptions): SendMessageResult {
@@ -122,6 +125,9 @@ export class CopilotConversations {
       turn.runtime = await this.wait(turn.startup, turn);
       yield { type: 'backend_runtime', processId: turn.runtime.process.pid ?? null };
       turn.controller.signal.throwIfAborted();
+      const catalog = await this.wait(this.catalog.forRuntime(runtime, turn.runtime.client, turn.controller.signal), turn);
+      turn.controller.signal.throwIfAborted();
+      assertCopilotSelection(catalog, options, runtime.env);
       const queued: StreamEvent[] = [];
       let state = createCopilotSdkEventState();
       let complete = false;
@@ -145,7 +151,7 @@ export class CopilotConversations {
       };
       accepting = true;
       void turn.runtime.closed.then(error => finish(error.message, 'transport'));
-      const config = { ...copilotSessionConfig(options, runtime.env, workingDir), onEvent };
+      const config = { ...copilotSessionConfig(options, runtime.env, workingDir, catalog.models), onEvent };
       let session: CopilotSession;
       let prompt = composePrompt(message, options.systemPrompt, options.isNewSession);
       if (!options.isNewSession && options.externalSessionId) {

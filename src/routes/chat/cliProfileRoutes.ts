@@ -102,11 +102,13 @@ export function createCliProfileRouter(opts: CliProfileRoutesOptions): express.R
       try {
         const runtime = await chatService.resolveCliProfileRuntime(profile.id);
         const adapter = backendRegistry.get(runtime.backendId);
-        if (adapter && runtime.backendId !== 'copilot') {
-          const metadata = await adapter.getMetadata({ cliProfile: runtime.profile });
-          const modelCount = Array.isArray(metadata.models) ? metadata.models.length : 0;
-          result.modelsAvailable = modelCount > 0;
-          result.modelCount = modelCount;
+        if (adapter) {
+          const metadata = await adapter.getMetadata({ cliProfile: runtime.profile, ...(runtime.backendId === 'copilot' ? { refreshModels: true } : {}) });
+          if (runtime.backendId !== 'copilot') {
+            const modelCount = Array.isArray(metadata.models) ? metadata.models.length : 0;
+            result.modelsAvailable = modelCount > 0;
+            result.modelCount = modelCount;
+          }
         }
       } catch (metadataErr: unknown) {
         result.modelListError = (metadataErr as Error).message || String(metadataErr);

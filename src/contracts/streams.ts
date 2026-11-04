@@ -8,7 +8,7 @@ export interface SendMessageRequest {
   content: string;
   backend?: string;
   model?: string;
-  effort?: ContractEffortLevel;
+  effort?: ContractEffortLevel | null;
   claudeCodeMode?: ClaudeCodeModeInput;
   cliProfileId?: string;
   serviceTier?: ServiceTierInput;
@@ -57,7 +57,7 @@ export function validateSendMessageRequest(body: unknown): ValidatedSendMessageR
     content: requiredNonEmptyString(record, 'content', 'Message content required'),
     backend: optionalString(record, 'backend'),
     model: optionalString(record, 'model'),
-    effort: optionalStringEnum(record, 'effort', CONTRACT_EFFORT_LEVELS),
+    effort: record.effort === null ? null : optionalStringEnum(record, 'effort', CONTRACT_EFFORT_LEVELS),
     claudeCodeMode: parseClaudeCodeModeInput(record.claudeCodeMode),
     cliProfileId: optionalString(record, 'cliProfileId'),
     serviceTier: parseServiceTierInput(record.serviceTier),

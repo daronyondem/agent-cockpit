@@ -6,6 +6,7 @@ import { startCopilotSdkRuntime, type CopilotSdkRuntime } from '../src/services/
 import { resolveCopilotCliRuntime } from '../src/services/backends/copilotRuntime';
 import { CopilotAdapter, __copilotTestUtils } from '../src/services/backends/copilot';
 import { CopilotConversations } from '../src/services/backends/copilotConversations';
+import { CopilotModelCatalog } from '../src/services/backends/copilotCatalog';
 import { spawnCopilotProcess } from '../src/services/backends/copilotProcess';
 import { buildCliCommandInvocation } from '../src/services/cliCommandResolver';
 import type { SendMessageOptions, StreamEvent } from '../src/types';
@@ -134,6 +135,11 @@ native('real Copilot owned SDK runtime with fixed local model responses', () => 
     expect(status).toMatchObject({ protocolVersion: 3 });
     expect(await runtime!.client.getAuthStatus()).toMatchObject({ isAuthenticated: false });
     await expect(runtime!.client.listModels()).rejects.toThrow(/authenticated/i);
+    const catalog = new CopilotModelCatalog();
+    const discovered = await catalog.forRuntime({ command: 'copilot', env: nativeEnv, profileKey: 'isolated-no-auth' }, runtime!.client);
+    expect(discovered.modelCatalog).toMatchObject({ source: 'fallback', reason: expect.stringContaining('unavailable') });
+    expect(discovered.models.find(model => model.id === 'auto')?.capabilities?.input?.image).toBe(false);
+    await catalog.shutdown();
     let session = await runtime!.client.createSession(config());
     expect((await session.sendAndWait({ prompt: 'SDK_SMOKE' }))?.data.content).toBe('SDK_TEXT_OK');
     const id = session.sessionId;

@@ -66,7 +66,7 @@ console.log(JSON.stringify({type:'result',exitCode:0,usage:{}}));
     const settings = await env.chatService.getSettings();
     await env.chatService.saveSettings({ ...settings,
       cliProfiles: settings.cliProfiles!.map(profile => ({ ...profile, command: launcher })),
-      knowledgeBase: { digestionCliProfileId: env.profileId, digestionCliModel: 'gpt-4', dreamingCliProfileId: env.profileId, dreamingCliModel: 'gpt-4', kbGleaningEnabled: true, cliConcurrency: 1 },
+      knowledgeBase: { digestionCliProfileId: env.profileId, digestionCliModel: env.model, dreamingCliProfileId: env.profileId, dreamingCliModel: env.model, kbGleaningEnabled: true, cliConcurrency: 1 },
     });
     await env.chatService.setWorkspaceKbEnabled(env.conv.workspaceId, true);
     const queueRegistry = new WorkspaceTaskQueueRegistry();
@@ -98,7 +98,7 @@ console.log(JSON.stringify({type:'result',exitCode:0,usage:{}}));
     await routines.ensureWorkspace(env.conv.workspaceId);
     const dir = routines.getRoutineDir(env.conv.workspaceId, 'fixture');
     fs.mkdirSync(dir, { recursive: true });
-    fs.writeFileSync(path.join(dir, 'manifest.json'), JSON.stringify({ schemaVersion: 1, kind: 'agent-cockpit.routine', id: 'fixture', title: 'Synthetic routine', routineFile: 'routine.md', state: 'enabled', trigger: { type: 'manual' }, notification: { mode: 'off' }, harness: { cliProfileId: env.profileId, model: 'gpt-4' }, timeoutMinutes: 1 }));
+    fs.writeFileSync(path.join(dir, 'manifest.json'), JSON.stringify({ schemaVersion: 1, kind: 'agent-cockpit.routine', id: 'fixture', title: 'Synthetic routine', routineFile: 'routine.md', state: 'enabled', trigger: { type: 'manual' }, notification: { mode: 'off' }, harness: { cliProfileId: env.profileId, model: env.model }, timeoutMinutes: 1 }));
     fs.writeFileSync(path.join(dir, 'routine.md'), '# Synthetic routine\nWrite COPILOT_ROUTINE_571 to the authorized output folder.\n');
     return dir;
   }

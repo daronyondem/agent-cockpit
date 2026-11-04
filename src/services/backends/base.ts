@@ -15,6 +15,8 @@ import type {
 export interface BackendCallOptions {
   /** Full CLI profile for adapters that support profile-isolated runtimes. */
   cliProfile?: CliProfile;
+  /** Invalidate a model catalog after an explicit account/access check. */
+  refreshModels?: boolean;
 }
 
 export interface RunOneShotOptions {

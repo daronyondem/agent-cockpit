@@ -115,6 +115,7 @@ test('mobile reset admission failures restore the draft without attaching a phan
     await act(async () => { root.render(createElement(Harness)); });
     await act(async () => { await pipeline.sendDraft(); });
     expect(draft).toBe('Keep this draft');
+    expect(sendMessage).toHaveBeenCalledWith('fixture', expect.objectContaining({ effort: null }));
     expect(attachments).toEqual([attachment]);
     expect(streaming).toBe(false);
     expect(conversation.messages).toEqual([]);

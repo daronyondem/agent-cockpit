@@ -675,6 +675,9 @@ export class ChatService {
    * available, then the first supported level, or clears if nothing matches.
    */
   private _effectiveEffort(backend: string, model: string | undefined, requested: EffortLevel | undefined): EffortLevel | undefined {
+    // Copilot's account-scoped catalog validates effort at send time. The
+    // server-wide fallback cannot normalize a newly discovered model.
+    if (backend === 'copilot') return requested;
     const adapter = this._backendRegistry?.get(backend);
     const modelOption = adapter?.metadata.models?.find(m => m.id === model);
     return effectiveEffort(model, requested, modelOption);

@@ -16,6 +16,9 @@ affects:
   - src/services/backends/copilotSdkEvents.ts
   - src/services/backends/copilotSessionConfig.ts
   - src/services/backends/copilotModels.ts
+  - src/services/backends/copilotCatalog.ts
+  - src/contracts/responses.ts
+  - src/contracts/streams.ts
   - src/services/backends/copilotTools.ts
   - src/services/backends/copilotProcess.ts
   - src/services/cliProfileAuthService.ts
@@ -107,6 +110,17 @@ token details, otherwise normalize cache-inclusive model aggregates, and count
 children once without adding overlapping provider/model/agent maps. Preserve
 native premium-request counters separately from nano-AIU. Unknown units and
 unavailable metrics are not zero charges or USD estimates.
+
+Discover models through the effective profile's owned SDK connection and cache
+only by runtime/auth identity, with bounded expiry and explicit refresh after
+account checks or CLI shutdown. Preserve a clearly marked curated fallback for
+discovery failures and opaque/custom-provider compatibility. Runtime efforts are
+authoritative; media still requires Cockpit selection/transport evidence. Keep
+saved unavailable IDs visible and reject them before execution, rather than
+silently selecting a replacement. Add an explicit nullable effort clear to the
+message boundary so changing to a model without effort cannot retain a stale
+stored selection in either client. This closes static-catalog UI drift without
+claiming successful hosted account or media certification.
 
 ## Alternatives Considered
 

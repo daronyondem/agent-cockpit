@@ -33,6 +33,7 @@ export async function createCopilotWorkflowEnv(native = false) {
   const callsPath = path.join(env.tmpDir, 'copilot-calls.jsonl');
   const launcher = path.join(env.tmpDir, 'copilot-workflow');
   const profileId = 'copilot-workflows';
+  const model = native ? 'gpt-4' : 'gpt-6.1-sol';
   const plan: CopilotWorkflowPlan = {
     memoryOutput: JSON.stringify({ action: 'saved', reason: 'Durable fixture project rule.', entry:
       `---\nname: fixture-project-rule\ndescription: Fixture project identifier\ntype: project\n---\n\nThe permanent project identifier is ${MEMORY_MARKER}.` }),
@@ -106,12 +107,12 @@ console.log(JSON.stringify({type:'result',exitCode:0,usage:{}}));
     env.backendRegistry.register(adapter);
     await env.chatService.saveSettings({ ...(await env.chatService.getSettings()), defaultBackend: 'copilot', defaultCliProfileId: profileId,
       cliProfiles: [{ id: profileId, name: 'Copilot workflows', harness: 'copilot', authMode: 'server-configured', command: launcher, createdAt: '', updatedAt: '' }],
-      memory: { cliProfileId: profileId, cliModel: 'gpt-4' },
-      workspaceContext: { cliProfileId: profileId, cliModel: 'gpt-4', scanIntervalMinutes: 1440, cliConcurrency: 1 },
+      memory: { cliProfileId: profileId, cliModel: model },
+      workspaceContext: { cliProfileId: profileId, cliModel: model, scanIntervalMinutes: 1440, cliConcurrency: 1 },
     });
-    const conv = await env.chatService.createConversation('Fixture conversation', workspace, 'copilot', 'gpt-4', undefined, profileId);
+    const conv = await env.chatService.createConversation('Fixture conversation', workspace, 'copilot', model, undefined, profileId);
     await env.chatService.setWorkspaceMemoryEnabled(conv.workspaceId, true);
-    return { ...env, adapter, workspace, conv, plan, writePlan, callsPath, profileId, close };
+    return { ...env, adapter, workspace, conv, plan, writePlan, callsPath, profileId, model, close };
   } catch (err) {
     await close();
     throw err;

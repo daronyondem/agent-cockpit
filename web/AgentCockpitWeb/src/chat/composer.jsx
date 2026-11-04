@@ -581,7 +581,7 @@ function ComposerPicks({ convId, backends, cliProfiles, composerCliProfileId, co
     let cancelled = false;
     setProfileBackend(null);
     setProfileBackendLoadedFor(null);
-    AgentApi.getCliProfileMetadata(selectedProfileId)
+    const load = () => AgentApi.getCliProfileMetadata(selectedProfileId)
       .then(backend => {
         if (!cancelled) {
           setProfileBackend(backend || null);
@@ -594,8 +594,16 @@ function ComposerPicks({ convId, backends, cliProfiles, composerCliProfileId, co
           setProfileBackendLoadedFor(selectedProfileId);
         }
       });
-    return () => { cancelled = true; };
-  }, [selectedProfileId]);
+    load();
+    const refresh = selectedProfile?.harness === 'copilot';
+    const timer = refresh ? setInterval(load, 60_000) : null;
+    if (refresh) window.addEventListener('focus', load);
+    return () => {
+      cancelled = true;
+      if (timer) clearInterval(timer);
+      if (refresh) window.removeEventListener('focus', load);
+    };
+  }, [selectedProfileId, selectedProfile?.harness]);
   React.useEffect(() => {
     if (!canChangeProfile || !selectedProfileId || !effectiveBackendId) return;
     if (composerCliProfileId !== selectedProfileId || composerBackend !== effectiveBackendId) {
@@ -612,8 +620,9 @@ function ComposerPicks({ convId, backends, cliProfiles, composerCliProfileId, co
   const fallbackModel = profileMetadataPending
     ? null
     : (backendModels.find(m => m.default) || backendModels[0] || null);
-  const pendingModel = profileMetadataPending && composerModel
-    ? { id: composerModel, label: composerModel }
+  const unavailableModel = backend?.id === 'copilot' && !profileMetadataPending && composerModel && !modelFromCatalog;
+  const pendingModel = (profileMetadataPending || unavailableModel) && composerModel
+    ? { id: composerModel, label: composerModel + (unavailableModel ? ' (unavailable)' : '') }
     : null;
   const model = modelFromCatalog
     || pendingModel
@@ -621,7 +630,10 @@ function ComposerPicks({ convId, backends, cliProfiles, composerCliProfileId, co
     || null;
   const modelOptions = profileMetadataPending && !modelFromCatalog
     ? (pendingModel ? [{ value: pendingModel.id, label: modelDisplayLabel(pendingModel), disabled: true }] : [])
-    : backendModels.map(m => ({ value: m.id, label: modelDisplayLabel(m) + costTierDot(m.costTier) }));
+    : [
+      ...(unavailableModel ? [{ value: composerModel, label: pendingModel.label, disabled: true }] : []),
+      ...backendModels.map(m => ({ value: m.id, label: modelDisplayLabel(m) + costTierDot(m.costTier) })),
+    ];
   const backendId = backend ? backend.id : null;
   const modelId = model ? model.id : null;
   const effortLevels = (model && Array.isArray(model.supportedEffortLevels)) ? model.supportedEffortLevels : [];
@@ -701,6 +713,7 @@ function ComposerPicks({ convId, backends, cliProfiles, composerCliProfileId, co
           title="Model"
         />
       ) : null}
+      {backend?.modelCatalog?.source === 'fallback' ? <span className="meta" title={backend.modelCatalog.reason}>Fallback models</span> : null}
       {effortLevels.length > 0 ? (
         <PickChip
           label="Effort"

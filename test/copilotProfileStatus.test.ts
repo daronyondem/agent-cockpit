@@ -12,7 +12,7 @@ let stop: jest.Mock;
 
 beforeEach(() => {
   getAuthStatus = jest.fn().mockResolvedValue({ isAuthenticated: true });
-  listModels = jest.fn().mockResolvedValue([{ id: 'enabled', policy: { state: 'enabled' } }, { id: 'disabled', policy: { state: 'disabled' } }]);
+  listModels = jest.fn().mockResolvedValue([{ id: 'enabled', policy: { state: 'enabled' } }, { id: 'disabled', policy: { state: 'disabled' } }, { id: 'unconfigured', policy: { state: 'unconfigured' } }]);
   stop = jest.fn().mockResolvedValue(undefined);
   start.mockResolvedValue({ client: { getAuthStatus, listModels }, stop } as never);
 });

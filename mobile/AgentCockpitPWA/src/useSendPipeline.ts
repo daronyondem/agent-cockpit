@@ -223,7 +223,7 @@ export function useSendPipeline(options: UseSendPipelineOptions) {
         backend: options.selectedBackend,
         cliProfileId: options.selectedCliProfileId,
         model: options.selectedModel,
-        effort: options.selectedEffort,
+        effort: runtimeSelection.backend === 'copilot' ? options.selectedEffort ?? null : options.selectedEffort,
         claudeCodeMode: options.claudeCodeModeForRequest,
         serviceTier: options.serviceTierEnabled ? options.selectedServiceTier : undefined,
       });

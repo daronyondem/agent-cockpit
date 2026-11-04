@@ -191,6 +191,12 @@ maps overlap. Keep parsing in `copilotUsage.ts`, subtract the native baseline,
 and never convert nano-AIU to premium-request credits or USD. Native workflow
 and browser fixtures must configure the server environment and assert SDK
 dispatch: Settings intentionally strips Copilot profile-local env values.
+Keep profile/runtime model discovery and its bounded cache in `copilotCatalog.ts`;
+map native model capabilities in `copilotModels.ts`. Review
+`test/copilotCatalog.test.ts`, `test/copilotCatalog.integration.test.ts`, and
+`test/chat.copilotCatalog.test.ts` when changing catalog scope or validation.
+Preserve missing saved model IDs in both clients, expose fallback provenance,
+and never infer new media support from a native vision flag alone.
 Review `test/copilotProfileStatus.test.ts`, `test/cliProfileAuthService.test.ts`
 and the profile-auth route tests for credential/catalog checks. Preserve the
 distinction between installed CLI, authenticated credentials and enabled-model

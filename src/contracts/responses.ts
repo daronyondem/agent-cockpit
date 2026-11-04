@@ -292,6 +292,11 @@ export interface BackendMetadata {
   icon?: string;
   capabilities?: BackendCapabilities;
   models?: ModelOption[];
+  modelCatalog?: {
+    source: 'runtime' | 'fallback';
+    reason?: string;
+    fetchedAt?: string;
+  };
 }
 
 export interface WorkspaceContextGlobalSettings {

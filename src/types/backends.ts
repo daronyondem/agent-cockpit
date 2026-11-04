@@ -85,6 +85,11 @@ export interface BackendMetadata {
   capabilities: BackendCapabilities;
   resumeCapabilities: BackendResumeCapabilities;
   models?: ModelOption[];
+  modelCatalog?: {
+    source: 'runtime' | 'fallback';
+    reason?: string;
+    fetchedAt?: string;
+  };
 }
 
 /**

@@ -34,6 +34,11 @@ net.createServer(socket => {
   record({method,params:method==='connect'?{tokenMatches:params.token===process.env.COPILOT_CONNECTION_TOKEN}:params});
   if(method==='connect') return {protocolVersion:3};
   if(method==='status.get') return {version:'fixture',protocolVersion:3};
+  if(method==='models.list') {
+   if(process.env.COPILOT_FIXTURE_CATALOG==='error') throw new rpc.ResponseError(-32603,'Catalog unavailable');
+   if(process.env.COPILOT_FIXTURE_CATALOG==='hang') return new Promise(()=>{});
+   return {models:JSON.parse(process.env.COPILOT_FIXTURE_MODELS || '[{"id":"gpt-6.1-sol","name":"Sol","capabilities":{"supports":{"reasoningEffort":true,"vision":true}},"supportedReasoningEfforts":["low","high","max"]}]')};
+  }
   if(method==='session.create') {
    if(process.env.COPILOT_FIXTURE_OPEN==='hang') return new Promise(()=>{});
    return {sessionId:params.sessionId};
