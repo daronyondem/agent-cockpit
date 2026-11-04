@@ -2,7 +2,6 @@ import fs from 'fs';
 import os from 'os';
 import path from 'path';
 import http from 'http';
-import { createCanvas } from '@napi-rs/canvas';
 import { execFileSync } from 'child_process';
 import { CopilotAdapter } from '../src/services/backends/copilot';
 import { copilotUsageMetrics } from '../src/services/backends/copilotUsage';
@@ -98,6 +97,8 @@ setInterval(() => {}, 1000);
   }, 20_000);
 
   test('transports explicit image and PDF attachments without file tools', async () => {
+    // Skipped native suites must not load the canvas GC worker in normal CI.
+    const { createCanvas } = await import('@napi-rs/canvas');
     const canvas = createCanvas(32, 32);
     const context = canvas.getContext('2d');
     context.fillStyle = '#ff0000';

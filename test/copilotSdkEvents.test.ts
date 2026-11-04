@@ -86,3 +86,12 @@ test('leaves accounting to the reconciled native metrics API rather than project
   expect(known.events).toEqual([]);
   expect(reduceCopilotSdkEvent(known.state, event('session.usage_checkpoint', { totalNanoAiu: 100 })).events).toEqual([]);
 });
+
+test('projects root context snapshots independently of token charges and ignores child context', () => {
+  let state = createCopilotSdkEventState();
+  const context = reduceCopilotSdkEvent(state, event('session.usage_info', { currentTokens: 25, tokenLimit: 100, messagesLength: 2 }));
+  expect(context.events).toMatchObject([{ type: 'usage', usage: { inputTokens: 0, contextUsagePercentage: 25, contextWindow: { status: 'available', usedTokens: 25, tokenLimit: 100 } } }]);
+  state = context.state;
+  expect(reduceCopilotSdkEvent(state, event('session.usage_info', { currentTokens: 90, tokenLimit: 100 }, 'child')).events).toEqual([]);
+  expect(reduceCopilotSdkEvent(state, event('session.compaction_start')).events).toMatchObject([{ usage: { contextWindow: { status: 'unavailable' } } }]);
+});

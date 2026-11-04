@@ -1,6 +1,7 @@
 import type { SessionEvent } from '@github/copilot-sdk' with { 'resolution-mode': 'import' };
 import type { StreamEvent } from '../../types';
 import { createCopilotWorkState, reduceCopilotWork, finishCopilotWork, type CopilotWorkState } from './copilotAgents';
+import { copilotContextUsage } from './copilotUsage';
 
 export interface CopilotSdkEventState {
   textDeltas: ReadonlySet<string>;
@@ -37,6 +38,14 @@ export function reduceCopilotSdkEvent(previous: CopilotSdkEventState, event: Ses
   if (event.agentId || data.parentToolCallId) return { state, events };
 
   switch (event.type) {
+    case 'session.usage_info':
+      events.push({ type: 'usage', usage: copilotContextUsage(event.data.currentTokens, event.data.tokenLimit, event.timestamp) });
+      break;
+    case 'session.model_change':
+    case 'session.compaction_start':
+    case 'session.context_cleared':
+      events.push({ type: 'usage', usage: copilotContextUsage(undefined, undefined, event.timestamp) });
+      break;
     case 'assistant.message_delta':
       if (event.data.deltaContent && !state.textFinals.has(event.data.messageId)) {
         state.textDeltas = new Set([...state.textDeltas, event.data.messageId]);

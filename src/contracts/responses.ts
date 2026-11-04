@@ -1,4 +1,5 @@
 import type { ExplorerEntry, ExplorerPreviewResponse, ExplorerTreeResponse, FilePreviewResponse } from './explorer';
+import type { CopilotUsage, ContextWindowUsage } from './copilotUsage';
 
 export type EffortLevel = 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max' | 'ultra';
 export type ServiceTier = 'fast';
@@ -37,6 +38,8 @@ export interface Usage {
   credits?: number;
   pricingTier?: string;
   contextUsagePercentage?: number;
+  contextWindow?: ContextWindowUsage;
+  copilot?: CopilotUsage;
 }
 
 export interface UsageLedgerRecord {

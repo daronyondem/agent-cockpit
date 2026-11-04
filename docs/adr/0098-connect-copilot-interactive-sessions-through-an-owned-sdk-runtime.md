@@ -13,6 +13,15 @@ affects:
   - src/services/backends/copilotConversations.ts
   - src/services/backends/copilot.ts
   - src/services/backends/copilotUsage.ts
+  - src/services/backends/copilotLiveUsage.ts
+  - src/services/backends/copilotQuota.ts
+  - src/contracts/copilotUsage.ts
+  - src/services/chat/conversationUsageStore.ts
+  - src/services/chat/usageLedgerStore.ts
+  - test/copilotLiveUsage.test.ts
+  - test/copilotQuota.test.ts
+  - test/copilotUsageRoutes.test.ts
+  - test/copilotUsageUi.test.ts
   - src/services/backends/copilotSdkEvents.ts
   - src/services/backends/copilotSessionConfig.ts
   - src/services/backends/copilotGoals.ts
@@ -178,6 +187,15 @@ An explicit fresh native AI-credit window is required for resume. Preserve nativ
 units and omit unknown token/time fields. Clear stays unavailable because removal
 of an objective file does not clear runtime state. Do not use private invocation
 finalizers or recreate missing history to simulate goal controls.
+
+Extend the same owned runtime boundary to quota reads, with no native session or
+inference. Cache only whitelisted measurements by the existing runtime/auth digest,
+retain stale last-good data only for that identity, and drain late startups during
+shutdown/profile refresh. Keep live/final reconciliation in a focused checkpoint
+tracker. Persist context as replaceable snapshots that skip the daily ledger.
+AI-credit availability and premium requests remain distinct; an unavailable zero
+cannot become known free usage, and unknown account quota units cannot be guessed.
+This extends the proposed transport decision without changing accepted ADRs.
 
 ## Alternatives Considered
 

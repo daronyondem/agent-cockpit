@@ -3,6 +3,7 @@ import os from 'os';
 import path from 'path';
 import type { Usage } from '../../types';
 import { logger } from '../../utils/logger';
+import type { UsageAvailability } from '../../contracts/copilotUsage';
 
 const usageLog = logger.child({ module: 'copilot-usage' });
 const MAX_TAIL_BYTES = 4 * 1024 * 1024;
@@ -16,7 +17,7 @@ function counter(value: unknown): value is number {
 }
 
 /** Native metrics include children already; provider/model and agent maps overlap. */
-export function copilotUsageMetrics(value: unknown): Usage | null {
+export function copilotUsageMetrics(value: unknown): (Usage & { nativeEmpty?: true }) | null {
   const metrics = record(value);
   let counters: unknown[];
   if (metrics.tokenDetails !== undefined) {
@@ -43,7 +44,38 @@ export function copilotUsageMetrics(value: unknown): Usage | null {
   if (!counters.every(counter)) return null;
   const [inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens] = counters;
   return { inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens, costUsd: 0, costSource: 'none',
-    ...(counter(metrics.totalPremiumRequestCost) ? { credits: metrics.totalPremiumRequestCost } : {}) };
+    ...(metrics.totalUserRequests === 0 && metrics.totalPremiumRequestCost === 0 && metrics.totalNanoAiu === 0
+      && metrics.modelMetrics && typeof metrics.modelMetrics === 'object' && !Array.isArray(metrics.modelMetrics)
+      && Object.keys(metrics.modelMetrics).length === 0
+      && (metrics.providerModelMetrics === undefined || Array.isArray(metrics.providerModelMetrics) && metrics.providerModelMetrics.length === 0)
+      && counters.every(value => value === 0) ? { nativeEmpty: true as const } : {}),
+    ...(counter(metrics.totalPremiumRequestCost) ? { credits: metrics.totalPremiumRequestCost } : {}),
+    copilot: {
+      tokensStatus: 'complete' as const,
+      aiCreditsStatus: creditStatus(metrics.aiCreditsStatus, metrics.totalNanoAiu),
+      ...(counter(metrics.totalPremiumRequestCost) ? { premiumRequests: metrics.totalPremiumRequestCost } : {}),
+      ...(counter(metrics.totalNanoAiu) && (metrics.aiCreditsStatus === 'complete' || metrics.aiCreditsStatus === 'partial')
+        ? { aiCredits: metrics.totalNanoAiu / 1e9 } : {}),
+    },
+  };
+}
+
+function creditStatus(status: unknown, amount: unknown): UsageAvailability {
+  return counter(amount) && (status === 'complete' || status === 'partial') ? status : 'unavailable';
+}
+
+export function copilotContextUsage(currentTokens: unknown, tokenLimit: unknown, observedAt: string): Usage {
+  const valid = counter(currentTokens) && counter(tokenLimit) && tokenLimit > 0;
+  return { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, costUsd: 0, costSource: 'none',
+    contextWindow: { status: valid ? 'available' : 'unavailable', observedAt,
+      ...(valid ? { usedTokens: currentTokens, tokenLimit } : {}) },
+    ...(valid ? { contextUsagePercentage: Math.min(100, currentTokens / tokenLimit * 100) } : {}),
+  };
+}
+
+export function copilotUnavailableUsage(): Usage {
+  return { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, costUsd: 0, costSource: 'none',
+    copilot: { tokensStatus: 'unavailable', aiCreditsStatus: 'unavailable' } };
 }
 
 export function copilotUsageCheckpoint(event: Record<string, unknown>): Usage | null {
@@ -55,10 +87,15 @@ export function copilotUsageCheckpoint(event: Record<string, unknown>): Usage | 
   if (!counters.every((value): value is number => typeof value === 'number' && Number.isFinite(value) && value >= 0)
     || typeof credits !== 'number' || !Number.isFinite(credits) || credits < 0) return null;
   const [inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens] = counters;
-  return { inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens, credits, costUsd: 0, costSource: 'none' };
+  return { inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens, credits, costUsd: 0, costSource: 'none',
+    copilot: { tokensStatus: 'complete', aiCreditsStatus: 'unavailable', premiumRequests: credits } };
 }
 
 export function copilotTurnUsage(current: Usage, previous: Usage): Usage {
+  const credits = current.copilot;
+  const baseline = previous.copilot;
+  const emptyBaseline = 'nativeEmpty' in previous && previous.nativeEmpty === true;
+  const knownBaseline = baseline?.aiCredits !== undefined || emptyBaseline;
   return {
     inputTokens: Math.max(0, current.inputTokens - previous.inputTokens),
     outputTokens: Math.max(0, current.outputTokens - previous.outputTokens),
@@ -67,6 +104,12 @@ export function copilotTurnUsage(current: Usage, previous: Usage): Usage {
     ...(counter(current.credits) && counter(previous.credits) ? { credits: Math.max(0, current.credits - previous.credits) } : {}),
     costUsd: 0,
     costSource: 'none',
+    ...(credits ? { copilot: { tokensStatus: credits.tokensStatus,
+      aiCreditsStatus: credits.aiCreditsStatus === 'unavailable' || !knownBaseline ? 'unavailable' as const
+        : credits.aiCreditsStatus === 'partial' || (!emptyBaseline && baseline?.aiCreditsStatus !== 'complete') ? 'partial' as const : 'complete' as const,
+      ...(credits.aiCredits !== undefined && knownBaseline ? { aiCredits: Math.max(0, credits.aiCredits - (baseline?.aiCredits || 0)) } : {}),
+      ...(counter(current.credits) && counter(previous.credits) ? { premiumRequests: Math.max(0, current.credits - previous.credits) } : {}),
+    } } : {}),
   };
 }
 

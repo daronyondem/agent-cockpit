@@ -12,6 +12,15 @@ export function emptyUsage(): Usage {
   return { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, costUsd: 0 };
 }
 
+/** Legacy Copilot totals contain no AI-credit coverage; retain that uncertainty. */
+export function initializeCopilotCoverage(target: Usage, previous?: Usage): void {
+  if (target.copilot || !previous || previous.copilot) return;
+  if (!(previous.inputTokens + previous.outputTokens + previous.cacheReadTokens + previous.cacheWriteTokens > 0)
+    && previous.credits === undefined) return;
+  target.copilot = { tokensStatus: 'partial', aiCreditsStatus: 'unavailable',
+    ...(previous.credits !== undefined ? { premiumRequests: previous.credits } : {}) };
+}
+
 export function addToUsage(target: Usage, source: Usage): void {
   target.inputTokens += source.inputTokens || 0;
   target.outputTokens += source.outputTokens || 0;
@@ -29,6 +38,22 @@ export function addToUsage(target: Usage, source: Usage): void {
   }
   if (source.contextUsagePercentage !== undefined) {
     target.contextUsagePercentage = source.contextUsagePercentage;
+  }
+  if (source.contextWindow) {
+    target.contextWindow = source.contextWindow;
+    if (source.contextWindow.status === 'unavailable') delete target.contextUsagePercentage;
+  }
+  if (source.copilot) {
+    const previous = target.copilot;
+    const merge = (a: string | undefined, b: string) => !a || a === b ? b : 'partial';
+    target.copilot = {
+      tokensStatus: merge(previous?.tokensStatus, source.copilot.tokensStatus) as typeof source.copilot.tokensStatus,
+      aiCreditsStatus: merge(previous?.aiCreditsStatus, source.copilot.aiCreditsStatus) as typeof source.copilot.aiCreditsStatus,
+      ...(previous?.aiCredits !== undefined || source.copilot.aiCredits !== undefined
+        ? { aiCredits: (previous?.aiCredits || 0) + (source.copilot.aiCredits || 0) } : {}),
+      ...(previous?.premiumRequests !== undefined || source.copilot.premiumRequests !== undefined
+        ? { premiumRequests: (previous?.premiumRequests || 0) + (source.copilot.premiumRequests || 0) } : {}),
+    };
   }
 }
 
@@ -80,6 +105,7 @@ export class UsageLedgerStore {
         record = { backend: backendId, model, ...(pricingTier ? { pricingTier } : {}), usage: emptyUsage() };
         dayEntry.records.push(record);
       }
+      if (backendId === 'copilot') initializeCopilotCoverage(record.usage, record.usage);
       addToUsage(record.usage, this._enrich(backendId, model, usage, pricingContext));
 
       await this.write(ledger);

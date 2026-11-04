@@ -151,10 +151,14 @@ than zero; this starts a new native credit window. The goal strip labels any
 reported window as **AI credits**, separately from tokens and USD. Clear is
 unavailable in Copilot CLI 1.0.105. Plan mode remains unavailable in Cockpit.
 
-Per-turn input/output/cache tokens and native premium-request counters are
-reconciled across resume, so previous turns are not charged again. Missing usage
-is not a known zero. Cockpit does not convert native nano-AIU or underlying model
-API prices into a Copilot USD estimate.
+The usage panel shows live fresh input, output, cache read/write and measured
+context usage. Token and premium-request counters reconcile across resume and
+final summaries. AI credits and premium requests have separate labels; partial
+credit readings are reported subtotals, and unavailable readings are not zero.
+USD cost/estimates stay unavailable. Account quota is profile-scoped and labels
+stale data and measurement times. When the native compatibility API does not
+establish quota units, the panel says so. Custom providers have no Copilot account
+quota. Account readings can lag current activity; missing data does not block chat.
 
 Image and PDF one-shot workflows, including attachment OCR and Knowledge Base
 image conversion, are sent through `copilot --attachment` with a multimodal

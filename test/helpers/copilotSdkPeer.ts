@@ -121,6 +121,10 @@ net.createServer(socket => {
     emit(id,'assistant.message_delta',{messageId:'answer',deltaContent:'answer:'+prompt});
     emit(id,'assistant.message',{messageId:'answer',content:'answer:'+prompt});
     if(process.env.COPILOT_FIXTURE_LEDGER!=='resume-only') emit(id,'session.usage_checkpoint',process.env.COPILOT_FIXTURE_LEDGER==='new'?{totalNanoAiu:100}:checkpoint);
+    if(process.env.COPILOT_FIXTURE_CONTEXT==='1') {
+     emit(id,'session.usage_info',{currentTokens:250,tokenLimit:1000,messagesLength:2});
+     emit(id,'assistant.usage',{model:'fixture',inputTokens:10,outputTokens:10});
+    }
     emit(id,'assistant.turn_end',{turnId:'1'});
     emit(id,'session.idle');
    };

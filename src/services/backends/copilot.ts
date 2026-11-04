@@ -17,6 +17,7 @@ import { buildCliCommandInvocation } from '../cliCommandResolver';
 import { copilotChatTransport, resolveCopilotCliRuntime, resolveCopilotWorkingDir, type CopilotCliRuntime } from './copilotRuntime';
 import { CopilotConversations } from './copilotConversations';
 import { CopilotModelCatalog, assertCopilotSelection } from './copilotCatalog';
+import { CopilotQuotaCache } from './copilotQuota';
 import { COPILOT_GOALS, type CopilotGoalRun } from './copilotGoals';
 import { parseGoalAiCreditLimit } from '../../contracts/goals';
 import { checkOneShotMediaInput } from './mediaCapabilities';
@@ -70,6 +71,7 @@ export class CopilotAdapter extends BaseBackendAdapter {
   private turns = new Set<StreamState>();
   private conversations: CopilotConversations;
   private catalog = new CopilotModelCatalog();
+  private quota = new CopilotQuotaCache();
   private scopes = new Set<CopilotProcessScope>();
   private closing: Promise<void> | null = null;
   private closed = false;
@@ -110,11 +112,16 @@ export class CopilotAdapter extends BaseBackendAdapter {
   }
 
   async getMetadata(options: BackendCallOptions = {}): Promise<BackendMetadata> {
-    if (options.refreshModels) await this.catalog.shutdown();
+    if (options.refreshModels) await Promise.all([this.catalog.shutdown(), this.quota.shutdown()]);
     if (this.closed || this.closing) return this.metadata;
     const interactive = copilotChatTransport(options.cliProfile) === 'sdk';
     return { ...this.metadata, capabilities: { ...this.metadata.capabilities, userQuestions: interactive, stdinInput: interactive, agents: interactive, goals: this.getGoalCapability(options) },
       ...await this.catalog.get(options.cliProfile) };
+  }
+
+  async getQuota(options: BackendCallOptions = {}) {
+    if (this.closed || this.closing) throw new Error('Copilot is shutting down.');
+    return this.quota.get(options.cliProfile);
   }
 
   getGoalCapability(options: BackendCallOptions = {}) {
@@ -180,7 +187,7 @@ export class CopilotAdapter extends BaseBackendAdapter {
     for (const controller of this.oneShots) controller.abort();
     this.closing = settleCopilotCleanup([
       ...[...this.turns].map(state => this.closeTurn(state)),
-      ...[...this.scopes].map(scope => scope.stop()), this.conversations.shutdown(options), this.catalog.shutdown(),
+      ...[...this.scopes].map(scope => scope.stop()), this.conversations.shutdown(options), this.catalog.shutdown(), this.quota.shutdown(),
     ])
       .finally(() => { this.closing = null; });
     return this.closing;
@@ -564,6 +571,8 @@ function copilotUsage(outputTokens: number, premiumRequests: number): Usage {
     costUsd: 0,
     costSource: 'none',
     ...(premiumRequests > 0 ? { credits: premiumRequests } : {}),
+    copilot: { tokensStatus: 'partial', aiCreditsStatus: 'unavailable',
+      ...(premiumRequests > 0 ? { premiumRequests } : {}) },
   };
 }
 

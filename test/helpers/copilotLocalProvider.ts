@@ -22,7 +22,9 @@ export async function createCopilotLocalProvider(getPlan: () => CopilotWorkflowP
         const reply = (delta: object, reason: string) => {
           res.writeHead(200, { 'Content-Type': 'text/event-stream' });
           for (const [part, finish] of [[delta, null], [{}, reason]]) {
-            res.write(`data: ${JSON.stringify({ id: 'fixture', object: 'chat.completion.chunk', created: 1, model: 'gpt-4', choices: [{ index: 0, delta: part, finish_reason: finish }] })}\n\n`);
+            res.write(`data: ${JSON.stringify({ id: 'fixture', object: 'chat.completion.chunk', created: 1, model: 'gpt-4', choices: [{ index: 0, delta: part, finish_reason: finish }],
+              ...(finish && text.includes('COPILOT_UI_USAGE') ? { usage: { prompt_tokens: 120, completion_tokens: 30, total_tokens: 150, prompt_tokens_details: { cached_tokens: 40 } } } : {}),
+            })}\n\n`);
           }
           res.end('data: [DONE]\n\n');
         };
@@ -87,6 +89,7 @@ setTimeout(()=>fs.writeFileSync(${JSON.stringify(path.join(workspace, 'ui-delega
           else say('COPILOT_UI_CHILD_UNEXPECTED');
           return;
         }
+        if (text.includes('COPILOT_UI_USAGE')) { say('COPILOT_UI_USAGE_OK'); return; }
         if (text.includes('COPILOT_UI_REPLY')) { say('COPILOT_UI_REPLY_OK'); return; }
         if (text.includes('COPILOT_UI_DELEGATE')) {
           if (toolMessages.length) say('COPILOT_UI_DELEGATE_PARENT_OK');

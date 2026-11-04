@@ -1,3 +1,5 @@
+import type { CopilotUsage, ContextWindowUsage } from '../contracts/copilotUsage';
+
 // ── Usage Types ─────────────────────────────────────────────────────
 
 export interface Usage {
@@ -32,12 +34,14 @@ export interface Usage {
     longContextThresholdTokens?: number;
     usdPerCredit?: number;
   };
-  /** Harness-specific credits consumed: Kiro credits or Copilot premium requests. */
+  /** Legacy/backend-scoped Kiro credits or Copilot premium requests. Mixed totals use copilot.premiumRequests for Copilot display. */
   credits?: number;
   /** Provider pricing tier for a raw usage event, such as OpenAI priority. Not meaningful on aggregate totals. */
   pricingTier?: string;
   /** Percentage of the model's context window used (0–100). Snapshot, not cumulative. */
   contextUsagePercentage?: number;
+  contextWindow?: ContextWindowUsage;
+  copilot?: CopilotUsage;
 }
 
 export interface UsageLedgerRecord {

@@ -1,4 +1,5 @@
 import { UsageProjection } from './usageProjection.ts';
+import { CopilotUsageDetails } from './chat/copilotUsage.jsx';
 import { GrokBillingSection } from './chat/grokBillingSection.jsx';
 /* ============================================================
    ContextChip renderers — per-CLI registry
@@ -642,6 +643,10 @@ function DefaultTokenCard({ usage }){
 }
 
 const CHIP_RENDERERS = {
+  'copilot': {
+    renderChipText(usage) { return CHIP_RENDERERS.codex.renderChipText({ ...usage, costUsd: 0, estimatedCostUsd: 0 }) || 'Copilot usage'; },
+    renderTooltipCard(usage, opts) { return <><CodexTokenCard usage={{ ...usage, costUsd: 0, estimatedCostUsd: 0 }}/><CopilotUsageDetails usage={usage} quota={opts?.planUsage}/></>; },
+  },
   'grok-build': {
     renderChipText(usage){ return CHIP_RENDERERS.codex.renderChipText(usage); },
     renderTooltipCard(usage, opts){ return <><DefaultTokenCard usage={usage}/><GrokBillingSection data={opts && opts.planUsage}/></>; },

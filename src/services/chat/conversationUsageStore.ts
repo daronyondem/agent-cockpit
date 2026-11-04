@@ -1,7 +1,7 @@
 import type { ConversationEntry, Usage, WorkspaceIndex } from '../../types';
 import type { UsagePricingCatalog } from '../usagePricing/types';
 import { applyCostEstimate } from '../usagePricing/estimator';
-import { addToUsage, emptyUsage } from './usageLedgerStore';
+import { addToUsage, emptyUsage, initializeCopilotCoverage } from './usageLedgerStore';
 
 interface ConversationLookupResult {
   hash: string;
@@ -61,21 +61,27 @@ export class ConversationUsageStore {
       );
 
       if (!convEntry.usage) convEntry.usage = emptyUsage();
+      if (backendId === 'copilot') initializeCopilotCoverage(convEntry.usage,
+        convEntry.usageByBackend?.copilot || (!convEntry.usageByBackend && convEntry.backend === 'copilot' ? { ...convEntry.usage } : undefined));
       addToUsage(convEntry.usage, enrichedUsage);
 
       if (!convEntry.usageByBackend) convEntry.usageByBackend = {};
       if (!convEntry.usageByBackend[backendId]) convEntry.usageByBackend[backendId] = emptyUsage();
+      if (backendId === 'copilot') initializeCopilotCoverage(convEntry.usageByBackend[backendId], convEntry.usageByBackend[backendId]);
       addToUsage(convEntry.usageByBackend[backendId], enrichedUsage);
 
       let sessionUsage = emptyUsage();
       const activeSession = convEntry.sessions.find(s => s.active);
       if (activeSession) {
         if (!activeSession.usage) activeSession.usage = emptyUsage();
+        if (backendId === 'copilot') initializeCopilotCoverage(activeSession.usage,
+          activeSession.usageByBackend?.copilot || (!activeSession.usageByBackend && convEntry.backend === 'copilot' ? { ...activeSession.usage } : undefined));
         addToUsage(activeSession.usage, enrichedUsage);
         sessionUsage = activeSession.usage;
 
         if (!activeSession.usageByBackend) activeSession.usageByBackend = {};
         if (!activeSession.usageByBackend[backendId]) activeSession.usageByBackend[backendId] = emptyUsage();
+        if (backendId === 'copilot') initializeCopilotCoverage(activeSession.usageByBackend[backendId], activeSession.usageByBackend[backendId]);
         addToUsage(activeSession.usageByBackend[backendId], enrichedUsage);
       }
 

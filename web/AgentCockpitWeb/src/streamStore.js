@@ -17,6 +17,7 @@ import { PlanUsageStore } from './planUsageStore.js';
 import { KiroPlanUsageStore } from './kiroPlanUsageStore.js';
 import { GrokPlanUsageStore } from './grokPlanUsageStore.js';
 import { CodexPlanUsageStore } from './codexPlanUsageStore.js';
+import { CopilotPlanUsageStore } from './copilotPlanUsageStore.js';
 import { cleanGoalObjectiveText, goalSnapshotTimeMs, isActiveGoal } from './goalState.js';
 import { reduceStreamFrame, mergeInitialStreamMessages } from './stream/streamFrameReducer.ts';
 
@@ -1195,6 +1196,7 @@ import { reduceStreamFrame, mergeInitialStreamMessages } from './stream/streamFr
       : conv.backend === 'kiro'        ? KiroPlanUsageStore
       : conv.backend === 'codex'       ? CodexPlanUsageStore
       : conv.backend === 'grok-build'  ? GrokPlanUsageStore
+      : conv.backend === 'copilot'     ? CopilotPlanUsageStore
       : null;
     if (!store || typeof store.refresh !== 'function') return;
     store.refresh(cliProfileId);

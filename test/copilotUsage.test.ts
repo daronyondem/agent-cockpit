@@ -24,7 +24,7 @@ describe('Copilot native usage', () => {
   afterEach(() => { fs.rmSync(home, { recursive: true, force: true }); });
 
   test('parses the disjoint token buckets from current CLI checkpoints', () => {
-    expect(copilotUsageCheckpoint(checkpoint())).toEqual({
+    expect(copilotUsageCheckpoint(checkpoint())).toMatchObject({
       inputTokens: 10, outputTokens: 20, cacheReadTokens: 30, cacheWriteTokens: 40,
       credits: 2, costUsd: 0, costSource: 'none',
     });
@@ -38,7 +38,7 @@ describe('Copilot native usage', () => {
   });
 
   test('subtracts cumulative session totals without double-counting cache tokens or credits', () => {
-    expect(copilotTurnUsage(copilotUsageCheckpoint(checkpoint(15, 27, 3))!, copilotUsageCheckpoint(checkpoint())!)).toEqual({
+    expect(copilotTurnUsage(copilotUsageCheckpoint(checkpoint(15, 27, 3))!, copilotUsageCheckpoint(checkpoint())!)).toMatchObject({
       inputTokens: 5, outputTokens: 7, cacheReadTokens: 0, cacheWriteTokens: 0,
       credits: 1, costUsd: 0, costSource: 'none',
     });
@@ -83,18 +83,18 @@ describe('Copilot SDK reconciled metrics', () => {
   test('makes model input disjoint from both cache buckets and counts aggregate children once', () => {
     const usage = copilotUsageMetrics({ modelMetrics: { root: model(), child: model(60, 15, 20, 5) },
       agentMetrics: { main: { modelMetrics: { root: model() } } }, totalPremiumRequestCost: 1.5, totalNanoAiu: 900 });
-    expect(usage).toEqual({ inputTokens: 105, outputTokens: 45, cacheReadTokens: 60, cacheWriteTokens: 15,
+    expect(usage).toMatchObject({ inputTokens: 105, outputTokens: 45, cacheReadTokens: 60, cacheWriteTokens: 15,
       credits: 1.5, costUsd: 0, costSource: 'none' });
   });
 
   test('prefers provider aggregates without collapsing identical model IDs or adding overlapping maps', () => {
     expect(copilotUsageMetrics({ providerModelMetrics: [{ modelId: 'same', metrics: model() }, { modelId: 'same', metrics: model(60, 15, 20, 5) }],
-      modelMetrics: { same: model(999, 999, 0, 0) } })).toEqual({ inputTokens: 105, outputTokens: 45,
+      modelMetrics: { same: model(999, 999, 0, 0) } })).toMatchObject({ inputTokens: 105, outputTokens: 45,
       cacheReadTokens: 60, cacheWriteTokens: 15, costUsd: 0, costSource: 'none' });
   });
 
   test('prefers authoritative disjoint token details and never converts nano-AIU into legacy credits', () => {
-    expect(copilotUsageMetrics({ tokenDetails: checkpoint().data.accountingSnapshot.tokenDetails, modelMetrics: { model: model() }, totalNanoAiu: 100 })).toEqual({
+    expect(copilotUsageMetrics({ tokenDetails: checkpoint().data.accountingSnapshot.tokenDetails, modelMetrics: { model: model() }, totalNanoAiu: 100 })).toMatchObject({
       inputTokens: 10, outputTokens: 20, cacheReadTokens: 30, cacheWriteTokens: 40, costUsd: 0, costSource: 'none',
     });
     expect(copilotTurnUsage({ inputTokens: 15, outputTokens: 25, cacheReadTokens: 35, cacheWriteTokens: 45, costUsd: 0 }, copilotUsageCheckpoint(checkpoint())!)).not.toHaveProperty('credits');

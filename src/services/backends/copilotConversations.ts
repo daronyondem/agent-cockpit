@@ -5,7 +5,8 @@ import { resolveCopilotCliRuntime, resolveCopilotWorkingDir } from './copilotRun
 import { startCopilotSdkRuntime, type CopilotSdkRuntime } from './copilotSdkRuntime';
 import { copilotSessionConfig, composePrompt } from './copilotSessionConfig';
 import { createCopilotSdkEventState, reduceCopilotSdkEvent } from './copilotSdkEvents';
-import { copilotTurnUsage, copilotUsageMetrics } from './copilotUsage';
+import { copilotContextUsage, copilotUsageMetrics } from './copilotUsage';
+import { CopilotLiveUsage } from './copilotLiveUsage';
 import { CopilotModelCatalog, assertCopilotSelection } from './copilotCatalog';
 import { CopilotInputs } from './copilotInputs';
 import { finishCopilotWork } from './copilotAgents';
@@ -195,6 +196,7 @@ export class CopilotConversations {
       turn.controller.signal.throwIfAborted();
       assertCopilotSelection(catalog, options, runtime.env);
       const queued: StreamEvent[] = [];
+      let liveUsage: CopilotLiveUsage | undefined;
       let complete = false;
       let admitted = false;
       let started = false;
@@ -223,6 +225,7 @@ export class CopilotConversations {
         state = projected.state;
         queued.push(...projected.events);
         turn.inputs?.handle(event);
+        if (event.type === 'assistant.usage') liveUsage?.request();
         if (!event.agentId && event.type === 'assistant.turn_start') { started = true; enableSteering(); }
         if (state.error) { turn.inputs?.cancel(); finish(); }
         else if (admitted && state.idle) finishInputs();
@@ -268,6 +271,10 @@ export class CopilotConversations {
       // Read the runtime's reconciled ledger after resume, before this prompt.
       // This also works when a launcher privately chooses the native auth home.
       const baseline = await this.readUsage(session, turn);
+      liveUsage = new CopilotLiveUsage(baseline, () => this.readUsage(session, turn), usage => {
+        if (accepting && !turn.controller.signal.aborted) { queued.push({ type: 'usage', usage }); notify(); }
+      });
+      yield { type: 'usage', usage: copilotContextUsage(undefined, undefined, new Date().toISOString()) };
       turn.controller.signal.throwIfAborted();
       if (complete) throw new Error(state.error || 'Copilot session closed before prompt submission.');
       let displayPrompt: string | undefined;
@@ -303,15 +310,8 @@ export class CopilotConversations {
           log.warn('Copilot goal state unavailable after idle.');
         }
       }
-      if (!state.error && baseline) {
-        const current = await this.readUsage(session, turn);
-        if (current) {
-          const usage = copilotTurnUsage(current, baseline);
-          if ([usage.inputTokens, usage.outputTokens, usage.cacheReadTokens, usage.cacheWriteTokens, usage.credits].some(value => value && value > 0)) {
-            yield { type: 'usage', usage };
-          }
-        }
-      }
+      if (!state.error) await liveUsage.finish();
+      while (queued.length) yield queued.shift()!;
       accepting = false;
       await this.stop(turn);
       yield { type: 'done' };

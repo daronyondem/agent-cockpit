@@ -346,8 +346,10 @@ After a Worktrees enable or disable succeeds, `workspaceSettings.jsx` refreshes 
 
   Structured input adds about 2.4 KiB of minified desktop JS to the runtime-catalog
   baseline, with initial budgets 903 KiB total JS and 263 KiB for the entry chunk
-  (previously 900/260). Native goal controls raise only the entry limit to 264 KiB;
-  total JS remains 903 KiB and CSS/vendor/other chunk limits are unchanged.
+  (previously 900/260). Native goal controls raised the entry limit to 264 KiB.
+  Copilot context/billing cards and quota add about 3.4 KiB, measuring 906.1 KiB
+  total JS and 266.9 KiB entry; limits are 907 KiB total and 267 KiB entry.
+  CSS/vendor/other chunk limits are unchanged.
 
   **Lifecycle edges:**
   - `reset(convId)` clears `pendingInteraction` and `uiState` along with the rest of the session.
@@ -457,3 +459,26 @@ No default window is chosen. Native `aiCreditsUsed / aiCreditLimit` is labeled
 **AI credits**, independently of token budgets and USD. Copilot omits an unreported
 elapsed timer. Reload reads the native saved objective; Stop/pause retains it.
 See [backend control semantics](spec-backend-services.md#copilot-native-goals-copilotgoalsts).
+
+### Copilot usage visibility
+
+The `copilot` chip renderer reuses the context/token breakdown and adds
+`chat/copilotUsage.jsx`. Show fresh input, output, cache read/write, measured
+context counts/limit/time, separate AI credits and premium requests, and explicit
+unavailable USD cost/estimate. Partial AI credits are a reported subtotal;
+unavailable credit amounts are not zero. Mixed-harness `Usage.credits` and prior
+USD amounts are never relabeled as Copilot spend. Context snapshots survive
+history reload but remain labeled with their measurement timestamp.
+
+`copilotPlanUsageStore.js` coalesces fetches and stores responses by profile ID.
+It calls `GET /cli-profiles/:profileId/copilot-quota`, with
+`server-configured-copilot` as the default profile. Failed HTTP fetches replace
+that profile's visible reading with unavailable data. `ContextChip` subscribes
+only to its selected profile, hides prior profile data during changes, exposes
+an accessible `Session usage` label, and refreshes Copilot quota every minute
+while mounted. Stream completion also requests a quota refresh. Account readings
+show used/entitled native units, explicit unlimited state, optional native usage
+percentage/reset, original fetched time, stale state and service-delay caveat.
+Unknown units remain `quota units (unit not reported)`; no missing amount implies
+zero or exhausted access. No account percentage is projected across a guessed
+billing cycle.

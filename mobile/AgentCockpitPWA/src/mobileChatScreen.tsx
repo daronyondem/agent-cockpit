@@ -38,6 +38,7 @@ import {
 } from './mobileIcons';
 import { Button, ErrorBanner, ProgressBar } from './mobilePrimitives';
 import { GrokBilling } from './grokBilling';
+import { CopilotQuota, CopilotUsage } from './copilotUsage';
 import { InteractionCard } from './interactionCard';
 import { AgentToolsProvider, ToolActivityView } from './agentTools';
 import type {
@@ -347,6 +348,7 @@ export function ChatScreen(props: {
         />
       ) : null}
       <UsageBar usage={conversation.sessionUsage || conversation.usage} backend={conversation.backend} />
+      {conversation.backend === 'copilot' ? <CopilotQuota client={props.client} profileId={conversation.cliProfileId} refreshKey={conversation.messages.length} /> : null}
       {conversation.backend === 'grok-build' ? <GrokBilling client={props.client} profileId={conversation.cliProfileId} refreshKey={conversation.messages.length} /> : null}
       {props.pendingInteraction ? (
         <InteractionCard
@@ -895,6 +897,7 @@ function UsageBar({ usage, backend }: { usage?: Usage; backend?: string }) {
   if (!usage) {
     return null;
   }
+  if (backend === 'copilot') return <CopilotUsage usage={usage} />;
   const tokens = usage.inputTokens + usage.outputTokens + usage.cacheReadTokens + usage.cacheWriteTokens;
   const context = usage.contextUsagePercentage ?? 0;
   const reportedCost = Number(usage.costUsd) || 0;

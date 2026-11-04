@@ -734,7 +734,17 @@ Together these guarantee that a workspace index always parses on disk and that c
       },
       credits?: number,                // Harness-specific accumulated Kiro credits or Copilot premium requests
       pricingTier?: string,            // Raw event pricing tier before aggregation; not meaningful on cumulative totals.
-      contextUsagePercentage?: number  // Kiro/Codex: context window usage snapshot (0–100)
+      contextUsagePercentage?: number, // Kiro/Codex/Copilot: context window snapshot (0–100)
+      contextWindow?: {                // Copilot measured snapshot; replace, never sum
+        status: 'available'|'unavailable', observedAt: string,
+        usedTokens?: number, tokenLimit?: number
+      },
+      copilot?: {                       // Separate from other harness credits and USD
+        tokensStatus: 'complete'|'partial'|'unavailable',
+        aiCreditsStatus: 'complete'|'partial'|'unavailable',
+        aiCredits?: number,             // Partial = reported subtotal; absent = unknown
+        premiumRequests?: number        // Native premium-request counter, independent of AI credits
+      }
     }|null,
     usageByBackend: {            // Per-backend usage breakdown (keyed by backend id)
       [backendId]: Usage

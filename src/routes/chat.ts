@@ -572,7 +572,8 @@ export async function processStream(
       } else if (event.type === 'input_ready') {
         emit(event);
       } else if (event.type === 'usage') {
-        const skipLedger = backend === 'kiro' && event.usage.credits === undefined;
+        const skipLedger = backend === 'kiro' && event.usage.credits === undefined
+          || backend === 'copilot' && event.usage.contextWindow !== undefined;
         const updated = await chatService.addUsage(convId, event.usage, backend, event.model, { skipLedger });
         if (!isClosed()) {
           emit({ type: 'usage', usage: updated?.conversationUsage || event.usage, sessionUsage: updated?.sessionUsage });

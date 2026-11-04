@@ -167,6 +167,34 @@
   white-space: nowrap;
 }
 
+.copilot-usage-details {
+  border-top: 1px solid var(--border);
+  flex: 0 0 auto;
+  min-width: 0;
+}
+
+.copilot-usage-details > summary {
+  cursor: pointer;
+  font-family: var(--mono-font);
+  font-size: 11px;
+  padding: 8px 10px;
+}
+
+.copilot-usage-details .usage-bar {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  max-height: 180px;
+  overflow-y: auto;
+}
+
+.copilot-usage-details .usage-value {
+  overflow-wrap: anywhere;
+  white-space: normal;
+}
+
+.copilot-usage-details .copilot-quota-grid {
+  grid-template-columns: minmax(0, 1fr);
+}
+
 .usage-track {
   background: var(--surface-2);
   border-radius: 999px;

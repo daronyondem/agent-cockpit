@@ -4,7 +4,7 @@ Agent Cockpit supports multiple CLI backends. Not all backends expose the same m
 
 | Feature | Claude Code | Kiro | Codex | OpenCode | Grok Build | GitHub Copilot | Notes |
 |---------|------------|------|-------|----------|------------|----------------|-------|
-| Token usage tracking | Yes | No | Yes | Yes | Yes | Yes, with native totals | Claude Code reports input/output/cache tokens. Codex reports per-turn token usage via `thread/tokenUsage/updated`. OpenCode reports JSON `step_finish.tokens`. Kiro reports credits + context % instead. Grok Build reports per-prompt `_meta.usage`, split into disjoint input/cache buckets and per-model rows. GitHub Copilot subtracts native before/after metrics (saved checkpoints on its JSONL compatibility path), splits cache-inclusive input into disjoint buckets, and reports premium requests separately from USD and nano-AIU. |
+| Token usage tracking | Yes | No | Yes | Yes | Yes | Yes, with live native totals/context | Claude Code reports input/output/cache tokens. Codex reports per-turn token usage via `thread/tokenUsage/updated`. OpenCode reports JSON `step_finish.tokens`. Kiro reports credits + context % instead. Grok Build reports per-prompt `_meta.usage`, split into disjoint input/cache buckets and per-model rows. GitHub Copilot subtracts native before/after metrics (saved checkpoints on its JSONL compatibility path), splits cache-inclusive input into disjoint buckets, and reports premium requests separately from USD and nano-AIU. |
 | Cost (USD) | Yes | No | No | Reported when OpenCode reports it | Reported model cost when complete | No | Claude Code provides per-message USD cost. Codex uses ChatGPT subscription credits or API-key billing — neither is exposed as USD per turn. OpenCode provider cost is passed through when present in JSON events. Kiro uses a proprietary credits system. Grok Build shows reported model cost only when the CLI reports it as complete; optional account balances are shown separately. GitHub Copilot does not expose per-turn USD cost. |
 | Integration protocol | Direct CLI spawn | ACP (JSON-RPC 2.0) | Codex App Server (JSON-RPC 2.0) | `opencode run --format json` | ACP + native xAI extensions | Owned SDK/headless; JSONL compatibility | Claude Code and OpenCode spawn a CLI process per message. Kiro, Codex, and Grok Build run persistent JSON-RPC servers (`kiro-cli acp` / `codex app-server` / `grok agent stdio`) with bidirectional streaming. GitHub Copilot owns one headless runtime per active turn, cold-resumes native history, and retains JSONL for opaque custom commands and one-shots. |
 | Visible thinking | Yes | Yes | Yes | Yes | Yes | Yes | Claude Code, Kiro, Codex, OpenCode, and Grok Build can all emit dedicated thinking frames. OpenCode streams `reasoning` JSON parts when Cockpit passes `--thinking`. GitHub Copilot maps assistant.reasoning_delta events. |
@@ -43,3 +43,11 @@ are verified with fixed local replies; hosted billing remains separate. See the
 
 Grok implementation, native extensions, cost completeness, background work, and
 platform verification are detailed in [spec-grok-build.md](docs/spec-grok-build.md).
+
+Copilot SDK usage includes live/final checkpoint reconciliation, measured context
+counts/limits, separate AI credits and premium requests, and profile-scoped quota
+on desktop/mobile. Partial credit amounts are reported subtotals; unavailable
+amounts and unknown account units are explicit. No USD estimate is inferred.
+Quota reads are bounded and create no session or model work. Successful hosted
+billing, genuine two-account access and native Windows/Linux qualification remain
+pending. See [the backend contract](docs/spec-backend-services.md#copilot-context-snapshots-and-account-quota).

@@ -33,6 +33,7 @@ import type { ConversationInputRequest, SendMessageRequest } from '../../../src/
 import type { AttachmentOcrRequest, AttachmentOcrResponse } from '../../../src/contracts/uploads';
 import type { WorkspaceLocationResponse } from '../../../src/contracts/workspaces';
 import type { GrokBillingResponse } from '../../../src/contracts/grokBilling';
+import type { CopilotQuotaResponse } from '../../../src/contracts/copilotUsage';
 
 type RequestOptions = {
   query?: Record<string, string | undefined>;
@@ -90,6 +91,10 @@ export class AgentCockpitAPI {
 
   async getGrokBilling(profileID: string): Promise<GrokBillingResponse> {
     return this.request<GrokBillingResponse>('GET', `/api/chat/cli-profiles/${encodeURIComponent(profileID)}/grok-billing`, { csrf: true });
+  }
+
+  async getCopilotQuota(profileID: string): Promise<CopilotQuotaResponse> {
+    return this.request<CopilotQuotaResponse>('GET', `/api/chat/cli-profiles/${encodeURIComponent(profileID)}/copilot-quota`);
   }
 
   async getBackends(): Promise<BackendMetadata[]> {

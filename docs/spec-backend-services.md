@@ -1421,7 +1421,7 @@ runtime reconciles saved usage records and shutdown snapshots itself; do not
 guess a transcript path or depend on receiving a live checkpoint. Copilot
 1.0.105 fixed-provider evidence includes durable `session.usage_record` and
 `session.shutdown` records without live `session.usage_checkpoint` events.
-Subtract the pre-turn aggregate to emit at most one per-turn usage frame.
+Use the pre-turn aggregate as the initial charged checkpoint. `copilotLiveUsage.ts` coalesces `assistant.usage` notifications into native metric reads, emits only the difference from the last charged checkpoint, advances that checkpoint, and reconciles once more after session-wide idle. Final metrics therefore do not charge live updates or resumed history again.
 
 `copilotUsageMetrics(unknown)` lives in `copilotUsage.ts`. Prefer the native
 disjoint `tokenDetails` map when present, requiring all four nonnegative finite
@@ -1436,15 +1436,82 @@ Reject inconsistent entries whose caches exceed input and reject invalid sums.
 An empty aggregate is usable only with explicit `totalUserRequests:0`.
 
 Only a finite nonnegative native `totalPremiumRequestCost` maps to existing
-`Usage.credits` (premium requests). Missing billing fields stay absent; neither
-`totalNanoAiu` nor underlying model API prices are converted to legacy credits
-or USD. Differences include credits only when both snapshots report that field.
-Keep `costUsd:0` / `costSource:'none'`. Missing, malformed, failed or timed-out
-metrics suppress usage while allowing chat to finish. Metric waits use the same
-30-second request deadline and abort signal as session admission. Warn on RPC
-failure without retaining diagnostics/credentials. Omit all-zero differences,
-and never charge historical startup checkpoint notifications. Root errors and
-failed send admission do not trigger a final usage query.
+`Usage.credits` and the separate `Usage.copilot.premiumRequests` counter. Preserve
+`credits` for existing storage/readers; both clients display only the Copilot
+counter, so a mixed-harness session cannot relabel Kiro credits as premium
+requests. Subtract premium-request counters only when both checkpoints report
+them. Historical JSONL checkpoints carry complete token provenance; output-only
+JSONL fallback usage is partial.
+
+`Usage.copilot` also holds `tokensStatus` and `aiCreditsStatus`, each
+`complete|partial|unavailable`, plus optional `aiCredits`. A finite nonnegative
+`totalNanoAiu` becomes AI credits by dividing by 1e9 only when native
+`aiCreditsStatus` is complete or partial. Partial values are reported subtotals;
+unavailable numeric zero is not a zero-cost claim and its amount is omitted.
+A nonempty baseline with unknown AI credits cannot establish a new credit delta.
+An internal empty-baseline marker requires explicit zero user requests, zero premium requests/nano-AIU, empty model/provider maps and zero token buckets. Only that marker establishes an initial zero boundary; unreported tokens alone do not prove an empty session. This marker is never emitted or persisted. Partial
+baseline coverage remains partial even when later cumulative coverage is complete.
+Never convert these values to premium requests, Codex token budgets, model API
+prices or USD. Keep `costUsd:0` / `costSource:'none'` and no USD estimate.
+
+Missing, malformed, failed or timed-out metrics suppress uncertain charges while
+allowing chat to finish. Emit explicit unavailable provenance with zero additive
+token counters instead of silently implying a free turn. A later usable live
+snapshot reconciles against the last usable checkpoint, never the failed read.
+Aggregation sums amounts separately and preserves incomplete coverage: different
+availability states merge to partial. Context-only updates do not change billing
+availability. `initializeCopilotCoverage` seeds pre-existing Copilot totals with
+unknown AI-credit coverage and retains their measured premium requests before
+adding newer fields. The conversation/session aggregates use the prior Copilot
+backend bucket, excluding other harness credits; daily Copilot ledger rows use
+the same progressive initialization. Legacy unknown coverage stays partial after
+new complete observations, preserving storage formats and all existing counters. Metric waits retain the 30-second request deadline and abort signal
+of session admission. Warn on RPC failure without retaining native diagnostics
+or credentials. Unchanged snapshots are not charged; historical startup checkpoint
+notifications are never charged. Root errors and failed send admission do not
+trigger a final usage query.
+
+#### Copilot context snapshots and account quota
+
+`session.usage_info` from the root/session projects to a zero-additive `usage`
+frame with `contextWindow:{status:'available',observedAt,usedTokens,tokenLimit}`
+and `contextUsagePercentage=min(100,usedTokens/tokenLimit*100)`. Counts must be
+finite/nonnegative and the limit positive; invalid values produce unavailable
+context without a percentage. Ignore child context. Session setup, model changes,
+compaction start and context clears invalidate the previous snapshot. Context
+snapshots replace rather than accumulate; backend/profile switches and reset
+clear both context fields. Conversation and active-session usage persist the
+snapshot for reload, while context-only frames skip the daily ledger.
+
+`CopilotQuotaCache` in `copilotQuota.ts` belongs to `CopilotAdapter`. Its account
+read starts an owned SDK runtime, calls `account.getQuota({})` and reads only the
+`token_based_billing` flag from `account.getCurrentAuth`, then awaits owned cleanup.
+It creates no native session, prompt, tools or inference. No auth object, native
+error or environment is returned or cached. The profile route calls the adapter's
+`getQuota({cliProfile})`; adapter shutdown and explicit profile/catalog refresh
+abort and drain pending quota work. Failed cleanup retains its admission barrier.
+
+Cache by the catalog's digest of effective profile/runtime/environment and CLI/
+auth-file signatures. Coalesce reads per digest, refresh at most once per minute,
+and bound entries to 32. The read deadline is 10 seconds; cleanup includes late
+startup. Mark readings stale after five minutes or after failed refresh. Only a
+failed refresh of the exact same digest may retain a last-good reading, with its
+original timestamp, stale flag and failure explanation. New identity failures
+return no previous account data. Custom providers and opaque JSONL wrappers
+return explicit unavailable states without spawning an account probe.
+
+Normalize only finite nonnegative used/entitlement measurements. Explicit
+unlimited entitlement retains its flag and omits a negative unlimited sentinel.
+Missing amounts do not become zero, missing percentages do not become 100%, and
+numeric balances never infer an exhausted access/capacity verdict. Preserve valid
+native remaining percentages and reset dates. The compatibility quota RPC lacks
+units on token-based/unknown accounts: show `quota units (unit not reported)`;
+only explicit non-token billing establishes request units (premium requests for
+`premium_interactions`, requests for other categories). AI-credit consumption
+and account quota remain separate measurements. Both clients label measurement
+times, stale/unavailable readings and possible service aggregation delay.
+Browser-safe shapes live in `src/contracts/copilotUsage.ts`. Hosted billing and
+actual two-account/platform certification remain separate qualification work.
 
 Native fixed-model checks prove cold resume/history, cache-disjoint per-turn
 accounting, aggregate delegated usage exactly once, managed instruction discovery,

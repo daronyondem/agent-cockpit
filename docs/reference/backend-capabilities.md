@@ -109,7 +109,7 @@ Native compatibility is verified on Grok Build 1.0.52, macOS arm64. See the
   `copilot --additional-mcp-config <json>`;
 - per-turn input/output/cache tokens and premium-request credits, derived by
   subtracting native metrics before/after a turn (saved checkpoints for JSONL)
-  and separating cache-inclusive input; no nano-AIU conversion or USD estimate;
+  and separating cache-inclusive input; explicit native AI credits and premium requests remain distinct, with no USD estimate;
 - restricted text-only one-shots explicitly expose zero tools using
   `--available-tools none`;
 - grouped SDK child tools and final summaries, including nested/background work,
@@ -144,3 +144,9 @@ See the [SDK evaluation](../research/copilot-sdk-parity-evaluation.md).
 Named profiles share terminal authentication and do not isolate accounts.
 Anthropic `max` effort is not advertised until selection-specific verification.
 Native installations have a manual updater but no background update discovery.
+
+Copilot also displays measured context snapshots and profile-scoped account
+quota on desktop/mobile. Live/final usage reconciliation preserves complete,
+partial and unavailable coverage. Unknown balances/units remain unknown; stale
+readings retain their original timestamps. Quota reads create no session or
+inference. Hosted billing/account qualification remains separate.

@@ -11,6 +11,8 @@ import { spawnCopilotProcess } from '../src/services/backends/copilotProcess';
 import { buildCliCommandInvocation } from '../src/services/cliCommandResolver';
 import type { SendMessageOptions, StreamEvent } from '../src/types';
 import { waitForCopilotPeer } from './helpers/copilotSdkPeer';
+import { addToUsage, emptyUsage } from '../src/services/chat/usageLedgerStore';
+import { CopilotQuotaCache } from '../src/services/backends/copilotQuota';
 
 const native = process.env.COPILOT_SDK_E2E === '1' ? describe : describe.skip;
 
@@ -173,6 +175,49 @@ native('real Copilot owned SDK runtime with fixed local model responses', () => 
     for await (const frame of stream) { frames.push(frame); events.push({ source: 'cockpit', ...frame }); }
     return frames;
   };
+  const totalUsage = (frames: StreamEvent[]) => {
+    const total = emptyUsage();
+    for (const frame of frames) if (frame.type === 'usage') addToUsage(total, frame.usage);
+    return total;
+  };
+
+  test('reports native context and credit availability without inventing an unauthenticated quota', async () => {
+    await expect(runtime!.client.rpc.account.getQuota({})).rejects.toThrow();
+    const session = await runtime!.client.createSession(config());
+    const quota = await session.rpc.quota.get();
+    events.push({ source: 'probe', quota });
+    expect(quota.snapshots).toEqual({});
+    await session.send({ prompt: 'SDK_USAGE_SNAPSHOT' });
+    await waitForCopilotPeer(() => events.some(event => event.type === 'session.idle'));
+    const context = await session.rpc.metadata.contextInfo({ promptTokenLimit: 128000, outputTokenLimit: 4096 });
+    const metrics = await session.rpc.usage.getMetrics();
+    events.push({ source: 'probe', context, metrics });
+    expect(context.contextInfo).toMatchObject({ totalTokens: expect.any(Number), limit: 128000 });
+    expect(events.some(event => event.type === 'session.usage_info')).toBe(true);
+    expect(metrics).toMatchObject({ totalNanoAiu: 0, aiCreditsStatus: 'unavailable' });
+  }, 30000);
+
+  test('owned account quota service closes an unauthenticated native probe without sessions or inference', async () => {
+    await runtime!.stop(); runtime = undefined;
+    const options = conversationOptions();
+    const profile = { ...options.cliProfile!, command: 'copilot', env: { ...options.cliProfile!.env,
+      COPILOT_PROVIDER_BASE_URL: '', COPILOT_MODEL: '' } };
+    let launches = 0;
+    const quota = new CopilotQuotaCache({ startRuntime: async (resolved, dir, options) => {
+      launches++;
+      const selected = resolveCopilotCliRuntime({ ...profile, command: process.env.COPILOT_SDK_CLI_PATH || 'copilot' });
+      runtime = await startCopilotSdkRuntime({ ...selected, env: resolved.env }, dir, options);
+      return runtime;
+    } });
+    try {
+      expect(await quota.get(profile)).toMatchObject({ status: 'unavailable', rows: [], fetchedAt: null });
+      expect(await quota.get(profile)).toMatchObject({ status: 'unavailable', rows: [] });
+      expect(launches).toBe(1);
+      expect(requests).toHaveLength(0);
+      expect(events).toHaveLength(0);
+      expect(runtime!.process.exitCode !== null || runtime!.process.signalCode !== null).toBe(true);
+    } finally { await quota.shutdown(); }
+  }, 30000);
 
   test('native goals complete, replace literal objectives and retain credit units after cold status reads', async () => {
     await runtime!.stop(); runtime = undefined;
@@ -385,9 +430,11 @@ native('real Copilot owned SDK runtime with fixed local model responses', () => 
       const second = await collectConversation(adapter.sendMessage('SDK_FACADE_RESUME', conversationOptions({ isNewSession: false, externalSessionId: session.sessionId })).stream);
       for (const frames of [first, second]) {
         expect(frames.some(frame => frame.type === 'error')).toBe(false);
-        expect(frames.filter(frame => frame.type === 'usage')).toEqual([{ type: 'usage', usage: {
+        expect(totalUsage(frames)).toMatchObject({
           inputTokens: 80, outputTokens: 30, cacheReadTokens: 40, cacheWriteTokens: 0, credits: 0, costUsd: 0, costSource: 'none',
-        } }]);
+          copilot: { tokensStatus: 'complete', aiCreditsStatus: 'unavailable', premiumRequests: 0 },
+          contextWindow: { status: 'available', tokenLimit: 128000 },
+        });
       }
       expect(second).toContainEqual(session);
       expect(JSON.stringify(requests.at(-1)?.messages)).toContain('SDK_FACADE_SEED');
@@ -395,9 +442,9 @@ native('real Copilot owned SDK runtime with fixed local model responses', () => 
       scenario = 'delegate';
       const delegated = await collectConversation(adapter.sendMessage('SDK_FACADE_DELEGATE', conversationOptions({ isNewSession: false, externalSessionId: session.sessionId })).stream);
       expect(delegated.some(frame => frame.type === 'error')).toBe(false);
-      expect(delegated.filter(frame => frame.type === 'usage')).toEqual([{ type: 'usage', usage: {
+      expect(totalUsage(delegated)).toMatchObject({
         inputTokens: 240, outputTokens: 90, cacheReadTokens: 120, cacheWriteTokens: 0, credits: 0, costUsd: 0, costSource: 'none',
-      } }]);
+      });
       expect(delegated.filter(frame => frame.type === 'text').map(frame => frame.content).join('')).toBe('SDK_PARENT_OK');
     } finally { await adapter.shutdown(); }
   }, 60000);
@@ -443,15 +490,15 @@ native('real Copilot owned SDK runtime with fixed local model responses', () => 
         expect(frames.some(frame => frame.type === 'tool_activity' && !frame.isAgent && frame.parentAgentId === root.id)).toBe(true);
       }
       const measuredCalls = requests.length - (mode === 'error' ? 1 : 0);
-      expect(frames.filter(frame => frame.type === 'usage')).toEqual([{ type: 'usage', usage: {
+      expect(totalUsage(frames)).toMatchObject({
         inputTokens: measuredCalls * 80, outputTokens: measuredCalls * 30, cacheReadTokens: measuredCalls * 40, cacheWriteTokens: 0, credits: 0, costUsd: 0, costSource: 'none',
-      } }]);
+      });
       const session = frames.find(frame => frame.type === 'external_session');
       if (session?.type !== 'external_session') throw new Error('Missing native session ID');
       scenario = 'text';
       const resumed = await collectConversation(adapter.sendMessage('SDK_PHASE6_COLD_RESUME', conversationOptions({ isNewSession: false, externalSessionId: session.sessionId })).stream);
       expect(resumed.some(frame => frame.type === 'error' || (frame.type === 'tool_activity' && frame.isAgent))).toBe(false);
-      expect(resumed.filter(frame => frame.type === 'usage')).toMatchObject([{ usage: { inputTokens: 80, outputTokens: 30, cacheReadTokens: 40 } }]);
+      expect(totalUsage(resumed)).toMatchObject({ inputTokens: 80, outputTokens: 30, cacheReadTokens: 40 });
     } finally { await adapter.shutdown(); }
   }, 60000);
 

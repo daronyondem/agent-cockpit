@@ -396,6 +396,7 @@ describe('collectCopilotJson', () => {
       costUsd: 0,
       costSource: 'none',
       credits: 3,
+      copilot: { tokensStatus: 'partial', aiCreditsStatus: 'unavailable', premiumRequests: 3 },
     });
 
   });
@@ -499,6 +500,7 @@ describe('CopilotAdapter streaming', () => {
           costUsd: 0,
           costSource: 'none',
           credits: 1,
+          copilot: { tokensStatus: 'partial', aiCreditsStatus: 'unavailable', premiumRequests: 1 },
         },
       },
       { type: 'done' },
@@ -672,7 +674,8 @@ describe('Copilot lifecycle regressions', () => {
     const events = await collect(backend.sendMessage('test', options()).stream);
     expect(events).toEqual(expect.arrayContaining([
       { type: 'text', content: 'complete', streaming: false },
-      { type: 'usage', usage: { inputTokens: 10, outputTokens: 5, cacheReadTokens: 0, cacheWriteTokens: 0, credits: 1, costUsd: 0, costSource: 'none' } },
+      { type: 'usage', usage: { inputTokens: 10, outputTokens: 5, cacheReadTokens: 0, cacheWriteTokens: 0, credits: 1, costUsd: 0, costSource: 'none',
+        copilot: { tokensStatus: 'complete', aiCreditsStatus: 'unavailable', premiumRequests: 1 } } },
       { type: 'done' },
     ]));
   });
@@ -987,6 +990,7 @@ describe('Copilot lifecycle regressions', () => {
       type: 'usage',
       usage: {
         inputTokens: 5, outputTokens: 7, cacheReadTokens: 0, cacheWriteTokens: 0,
+        copilot: { tokensStatus: 'complete', aiCreditsStatus: 'unavailable', premiumRequests: 1 },
         credits: 1, costUsd: 0, costSource: 'none',
       },
     });

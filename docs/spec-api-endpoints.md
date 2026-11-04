@@ -137,6 +137,30 @@ Resolves the CLI profile through settings, derives its runtime backend from the 
 
 Copilot profile metadata includes `modelCatalog:{source:'runtime'|'fallback',reason?:string,fetchedAt?:string}`. Runtime catalogs contain enabled account model IDs and exact supported effort levels; `fetchedAt` is ISO time. An empty enabled catalog stays empty. Discovery failures, opaque custom commands, and explicit custom providers return a clearly marked fallback reason, which is not proof of account access. The backend cache is profile/runtime/auth scoped, expires after 60 seconds, and is invalidated/drained by CLI shutdown or an explicit profile test. Native vision does not enable unverified media models. See the [catalog contract](spec-backend-services.md#copilotadapter-srcservicesbackendscopilotts).
 
+### Copilot account quota
+
+```http
+GET /cli-profiles/:profileId/copilot-quota
+```
+
+Returns `CopilotQuotaResponse` from `src/contracts/copilotUsage.ts`:
+`{profileId,quota:{status:'available'|'unavailable',fetchedAt:string|null,stale:boolean,rows:CopilotQuotaRow[],message?:string}}`.
+Each row carries `id`, `label`, `unit`, `observedAt`, `kind:'account_snapshot'`,
+`access`, `capacity`, and measured `used`; optional `entitlement`, `unlimited`,
+`usedPercentage`, and ISO `resetAt` preserve actual service measurements. Request
+units are labeled only when the native account explicitly reports non-token
+billing. Other compatibility units stay unknown. No currency is inferred.
+
+Missing/disabled profiles or a non-Copilot harness return 400. Missing adapter,
+shutdown or failed owned cleanup returns 503. A failed/missing account reading
+returns 200 with explicit unavailable data; a failed refresh may return stale
+last-good data from the identical runtime/auth scope. A successful empty native
+snapshot is unavailable, not an exhausted account. Reads are coalesced, cached
+for one minute by effective profile/runtime/auth identity and bounded to 32
+entries. A 10-second query deadline precedes awaited process cleanup. No session,
+model work or quota-based execution gate is created. See the
+[backend contract](spec-backend-services.md#copilot-context-snapshots-and-account-quota).
+
 ## 3.7 Messaging and Streaming
 
 **Send message:**

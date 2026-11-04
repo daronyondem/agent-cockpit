@@ -30,6 +30,7 @@ export function loadFrontendModule(relativePath: string, dependencies: Record<st
       return dependencies[name];
     },
     URL,
+    window: typeof window === 'undefined' ? undefined : window,
     document: {
       createElement: jest.fn(),
       body: { append: jest.fn() },

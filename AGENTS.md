@@ -208,7 +208,14 @@ environment. Never retry an SDK failure through JSONL. Review
 across transports. SDK usage reads native metrics before submission and after
 root idle; model input includes both cache buckets, and provider/model/agent
 maps overlap. Keep parsing in `copilotUsage.ts`, subtract the native baseline,
-and never convert nano-AIU to premium-request credits or USD. Native workflow
+and never convert nano-AIU to premium-request credits or USD. Keep live checkpoint
+reconciliation in `copilotLiveUsage.ts` and profile/runtime/auth-scoped quota reads
+in `copilotQuota.ts`; review their focused tests plus `copilotUsageRoutes.test.ts`
+and `copilotUsageUi.test.ts`. Preserve native complete/partial/unavailable billing
+coverage, separate Copilot premium requests from other harness credits, and skip
+the ledger for replaceable context-only snapshots. Unknown quota units/balances
+must stay unknown; quota reads create no session or model work and adapter
+shutdown/profile refresh must drain their owned processes. Native workflow
 and browser fixtures must configure the server environment and assert SDK
 dispatch: Settings intentionally strips Copilot profile-local env values.
 Keep profile/runtime model discovery and its bounded cache in `copilotCatalog.ts`;

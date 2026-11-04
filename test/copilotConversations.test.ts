@@ -61,7 +61,7 @@ describe('Copilot SDK conversation ownership through an executable RPC peer', ()
     } }) + '\n');
     const frames = await collect(conversations.sendMessage('next', options({ isNewSession: false, externalSessionId: 'saved' })).stream);
     expect(frames).toContainEqual({ type: 'external_session', sessionId: 'saved' });
-    expect(frames.filter(frame => frame.type === 'usage')).toEqual([{ type: 'usage', usage: { inputTokens: 10, outputTokens: 10, cacheReadTokens: 2, cacheWriteTokens: 1, credits: 1, costUsd: 0, costSource: 'none' } }]);
+    expect(frames.filter(frame => frame.type === 'usage' && !frame.usage.contextWindow)).toMatchObject([{ type: 'usage', usage: { inputTokens: 10, outputTokens: 10, cacheReadTokens: 2, cacheWriteTokens: 1, credits: 1, costUsd: 0, costSource: 'none' } }]);
     expect(peer.calls().find(call => call.method === 'session.resume')?.params).toMatchObject({ sessionId: 'saved', continuePendingWork: false });
     expect(peer.calls().find(call => call.method === 'session.send')?.params?.prompt).toBe('next');
     expect(peer.calls().some(call => call.method === 'session.create')).toBe(false);
@@ -89,7 +89,7 @@ describe('Copilot SDK conversation ownership through an executable RPC peer', ()
     conversations = new CopilotConversations({ requestTimeoutMs: 1000 });
     const frames = await collect(conversations.sendMessage('hello', options({ cliProfile: peer.profile({ COPILOT_FIXTURE_METRICS: mode }) })).stream);
     expect(frames.some(frame => frame.type === 'text')).toBe(true);
-    expect(frames.some(frame => frame.type === 'error' || frame.type === 'usage')).toBe(false);
+    expect(frames.some(frame => frame.type === 'error')).toBe(false);
     expect(alive(peer.calls()[0].pid)).toBe(false);
   }, 15000);
 
@@ -102,7 +102,7 @@ describe('Copilot SDK conversation ownership through an executable RPC peer', ()
   test.each(['unknown baseline', 'unknown ledger'])('omits uncertain charges for %s', async kind => {
     const frames = await collect(conversations.sendMessage('hello', options(kind === 'unknown baseline'
       ? { isNewSession: false, externalSessionId: 'saved' } : { cliProfile: peer.profile({ COPILOT_FIXTURE_LEDGER: 'new' }) })).stream);
-    expect(frames.some(frame => frame.type === 'usage')).toBe(false);
+    expect(frames.filter(frame => frame.type === 'usage' && !frame.usage.contextWindow)).toMatchObject([{ usage: { inputTokens: 0, copilot: { tokensStatus: 'unavailable' } } }]);
     expect(frames.some(frame => frame.type === 'text')).toBe(true);
   }, 15000);
 
@@ -114,7 +114,7 @@ describe('Copilot SDK conversation ownership through an executable RPC peer', ()
     } }) + '\n');
     const frames = await collect(conversations.sendMessage('new prompt', options({ isNewSession: false, externalSessionId: 'saved', cliProfile: peer.profile({ COPILOT_FIXTURE_LEDGER: 'resume-only' }) })).stream);
     expect(frames.some(frame => frame.type === 'text')).toBe(true);
-    expect(frames.some(frame => frame.type === 'usage')).toBe(false);
+    expect(frames.some(frame => frame.type === 'usage' && !frame.usage.contextWindow)).toBe(false);
   }, 15000);
 
   test('waits beyond a model reply, loop end and child idle until attached background work drains', async () => {

@@ -8,14 +8,14 @@ const DEFAULT_BUILD_DIR = path.join(ROOT, 'public', 'v2-built');
 const KIB = 1024;
 
 const DEFAULT_BUDGETS = {
-  // Correlated questions and steering add ~2.4 KiB to the catalog baseline.
-  totalJs: 903 * KIB,
+  // Copilot context/billing cards and quota add ~3.4 KiB to the goals baseline.
+  totalJs: 907 * KIB,
   totalCss: 230 * KIB,
   maxJsAsset: 230 * KIB,
   maxCssAsset: 230 * KIB,
   assets: {
-    // Native goal controls and explicit credit-window validation add ~1.8 KiB.
-    'index.js': 264 * KIB,
+    // The measured entry with Copilot usage visibility is 266.9 KiB.
+    'index.js': 267 * KIB,
     'react-vendor.js': 230 * KIB,
     'markdown-vendor.js': 160 * KIB,
     'kbBrowser.js': 115 * KIB,

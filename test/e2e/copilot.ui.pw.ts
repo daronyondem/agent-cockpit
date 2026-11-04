@@ -33,6 +33,51 @@ for (const mobile of [false, true]) {
   const client = mobile ? 'mobile' : 'desktop';
   const assistant = mobile ? '.message.assistant' : '.msg-agent';
 
+  test(`${client} retains native context and separate billing units after cold resume`, async ({ page, request }) => {
+    const conv = await create(request, `Copilot ${client} usage`);
+    // An explicit title keeps this usage fixture stable across reloads.
+    expect((await request.put(`/api/chat/conversations/${conv.id}`, { headers: await headers(request), data: { title: conv.title } })).ok()).toBeTruthy();
+    await open(page, conv.title, mobile);
+    for (const prompt of ['COPILOT_UI_USAGE_FIRST', 'COPILOT_UI_USAGE_SECOND']) {
+      await send(page, prompt);
+      await expect(page.getByLabel('Send', { exact: true })).toBeVisible();
+      await expect.poll(async () => (await (await request.get(`/api/chat/conversations/${conv.id}`)).json()).messages.filter((message: { role: string; content: string }) => message.role === 'assistant' && message.content.includes('COPILOT_UI_USAGE_OK')).length).toBe(prompt.endsWith('FIRST') ? 1 : 2);
+    }
+    const saved = await (await request.get(`/api/chat/conversations/${conv.id}`)).json();
+    expect(saved.sessionUsage).toMatchObject({ inputTokens: 160, outputTokens: 60, cacheReadTokens: 80, cacheWriteTokens: 0 });
+    expect(saved.sessionUsage.contextWindow).toMatchObject({ status: 'available', tokenLimit: expect.any(Number), usedTokens: expect.any(Number) });
+    expect(saved.sessionUsage.copilot.aiCreditsStatus).toBe('unavailable');
+    expect(saved.sessionUsage.copilot.aiCredits).toBeUndefined();
+    await open(page, conv.title, mobile);
+    if (!mobile) await page.getByLabel('Session usage', { exact: true }).hover();
+    else await page.getByLabel('Copilot session usage').locator('summary').click();
+    const details = mobile ? page.getByLabel('Copilot session usage') : page.getByRole('tooltip');
+    await expect(details).toContainText('AI credits');
+    await expect(details).toContainText('Premium requests');
+    await expect(details).toContainText('Unavailable');
+    await expect(details).toContainText(mobile ? 'Context measured' : 'measured');
+    await page.screenshot({ path: test.info().outputPath(`${client}-usage.png`), fullPage: true });
+  });
+
+  test(`${client} labels stale account quota and unavailable refresh without inventing a balance`, async ({ page, request }) => {
+    let available = true;
+    await page.route(`**/api/chat/cli-profiles/${profileId}/copilot-quota`, route => route.fulfill({ json: { profileId, quota: available
+      ? { status: 'available', fetchedAt: '2026-11-04T00:00:00Z', stale: true, rows: [{ id: 'premium', label: 'Premium interactions', used: 25, entitlement: 100, unit: 'premium_requests', usedPercentage: 25 }] }
+      : { status: 'unavailable', fetchedAt: null, stale: false, rows: [], message: 'Account quota unavailable.' } } }));
+    const conv = await create(request, `Copilot ${client} quota`);
+    expect((await request.put(`/api/chat/conversations/${conv.id}`, { headers: await headers(request), data: { title: conv.title } })).ok()).toBeTruthy();
+    await open(page, conv.title, mobile); await send(page, 'COPILOT_UI_USAGE_QUOTA');
+    await expect(page.locator(assistant).filter({ hasText: 'COPILOT_UI_USAGE_OK' })).toBeVisible();
+    if (!mobile) await page.getByLabel('Session usage', { exact: true }).hover();
+    const quota = page.getByLabel('Copilot account quota');
+    if (mobile) await quota.locator('summary').click();
+    await expect(quota).toContainText('stale'); await expect(quota).toContainText('25 / 100 premium requests');
+    await page.screenshot({ path: test.info().outputPath(`${client}-quota-stale.png`), fullPage: true });
+    available = false; await open(page, conv.title, mobile);
+    if (!mobile) await page.getByLabel('Session usage', { exact: true }).hover();
+    await expect(quota).toContainText(/unavailable/i); await expect(quota).not.toContainText('25 / 100');
+  });
+
   test(`${client} completes and reloads native goals without offering Clear`, async ({ page, request }) => {
     const conv = await create(request, `Copilot ${client} goal completion`);
     await open(page, conv.title, mobile);

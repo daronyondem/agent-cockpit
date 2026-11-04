@@ -19,8 +19,8 @@ not hosted model quality or Copilot account access.
 | Questions | Production UUID-correlated callbacks handle repeated questions/freeform, stale refusal, active reload and Stop in desktop/mobile | Hosted models and Windows/Linux |
 | Steering | Production consumption correlation, paused boundary withdrawal and cold resume prevent late follow-up execution; desktop/mobile draft/file preservation passes | Hosted models and Windows/Linux |
 | Delegation | Production parallel/nested/background cards, scoped tools, final summaries, child failure, cancellation and usage-once checks pass on CLI 1.0.105 | Hosted-model and Windows/Linux qualification |
-| Context | metadata.contextInfo returns token categories, totalTokens and prompt limit | Native live UI, supported versions, hosted models |
-| Usage | Measured local-provider totals survive cold resume; cache-inclusive input is split into fresh/cache buckets; delegated usage is included once | Hosted billing/entitlements, nano-AIU display, quota/context UI |
+| Context | Production root usage_info snapshots persist counts, limit and observation time; native metadata.contextInfo confirms measurement on 1.0.105 | Other supported versions, hosted models and Windows/Linux qualification |
+| Usage | Production live/final checkpoints preserve disjoint tokens and separate premium requests/AI-credit availability; native unknown-zero and no-auth quota probes pass | Hosted billing/entitlements, two-account and Windows/Linux qualification |
 | Goal set/status | Public command effect plus send completes through native task_complete; replacement/cold status retain objective ID and text | Hosted and Windows/Linux qualification |
 | Goal pause | Native off plus owned cleanup stops actual workers and preserves paused state | Hosted and Windows/Linux qualification |
 | Goal resume | Explicit --max-ai-credits N resumes the same paused objective and completes after interrupted work without replay; on alone leaves it paused | Hosted credit charging and Windows/Linux qualification |
@@ -334,3 +334,55 @@ report `copilot-sdk-compat-uIwMvj` records CLI 1.0.105, SDK 1.0.28, Node 22.23.4
 macOS arm64 and pre-commit revision f0b2188 with dirty:true. The first goal case
 also verifies that a later normal question still exposes ask_user after cold
 status/control attaches. All 39 recorded owned runtime PIDs are stopped.
+
+## Context, quota and billing visibility — 2026-11-04
+
+CLI 1.0.105 / SDK 1.0.28 on macOS arm64 emits root `session.usage_info`
+with context token counts/limit and `assistant.usage` with disjoint-cache source
+metadata. In the isolated fixed-provider probe, the event reported 12,631 current
+tokens / 128,000 context tokens; metadata.contextInfo returned a fresh breakdown
+with 11,863 total tokens. These are independent observation times, not additive
+charges. The runtime explicitly returned totalNanoAiu:0 and
+aiCreditsStatus:unavailable for a successful local-provider call. Numeric zero
+therefore cannot certify known free usage. Empty session.quota.get snapshots and
+a rejected unauthenticated account.getQuota did not establish exhausted quota.
+
+Production now reconciles native metrics while calls complete and after idle,
+advancing one charged checkpoint per emitted delta. Native cold-resume and all
+parallel/nested/background delegation checks pass without recharging history or
+counting children twice. Preserve complete/partial/unavailable AI-credit coverage,
+convert explicitly reported nano-AIU to AI credits only via 1e9, and retain premium
+requests as their own counter. No underlying model price or currency conversion
+is used. Context-only frames persist snapshots and skip the daily ledger.
+
+Quota uses a bounded profile/runtime/auth-scoped read with owned cleanup and no
+session/inference. Its legacy compatibility API does not establish units for
+token-based/unknown accounts; UI displays unknown units rather than guessing AI
+credits or premium requests. Whitelisted nonnegative amounts, explicit unlimited
+state and supplied reset/percentage metadata are retained; numeric values do not
+infer an access or exhaustion verdict. Failed same-identity refreshes may show
+stale data; different identities cannot inherit that data. Hosted quota/billing
+success, genuine two-account behavior and native Windows/Linux remain unqualified.
+
+Initial full native report: `copilot-sdk-compat-uJqEl9` in the system temp folder,
+27/27 checks, Node 22.23.4. The independent context probe is
+`copilot-sdk-compat-9Kz7Lm`. Reports retain their actual revision/dirty evidence.
+Browser and final regression qualification are tracked separately.
+
+Sources: [official SDK usage APIs](https://github.com/github/copilot-sdk/blob/main/docs/features/usage-and-billing.md)
+and the installed 1.0.28 generated session-event/RPC contracts. Upstream main is
+not a substitute for the selected-version native probes.
+
+Final phase 8 qualification: 28 native SDK cases pass in
+`copilot-sdk-compat-xj8cgU`; 30 rebuilt desktop/mobile Chromium cases pass in
+`cockpit-copilot-ui-A1P284`, with 57 SDK headless launches. Browser cases confirm
+measured two-turn totals persist as 160 fresh input / 60 output / 80 cache-read
+tokens, with available measured context and unavailable local-provider AI-credit
+amounts. Stale and unavailable quota rendering uses injected data, separately
+from hosted-account entitlement evidence. Screenshots are reviewed. All 39
+recorded native runtime PIDs, the browser fixture PM2 daemon and three tool
+workers are stopped. Complete regression passes 2,995 cases and raised coverage
+floors, with clean exit after deferring the skipped media suite's native canvas
+import. Successful hosted billing and real two-account/Windows/Linux validation
+remain outstanding. Reports retain their actual pre-commit revision plus dirty
+state.

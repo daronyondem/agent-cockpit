@@ -316,3 +316,18 @@ No default window is chosen. Native `aiCreditsUsed / aiCreditLimit` is labeled
 elapsed timer. Reload reads the native saved objective; Stop/pause retains it.
 Intentional Pause saves a paused lifecycle card without a stream-failure notice.
 See [backend control semantics](spec-backend-services.md#copilot-native-goals-copilotgoalsts).
+
+### Copilot usage visibility
+
+`copilotUsage.tsx` owns the mobile Copilot usage and quota panels, composed by
+`mobileChatScreen.tsx`. Show all four disjoint token buckets, AI credits with
+complete/partial/unavailable provenance, Copilot-only premium requests, unavailable
+USD cost/estimate, measured context counts/limit and observation time. Do not
+reuse another harness's credits or dollar totals as Copilot billing.
+`AgentCockpitAPI.getCopilotQuota(profileId)` reads the shared quota contract.
+The account panel refreshes on profile/message changes and every minute, ignores
+late responses from the previous profile, clears visible data on HTTP failure,
+and cancels its timer on unmount. Label stale account readings and unknown quota
+units; retain native percentage, unlimited and reset metadata. Account timestamps
+explicitly allow delayed service aggregation. Context persists through reload.
+Usage and account quota use separate collapsed disclosures to preserve chat/composer space. Expanded usage has two columns; quota uses full-width rows. Values wrap, and expanded contents scroll within 180px rather than truncating measurement times or unknown-unit labels. No manifest, service worker, PWA installation or public asset policy changes.

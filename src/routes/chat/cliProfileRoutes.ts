@@ -9,6 +9,8 @@ import type { CliProfile, CliHarness, Request, Response, Settings } from '../../
 import { isCliProfileResolutionError, param, sendError } from './routeUtils';
 import { GrokBillingCache } from '../../services/backends/grokBilling';
 import type { GrokBillingResponse } from '../../contracts/grokBilling';
+import type { CopilotQuotaResponse } from '../../contracts/copilotUsage';
+import { CopilotAdapter } from '../../services/backends/copilot';
 
 export interface CliProfileRoutesOptions {
   chatService: ChatService;
@@ -20,6 +22,21 @@ export function createCliProfileRouter(opts: CliProfileRoutesOptions): express.R
   const { chatService, backendRegistry, cliProfileAuth } = opts;
   const router = express.Router();
   const grokBilling = new GrokBillingCache();
+
+  router.get('/cli-profiles/:profileId/copilot-quota', async (req: Request, res: Response) => {
+    try {
+      const profileId = param(req, 'profileId');
+      const runtime = await chatService.resolveCliProfileRuntime(profileId);
+      if (runtime.backendId !== 'copilot') return res.status(400).json({ error: 'Copilot quota requires a Copilot profile' });
+      const adapter = backendRegistry.get('copilot');
+      if (!(adapter instanceof CopilotAdapter)) return res.status(503).json({ error: 'Copilot is unavailable' });
+      const quota = await adapter.getQuota({ cliProfile: runtime.profile });
+      const response: CopilotQuotaResponse = { profileId: runtime.cliProfileId || profileId, quota };
+      res.json(response);
+    } catch (error) {
+      sendError(res, isCliProfileResolutionError(error) ? 400 : 503, error);
+    }
+  });
 
   router.get('/cli-profiles/:profileId/grok-billing', async (req: Request, res: Response) => {
     try {

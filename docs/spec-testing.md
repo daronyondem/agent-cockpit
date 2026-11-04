@@ -107,6 +107,10 @@ Test HTTP servers that are contacted through `127.0.0.1` bind explicitly to `127
 | `test/codexBackend.test.ts` profile metadata coverage | `getMetadata({ cliProfile })` runs Codex `model/list` under the selected profile runtime, normalizes the returned model catalog, caches it by profile runtime key, and keeps server-configured metadata separate from account-profile metadata. |
 | `test/codexBackend.test.ts` normal-stream goal forwarding | A normal Codex `sendMessage()` stream forwards current-thread native `thread/goal/updated` and `thread/goal/cleared` notifications as backend-neutral `goal_updated` / `goal_cleared` events, ignores goal notifications for other threads, keeps assistant text flowing from the active chat turn, and does not treat the goal notification's `turnId` as the active runtime turn. |
 | `test/frontendProfileMetadataCache.test.ts` | Executable browser API tests verify profile isolation, coalescing, expiry, retry after failure, explicit account-test invalidation without settings changes, and rejection of stale in-flight cache writes. |
+| `test/copilotLiveUsage.test.ts` | Live/final checkpoint reconciliation, coalesced reads, failed/missing baselines, fractional and partial AI credits, unknown zero, replaceable context snapshots and separate harness billing units. |
+| `test/copilotQuota.test.ts` | Native quota whitelist, real zero/unlimited/missing data, unknown token-billing units, profile/auth-key isolation, copies/coalescing, stale last-good reads, custom-provider gating, timeout/shutdown, missing CLI, older auth metadata, failed-cleanup barriers, cache bounds and late startup cleanup. |
+| `test/copilotUsageRoutes.test.ts` | Production HTTP/WebSocket SDK context and billing persistence, context-only ledger exclusion, live/final charging once, profile-scoped quota route and harness/invalid-profile validation. |
+| `test/copilotUsageUi.test.ts` | Desktop/mobile billing units, partial/unavailable values and no guessed USD, stale/unknown quota, escaped labels, late profile responses and failure clearing. |
 | `test/copilotGoals.test.ts` | Native projection/credit validation, SDK command effects and literal objectives, executable-peer cold controls/resume, active pause, missing-history refusal, failed work, idle/control replacement, normal-close status race and late reset/shutdown cleanup. |
 | `test/copilotGoalRoutes.test.ts` | Actual Copilot facade through HTTP/WebSocket goal set/status/pause/resume, explicit decimal credit validation before admission, no fabricated Clear, profile-scoped capability gating and persisted achievement cards. |
 | `test/goalEventPersistence.test.ts` | Shared atomic poll/stream card check-and-append, single writer/emitter, native session/objective identity, write failure retry and no deleted-conversation recreation. |
@@ -340,3 +344,40 @@ drift, ADR lint, production builds and the 902.7/903 KiB JS plus 201.8/230 KiB C
 budget all pass. Report revisions/dirty flags are retained, never relabeled after
 the local commit. Hosted accounts, billing judgment and native Windows/Linux
 remain separate qualification.
+
+### Copilot usage qualification checkpoint
+
+Phase 8 passes 166 suites / 2,995 normal-CI cases (28 added), with 62
+opt-in/platform cases skipped and a clean Jest exit. Final coverage measures
+88.90% statements/lines, 77.01% branches and 93.81% functions; raised floors
+are 88.8% / 76.8% / 93.7%. Retained measurements explicitly clear those floors.
+Twenty-eight native SDK cases pass on CLI 1.0.105 / SDK 1.0.28 / Node 22.23.4 /
+macOS arm64, including root context, unknown-zero AI credits and an owned no-auth
+quota read that creates no session/inference and closes its process. All 39
+recorded conversation runtime PIDs are stopped. Six native Memory/Context
+workflows pass after the historical-coverage guard. No hosted-billing, genuine
+two-account or native Windows/Linux evidence is implied.
+
+All 30 rebuilt Chromium desktop/mobile cases pass, with 57 observed headless
+SDK launches. New cases check two-turn disjoint usage (160 fresh input, 60 output,
+80 cache read), persistent root context/credit availability after reload, and
+stale/unavailable quota. Four browser cases inject catalog or quota data while
+the remaining checks exercise native fixed-provider paths; quota injection is
+not hosted entitlement evidence. The first two new reload failures were fixture
+title races from normal auto-titling; explicit human titles stabilize those
+fixtures. Their original screenshots/traces are retained. Desktop/mobile usage
+and quota screenshots are reviewed; the fixture PM2 daemon and all three recorded
+tool workers are stopped.
+
+Open-handle diagnosis found native canvas CustomGC from a top-level import in
+the skipped hosted media suite. Canvas now loads only inside its opt-in image/PDF
+test; focused diagnostics and the complete final coverage command exit cleanly.
+A direct deferred import/PNG smoke check also passes, without hosted inference.
+Production assets are rebuilt after full Jest fixtures; bundle checks pass at
+906.1 KiB JS / 907, 201.8 KiB CSS / 230 and 266.9 KiB entry / 267. CSS/vendor/other
+chunk caps are retained. Backend/web/mobile types, zero-warning lint,
+maintainability, 187-route spec drift and 97-ADR lint pass.
+
+Reports: native `copilot-sdk-compat-xj8cgU`, browser `cockpit-copilot-ui-A1P284`
+under the system temp directory. Reports preserve actual pre-commit revision
+`cb7d250` plus dirty state; they are not relabeled after committing.
