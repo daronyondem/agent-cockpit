@@ -344,9 +344,10 @@ After a Worktrees enable or disable succeeds, `workspaceSettings.jsx` refreshes 
   backend explains that the turn finished before consuming it. Native answers
   and steering do not add separate Cockpit transcript user bubbles.
 
-  This feature adds about 2.4 KiB of minified desktop JS to the runtime-catalog
-  baseline. The measured budgets become 903 KiB total JS and 263 KiB for the
-  entry chunk (previously 900/260); CSS/vendor/other chunk limits are unchanged.
+  Structured input adds about 2.4 KiB of minified desktop JS to the runtime-catalog
+  baseline, with initial budgets 903 KiB total JS and 263 KiB for the entry chunk
+  (previously 900/260). Native goal controls raise only the entry limit to 264 KiB;
+  total JS remains 903 KiB and CSS/vendor/other chunk limits are unchanged.
 
   **Lifecycle edges:**
   - `reset(convId)` clears `pendingInteraction` and `uiState` along with the rest of the session.
@@ -444,3 +445,15 @@ After a Worktrees enable or disable succeeds, `workspaceSettings.jsx` refreshes 
   - **Auto-drain on `done`** — when a stream completes with no `pendingInteraction` and no `streamError`, the store marks `queue[0]` as in-flight and composes the entry's wire-format content via `composeWireContent` (content + `[Uploaded files: …]` tag rebuilt from `attachments[]`). The content is sent via the internal `sendWireContent(convId, queuedMessage)` helper (bypasses the pendingAttachments pipeline since attachments were already uploaded at enqueue time). The server-side queue is shortened only after `/message` accepts the send; on success the follow-up PUT persists the current non-in-flight queue tail, not the stale tail captured at drain start. If `/message` returns 409 because the server still owns an active stream, or the send fails before the POST can start, the original queued item, including attachments, is restored at the head and the restored queue is PUT back to the server. Rollback merges that original head with the current non-in-flight queue tail, so edits to later queued items made while the head was in flight are preserved locally and across reloads.
 
   **Backwards compatibility (historical transcripts):** messages saved before the typed queue existed may carry `[Uploaded files: /abs/path1, /abs/path2]` trailing text on `Message.content` (user messages). The renderer feeds these through `StreamStore.parseUploadedFilesTag(content)`, which strips the tag and returns `{ content, attachments }` where each `AttachmentMeta` has `name` + `path` + `kind` (inferred from extension via `attachmentKindFromPath`). `size`/`meta` are unavailable for legacy entries — the `md` chip shows only the filename and kind badge in that case. Users receive the same typed-chip UX for old transcripts at read-time; the on-disk bytes are untouched.
+
+### Copilot native goal controls
+
+SDK profile metadata enables the shared goal composer, slash commands, strip and
+persisted lifecycle cards. Opaque JSONL profiles keep goals unavailable. Copilot
+Clear stays hidden. A paused goal shows a labeled **Fresh AI credit limit** number
+input; Resume stays disabled until its value is finite and positive, then sends
+`{aiCreditLimit:number}`. API actions also validate before optimistic streaming.
+No default window is chosen. Native `aiCreditsUsed / aiCreditLimit` is labeled
+**AI credits**, independently of token budgets and USD. Copilot omits an unreported
+elapsed timer. Reload reads the native saved objective; Stop/pause retains it.
+See [backend control semantics](spec-backend-services.md#copilot-native-goals-copilotgoalsts).

@@ -70,12 +70,15 @@ function normalizeGoalCapability(capability, backendId){
   return { set: false, clear: false, pause: false, resume: false, status: 'none' };
 }
 
-function goalCapabilityForBackend(backends, backendId){
-  const backend = (backends || []).find(b => b && b.id === backendId);
+function goalCapabilityForBackend(backends, backendId, metadata){
+  const backend = metadata || (backends || []).find(b => b && b.id === backendId);
   return normalizeGoalCapability(backend?.capabilities?.goals, backendId);
 }
 
 function GoalStrip({ convId, goal, streaming, sending }){
+  const [creditLimit, setCreditLimit] = React.useState('');
+  const copilotGoal = goal?.backend === 'copilot';
+  const validCreditLimit = !copilotGoal || (Number.isFinite(Number(creditLimit)) && Number(creditLimit) > 0);
   const status = goal?.status || 'active';
   const hasGoal = !!goal;
   const goalThreadId = goal?.threadId || null;
@@ -110,16 +113,18 @@ function GoalStrip({ convId, goal, streaming, sending }){
       <div className="goal-strip-main">
         <span className="goal-dot" aria-hidden="true"/>
         <span className="goal-status">{goalStatusLabel(status)}</span>
-        {elapsed !== '0s' ? <span className="goal-elapsed">{elapsed}</span> : null}
+        {!copilotGoal && elapsed !== '0s' ? <span className="goal-elapsed">{elapsed}</span> : null}
         {objective ? <span className="goal-objective" title={objective}>{objective}</span> : null}
         {goal.backend === 'grok-build' && typeof goal.tokenBudget === 'number' ? <span className="goal-elapsed" title="Grok checks token budgets between work steps, so execution can exceed the budget.">Soft budget: {goal.tokenBudget.toLocaleString()}</span> : null}
       </div>
       <div className="goal-strip-actions">
+        {copilotGoal && typeof goal.aiCreditLimit === 'number' ? <span>AI credits: {goal.aiCreditsUsed ?? '—'} / {goal.aiCreditLimit}</span> : null}
+        {copilotGoal && status === 'paused' ? <label>Fresh AI credit limit <input aria-label="Fresh AI credit limit" type="number" min="0" step="any" inputMode="decimal" value={creditLimit} onChange={event => setCreditLimit(event.target.value)} style={{width:80}} /></label> : null}
         {canPause ? (
           <button type="button" onClick={() => StreamStore.pauseGoal(convId)} disabled={sending} title="Pause goal">Pause</button>
         ) : null}
         {status === 'paused' && goalSupportsAction(goal, 'resume') ? (
-          <button type="button" onClick={() => StreamStore.resumeGoal(convId)} disabled={sending || !canResume} title="Resume goal">Resume</button>
+          <button type="button" onClick={() => StreamStore.resumeGoal(convId, copilotGoal ? Number(creditLimit) : undefined)} disabled={sending || !canResume || !validCreditLimit} title="Resume goal">Resume</button>
         ) : null}
         {canClear ? (
           <button
@@ -142,6 +147,7 @@ export const ChatComposer = React.memo(function ChatComposer({ convId, profileLo
   const toast = useToasts();
   const fileInputRef = React.useRef(null);
   const composerTextRef = React.useRef(null);
+  const [goalProfileMetadata, setGoalProfileMetadata] = React.useState(null);
   if (!state || !state.conv) return null;
 
   const conv = state.conv;
@@ -169,7 +175,8 @@ export const ChatComposer = React.memo(function ChatComposer({ convId, profileLo
     : profileLocked
       ? conv.backend
       : (state.composerBackend || conv.backend);
-  const goalCapability = goalCapabilityForBackend(backends, topbarBackendId);
+  const goalCapability = goalCapabilityForBackend(backends, topbarBackendId,
+    goalProfileMetadata?.profileId === topbarCliProfileId ? goalProfileMetadata.backend : null);
   const goalCapable = goalCapability.set === true;
   const goalMode = goalCapable && !!state.goalMode;
   const activeGoal = state.goal || null;
@@ -468,6 +475,7 @@ export const ChatComposer = React.memo(function ChatComposer({ convId, profileLo
             <ComposerPicks
               convId={convId}
               backends={backends}
+              onProfileMetadata={setGoalProfileMetadata}
               cliProfiles={cliProfiles}
               composerCliProfileId={state.composerCliProfileId || conv.cliProfileId || null}
               composerBackend={state.composerBackend || conv.backend || null}
@@ -565,7 +573,7 @@ export const ChatComposer = React.memo(function ChatComposer({ convId, profileLo
    Values flush to the server with the next /message POST (see StreamStore.send).
    Each chip wraps a transparent native <select> so we get native dropdown
    UX, keyboard/a11y for free, and the chip's styled shell. */
-function ComposerPicks({ convId, backends, cliProfiles, composerCliProfileId, composerBackend, composerModel, composerEffort, composerClaudeCodeMode, composerServiceTier, profileLocked, disabled }){
+function ComposerPicks({ convId, backends, cliProfiles, onProfileMetadata, composerCliProfileId, composerBackend, composerModel, composerEffort, composerClaudeCodeMode, composerServiceTier, profileLocked, disabled }){
   const activeProfiles = Array.isArray(cliProfiles) ? cliProfiles.filter(p => p && !p.disabled) : [];
   const exactProfile = activeProfiles.find(p => p.id === composerCliProfileId) || null;
   const canRepairMissingProfile = profileLocked && !!composerCliProfileId && !exactProfile;
@@ -590,16 +598,19 @@ function ComposerPicks({ convId, backends, cliProfiles, composerCliProfileId, co
     let cancelled = false;
     setProfileBackend(null);
     setProfileBackendLoadedFor(null);
+    onProfileMetadata({ profileId: selectedProfileId, backend: null });
     const load = () => AgentApi.getCliProfileMetadata(selectedProfileId)
       .then(backend => {
         if (!cancelled) {
           setProfileBackend(backend || null);
+          onProfileMetadata({ profileId: selectedProfileId, backend: backend || null });
           setProfileBackendLoadedFor(selectedProfileId);
         }
       })
       .catch(() => {
         if (!cancelled) {
           setProfileBackend(null);
+          onProfileMetadata({ profileId: selectedProfileId, backend: null });
           setProfileBackendLoadedFor(selectedProfileId);
         }
       });
@@ -612,7 +623,7 @@ function ComposerPicks({ convId, backends, cliProfiles, composerCliProfileId, co
       if (timer) clearInterval(timer);
       if (refresh) window.removeEventListener('focus', load);
     };
-  }, [selectedProfileId, selectedProfile?.harness]);
+  }, [selectedProfileId, selectedProfile?.harness, onProfileMetadata]);
   React.useEffect(() => {
     if (!canChangeProfile || !selectedProfileId || !effectiveBackendId) return;
     if (composerCliProfileId !== selectedProfileId || composerBackend !== effectiveBackendId) {

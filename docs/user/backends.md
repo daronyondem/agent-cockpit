@@ -138,23 +138,23 @@ error. This check does not run paid inference or prove access to every model.
 Login remains a terminal operation. Multiple named profiles still share the
 same terminal login; they are not independent accounts.
 
-Agent Cockpit talks to GitHub Copilot through non-interactive runs
-(`copilot -p <prompt> --output-format json`), streams visible thinking and tool
-activity, and resumes later turns through Copilot session IDs. The chat picker
-still uses a curated catalog of Copilot's Claude and GPT model identifiers.
-The default **auto** choice lets
-Copilot select an available model; explicit choices depend on your subscription
-and administrator policy. Reasoning effort is available for explicit reasoning
-models, not auto, Haiku, or the unverified Gemini catalog entry. The catalog is
-static, not a live list of models available to your account.
+Agent Cockpit uses owned SDK chat sessions with visible thinking, tools,
+questions, steering, grouped delegated work and later-session resume. Opaque
+custom command overrides retain JSONL compatibility. The picker discovers models
+for the selected runtime and marks its curated fallback when discovery is unavailable.
+The default **auto** choice lets Copilot route requests; explicit model and effort
+choices depend on the selected runtime, subscription and administrator policy.
 
-GitHub Copilot reports per-turn input/output/cache tokens and premium-request
-credits rather than USD cost. Resumed-session totals are subtracted so earlier
-turns are not counted again. If the native usage baseline cannot be read,
-uncertain cumulative charges are omitted. Copilot has native delegation,
-questions, plan mode, and goal/autopilot features, but grouped child
-presentation and interactive controls are deferred in Agent Cockpit's initial
-integration. Child responses are kept separate from the parent answer.
+SDK profiles support goals through the shared goal composer. Pause stops owned
+work and keeps the objective. Resume requires a **Fresh AI credit limit** greater
+than zero; this starts a new native credit window. The goal strip labels any
+reported window as **AI credits**, separately from tokens and USD. Clear is
+unavailable in Copilot CLI 1.0.105. Plan mode remains unavailable in Cockpit.
+
+Per-turn input/output/cache tokens and native premium-request counters are
+reconciled across resume, so previous turns are not charged again. Missing usage
+is not a known zero. Cockpit does not convert native nano-AIU or underlying model
+API prices into a Copilot USD estimate.
 
 Image and PDF one-shot workflows, including attachment OCR and Knowledge Base
 image conversion, are sent through `copilot --attachment` with a multimodal

@@ -21,10 +21,10 @@ not hosted model quality or Copilot account access.
 | Delegation | Production parallel/nested/background cards, scoped tools, final summaries, child failure, cancellation and usage-once checks pass on CLI 1.0.105 | Hosted-model and Windows/Linux qualification |
 | Context | metadata.contextInfo returns token categories, totalTokens and prompt limit | Native live UI, supported versions, hosted models |
 | Usage | Measured local-provider totals survive cold resume; cache-inclusive input is split into fresh/cache buckets; delegated usage is included once | Hosted billing/entitlements, nano-AIU display, quota/context UI |
-| Goal set/status | commands.invoke(autopilot, objective) creates active native objective and returns an agent-prompt reservation | Sending/finalizing objective prompts, completion and background ownership |
-| Goal pause | autopilot off changes native objective to paused | Pause during actual work and fresh resume |
-| Goal resume | autopilot on changes mode but leaves objective paused | Credit-window resume semantics |
-| Goal clear | goal clear returns a notice that clear was removed; native state remains paused | Native supported clear API or explicit product limitation |
+| Goal set/status | Public command effect plus send completes through native task_complete; replacement/cold status retain objective ID and text | Hosted and Windows/Linux qualification |
+| Goal pause | Native off plus owned cleanup stops actual workers and preserves paused state | Hosted and Windows/Linux qualification |
+| Goal resume | Explicit --max-ai-credits N resumes the same paused objective and completes after interrupted work without replay; on alone leaves it paused | Hosted credit charging and Windows/Linux qualification |
+| Goal clear | CLI 1.0.105 reports Clear removed; state remains paused; workspace-file deletion is not canonical clear | Explicit upstream limitation; product action stays unavailable |
 | ACP | Initialization, session/new with local BYOK, session/prompt and end_turn succeed | SDK provides the richer planned control surface |
 
 A separate read-only check of normal shared terminal credentials returned
@@ -278,3 +278,59 @@ pass. Screenshots were reviewed; fixture PM2/workers and 29 recorded SDK runtime
 PIDs are stopped. Reports retain their pre-commit revision plus dirty state,
 rather than being relabeled after commit. Successful hosted accounts, genuine
 two-account isolation and native Windows/Linux remain unverified.
+
+## Native goal integration evidence (2026-11-04)
+
+CLI 1.0.105 / SDK 1.0.28 / Node 22.23.4 on macOS arm64 supports native
+objective set, canonical reads, pause and explicit credit-window resume.
+The production facade now uses those public APIs through the existing owned
+conversation path. Initial set uses `[--max-ai-credits N ]-- <objective>`: the
+delimiter preserves reserved command text and embedded flag text literally.
+Public commands.invoke returns the native agent prompt; public send admits it
+once. No private finalizeInvocationEffect API is needed or used. Completed
+objectives retain status/summary on a fresh owned process. Replacing an objective
+changes its native session-local ID without replacing the session.
+
+`autopilot off` pauses active native state, but stopping actual tool workers still
+requires awaited owner cleanup. Intentional Pause ends the owned stream with
+canonical paused state after cleanup rather than a fabricated stream failure. Native Pause, ordinary Stop and reset all retain
+the objective; a cold resume with continuePendingWork:false changes an interrupted
+active objective to paused with reason resumed_session. Resume requires an explicit
+fresh --max-ai-credits N window, returns a continuation prompt, and retains the
+objective ID/text/turn count. `autopilot on` merely changes mode and leaves a paused
+objective paused. Local-provider credit usage is known zero for these fixtures,
+not evidence of hosted charging. Native credit-window fields stay separate from
+Copilot premium requests, token usage, lifetime nano-AIU and USD estimates.
+
+Ordinary session.idle can leave an objective active. Tests use public send and
+observe idle directly; SDK sendAndWait can keep waiting for the objective. Neither
+a root reply nor idle fabricates achievement. The actual native task_complete
+transition is authoritative. Attached background child work must still drain
+before stream/process closure, including parent completion ahead of a child.
+Fixed responses must stop calling task_complete after the first successful call,
+because native interactive continuation reports that tool as inapplicable.
+The fixture bounds requests and has an external cancellation deadline.
+
+The removed `goal clear` command only returns an explanatory notice. A separate
+probe of the public workspace-objective deletion helper returned deleted:true
+without removing the active canonical runtime objective. That storage helper is
+not a Clear implementation and is never used by product controls.
+
+Desktop/mobile lifecycle checks also caught a concurrent poll/stream card race
+and a normal-idle close/read race. Shared atomic goal-event persistence now
+serializes check/append, including native session/objective identity; read-only
+status can reattach after draining normal cleanup. Neither fix retries model work.
+Canonical specs document the protocol and client behavior.
+
+Primary references: [CLI goal command/credit-window reference](https://docs.github.com/en/copilot/reference/copilot-cli-reference/cli-command-reference),
+[Autopilot behavior](https://docs.github.com/en/copilot/how-tos/copilot-cli/use-copilot-cli/use-autopilot-mode).
+Installed declarations and actual native results take precedence over upstream
+main documentation for the selected version. Final checkpoint reports retain
+the revision and dirty flag at execution; hosted/two-account/native Windows and
+Linux certification remain separate work.
+
+The completed native goal checkpoint passes all 26 SDK compatibility cases;
+report `copilot-sdk-compat-uIwMvj` records CLI 1.0.105, SDK 1.0.28, Node 22.23.4,
+macOS arm64 and pre-commit revision f0b2188 with dirty:true. The first goal case
+also verifies that a later normal question still exposes ask_user after cold
+status/control attaches. All 39 recorded owned runtime PIDs are stopped.

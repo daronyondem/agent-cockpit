@@ -14,7 +14,8 @@ const DEFAULT_BUDGETS = {
   maxJsAsset: 230 * KIB,
   maxCssAsset: 230 * KIB,
   assets: {
-    'index.js': 263 * KIB,
+    // Native goal controls and explicit credit-window validation add ~1.8 KiB.
+    'index.js': 264 * KIB,
     'react-vendor.js': 230 * KIB,
     'markdown-vendor.js': 160 * KIB,
     'kbBrowser.js': 115 * KIB,

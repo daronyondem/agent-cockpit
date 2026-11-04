@@ -1,3 +1,4 @@
+import { parseGoalAiCreditLimit } from '../../../src/contracts/goals';
 /* Agent Cockpit v2 — per-conversation stream store.
 
    Lifts streaming state out of the ChatLive view so that switching
@@ -373,7 +374,7 @@ import { reduceStreamFrame, mergeInitialStreamMessages } from './stream/streamFr
 
   function optimisticGoalActions(backend){
     const isClaude = isClaudeCodeBackend(backend);
-    return { clear: true, stopTurn: true, pause: !isClaude, resume: !isClaude };
+    return { clear: backend !== 'copilot', stopTurn: true, pause: !isClaude, resume: !isClaude };
   }
 
   function isClaudeCodeBackend(backend){
@@ -739,7 +740,7 @@ import { reduceStreamFrame, mergeInitialStreamMessages } from './stream/streamFr
           ? hydrateAttachmentsFromDraft(draft.attachments)
           : cur.pendingAttachments,
       }));
-      if ((data.backend === 'codex' || data.backend === 'claude-code' || data.backend === 'claude-code-interactive' || data.backend === 'grok-build') && AgentApi.conv && AgentApi.conv.getGoal) {
+      if ((data.backend === 'codex' || data.backend === 'claude-code' || data.backend === 'claude-code-interactive' || data.backend === 'grok-build' || data.backend === 'copilot') && AgentApi.conv && AgentApi.conv.getGoal) {
         AgentApi.conv.getGoal(convId)
           .then(goalData => {
             const goal = goalData && goalData.goal ? goalData.goal : null;
@@ -775,7 +776,7 @@ import { reduceStreamFrame, mergeInitialStreamMessages } from './stream/streamFr
     const s = states.get(convId);
     if (!s || !AgentApi.conv || !AgentApi.conv.getGoal) return null;
     const backend = (s.conv && s.conv.backend) || s.composerBackend || null;
-    if (backend && backend !== 'codex' && backend !== 'claude-code' && backend !== 'claude-code-interactive' && backend !== 'grok-build') {
+    if (backend && backend !== 'codex' && backend !== 'claude-code' && backend !== 'claude-code-interactive' && backend !== 'grok-build' && backend !== 'copilot') {
       applyGoalSnapshot(convId, null);
       return null;
     }
@@ -1430,7 +1431,7 @@ import { reduceStreamFrame, mergeInitialStreamMessages } from './stream/streamFr
       ? s.composerServiceTier
       : (s.conv && s.conv.serviceTier) || null;
     const goalStartedAtMs = Date.now();
-    const optimisticBackend = (sendBackend === 'codex' || sendBackend === 'claude-code' || sendBackend === 'claude-code-interactive' || sendBackend === 'grok-build') ? sendBackend : undefined;
+    const optimisticBackend = (sendBackend === 'codex' || sendBackend === 'claude-code' || sendBackend === 'claude-code-interactive' || sendBackend === 'grok-build' || sendBackend === 'copilot') ? sendBackend : undefined;
     const optimisticGoal = {
       backend: optimisticBackend,
       objective,
@@ -1680,7 +1681,7 @@ import { reduceStreamFrame, mergeInitialStreamMessages } from './stream/streamFr
       composerBackend: value || null,
       composerClaudeCodeMode: isClaudeCodeBackend(value) ? s.composerClaudeCodeMode : null,
       composerServiceTier: value === 'codex' ? s.composerServiceTier : null,
-      goalMode: (value === 'codex' || value === 'claude-code' || value === 'claude-code-interactive' || value === 'grok-build') ? s.goalMode : false,
+      goalMode: (value === 'codex' || value === 'claude-code' || value === 'claude-code-interactive' || value === 'grok-build' || value === 'copilot') ? s.goalMode : false,
     });
   }
   function setComposerCliProfile(convId, profileId, backendId){
@@ -1693,7 +1694,7 @@ import { reduceStreamFrame, mergeInitialStreamMessages } from './stream/streamFr
       composerEffort: null,
       composerClaudeCodeMode: isClaudeCodeBackend(backendId) ? s.composerClaudeCodeMode : null,
       composerServiceTier: backendId === 'codex' ? s.composerServiceTier : null,
-      goalMode: (backendId === 'codex' || backendId === 'claude-code' || backendId === 'claude-code-interactive' || backendId === 'grok-build') ? s.goalMode : false,
+      goalMode: (backendId === 'codex' || backendId === 'claude-code' || backendId === 'claude-code-interactive' || backendId === 'grok-build' || backendId === 'copilot') ? s.goalMode : false,
     });
   }
   function setComposerModel(convId, value){
@@ -1958,10 +1959,12 @@ import { reduceStreamFrame, mergeInitialStreamMessages } from './stream/streamFr
     }
   }
 
-  async function resumeGoal(convId){
+  async function resumeGoal(convId, aiCreditLimit){
     const s = states.get(convId);
     if (!s || s.sending || s.streaming) return;
     const prevGoal = s.goal;
+    try { aiCreditLimit = parseGoalAiCreditLimit(aiCreditLimit, (prevGoal?.backend || s.conv?.backend) === 'copilot'); }
+    catch (error) { update(convId, { streamError: error.message }); return; }
     update(convId, { sending: true, streamError: null, streamErrorSource: null, pendingInteraction: null, inputTurnId: null, inputError: null });
     try {
       await ensureWsOpen(convId);
@@ -1984,7 +1987,7 @@ import { reduceStreamFrame, mergeInitialStreamMessages } from './stream/streamFr
     }));
 
     try {
-      const data = await AgentApi.conv.resumeGoal(convId);
+      const data = await AgentApi.conv.resumeGoal(convId, aiCreditLimit === undefined ? {} : { aiCreditLimit });
       if (data && data.goal) applyGoalSnapshot(convId, data.goal);
     } catch (err) {
       if (err && err.status === 409) {

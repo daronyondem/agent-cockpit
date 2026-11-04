@@ -29,6 +29,9 @@ net.createServer(socket => {
  const connection = rpc.createMessageConnection(socket,socket);
  let baseline = {tokenDetails:{input:{tokenCount:0},output:{tokenCount:0},cache_read:{tokenCount:0},cache_write:{tokenCount:0}},totalPremiumRequestCost:0};
  let sent = false;
+ let goal = null;
+ const goalPath = id => require('path').join(process.env.COPILOT_HOME,'fixture-goal-'+id+'.json');
+ const saveGoal = id => {fs.mkdirSync(process.env.COPILOT_HOME,{recursive:true});fs.writeFileSync(goalPath(id),JSON.stringify(goal));};
  const emit = (sessionId,type,data={},agentId) => connection.sendNotification('session.event', {sessionId,event:{type,data,id:'event-'+(++serial),parentId:null,timestamp:new Date().toISOString(),...(agentId?{agentId}:{})}});
  connection.onRequest(async (method,params) => {
   record({method,params:method==='connect'?{tokenMatches:params.token===process.env.COPILOT_CONNECTION_TOKEN}:params});
@@ -54,7 +57,27 @@ net.createServer(socket => {
    try { const lines=fs.readFileSync(require('path').join(process.env.COPILOT_HOME,'session-state',params.sessionId,'events.jsonl'),'utf8').trim().split('\\n');
     const saved=JSON.parse(lines.at(-1)).data;baseline={...saved.accountingSnapshot,totalPremiumRequestCost:saved.totalPremiumRequests};
    } catch { baseline={totalNanoAiu:100}; }
+   try {goal=JSON.parse(fs.readFileSync(goalPath(params.sessionId),'utf8'));if(goal.status==='active'){goal.status='paused';goal.pauseReason='resumed_session';saveGoal(params.sessionId);}} catch {}
    return {sessionId:params.sessionId};
+  }
+  if(method==='session.autopilotObjective.getState') {
+   if(process.env.COPILOT_FIXTURE_GOAL==='hang') return new Promise(()=>{});
+   return {state:goal};
+  }
+  if(method==='session.commands.invoke') {
+   const input=params.input;
+   if(input==='off') {if(goal?.status==='active'){goal.status='paused';goal.pauseReason='autopilot_off';}}
+   else {
+    const limit=/--max-ai-credits ([0-9.e+-]+)/.exec(input);
+    const objective=input.includes('-- ')?input.slice(input.indexOf('-- ')+3):null;
+    if(objective)goal={id:(goal?.id||0)+1,objective,status:'active',turnCount:0,creditCountNanoAiu:'0'};
+    else if(goal) {goal.status='active';delete goal.pauseReason;}
+    if(limit&&goal)goal.creditLimit={credits:Number(limit[1]),creditsUsed:0,creditsUsedNanoAiu:'0'};
+   }
+   saveGoal(params.sessionId);
+   emit(params.sessionId,'session.autopilot_objective_changed',{operation:'update',id:goal?.id,status:goal?.status});
+   if(process.env.COPILOT_FIXTURE_GOAL==='session-error') emit(params.sessionId,'session.error',{message:'Goal failed before prompt submission',errorType:'query'});
+   return input==='off'?{kind:'completed',message:'Switched to interactive mode.'}:{kind:'agent-prompt',prompt:goal.objective,displayPrompt:'Autopilot objective: '+goal.objective,mode:'autopilot'};
   }
   if(method==='session.usage.getMetrics') {
    if(process.env.COPILOT_FIXTURE_METRICS==='session-error') emit(params.sessionId,'session.error',{message:'Session failed during usage query',errorType:'query'});
@@ -67,6 +90,7 @@ net.createServer(socket => {
   if(method==='session.send') {
    sent = true;
    const id = params.sessionId;
+   if(goal?.status==='active'){goal.turnCount++;saveGoal(id);}
    const prompt = params.prompt;
    if(prompt.includes('ACK_BEFORE_START')) {
     record({method:'ack',sessionId:id});
@@ -93,6 +117,7 @@ net.createServer(socket => {
     setImmediate(()=>process.exit(7));return {messageId:'user-'+id};
    }
    const finish = () => {
+    if(goal?.status==='active'&&!prompt.includes('IDLE_GOAL')){goal.status='completed';goal.completionSummary='Goal verified';saveGoal(id);emit(id,'session.autopilot_objective_changed',{operation:'update',id:goal.id,status:goal.status});}
     emit(id,'assistant.message_delta',{messageId:'answer',deltaContent:'answer:'+prompt});
     emit(id,'assistant.message',{messageId:'answer',content:'answer:'+prompt});
     if(process.env.COPILOT_FIXTURE_LEDGER!=='resume-only') emit(id,'session.usage_checkpoint',process.env.COPILOT_FIXTURE_LEDGER==='new'?{totalNanoAiu:100}:checkpoint);

@@ -143,6 +143,8 @@ export interface SendMessageOptions {
    * Memory MCP stub.  Backends that don't support MCP ignore this.
    */
   mcpServers?: McpServerConfig[];
+  /** Explicit native Copilot goal credit window, required on resume. */
+  goalAiCreditLimit?: number;
 }
 
 export interface SendMessageResult {

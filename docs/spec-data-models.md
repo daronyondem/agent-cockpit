@@ -2494,3 +2494,15 @@ The dreaming CLI returns `{ "operations": [...] }` JSON. 10 supported operation 
 Connection confidence levels: `extracted` (entry explicitly states relationship), `inferred` (deduced from overlapping concepts), `speculative` (weaker thematic connection). Most connections should be `inferred`.
 
 All operations are parsed by `parseDreamOutput()` (extracts JSON from potentially noisy CLI output via markdown-fence matching or a string-aware balanced-brace scanner that ignores braces inside JSON string literals), validated by `validateOp()`, and applied transactionally by `applyOperations()` in `dreamOps.ts`. The same string-aware scanner backs `parseVerificationOutput()`, `parseDiscoveryOutput()`, and `parseReflectionOutput()` in `dream.ts`.
+
+### Copilot native goal fields
+
+`ThreadGoal` (server declaration `src/types/goals.ts`, browser contract
+`src/contracts/responses.ts`) accepts `backend:'copilot'` and optional
+`objectiveId:number`, `aiCreditLimit:number|null`, `aiCreditsUsed:number|null`.
+The ID is native and session-local; credit fields describe the native objective
+window and are separate from token counters and USD. Unreported time/timestamps
+are omitted. Supported actions are clear:false, stopTurn/pause/resume:true.
+`ResumeGoalRequest` and `parseGoalAiCreditLimit` in `src/contracts/goals.ts`
+share the explicit positive-finite resume window across server and clients.
+See [native control/projection semantics](spec-backend-services.md#copilot-native-goals-copilotgoalsts).

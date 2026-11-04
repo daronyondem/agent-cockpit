@@ -1250,9 +1250,9 @@
       'conversations/' + encodeURIComponent(convId) + '/goal',
       { method: 'POST', body: body || {} },
     ).then(r => r.json()),
-    resumeGoal: (convId) => chatFetch(
+    resumeGoal: (convId, body) => chatFetch(
       'conversations/' + encodeURIComponent(convId) + '/goal/resume',
-      { method: 'POST', body: {} },
+      { method: 'POST', body: body || {} },
     ).then(r => r.json()),
     pauseGoal: (convId) => chatFetch(
       'conversations/' + encodeURIComponent(convId) + '/goal/pause',

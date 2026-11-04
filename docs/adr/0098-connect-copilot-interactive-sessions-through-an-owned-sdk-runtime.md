@@ -15,6 +15,13 @@ affects:
   - src/services/backends/copilotUsage.ts
   - src/services/backends/copilotSdkEvents.ts
   - src/services/backends/copilotSessionConfig.ts
+  - src/services/backends/copilotGoals.ts
+  - src/services/chat/goalEventPersistence.ts
+  - test/goalEventPersistence.test.ts
+  - src/contracts/goals.ts
+  - src/routes/chat/goalRoutes.ts
+  - test/copilotGoals.test.ts
+  - test/copilotGoalRoutes.test.ts
   - src/services/backends/copilotInputs.ts
   - src/services/backends/copilotAgents.ts
   - src/services/backends/copilotModels.ts
@@ -161,6 +168,16 @@ plain-text final summaries on tool outcomes and render them in desktop/mobile
 cards, preserving the parent answer and restricted one-shot output. Stop and
 terminal errors settle unfinished work before persistence. Native session-wide
 metrics already include children and must not add their overlapping counters.
+
+Native goals use public command effects plus SDK send, with canonical runtime
+state owning status. Copilot polling and stream completion share atomic terminal-card
+persistence to prevent duplicate writes. Route capability checks are pure and profile-scoped, avoiding
+expensive catalog discovery on polls. Control reads share active ownership or
+reserve an idle attach to existing history; lifecycle cancellation drains both.
+An explicit fresh native AI-credit window is required for resume. Preserve native
+units and omit unknown token/time fields. Clear stays unavailable because removal
+of an objective file does not clear runtime state. Do not use private invocation
+finalizers or recreate missing history to simulate goal controls.
 
 ## Alternatives Considered
 

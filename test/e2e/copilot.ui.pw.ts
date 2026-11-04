@@ -33,6 +33,56 @@ for (const mobile of [false, true]) {
   const client = mobile ? 'mobile' : 'desktop';
   const assistant = mobile ? '.message.assistant' : '.msg-agent';
 
+  test(`${client} completes and reloads native goals without offering Clear`, async ({ page, request }) => {
+    const conv = await create(request, `Copilot ${client} goal completion`);
+    await open(page, conv.title, mobile);
+    await send(page, '/goal COPILOT_UI_GOAL_COMPLETE');
+    const strip = page.locator('.goal-strip');
+    await expect(strip).toContainText('Goal achieved');
+    await expect(strip.getByRole('button', { name: 'Clear', exact: true })).toHaveCount(0);
+    await expect(strip).toContainText('COPILOT_UI_GOAL_COMPLETE');
+    await open(page, conv.title, mobile);
+    await expect(strip).toContainText('Goal achieved');
+    const saved = await (await request.get(`/api/chat/conversations/${conv.id}`)).json();
+    expect(saved.messages.filter((message: { goalEvent?: { kind: string } }) => message.goalEvent?.kind === 'achieved')).toHaveLength(1);
+    await page.screenshot({ path: test.info().outputPath(`${client}-goal-complete.png`), fullPage: true });
+  });
+
+  test(`${client} pauses native goal work and resumes only with an explicit AI credit window`, async ({ page, request }) => {
+    for (const name of ['ui-goal-worker.pid', 'ui-goal-worker-finished', 'ui-goal-release']) await fs.rm(path.join(workspace, name), { force: true });
+    const conv = await create(request, `Copilot ${client} goal pause`);
+    await open(page, conv.title, mobile);
+    await send(page, '/goal COPILOT_UI_GOAL_PAUSE');
+    await expect.poll(async () => fs.readFile(path.join(workspace, 'ui-goal-worker.pid'), 'utf8').catch(() => '')).not.toBe('');
+    const worker = Number(await fs.readFile(path.join(workspace, 'ui-goal-worker.pid'), 'utf8'));
+    const strip = page.locator('.goal-strip');
+    await strip.getByRole('button', { name: 'Pause', exact: true }).click();
+    await expect(strip).toContainText('Goal paused');
+    await expect(page.getByText('Stream failed: Copilot turn aborted.', { exact: true })).toHaveCount(0);
+    await expect.poll(() => { try { process.kill(worker, 0); return true; } catch { return false; } }).toBe(false);
+    await open(page, conv.title, mobile);
+    await expect(strip).toContainText('Goal paused');
+    const resume = strip.getByRole('button', { name: 'Resume', exact: true });
+    await expect(resume).toBeDisabled();
+    await page.getByLabel('Fresh AI credit limit', { exact: true }).fill('0');
+    await expect(resume).toBeDisabled();
+    await page.getByLabel('Fresh AI credit limit', { exact: true }).fill('2.5');
+    await expect(resume).toBeEnabled();
+    await page.screenshot({ path: test.info().outputPath(`${client}-goal-paused.png`), fullPage: true });
+    await fs.writeFile(path.join(workspace, 'ui-goal-release'), 'finish');
+    const submission = page.waitForRequest(request => request.url().endsWith(`/conversations/${conv.id}/goal/resume`) && request.method() === 'POST');
+    await resume.click();
+    expect((await submission).postDataJSON()).toEqual({ aiCreditLimit: 2.5 });
+    await expect(strip).toContainText('Goal achieved');
+    await expect(strip).toContainText('AI credits: 0 / 2.5');
+    await expect(page.getByLabel('Send', { exact: true })).toBeVisible();
+    expect(Number(await fs.readFile(path.join(workspace, 'ui-goal-worker.pid'), 'utf8'))).toBe(worker);
+    await expect(fs.stat(path.join(workspace, 'ui-goal-worker-finished'))).rejects.toThrow();
+    const goal = (await (await request.get(`/api/chat/conversations/${conv.id}/goal`)).json()).goal;
+    expect(goal).toMatchObject({ backend: 'copilot', objectiveId: 1, objective: 'COPILOT_UI_GOAL_PAUSE', status: 'complete', aiCreditLimit: 2.5 });
+    expect(goal.tokenBudget).toBeUndefined();
+  });
+
   test(`${client} preserves unavailable selections, follows discovered efforts and labels fallback models`, async ({ page, request }) => {
     let fallback = false;
     await page.route(`**/api/chat/cli-profiles/${profileId}/metadata`, async route => {

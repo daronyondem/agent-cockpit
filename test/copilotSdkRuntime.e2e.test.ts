@@ -19,7 +19,8 @@ native('real Copilot owned SDK runtime with fixed local model responses', () => 
   let runtime: CopilotSdkRuntime | undefined;
   let provider: http.Server;
   let baseUrl: string;
-  let scenario: 'text' | 'question' | 'questions' | 'steer' | 'delegate' | 'delegation' | 'wait';
+  let scenario: 'text' | 'question' | 'questions' | 'steer' | 'delegate' | 'delegation' | 'wait' | 'goal';
+  let goalDelegation: boolean;
   let delegationMode: 'parallel' | 'nested' | 'background' | 'error' | 'cancel';
   let releaseDelegate: (() => void) | undefined;
   let finalBeforeSteer: boolean;
@@ -34,7 +35,7 @@ native('real Copilot owned SDK runtime with fixed local model responses', () => 
     dir = fs.mkdtempSync(path.join(os.tmpdir(), 'copilot-sdk-native-'));
     fs.writeFileSync(path.join(dir, 'AGENTS.md'), '# Synthetic instructions\nSDK_MANAGED_INSTRUCTIONS_MARKER\n');
     scenario = 'text'; requests = []; events = []; releaseSteer = undefined; question = undefined; finalBeforeSteer = false;
-    delegationMode = 'parallel'; releaseDelegate = undefined;
+    delegationMode = 'parallel'; releaseDelegate = undefined; goalDelegation = false;
     provider = http.createServer((req, res) => {
       let body = '';
       req.on('data', chunk => { body += chunk.toString(); });
@@ -55,6 +56,12 @@ native('real Copilot owned SDK runtime with fixed local model responses', () => 
           reply({ role: 'assistant', tool_calls: [{ index: 0, id: `fixture-${name}-${requests.length}`, type: 'function', function: { name, arguments: JSON.stringify(args) } }] }, 'tool_calls');
         };
         const hasTool = messages.some(message => message.role === 'tool');
+        const currentUserIndex = messages.reduce((last, message, index) => message.role === 'user' ? index : last, -1);
+        const currentHasTool = messages.slice(currentUserIndex).some(message => message.role === 'tool');
+        if ((scenario === 'goal' || goalDelegation) && requests.length > 12) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: { message: 'Goal fixture request deadline', type: 'invalid_request_error' } })); return;
+        }
         if (scenario === 'delegation') {
           const lastUser = String(messages.filter(message => message.role === 'user').at(-1)?.content || '');
           const child = /SDK_PHASE6_CHILD_(LEFT|RIGHT|OUTER|INNER)$/.exec(lastUser)?.[1];
@@ -80,12 +87,14 @@ native('real Copilot owned SDK runtime with fixed local model responses', () => 
             say(`SDK_PHASE6_SUMMARY_${child}`); return;
           }
           if (!hasTool) tasks(delegationMode === 'parallel' ? ['SDK_PHASE6_CHILD_LEFT', 'SDK_PHASE6_CHILD_RIGHT'] : [delegationMode === 'nested' ? 'SDK_PHASE6_CHILD_OUTER' : 'SDK_PHASE6_CHILD_LEFT']);
+          else if (goalDelegation && !messages.some(message => (message as { tool_calls?: Array<{ function: { name: string } }> }).tool_calls?.some(tool => tool.function.name === 'task_complete'))) call('task_complete', { summary: 'SDK_GOAL_DELEGATION_VERIFIED' });
           else say('SDK_PHASE6_PARENT_OK');
           return;
         }
+        if (scenario === 'goal') { call('task_complete', { summary: 'SDK_GOAL_VERIFIED' }); return; }
         if (scenario === 'questions' && messages.filter(message => message.role === 'tool').length < 2) {
           call('ask_user', { question: 'Choose a fixture answer', choices: ['Alpha', 'Beta'] });
-        } else if (scenario === 'question' && !hasTool) call('ask_user', { question: 'Choose a fixture answer', choices: ['Alpha', 'Beta'] });
+        } else if (scenario === 'question' && !currentHasTool) call('ask_user', { question: 'Choose a fixture answer', choices: ['Alpha', 'Beta'] });
         else if (scenario === 'wait' && !hasTool) {
           const powershell = process.platform === 'win32' && tools.some((tool: { name: string }) => tool.name === 'powershell');
           const quote = (value: string) => powershell ? `'${value.replace(/'/g, "''")}'` : `'${value.replace(/'/g, "'\\''")}'`;
@@ -164,6 +173,104 @@ native('real Copilot owned SDK runtime with fixed local model responses', () => 
     for await (const frame of stream) { frames.push(frame); events.push({ source: 'cockpit', ...frame }); }
     return frames;
   };
+
+  test('native goals complete, replace literal objectives and retain credit units after cold status reads', async () => {
+    await runtime!.stop(); runtime = undefined;
+    const adapter = new CopilotAdapter({ workingDir: dir });
+    try {
+      scenario = 'goal';
+      const first = await collectConversation(adapter.setGoalObjective('SDK_GOAL_OBJECTIVE', conversationOptions()).stream);
+      expect(first.filter(frame => frame.type === 'goal_updated').map(frame => frame.goal.status)).toEqual(['active', 'complete']);
+      const id = String(first.find(frame => frame.type === 'external_session')!.sessionId);
+      const saved = conversationOptions({ isNewSession: false, externalSessionId: id });
+      expect(await adapter.getGoal(saved)).toMatchObject({ objectiveId: 1, status: 'complete', lastReason: 'SDK_GOAL_VERIFIED' });
+      const second = await collectConversation(adapter.setGoalObjective('off --max-ai-credits 9', { ...saved, goalAiCreditLimit: 2.5 }).stream);
+      expect(second.filter(frame => frame.type === 'goal_updated').at(-1)?.goal).toMatchObject({ objectiveId: 2, objective: 'off --max-ai-credits 9', status: 'complete', aiCreditLimit: 2.5, aiCreditsUsed: 0 });
+      expect(await adapter.getGoal(saved)).toMatchObject({ objectiveId: 2, status: 'complete', aiCreditLimit: 2.5 });
+      expect(requests).toHaveLength(2);
+      // Read-only attaches must not leave later interactive tools disabled.
+      scenario = 'question';
+      const active = adapter.sendMessage('SDK_GOAL_AFTER_CONTROL_QUESTION', saved);
+      const pending = collectConversation(active.stream);
+      await waitForCopilotPeer(() => events.some(event => event.type === 'tool_activity' && event.inputRequestId));
+      const question = events.find(event => event.type === 'tool_activity' && event.inputRequestId)!;
+      expect(await active.deliverInput!({ text: 'Beta', requestId: String(question.inputRequestId) })).toEqual({ accepted: true });
+      expect((await pending).some(frame => frame.type === 'text' && frame.content.includes('Beta'))).toBe(true);
+      expect(requests).toHaveLength(4);
+    } finally { await adapter.shutdown(); }
+  }, 60000);
+
+  test('native idle does not achieve an objective and removed Clear leaves it intact', async () => {
+    const session = await runtime!.client.createSession({ ...config(), autopilot: { continuationEnabled: false, maxContinues: 0 } });
+    const effect = await session.rpc.commands.invoke({ name: 'autopilot', input: '-- SDK_IDLE_GOAL' });
+    if (effect.kind !== 'agent-prompt') throw new Error('Missing goal prompt');
+    await session.send({ prompt: effect.prompt });
+    await waitForCopilotPeer(() => events.some(event => event.type === 'session.idle'));
+    expect((await session.rpc.autopilotObjective.getState()).state).toMatchObject({ objective: 'SDK_IDLE_GOAL', status: 'active' });
+    await session.rpc.commands.invoke({ name: 'autopilot', input: 'off' });
+    const clear = await session.rpc.commands.invoke({ name: 'goal', input: 'clear' });
+    expect(clear).toMatchObject({ kind: 'text' });
+    expect(JSON.stringify(clear)).toContain('removed');
+    expect((await session.rpc.autopilotObjective.getState()).state).toMatchObject({ objective: 'SDK_IDLE_GOAL', status: 'paused' });
+    await runtime!.stop(); runtime = undefined;
+    const adapter = new CopilotAdapter();
+    try {
+      expect(await adapter.getGoal(conversationOptions({ isNewSession: false, externalSessionId: session.sessionId }))).toMatchObject({ status: 'paused', objective: 'SDK_IDLE_GOAL' });
+      expect(requests).toHaveLength(1);
+    } finally { await adapter.shutdown(); }
+  }, 60000);
+
+  test.each(['pause', 'stop', 'reset'] as const)('goal %s terminates native tools and explicit credit resume completes without replay', async action => {
+    await runtime!.stop(); runtime = undefined;
+    const adapter = new CopilotAdapter();
+    let worker = 0;
+    const alive = () => { try { process.kill(worker, 0); return true; } catch { return false; } };
+    try {
+      scenario = 'wait';
+      const active = adapter.setGoalObjective('SDK_GOAL_WORKER', conversationOptions());
+      const pending = collectConversation(active.stream);
+      await waitForCopilotPeer(() => fs.existsSync(path.join(dir, 'worker.pid')));
+      worker = Number(fs.readFileSync(path.join(dir, 'worker.pid'), 'utf8'));
+      expect(await adapter.getGoal(conversationOptions())).toMatchObject({ status: 'active', objective: 'SDK_GOAL_WORKER' });
+      if (action === 'pause') expect(await adapter.pauseGoal(conversationOptions())).toMatchObject({ status: 'paused', objective: 'SDK_GOAL_WORKER' });
+      else if (action === 'reset') await adapter.onSessionReset('native-conversation');
+      else active.abort();
+      const frames = await pending;
+      if (action === 'pause') expect(frames.some(frame => frame.type === 'error')).toBe(false);
+      await waitForCopilotPeer(() => !alive());
+      expect(frames.some(frame => frame.type === 'goal_updated' && frame.goal.status === 'complete')).toBe(false);
+      const id = String(frames.find(frame => frame.type === 'external_session')!.sessionId);
+      const saved = conversationOptions({ isNewSession: false, externalSessionId: id });
+      expect(await adapter.getGoal(saved)).toMatchObject({ objectiveId: 1, status: 'paused', objective: 'SDK_GOAL_WORKER' });
+      expect(() => adapter.resumeGoal(saved)).toThrow('fresh AI credit limit');
+      scenario = 'goal';
+      const resumed = await collectConversation(adapter.resumeGoal({ ...saved, goalAiCreditLimit: 3 }).stream);
+      expect(resumed.filter(frame => frame.type === 'goal_updated').at(-1)?.goal).toMatchObject({ objectiveId: 1, status: 'complete', aiCreditLimit: 3 });
+      expect(await adapter.getGoal(saved)).toMatchObject({ status: 'complete', turns: 2, aiCreditLimit: 3 });
+      expect(Number(fs.readFileSync(path.join(dir, 'worker.pid'), 'utf8'))).toBe(worker);
+      expect(fs.existsSync(path.join(dir, 'worker-finished'))).toBe(false);
+    } finally { await adapter.shutdown(); if (worker && alive()) process.kill(worker, 'SIGKILL'); }
+  }, 60000);
+
+  test('goal completion drains attached background delegates before closing the stream', async () => {
+    await runtime!.stop(); runtime = undefined;
+    const adapter = new CopilotAdapter();
+    const frames: StreamEvent[] = [];
+    try {
+      scenario = 'delegation'; delegationMode = 'background'; goalDelegation = true;
+      const active = adapter.setGoalObjective('SDK_GOAL_BACKGROUND', conversationOptions());
+      const deadline = setTimeout(() => active.abort(), 20000);
+      const pending = (async () => { for await (const frame of active.stream) { frames.push(frame); events.push({ source: 'cockpit', ...frame }); } })();
+      try {
+        await waitForCopilotPeer(() => !!releaseDelegate);
+        expect(frames.some(frame => frame.type === 'done')).toBe(false);
+        releaseDelegate!(); await pending;
+      } finally { clearTimeout(deadline); }
+      expect(frames.some(frame => frame.type === 'error')).toBe(false);
+      expect(frames.filter(frame => frame.type === 'goal_updated').at(-1)?.goal).toMatchObject({ status: 'complete', lastReason: 'SDK_GOAL_DELEGATION_VERIFIED' });
+      expect(frames.filter(frame => frame.type === 'tool_outcomes').flatMap(frame => frame.outcomes)).toContainEqual(expect.objectContaining({ status: 'success', summary: 'SDK_PHASE6_SUMMARY_LEFT' }));
+    } finally { releaseDelegate?.(); await adapter.shutdown(); }
+  }, 60000);
 
   test('verifies native status, empty authentication, same-ID session resume, and context APIs', async () => {
     const status = await runtime!.client.getStatus();
@@ -414,10 +521,22 @@ native('real Copilot owned SDK runtime with fixed local model responses', () => 
       expect(await delivery).toMatchObject(finalBoundary ? { accepted: false, status: 409 } : { accepted: true });
       const frames = await pending;
       expect(frames.some(frame => frame.type === 'error')).toBe(false);
-      expect(frames.filter(frame => frame.type === 'text').map(frame => frame.content).join('')).toBe(finalBoundary ? 'SDK_FINISHED_BEFORE_CORRECTION' : 'SDK_STEER_OK');
+      const replies = frames.filter(frame => frame.type === 'text');
+      expect(replies.length).toBeGreaterThan(0);
+      expect(replies.every(frame => frame.content === (finalBoundary ? 'SDK_FINISHED_BEFORE_CORRECTION' : 'SDK_STEER_OK'))).toBe(true);
+      if (finalBoundary) expect(replies).toHaveLength(1);
       if (finalBoundary) expect(requests).toHaveLength(1);
       const session = frames.find(frame => frame.type === 'external_session');
       if (session?.type !== 'external_session') throw new Error('Missing session ID');
+      if (!finalBoundary) {
+        // Native shell background completion can add a valid parent reply.
+        // Prove one correction delivery instead of assuming one model response.
+        const history = fs.readFileSync(path.join(dir, 'home', 'session-state', session.sessionId, 'events.jsonl'), 'utf8')
+          .trim().split('\n').map(line => JSON.parse(line));
+        const deliveries = history.filter(event => event.type === 'user.message' && event.data?.delivery === 'steering' && event.data?.content === 'SDK_CORRECTION');
+        expect(deliveries).toHaveLength(1);
+        events.push({ source: 'native-history', correctionDeliveries: deliveries });
+      }
       scenario = 'text';
       const resumed = await collectConversation(adapter.sendMessage('SDK_AFTER_CORRECTION', conversationOptions({ isNewSession: false, externalSessionId: session.sessionId })).stream);
       expect(resumed.some(frame => frame.type === 'error')).toBe(false);

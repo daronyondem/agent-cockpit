@@ -17,6 +17,8 @@ import { buildCliCommandInvocation } from '../cliCommandResolver';
 import { copilotChatTransport, resolveCopilotCliRuntime, resolveCopilotWorkingDir, type CopilotCliRuntime } from './copilotRuntime';
 import { CopilotConversations } from './copilotConversations';
 import { CopilotModelCatalog, assertCopilotSelection } from './copilotCatalog';
+import { COPILOT_GOALS, type CopilotGoalRun } from './copilotGoals';
+import { parseGoalAiCreditLimit } from '../../contracts/goals';
 import { checkOneShotMediaInput } from './mediaCapabilities';
 export { resolveCopilotCliRuntime, type CopilotCliRuntime } from './copilotRuntime';
 import { logger } from '../../utils/logger';
@@ -90,6 +92,7 @@ export class CopilotAdapter extends BaseBackendAdapter {
         toolActivity: true,
         userQuestions: false,
         stdinInput: false,
+        goals: false,
         oneShotMediaInput: {
           image: ['explicit-attachment'],
           pdf: ['explicit-attachment'],
@@ -110,17 +113,53 @@ export class CopilotAdapter extends BaseBackendAdapter {
     if (options.refreshModels) await this.catalog.shutdown();
     if (this.closed || this.closing) return this.metadata;
     const interactive = copilotChatTransport(options.cliProfile) === 'sdk';
-    return { ...this.metadata, capabilities: { ...this.metadata.capabilities, userQuestions: interactive, stdinInput: interactive, agents: interactive },
+    return { ...this.metadata, capabilities: { ...this.metadata.capabilities, userQuestions: interactive, stdinInput: interactive, agents: interactive, goals: this.getGoalCapability(options) },
       ...await this.catalog.get(options.cliProfile) };
   }
 
+  getGoalCapability(options: BackendCallOptions = {}) {
+    return copilotChatTransport(options.cliProfile) === 'sdk' ? COPILOT_GOALS : false;
+  }
+
+  getGoal(options: SendMessageOptions) {
+    this.assertGoalTransport(options);
+    return this.conversations.goal(options);
+  }
+
+  pauseGoal(options: SendMessageOptions) {
+    this.assertGoalTransport(options);
+    return this.conversations.goal(options, true);
+  }
+
+  setGoalObjective(objective: string, options: SendMessageOptions): SendMessageResult {
+    this.assertGoalTransport(options);
+    if (!objective.trim()) throw new Error('Goal objective required.');
+    return this.startTurn(objective, options, { kind: 'set', objective, aiCreditLimit: options.goalAiCreditLimit });
+  }
+
+  resumeGoal(options: SendMessageOptions): SendMessageResult {
+    this.assertGoalTransport(options);
+    if (!options.externalSessionId) throw new Error('No native Copilot session to resume.');
+    const aiCreditLimit = parseGoalAiCreditLimit(options.goalAiCreditLimit, true)!;
+    return this.startTurn('', options, { kind: 'resume', aiCreditLimit });
+  }
+
+  private assertGoalTransport(options: SendMessageOptions): void {
+    if (!this.getGoalCapability(options)) throw new Error('Goals require the Copilot SDK transport.');
+    if (this.closed || this.closing) throw new Error('Copilot is shutting down.');
+  }
+
   sendMessage(message: string, options: SendMessageOptions): SendMessageResult {
+    return this.startTurn(message, options);
+  }
+
+  private startTurn(message: string, options: SendMessageOptions, goalRun?: CopilotGoalRun): SendMessageResult {
     const key = options.conversationId || options.sessionId;
     const previous = [...this.turns].filter(turn => turn.key === key);
     if (previous.some(turn => !turn.aborted)) return { stream: this.rejectedTurn('Copilot already has an active turn for this conversation.'), abort: () => {}, sendInput: () => {} };
     const state: StreamState = { key, proc: null, aborted: this.closed || this.closing !== null };
     this.turns.add(state);
-    const stream = this.streamTurn(message, options, state, previous);
+    const stream = this.streamTurn(message, options, state, previous, goalRun);
     const close = stream.return.bind(stream), fail = stream.throw.bind(stream);
     stream.return = async value => { await this.closeTurn(state); return close(value); };
     stream.throw = async error => { await this.closeTurn(state); return fail(error); };
@@ -148,7 +187,8 @@ export class CopilotAdapter extends BaseBackendAdapter {
   }
 
   async onSessionReset(conversationId: string): Promise<void> {
-    await settleCopilotCleanup([...this.turns].filter(state => state.key === conversationId).map(state => this.closeTurn(state)));
+    await settleCopilotCleanup([...this.turns].filter(state => state.key === conversationId).map(state => this.closeTurn(state))
+      .concat(this.conversations.onSessionReset(conversationId)));
   }
 
   async runOneShot(prompt: string, options: RunOneShotOptions = {}): Promise<string> {
@@ -229,14 +269,14 @@ export class CopilotAdapter extends BaseBackendAdapter {
     return state.cleanup;
   }
 
-  private async *streamTurn(message: string, options: SendMessageOptions, state: StreamState, previous: StreamState[]): AsyncGenerator<StreamEvent> {
+  private async *streamTurn(message: string, options: SendMessageOptions, state: StreamState, previous: StreamState[], goalRun?: CopilotGoalRun): AsyncGenerator<StreamEvent> {
     try {
       if (!state.aborted && previous.length) await settleCopilotCleanup(previous.map(turn => this.closeTurn(turn)));
       if (state.aborted) {
         yield { type: 'error', error: 'Copilot turn aborted.', source: 'abort' }; yield { type: 'done' }; return;
       }
       if (copilotChatTransport(options.cliProfile) === 'sdk') {
-        state.sdk = this.conversations.sendMessage(message, { ...options, conversationId: state.key });
+        state.sdk = this.conversations.sendMessage(message, { ...options, conversationId: state.key }, goalRun);
         yield* state.sdk.stream;
       } else {
         const runtime = resolveCopilotCliRuntime(options.cliProfile);

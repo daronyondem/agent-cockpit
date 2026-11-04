@@ -62,6 +62,7 @@ page summarizes the user-facing shape.
   as JSON `tool_use` parts;
 - Memory and Knowledge Base MCP injection through per-process
   `OPENCODE_CONFIG_CONTENT`;
+- native SDK goal set/status/pause/resume, with an explicit fresh AI-credit limit on resume and persisted lifecycle cards; Clear is unavailable in CLI 1.0.105;
 - no confirmed native durable-memory directory for Agent Cockpit to import or
   watch. OpenCode memory integration uses Agent Cockpit's Memory MCP tools
   instead of backend-native memory capture.
@@ -114,7 +115,8 @@ Native compatibility is verified on Grok Build 1.0.52, macOS arm64. See the
 - grouped SDK child tools and final summaries, including nested/background work,
   isolated from the root answer; opaque JSONL profiles retain root-only activity;
 - exact native question callbacks and explicit active-turn steering on SDK
-  profiles; plan/goal controls remain deferred integrations;
+  profiles; plan mode remains unavailable;
+- native SDK goal set/status/pause/resume, with an explicit fresh AI-credit limit on resume and persisted lifecycle cards; Clear is unavailable in CLI 1.0.105;
 - no confirmed native durable-memory directory for Agent Cockpit to import or
   watch. Copilot memory integration uses Agent Cockpit's Memory MCP tools.
 

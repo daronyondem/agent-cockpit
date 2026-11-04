@@ -785,7 +785,7 @@ export default function App() {
           onGoalModeChange={setGoalMode}
           onRefreshGoal={() => void refreshGoalState()}
           onPauseGoal={() => void pauseGoalNow()}
-          onResumeGoal={() => void resumeGoalNow()}
+          onResumeGoal={(aiCreditLimit) => void resumeGoalNow(aiCreditLimit)}
           onClearGoal={() => void clearGoalNow()}
           onAttach={() => attachInputRef.current?.click()}
           onRemoveAttachment={(id) => void removePendingAttachment(id)}

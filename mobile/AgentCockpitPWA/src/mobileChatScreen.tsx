@@ -94,7 +94,7 @@ export function ChatScreen(props: {
   onGoalModeChange: (enabled: boolean) => void;
   onRefreshGoal: () => void;
   onPauseGoal: () => void;
-  onResumeGoal: () => void;
+  onResumeGoal: (aiCreditLimit?: number) => void;
   onClearGoal: () => void;
   onAttach: () => void;
   onRemoveAttachment: (id: string) => void;
@@ -416,10 +416,11 @@ function GoalStrip(props: {
   isStreaming: boolean;
   onRefresh: () => void;
   onPause: () => void;
-  onResume: () => void;
+  onResume: (aiCreditLimit?: number) => void;
   onClear: () => void;
 }) {
   const [nowMs, setNowMs] = useState(Date.now());
+  const [creditLimit, setCreditLimit] = useState('');
   const goalKey = `${props.goal?.threadId || 'none'}:${props.goal?.status || 'none'}:${props.goalUpdatedAtMs || ''}`;
   useEffect(() => {
     if (!props.goal) {
@@ -440,6 +441,8 @@ function GoalStrip(props: {
   if (!props.goal) {
     return null;
   }
+  const copilotGoal = props.goal.backend === 'copilot';
+  const validCreditLimit = !copilotGoal || (Number.isFinite(Number(creditLimit)) && Number(creditLimit) > 0);
   const elapsed = formatGoalElapsed(goalElapsedSeconds(props.goal, nowMs));
   const canPause = props.goal.status === 'active' && goalSupportsAction(props.goal, 'pause');
   const canResume = props.goal.status === 'paused' && !props.isStreaming && goalSupportsAction(props.goal, 'resume');
@@ -450,14 +453,16 @@ function GoalStrip(props: {
       <div className="goal-strip-main">
         <span className="goal-dot" aria-hidden="true" />
         <strong>{goalStatusLabel(props.goal)}</strong>
-        <span className="goal-elapsed">{elapsed}</span>
+        {!copilotGoal ? <span className="goal-elapsed">{elapsed}</span> : null}
         <span className="goal-objective">{props.goal.objective || 'No objective'}</span>
         {props.goal.backend === 'grok-build' && typeof props.goal.tokenBudget === 'number' ? <span className="goal-elapsed" title="Grok checks budgets between work steps and can exceed them.">Soft budget: {props.goal.tokenBudget.toLocaleString()}</span> : null}
       </div>
       <div className="goal-actions">
+        {copilotGoal && typeof props.goal.aiCreditLimit === 'number' ? <span>AI credits: {props.goal.aiCreditsUsed ?? '—'} / {props.goal.aiCreditLimit}</span> : null}
+        {copilotGoal && props.goal.status === 'paused' ? <label>Fresh AI credit limit <input aria-label="Fresh AI credit limit" type="number" min="0" step="any" inputMode="decimal" value={creditLimit} onChange={event => setCreditLimit(event.target.value)} style={{width:80}} /></label> : null}
         {canPause ? <button type="button" onClick={props.onPause}>Pause</button> : null}
         {props.goal.status === 'paused' && goalSupportsAction(props.goal, 'resume') ? (
-          <button type="button" disabled={!canResume} onClick={props.onResume}>Resume</button>
+          <button type="button" disabled={!canResume || !validCreditLimit} onClick={() => props.onResume(copilotGoal ? Number(creditLimit) : undefined)}>Resume</button>
         ) : null}
         {canClear ? <button type="button" disabled={clearDisabled} onClick={props.onClear}>Clear</button> : null}
       </div>

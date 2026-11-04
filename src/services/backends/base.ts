@@ -95,6 +95,11 @@ export class BaseBackendAdapter {
     throw new Error(`${this.constructor.name}.getGoal is not implemented`);
   }
 
+  /** Profile-scoped controls without starting a runtime or discovering models. */
+  getGoalCapability(_options: BackendCallOptions = {}): BackendMetadata['capabilities']['goals'] {
+    return this.metadata.capabilities.goals;
+  }
+
   setGoalObjective(_objective: string, _options?: SendMessageOptions): SendMessageResult {
     throw new Error(`${this.constructor.name}.setGoalObjective is not implemented`);
   }

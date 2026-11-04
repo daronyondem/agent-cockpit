@@ -133,8 +133,7 @@ The PWA currently covers:
   label/icon, thinking/text/tool frames, session recovery notices, and usage
   counters as desktop. `auto` is the default model; Haiku/auto do not show
   reasoning-effort choices. SDK profiles support native questions and explicit
-  steering and grouped delegated tools/summaries; opaque JSONL profiles do not. Copilot goal and plan controls remain
-  unavailable. Per-turn token/credit accounting
+  steering and grouped delegated tools/summaries; opaque JSONL profiles do not. Copilot SDK goals expose native set/status/pause/resume; Clear and plan mode remain unavailable. Per-turn token/credit accounting
   is performed on the server, and `costSource:'none'` keeps mobile cost `n/a`.
   No Copilot-specific PWA assets, manifest, or service-worker changes are needed.
   Gemini's unverified effort options are also hidden. Auto routing is not
@@ -304,3 +303,16 @@ worker, checks cancelled history and cold resume without replay. Desktop
 initial history hydration now preserves live/replayed rows; Stop checks expand
 the existing desktop progress disclosure. Both clients retain legacy completed
 activities without explicit outcomes. No PWA metadata/offline-policy changes.
+
+### Copilot native goal controls
+
+SDK profile metadata enables the shared goal composer, slash commands, strip and
+persisted lifecycle cards. Opaque JSONL profiles keep goals unavailable. Copilot
+Clear stays hidden. A paused goal shows a labeled **Fresh AI credit limit** number
+input; Resume stays disabled until its value is finite and positive, then sends
+`{aiCreditLimit:number}`. API actions also validate before optimistic streaming.
+No default window is chosen. Native `aiCreditsUsed / aiCreditLimit` is labeled
+**AI credits**, independently of token budgets and USD. Copilot omits an unreported
+elapsed timer. Reload reads the native saved objective; Stop/pause retains it.
+Intentional Pause saves a paused lifecycle card without a stream-failure notice.
+See [backend control semantics](spec-backend-services.md#copilot-native-goals-copilotgoalsts).

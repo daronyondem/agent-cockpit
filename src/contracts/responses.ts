@@ -340,7 +340,7 @@ export interface ConversationInputResponse {
   mode: 'stdin' | 'message';
 }
 
-export type ThreadGoalBackend = 'codex' | 'claude-code' | 'claude-code-interactive' | 'grok-build';
+export type ThreadGoalBackend = 'codex' | 'claude-code' | 'claude-code-interactive' | 'grok-build' | 'copilot';
 export type ThreadGoalStatus = 'active' | 'paused' | 'budgetLimited' | 'complete' | 'cleared' | 'unknown';
 export type ThreadGoalSource = 'native' | 'transcript' | 'runtime' | 'unknown';
 
@@ -358,6 +358,11 @@ export interface ThreadGoal {
   objective: string;
   status: ThreadGoalStatus;
   supportedActions?: ThreadGoalSupportedActions;
+  /** Native Copilot objective identity within this session. */
+  objectiveId?: number;
+  /** Copilot AI-credit window; independent of token budgets and USD. */
+  aiCreditLimit?: number | null;
+  aiCreditsUsed?: number | null;
   tokenBudget?: number | null;
   tokensUsed?: number | null;
   timeUsedSeconds?: number | null;

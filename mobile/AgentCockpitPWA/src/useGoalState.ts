@@ -1,3 +1,4 @@
+import { parseGoalAiCreditLimit } from '../../../src/contracts/goals';
 import { useEffect, useRef, useState, type Dispatch, type RefObject, type SetStateAction } from 'react';
 import { AgentAPIError } from './api';
 import {
@@ -170,7 +171,7 @@ export function useGoalState(options: UseGoalStateOptions) {
       claudeCodeMode: options.claudeCodeModeForSelection,
       serviceTier: options.serviceTierEnabled ? options.selectedServiceTier : undefined,
     };
-    const optimisticBackend = options.selectedBackendID === 'codex' || isClaudeBackend(options.selectedBackendID)
+    const optimisticBackend = options.selectedBackendID === 'codex' || options.selectedBackendID === 'copilot' || isClaudeBackend(options.selectedBackendID)
       ? options.selectedBackendID as ThreadGoal['backend']
       : undefined;
     const optimisticGoal: ThreadGoal = {
@@ -178,7 +179,7 @@ export function useGoalState(options: UseGoalStateOptions) {
       objective,
       status: 'active',
       supportedActions: {
-        clear: true,
+        clear: options.selectedGoalCapability.clear,
         stopTurn: true,
         pause: options.selectedGoalCapability.pause,
         resume: options.selectedGoalCapability.resume,
@@ -245,7 +246,7 @@ export function useGoalState(options: UseGoalStateOptions) {
     }
   }
 
-  async function resumeGoalNow() {
+  async function resumeGoalNow(aiCreditLimit?: number) {
     const conversation = options.activeConversation;
     if (!conversation || !goal || options.isStreaming) {
       return;
@@ -254,10 +255,12 @@ export function useGoalState(options: UseGoalStateOptions) {
       options.setErrorMessage(goalActionUnsupportedMessage('resume', goal.backend || conversation.backend));
       return;
     }
+    try { aiCreditLimit = parseGoalAiCreditLimit(aiCreditLimit, (goal.backend || conversation.backend) === 'copilot'); }
+    catch (error) { options.onError(error); return; }
     const previousGoal = goal;
     commitGoalSnapshot(conversation.id, { ...goal, status: 'active', updatedAt: Date.now() }, goalSnapshotTimeMs(goal) || Date.now());
     try {
-      const response = await options.clientRef.current.resumeGoal(conversation.id);
+      const response = await options.clientRef.current.resumeGoal(conversation.id, aiCreditLimit === undefined ? {} : { aiCreditLimit });
       if (response.goal) applyGoalSnapshot(conversation.id, response.goal);
       options.applyServerMessage(conversation.id, response.message);
       if (response.streamReady !== false) {

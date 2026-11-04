@@ -47,6 +47,7 @@ import { createWorkspaceArchiveRouter } from './chat/workspaceArchiveRoutes';
 import { createWorkspaceLocationRouter } from './chat/workspaceLocationRoutes';
 import { createWorktreeIsolationRouter } from './chat/worktreeIsolationRoutes';
 import { clearGoalEvent, formatGoalEventMessage, goalEventDedupeKey, goalEventFromStatus, normalizeGoalSnapshot } from '../services/chat/goalEventMessages';
+import { persistGoalEventOnce } from '../services/chat/goalEventPersistence';
 import type { DataMigrationService } from '../services/dataMigrationService';
 
 const log = logger.child({ module: 'chat-routes' });
@@ -301,17 +302,10 @@ export async function processStream(
     const key = goalEventDedupeKey(goalEvent);
     if (persistedGoalEventKeys.has(key)) return;
     persistedGoalEventKeys.add(key);
-    const goalMsg = await chatService.addMessage(
-      convId,
-      'system',
-      formatGoalEventMessage(goalEvent),
-      backend,
-      null,
-      undefined,
-      undefined,
-      undefined,
-      { goalEvent },
-    );
+    const goalMsg = backend === 'copilot'
+      ? await persistGoalEventOnce(chatService, convId, backend, goalEvent)
+      : await chatService.addMessage(convId, 'system', formatGoalEventMessage(goalEvent), backend, null,
+        undefined, undefined, undefined, { goalEvent });
     if (goalMsg && !isClosed()) emit({ type: 'assistant_message', message: goalMsg });
   }
 

@@ -1,3 +1,4 @@
+import type { ResumeGoalRequest } from '../../../src/contracts/goals';
 import type {
   AttachmentMeta,
   BackendMetadata,
@@ -46,6 +47,7 @@ type UploadOptions = {
 
 export type SetGoalRequest = {
   objective: string;
+  aiCreditLimit?: ResumeGoalRequest['aiCreditLimit'];
   backend?: string;
   cliProfileId?: string;
   model?: string;
@@ -185,10 +187,10 @@ export class AgentCockpitAPI {
     });
   }
 
-  async resumeGoal(conversationID: string): Promise<{ streamReady?: boolean; goal?: ThreadGoal | null; message?: Message | null }> {
+  async resumeGoal(conversationID: string, input: ResumeGoalRequest = {}): Promise<{ streamReady?: boolean; goal?: ThreadGoal | null; message?: Message | null }> {
     return this.request<{ streamReady?: boolean; goal?: ThreadGoal | null; message?: Message | null }>('POST', `/api/chat/conversations/${encodeURIComponent(conversationID)}/goal/resume`, {
       csrf: true,
-      body: {},
+      body: input,
     });
   }
 

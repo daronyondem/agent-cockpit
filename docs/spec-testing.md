@@ -8,7 +8,7 @@
 
 **Framework:** Jest 30.x — run with `npm test`. The script is `node --experimental-vm-modules node_modules/.bin/jest` because the KB handler tests import `unpdf` (ESM-only, wraps `pdfjs-dist`) and Jest's VM needs the flag to allow runtime `import()` calls. `jest.config.js` uses `ts-jest` for TypeScript and also transforms JS/JSX with `allowJs: true`, `module: CommonJS`, and `jsx: react-jsx` so tests can import the V2 frontend ES modules directly instead of evaluating browser globals. Default Jest execution is capped at `maxWorkers: '50%'` so process-spawning suites still run in parallel without stampeding local or CI machines, and the global per-test timeout is 30 seconds so widened harness-specific timeouts can surface their route/process-specific errors before Jest's generic timeout.
 
-**Coverage gate:** Run `npm run test:coverage` for backend coverage. The script keeps plain `npm test` unchanged for fast local iteration and runs Jest with `--coverage --runInBand`; serial execution keeps the full-suite coverage gate stable on local machines where parallel workers can exceed short route-test timeouts. `jest.config.js` collects coverage from `src/**/*.ts` and `server.ts`, excludes declaration-only `src/types/**` and `*.d.ts` files, writes reports under `coverage/`, and uses V8 coverage with `text-summary` plus `lcov` reporters. Global floors are statements/lines 88.6%, branches 76.3%, and functions 93.6%. The November 2, 2026 macOS cleanup coverage baseline at `84de7f4` measured statements/lines 88.28%, branches 74.99%, and functions 93.63% (139 passing suites, 2,720 passing tests; four opt-in suites and 24 tests skipped). The native orphan-cleanup fixture also passed separately with Copilot 1.0.105 on macOS arm64. New process/ownership/platform regressions provide coverage headroom without lowering the CI floor. When meaningful tests land, raise thresholds toward a stable cross-platform baseline; do not lower them merely to merge a regression.
+**Coverage gate:** Run `npm run test:coverage` for backend coverage. The script keeps plain `npm test` unchanged for fast local iteration and runs Jest with `--coverage --runInBand`; serial execution keeps the full-suite coverage gate stable on local machines where parallel workers can exceed short route-test timeouts. `jest.config.js` collects coverage from `src/**/*.ts` and `server.ts`, excludes declaration-only `src/types/**` and `*.d.ts` files, writes reports under `coverage/`, and uses V8 coverage with `text-summary` plus `lcov` reporters. Global floors are statements/lines 88.7%, branches 76.6%, and functions 93.6%. The November 2, 2026 macOS cleanup coverage baseline at `84de7f4` measured statements/lines 88.28%, branches 74.99%, and functions 93.63% (139 passing suites, 2,720 passing tests; four opt-in suites and 24 tests skipped). The native orphan-cleanup fixture also passed separately with Copilot 1.0.105 on macOS arm64. New process/ownership/platform regressions provide coverage headroom without lowering the CI floor. When meaningful tests land, raise thresholds toward a stable cross-platform baseline; do not lower them merely to merge a regression.
 
 The November 3 Copilot Memory/Context integration run passed 140 suites and 2,737 tests (five opt-in suites/28 tests skipped), measuring statements/lines 88.31%, branches 75.25%, and functions 93.64%. Memory MCP branch coverage increased from 61.34% to 63.65%, and Workspace Context from 73.63% to 74.23% in the same local V8 environment; the branch floor rises from 74.5% to 74.6%. The four real-Copilot application workflow cases passed separately on 1.0.105/macOS arm64 with isolated auth and fixed local model responses. No desktop/mobile bundle or API contract changes are involved; API/WebSocket assertions cover shared server behavior rather than browser interaction.
 
@@ -107,6 +107,9 @@ Test HTTP servers that are contacted through `127.0.0.1` bind explicitly to `127
 | `test/codexBackend.test.ts` profile metadata coverage | `getMetadata({ cliProfile })` runs Codex `model/list` under the selected profile runtime, normalizes the returned model catalog, caches it by profile runtime key, and keeps server-configured metadata separate from account-profile metadata. |
 | `test/codexBackend.test.ts` normal-stream goal forwarding | A normal Codex `sendMessage()` stream forwards current-thread native `thread/goal/updated` and `thread/goal/cleared` notifications as backend-neutral `goal_updated` / `goal_cleared` events, ignores goal notifications for other threads, keeps assistant text flowing from the active chat turn, and does not treat the goal notification's `turnId` as the active runtime turn. |
 | `test/frontendProfileMetadataCache.test.ts` | Executable browser API tests verify profile isolation, coalescing, expiry, retry after failure, explicit account-test invalidation without settings changes, and rejection of stale in-flight cache writes. |
+| `test/copilotGoals.test.ts` | Native projection/credit validation, SDK command effects and literal objectives, executable-peer cold controls/resume, active pause, missing-history refusal, failed work, idle/control replacement, normal-close status race and late reset/shutdown cleanup. |
+| `test/copilotGoalRoutes.test.ts` | Actual Copilot facade through HTTP/WebSocket goal set/status/pause/resume, explicit decimal credit validation before admission, no fabricated Clear, profile-scoped capability gating and persisted achievement cards. |
+| `test/goalEventPersistence.test.ts` | Shared atomic poll/stream card check-and-append, single writer/emitter, native session/objective identity, write failure retry and no deleted-conversation recreation. |
 | `test/copilotCatalog.test.ts` | Pure account-model projection, exact SDK effort intersections, policy/duplicate filtering, conservative media, effective selection validation, cache TTL/bounds/copies/profile/env/executable/auth scope, failure provenance/redaction, timeout/late-start/shutdown cleanup and failed-cleanup admission barriers. |
 | `test/copilotCatalog.integration.test.ts` | Official SDK plus strict executable RPC peer: new account IDs/max effort reach native session config and restricted JSONL argv; cached discovery reuse/refresh; invalid IDs/efforts rejected before session/prompt creation; direct media gates; Stop/update drains during discovery. |
 | `test/chat.copilotCatalog.test.ts` | HTTP 400 for unavailable IDs/efforts before user-message/tool creation, saved selection preservation, exact effort persistence for newly discovered models, explicit effort clears and automatic-selection effort rejection. |
@@ -284,3 +287,56 @@ and rejection of an existing conversation/workspace reservation.
 requires the TERM-resistant old worker to be dead before the new native spawn.
 All process readiness PID files publish by rename so readers cannot see an empty
 file between creation and writing.
+
+## Native Copilot goal qualification
+
+The goal suites extend `test/copilotSdkRuntime.e2e.test.ts` with real set,
+completion/replacement, removed-Clear refusal, idle-state semantics, worker
+pause/Stop/reset followed by explicit credit resume, subsequent normal questions,
+and background-delegate drain. Use `npm run e2e:copilot-sdk -- --testNamePattern 'goal|objective'` for that subset. Idle-state tests use public send plus observed
+session.idle instead of SDK sendAndWait, which may keep waiting for an active
+objective. Bound model requests and external cancellation in background fixtures.
+
+Steering fixtures prove exactly one persisted `user.message` correction with
+delivery:steering rather than an exact model reply count: native shell background
+completion can append another valid root response. Final-boundary refusal still
+requires one response and no replay on cold resume. Executable-peer tests also
+prove a terminal event during goal RPC admission cannot submit a later prompt,
+and that a recovered goal retains its mandatory snapshot-read instructions.
+
+Four added desktop/mobile browser cases cover completion/reload, pause/worker
+termination without a false failure, no Clear, explicit decimal credit windows
+and no interrupted worker replay. All 26 cases include the previous catalog,
+Memory, delegation, questions, steering and lifecycle checks. Entry JS budget is
+264 KiB from the measured 263.4 KiB result; total JS stays 903 KiB and other limits
+stay unchanged. Rebuild clients after Jest asset fixtures before browser/budget
+validation. The measured production bundle is 902.7 KiB JS and 201.8 KiB CSS.
+
+All 26 native SDK cases pass on CLI 1.0.105 / SDK 1.0.28 / Node 22.23.4 / macOS
+arm64. Report `copilot-sdk-compat-uIwMvj` retains the pre-commit revision f0b2188
+and dirty:true. All 39 recorded owned runtime PIDs are stopped. Six real-CLI
+Memory/Context workflow cases pass. These are fixed local-model checks, separate
+from hosted billing/access and native Windows/Linux certification.
+
+Atomic stream/poll terminal-card persistence is Copilot-specific. Existing Codex
+stream-card behavior is preserved, including separate achievements when starting
+the exact same objective twice; `test/chat.rest.test.ts` reproduces that boundary.
+The focused regression fails with whole-history stream dedupe and passes after
+scoping the new path. Other backends retain their previous per-stream persistence
+and pause-card behavior. The goal-status route keeps its existing historical
+poll dedupe. Final coverage and browser reports are recorded with the checkpoint.
+
+Final coverage passes **162 suites / 2,967 tests** (six opt-in/platform suites and
+60 tests skipped), with **88.86% statements/lines, 76.85% branches and 93.76%
+functions**. Raised floors remain 88.7% statements/lines, 76.6% branches and 93.6%
+functions. This checkpoint adds 30 normal-CI cases, including the Codex compatibility
+regression, six native SDK cases, and four desktop/mobile browser cases.
+
+All 26 final rebuilt Chromium desktop/mobile cases pass; report
+`cockpit-copilot-ui-jDQhgU` records 46 SDK runtime launches with CLI 1.0.105 on
+macOS arm64/Node 26.0.0. Fixture PM2 and all three recorded tool workers are
+stopped. Backend/web/mobile typechecks, zero-warning lint, maintainability, spec
+drift, ADR lint, production builds and the 902.7/903 KiB JS plus 201.8/230 KiB CSS
+budget all pass. Report revisions/dirty flags are retained, never relabeled after
+the local commit. Hosted accounts, billing judgment and native Windows/Linux
+remain separate qualification.

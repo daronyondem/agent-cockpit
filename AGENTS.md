@@ -222,8 +222,17 @@ and the profile-auth route tests for credential/catalog checks. Preserve the
 distinction between installed CLI, authenticated credentials and enabled-model
 access; static fallback metadata must not overwrite native access failures.
 Await auth-service shutdown so pending SDK probes cannot outlive server cleanup.
-Native autopilot mode alone is not goal-action parity: 1.0.105 removes clear,
-and switching autopilot on does not resume a paused objective. See ADR-0098.
+Goal routing uses pure `getGoalCapability({cliProfile})`, not model discovery on
+polls. Keep Copilot native projection/commands in `copilotGoals.ts` and controls
+inside the conversation owner. Polling and streams must share the atomic
+terminal-card boundary in `src/services/chat/goalEventPersistence.ts`; review its
+focused regressions when changing goal persistence. Review `test/copilotGoals.test.ts`,
+`test/copilotGoalRoutes.test.ts`, native SDK goal cases and desktop/mobile goal
+browser cases when changing them. Native autopilot mode alone is not goal-action
+parity: 1.0.105 removes Clear, and switching autopilot on does not resume a paused
+objective. Resume requires an explicit fresh AI-credit window; never translate
+credits to token budgets, invent elapsed time, edit objective storage to fake
+Clear, or create/recover history on status/pause/resume. See ADR-0098.
 SDK dependency upgrades must keep the app Node engine, all platform installer
 eligibility checks, Install Doctor and self-update engine-floor validation
 aligned. Preserve major-only legacy manifests and test macOS activation when

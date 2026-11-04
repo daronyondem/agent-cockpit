@@ -976,7 +976,7 @@ in [ADR-0092](adr/0092-integrate-grok-build-through-acp-and-native-extensions.md
 
 ### OpenCodeAdapter (`src/services/backends/opencode.ts`)
 
-**Metadata:** `id: 'opencode'`, label `OpenCode`, no icon yet, capabilities `{ thinking:true, planMode:false, agents:false, toolActivity:true, userQuestions:false, stdinInput:false, oneShotMediaInput:{ image:['explicit-attachment'], pdf:['explicit-attachment'] } }`, and session resume supported through persisted OpenCode session ids. `getMetadata({ cliProfile })` resolves the selected OpenCode runtime, tries `opencode models [provider] --verbose`, falls back to plain `opencode models [provider]` for older CLIs, parses `provider/model` lines into `ModelOption[]`, maps verbose model `variants` keys into `supportedEffortLevels`, and maps verbose `capabilities.input.image` / `capabilities.input.audio` / `capabilities.input.pdf` / `capabilities.input.video` plus `capabilities.attachment`, `capabilities.toolcall`, and `capabilities.reasoning` into `model.capabilities` (the parser also accepts the older top-level shape defensively). Text input/output is assumed for discovered models; media input is not assumed. Model ids remain the raw OpenCode ids used for execution; labels hide only the leading `openrouter/` prefix for OpenRouter models so visible selectors show `provider/model` without duplicating the OpenRouter transport prefix. It marks the first discovered model as the default unless a legacy `cliProfile.opencode.model` is present. If model discovery fails, metadata falls back to any legacy configured model as text-only so older saved OpenCode profiles can still render a useful picker without being treated as image-capable.
+**Metadata:** `id: 'opencode'`, label `OpenCode`, no icon yet, capabilities `{ thinking:true, planMode:false, agents:false, toolActivity:true, userQuestions:false, stdinInput:false, goals:false, oneShotMediaInput:{ image:['explicit-attachment'], pdf:['explicit-attachment'] } }`, and session resume supported through persisted OpenCode session ids. `getMetadata({ cliProfile })` resolves the selected OpenCode runtime, tries `opencode models [provider] --verbose`, falls back to plain `opencode models [provider]` for older CLIs, parses `provider/model` lines into `ModelOption[]`, maps verbose model `variants` keys into `supportedEffortLevels`, and maps verbose `capabilities.input.image` / `capabilities.input.audio` / `capabilities.input.pdf` / `capabilities.input.video` plus `capabilities.attachment`, `capabilities.toolcall`, and `capabilities.reasoning` into `model.capabilities` (the parser also accepts the older top-level shape defensively). Text input/output is assumed for discovered models; media input is not assumed. Model ids remain the raw OpenCode ids used for execution; labels hide only the leading `openrouter/` prefix for OpenRouter models so visible selectors show `provider/model` without duplicating the OpenRouter transport prefix. It marks the first discovered model as the default unless a legacy `cliProfile.opencode.model` is present. If model discovery fails, metadata falls back to any legacy configured model as text-only so older saved OpenCode profiles can still render a useful picker without being treated as image-capable.
 
 **Runtime resolution:** `resolveOpenCodeCliRuntime(profile?)` rejects non-OpenCode profiles, defaults the command to `opencode`, merges `cliProfile.env` when present, and resolves the executable through `src/services/cliCommandResolver.ts`. On macOS/Linux that resolver checks PATH and common user-local locations, including `~/.opencode/bin/opencode`, so PM2/launchd environments can find OpenCode even when the user's interactive shell PATH differs.
 
@@ -990,7 +990,7 @@ in [ADR-0092](adr/0092-integrate-grok-build-through-acp-and-native-extensions.md
 
 ### CopilotAdapter (`src/services/backends/copilot.ts`)
 
-**Metadata:** `id: 'copilot'`, label `GitHub Copilot`, inline SVG icon, conservative synchronous capabilities `{ thinking:true, planMode:false, agents:false, toolActivity:true, userQuestions:false, stdinInput:false, oneShotMediaInput:{ image:['explicit-attachment'], pdf:['explicit-attachment'] } }`, and later-session resume. Synchronous registry metadata uses a curated fallback with `modelCatalog:{source:'fallback',reason}`. Async profile metadata discovers account models and enables `userQuestions`/`stdinInput`/`agents` for the SDK transport; opaque JSONL profiles retain false. Actual steering requires that turn's `input_ready` token, emitted only after queue control succeeds. SDK delegation uses grouped cards and summaries as specified below; goals remain disabled. See [ADR-0098](adr/0098-connect-copilot-interactive-sessions-through-an-owned-sdk-runtime.md) and the contracts below.
+**Metadata:** `id: 'copilot'`, label `GitHub Copilot`, inline SVG icon, conservative synchronous capabilities `{ thinking:true, planMode:false, agents:false, toolActivity:true, userQuestions:false, stdinInput:false, goals:false, oneShotMediaInput:{ image:['explicit-attachment'], pdf:['explicit-attachment'] } }`, and later-session resume. Synchronous registry metadata uses a curated fallback with `modelCatalog:{source:'fallback',reason}`. Async profile metadata discovers account models and enables `userQuestions`/`stdinInput`/`agents` for the SDK transport; opaque JSONL profiles retain false. SDK profile metadata also advertises native set/status/pause/resume with clear:false. Actual steering requires that turn's `input_ready` token, emitted only after queue control succeeds. SDK delegation uses grouped cards and summaries as specified below; native goals use the control contract below. See [ADR-0098](adr/0098-connect-copilot-interactive-sessions-through-an-owned-sdk-runtime.md) and the contracts below.
 
 **Profile-scoped model catalog (`copilotCatalog.ts`, `copilotModels.ts`):**
 
@@ -1037,13 +1037,86 @@ archiving/deleting. This drain also applies after Stop has detached the runtime.
 
 **Response/retry boundaries:** Envelope `agentId` or `data.parentToolCallId` marks delegated output. Child/grandchild text deltas, reasoning and session errors never enter the root answer. SDK chat projects owned child tools/lifecycle into grouped cards and stores final child summaries there. Opaque JSONL chat and all one-shot collection continue suppressing child presentation. Only root tools clear pre-tool narration in one-shot collection; late child work cannot erase an already-collected root answer. Session-wide native usage aggregates are processed independently of presentation and include delegated work once. Any root or child tool start blocks missing-session replay, even when the child activity is hidden.
 
-**Scope and evidence:** SDK chat integrates native questions and explicit active-turn steering as specified below. SDK delegated cards, summaries and cancellation are integrated; plan mode and native goal controls remain follow-ups. ACP probes do not establish equivalent controls. Multiple named profiles share host auth and do not provide account isolation; `--version` checks only availability, not credentials, entitlement, model permissions, or account identity. Guided device login/account profiles, remaining quotas/resets/context occupancy, native memory import, and native sequential `runSessionShot()` are follow-ups. Sequential gleaning currently uses the base transcript-replay fallback and remains functional.
+**Scope and evidence:** SDK chat integrates native questions and explicit active-turn steering as specified below. SDK delegated cards, summaries and cancellation are integrated; native set/status/pause/resume goals are integrated; plan mode and native goal Clear remain unsupported. ACP probes do not establish equivalent controls. Multiple named profiles share host auth and do not provide account isolation; `--version` checks only availability, not credentials, entitlement, model permissions, or account identity. Guided device login/account profiles, remaining quotas/resets/context occupancy, native memory import, and native sequential `runSessionShot()` are follow-ups. Sequential gleaning currently uses the base transcript-replay fallback and remains functional.
 
 The authenticated native suite verifies direct image/PDF transport, fixture MCP calls, text/stream/later-session resume, and usage. The separate `npm run e2e:copilot-workflows` suite exercises the production chat router, Memory stdio shim/HTTP routes, Copilot governance processor, durable Memory search, workspace update frames, Workspace Context maintenance, and a fresh chat reading managed Context instructions/files. Six native cases cover successful note/search and recall, Memory-to-Context consumption plus reference ingestion, rejected Memory governance without fallback files, invalid Context output preserving the inbox until a successful retry, automatic scheduled maintenance, and reset finalization over the ended session. It runs the real CLI with an isolated temporary auth home and fixed local OpenAI-compatible model responses, without hosted accounts, live model reasoning, or CLI updates. The evidence is Copilot 1.0.105 on macOS arm64; each run prints CLI/OS/architecture/revision evidence. Normal CI runs `test/copilotMemoryContext.test.ts` against the real adapter, MCP shim, routes and stores with an executable JSONL fixture instead of requiring Copilot. It additionally checks duplicate governance, persisted metadata/reload, workspace isolation, disabled writes, reset token revocation, restricted governance versus tool-enabled Context arguments, unaccepted-note retention, processor failures, and cancellation/retry. These checks validate integration and persistence, not model quality or account/entitlement behavior.
 
 KB digestion/dreaming/gleaning and Routine workflows have separate executable-fixture integration coverage. Context scheduling/session finalizers are covered by both fixture and native suites; the baseline JSONL desktop/mobile lifecycle browser cases pass with real CLI/local replies on macOS and Ubuntu 24.04; the SDK path passes the same eight cases on macOS, with eight headless launches recorded separately. SDK Windows/Linux qualification remains pending. File downloads and actual server-restart/missing-session recovery remain outside that native certification. Native installs expose a runnable updater without background latest-version discovery; npm installs support discovery with full prerelease semver precedence. Compatibility evidence must record CLI version, OS/architecture, and revision, without extending macOS evidence to native Windows/Linux.
 
 **Memory:** GitHub Copilot has no confirmed native durable-memory directory that maps to Cockpit's `extractMemory(workspacePath)` / `getMemoryDir(workspacePath)` adapter API. The Copilot adapter therefore inherits the base `null` native-memory behavior. Memory-enabled Copilot conversations use Cockpit's Memory MCP tools (`memory_search` / `memory_note`) for durable workspace memory.
+
+### Copilot native goals (`copilotGoals.ts`)
+
+Copilot SDK 1.0.28 / CLI 1.0.105 exposes canonical objectives through the public
+`session.rpc.autopilotObjective.getState()` API. `BaseBackendAdapter.getGoalCapability({cliProfile})`
+defaults to synchronous metadata. Copilot overrides it with a pure transport check:
+SDK profiles return `{set:true,status:'native',pause:true,resume:true,clear:false}`;
+opaque JSONL profiles return false. Goal routes use this accessor for every action,
+without starting model-discovery runtimes on each poll. The desktop uses the selected
+profile metadata already fetched by ComposerPicks; mobile uses its profile metadata.
+Synchronous registry metadata remains conservative.
+
+- Set runs `commands.invoke({name:'autopilot',input:'[--max-ai-credits N ]-- <objective>'})`.
+  The `--` delimiter preserves objectives such as `off` and literal credit flags.
+  Optional `SendMessageOptions.goalAiCreditLimit` supplies the native window; omission
+  keeps native no-limit behavior. Only an `agent-prompt` result admits execution.
+  Its returned prompt, optional displayPrompt and first-session Cockpit instructions
+  are sent once through the public SDK send API. Do not call private command-effect
+  finalizers, execute CLI slash commands as ordinary user messages, or replay work.
+  Recheck terminal state after goal command/state RPCs and before send: a late
+  setup error cannot admit a prompt.
+  If a new goal needs normal missing-chat-history recovery, wrap the native goal
+  prompt in the saved recovery block and fresh workspace instructions; do not
+  overwrite or lose the mandatory snapshot-read instruction.
+- Resume requires existing native history, canonical paused state, and an explicit
+  finite positive `aiCreditLimit`. Invoke autopilot with `--max-ai-credits N`, then
+  send the returned continuation prompt. Preserve objective text/id and turn count;
+  the native credit window starts fresh. `autopilot on` alone does not resume it.
+  Missing-history resume fails without creating a replacement session or recovery.
+- Pause reads canonical state, invokes `autopilot off` for an active objective,
+  reads the paused snapshot, then cancels and awaits the active conversation owner.
+  This stops attached tools/delegates and preserves the native objective. The stream
+  drains cleanup, emits canonical paused state and done, and does not report
+  intentional Pause as a failed/aborted turn. Ordinary Stop keeps its abort path. An already
+  completed/paused objective is read without starting work. Stop/reset use normal
+  owner cleanup; a subsequent cold attach with `continuePendingWork:false` pauses
+  a formerly active objective with the native `resumed_session` reason.
+- Controls reuse the active owned session, including bounded waiting for startup.
+  Idle reads/pause reserve the same conversation map, cold-resume only the saved ID,
+  and close the owned process in finally. Attach supplies only provider, working
+  directory, permission handler, enableConfigDiscovery:false and
+  continuePendingWork:false; it does not apply current model/effort selections or
+  replace MCP/tool configuration. Concurrent idle reads coalesce. No-history
+  status returns null without allocating. Idle controls never create sessions, run
+  recovery, refresh MCP configuration, discover models or send model requests. A
+  new turn cancels an idle control and waits for cleanup. Reset/shutdown also drain
+  late control startups; failed process cleanup remains an admission barrier.
+- Project native `completed` to `ThreadGoal.status:'complete'`; copy active/paused,
+  objective, session/thread ID, session-local `objectiveId`, turnCount as turns,
+  pauseReason/completionSummary as lastReason, and `source:'native'`. A supplied
+  native creditLimit supplies `aiCreditLimit` and `aiCreditsUsed`; never map these
+  to tokenBudget, tokensUsed, USD or elapsed time. Native state has no timestamps.
+  Emit canonical `goal_updated` after command admission and after root idle (also
+  for normal chat). Idle alone is never goal achievement. Native errors retain
+  their stream error; failure/Stop cannot fabricate achievement. Background work
+  must drain before the owned stream closes, even after objective completion.
+- Lifecycle cards use the existing route/stream persistence. Copilot terminal-card
+  dedupe includes native session identity and objectiveId, so replacing the same text is still a distinct goal.
+  Clear is unsupported: CLI 1.0.105 reports its removal; deleting the objective
+  workspace file does not clear canonical runtime state and is forbidden as a
+  substitute. Desktop/mobile hide Clear, expose a labeled **Fresh AI credit limit**
+  on paused goals, validate before resume, label native **AI credits** separately,
+  and omit an unreported elapsed timer. No arbitrary resume budget is selected. `goalEventPersistence.ts` serializes Copilot terminal
+  check/append across polling and stream completion, so exactly one caller emits
+  a newly saved card. Normal-idle close races drain before a read-only cold retry;
+  cancellation/reset failures do not retry model work. Other backends retain
+  per-stream goal-card persistence and unconditional accepted pause cards, so
+  repeated Codex objectives still receive one achievement per run.
+
+The browser-safe resume request and limit validator live in `src/contracts/goals.ts`.
+Native fixture evidence uses fixed local responses, not hosted model judgment or
+billing certification. See the [versioned evaluation](research/copilot-sdk-parity-evaluation.md)
+and [ADR-0098](adr/0098-connect-copilot-interactive-sessions-through-an-owned-sdk-runtime.md).
 
 ### Copilot SDK runtime foundation
 

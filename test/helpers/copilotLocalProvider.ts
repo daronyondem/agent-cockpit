@@ -65,6 +65,14 @@ console.log('Updated fixture context from listed sources.');`;
         }
         const toolMessages = request.messages.filter(message => message.role === 'tool');
         const lastUser = String(request.messages.filter(message => message.role === 'user').at(-1)?.content || '');
+        if (text.includes('COPILOT_UI_GOAL')) {
+          if (text.includes('COPILOT_UI_GOAL_PAUSE') && !fs.existsSync(path.join(workspace, 'ui-goal-release'))) {
+            const quote = (value: string) => `'${value.replace(/'/g, `'\\''`)}'`;
+            const program = `const fs=require('fs');fs.writeFileSync(${JSON.stringify(path.join(workspace, 'ui-goal-worker.pid'))},String(process.pid));setTimeout(()=>fs.writeFileSync(${JSON.stringify(path.join(workspace, 'ui-goal-worker-finished'))},'unexpected'),45000);`;
+            call('bash', { command: `${quote(process.execPath)} -e ${quote(program)}`, description: 'Goal checkpoint worker', initial_wait: 1000 });
+          } else call('task_complete', { summary: 'COPILOT_UI_GOAL_VERIFIED' });
+          return;
+        }
         const child = /COPILOT_UI_CHILD_(BACKGROUND|STOP)$/.exec(lastUser)?.[1];
         if (child) {
           if (!toolMessages.length) {
