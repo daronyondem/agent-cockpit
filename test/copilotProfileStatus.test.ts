@@ -2,7 +2,9 @@ import { startCopilotSdkRuntime } from '../src/services/backends/copilotSdkRunti
 import { probeCopilotProfile } from '../src/services/backends/copilotProfileStatus';
 import type { CliProfile } from '../src/types';
 
-jest.mock('../src/services/backends/copilotSdkRuntime', () => ({ startCopilotSdkRuntime: jest.fn() }));
+jest.mock('../src/services/backends/copilotSdkRuntime', () => ({
+  ...jest.requireActual('../src/services/backends/copilotSdkRuntime'), startCopilotSdkRuntime: jest.fn(),
+}));
 
 const profile: CliProfile = { id: 'copilot-check', name: 'Copilot', harness: 'copilot', authMode: 'server-configured', createdAt: '', updatedAt: '' };
 const start = jest.mocked(startCopilotSdkRuntime);
@@ -55,4 +57,11 @@ test('releases the runtime when native auth verification fails', async () => {
   getAuthStatus.mockRejectedValue(new Error('Auth status failed'));
   await expect(probeCopilotProfile(profile, new AbortController().signal)).rejects.toThrow('Auth status failed');
   expect(stop).toHaveBeenCalledTimes(1);
+});
+
+test('marks unproved probe cleanup so guided auth retains its admission barrier', async () => {
+  stop.mockRejectedValue(new Error('Worker survived'));
+  await expect(probeCopilotProfile(profile, new AbortController().signal)).rejects.toMatchObject({
+    message: expect.stringContaining('probe cleanup failed'), cause: expect.any(Error),
+  });
 });

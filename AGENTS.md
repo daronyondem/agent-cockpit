@@ -242,6 +242,17 @@ and the profile-auth route tests for credential/catalog checks. Preserve the
 distinction between installed CLI, authenticated credentials and enabled-model
 access; static fallback metadata must not overwrite native access failures.
 Await auth-service shutdown so pending SDK probes cannot outlive server cleanup.
+Keep guided shared-terminal device login in `copilotDeviceAuth.ts`. Serialize
+login across all Copilot profiles and drain cancelled login/probe trees before
+replacement or shutdown; unproved cleanup must retain its admission barrier.
+Invalidate owned catalog/quota caches after every auth outcome. Auth cleanup
+failures must not prevent the chat router/server from draining other owners. Never claim
+account isolation from a config home or automatically approve native plaintext
+credential storage. Review `test/copilotDeviceAuth.test.ts` and
+`test/chat.copilotAuth.test.ts`; run `npm run e2e:copilot-auth` for native
+logged-out/device-code/cancellation checks. That opt-in suite uses temporary
+auth and never authorizes the code, so it does not certify hosted entitlement,
+successful OAuth completion or two-account isolation.
 Goal routing uses pure `getGoalCapability({cliProfile})`, not model discovery on
 polls. Keep Copilot native projection/commands in `copilotGoals.ts` and controls
 inside the conversation owner. Polling and streams must share the atomic

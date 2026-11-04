@@ -2,7 +2,11 @@ import type { BackendMetadata } from '../src/contracts/responses';
 
 type Client = {
   getCliProfileMetadata(id: string): Promise<BackendMetadata>;
-  settings: { testCliProfile(id: string): Promise<unknown> };
+  settings: {
+    testCliProfile(id: string): Promise<unknown>;
+    getCliProfileAuthJob(id: string): Promise<unknown>;
+    cancelCliProfileAuth(id: string): Promise<unknown>;
+  };
 };
 describe('browser profile metadata cache', () => {
   let api: Client;
@@ -68,5 +72,33 @@ describe('browser profile metadata cache', () => {
     await expect(api.getCliProfileMetadata('a')).rejects.toThrow('temporarily unavailable');
     expect((await api.getCliProfileMetadata('a')).id).toBe('copilot');
     expect(metadataCalls()).toBe(3);
+  });
+
+  test.each([
+    ['getCliProfileAuthJob', 'running', 'copilot', false],
+    ['getCliProfileAuthJob', 'succeeded', 'copilot', true],
+    ['getCliProfileAuthJob', 'failed', 'copilot', true],
+    ['getCliProfileAuthJob', 'cancelled', 'copilot', true],
+    ['getCliProfileAuthJob', 'succeeded', 'codex', false],
+    ['cancelCliProfileAuth', 'cancelled', 'copilot', true],
+  ] as const)('%s invalidates shared catalogs for %s/%s=%s', async (method, status, harness, invalidate) => {
+    await api.getCliProfileMetadata('a');
+    fetcher.mockImplementationOnce(async () => response({ job: { id: 'job', harness, status } }));
+    await api.settings[method]('job');
+    await api.getCliProfileMetadata('a');
+    expect(metadataCalls()).toBe(invalidate ? 2 : 1);
+  });
+
+  test('a catalog reply from before shared auth completed cannot overwrite the new account result', async () => {
+    await api.getCliProfileMetadata('warm');
+    let finish!: (value: unknown) => void;
+    fetcher.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+    const old = api.getCliProfileMetadata('a');
+    fetcher.mockImplementationOnce(async () => response({ job: { harness: 'copilot', status: 'succeeded' } }));
+    await api.settings.getCliProfileAuthJob('job');
+    fetcher.mockImplementationOnce(async () => response({ backend: { id: 'copilot', label: 'new login', models: [] } }));
+    await api.getCliProfileMetadata('a');
+    finish(response({ backend: { id: 'copilot', label: 'old login', models: [] } })); await old;
+    expect((await api.getCliProfileMetadata('a')).label).toBe('new login');
   });
 });

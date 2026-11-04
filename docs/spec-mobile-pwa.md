@@ -354,3 +354,14 @@ in scroll-follow signatures; cards alone keep the streaming response visible.
 Already-delivered files are persisted by the server before the frame is sent.
 Normal FILE_DELIVERY cards and the composer remain available. No PWA manifest,
 service-worker, static public/mobile, or installation behavior changes.
+
+### Copilot guided auth impact
+
+Copilot device login is managed in the full web app's Global Settings → CLI
+Profiles, like the existing account-auth administration flows. The mobile PWA
+continues selecting shared self-configured Copilot profiles; it does not expose
+an independent-account/login screen or store credentials. No mobile request,
+manifest, service-worker or public/mobile asset contract changes are needed.
+The full web auth controls are verified at desktop and narrow browser widths;
+that narrow test is not a mobile-PWA auth feature. Existing desktop/mobile chat
+qualification continues covering profile selection, reload and native workflows.

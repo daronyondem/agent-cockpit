@@ -24,7 +24,10 @@ Copilot profile checks use the official SDK through a Cockpit-owned headless
 process to distinguish installation, authenticated credentials and enabled-model
 catalog access. A denied catalog remains an error even when credentials are
 recognized. Profile-scoped discovery also populates the chat picker, with an explicit
-fallback on failure. Checks do not perform inference or manage login; named profiles still share terminal auth. Normal chat uses the owned SDK
+fallback on failure. Checks do not perform inference. **Authenticate** runs the
+native device-code login with cancellation, awaited cleanup and fresh
+credential/catalog verification; named profiles still share terminal auth.
+Normal chat uses the owned SDK
 conversation layer; opaque custom command overrides and restricted one-shots
 retain JSONL. SDK questions, explicit steering and grouped delegated work are
 integrated in desktop/mobile. Native goals support set/status/pause/resume with explicit fresh AI-credit limits on resume; Clear and plan mode remain unavailable. Resume, per-turn disjoint accounting and delegated usage

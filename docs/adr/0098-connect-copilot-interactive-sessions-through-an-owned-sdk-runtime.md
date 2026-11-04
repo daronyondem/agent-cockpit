@@ -12,6 +12,14 @@ affects:
   - test/copilotJsonRpc.test.ts
   - src/services/backends/copilotRuntime.ts
   - src/services/backends/copilotProfileStatus.ts
+  - src/services/backends/copilotDeviceAuth.ts
+  - test/copilotDeviceAuth.test.ts
+  - test/chat.copilotAuth.test.ts
+  - test/copilotAuth.e2e.test.ts
+  - scripts/run-copilot-auth-compat.ts
+  - web/AgentCockpitWeb/src/screens/settingsScreen.jsx
+  - web/AgentCockpitWeb/src/api.js
+  - test/frontendProfileMetadataCache.test.ts
   - src/services/backends/copilotConversations.ts
   - src/services/backends/copilot.ts
   - src/services/backends/copilotUsage.ts
@@ -113,9 +121,14 @@ lives in copilotRuntime.ts.
 
 Use a temporary owned runtime for profile credential/catalog verification first.
 Installation, authenticated credentials and enabled-model access are independent
-results: a static fallback model list cannot certify account access. Keep login
-in the terminal and shared auth unchanged until separate account-isolation work
-proves the native behavior. Abort and await active checks during server shutdown.
+results: a static fallback model list cannot certify account access. Guided
+login runs the native device-code command against shared terminal auth, with
+one cross-profile reservation and awaited descendant cleanup before fresh SDK
+verification. Cancel/timeout cannot accept late success; unproved cleanup keeps
+the reservation. Clear model/quota caches before releasing it. Do not invent
+account isolation from COPILOT_HOME: native keychain credentials are shared,
+and independent profiles require genuine two-account proof. Abort and await
+active checks/login work during server shutdown.
 
 Cockpit launches the selected CLI with `--headless --no-auto-update --log-level
 none` through spawnCopilotProcess. The process owns an ephemeral loopback

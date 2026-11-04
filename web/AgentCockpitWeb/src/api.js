@@ -423,6 +423,13 @@
     state._profileMetadataPromise.clear();
   }
 
+  function invalidateCompletedCopilotAuth(data){
+    if (data?.job?.harness === 'copilot' && data.job.status !== 'running') {
+      clearProfileMetadataCache();
+    }
+    return data;
+  }
+
   function getCliProfileMetadata(profileId){
     if (!profileId) return Promise.reject(new Error('profileId is required'));
     const cached = state._profileMetadataCache.get(profileId);
@@ -1120,11 +1127,11 @@
     }),
     getCliProfileAuthJob: (jobId) => chatFetch(
       'cli-profiles/auth-jobs/' + encodeURIComponent(jobId),
-    ).then(r => r.json()),
+    ).then(r => r.json()).then(invalidateCompletedCopilotAuth),
     cancelCliProfileAuth: (jobId) => chatFetch(
       'cli-profiles/auth-jobs/' + encodeURIComponent(jobId) + '/cancel',
       { method: 'POST', body: {} },
-    ).then(r => r.json()),
+    ).then(r => r.json()).then(invalidateCompletedCopilotAuth),
   };
 
   const AuthApi = {

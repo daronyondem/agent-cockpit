@@ -12,7 +12,7 @@ not hosted model quality or Copilot account access.
 | Surface | Evidence | Remaining qualification |
 | --- | --- | --- |
 | Headless protocol | SDK getStatus reports CLI 1.0.105/protocol 3 | Real Windows/Linux CLI runs |
-| Account status | Empty auth reports isAuthenticated:false; normal terminal GitHub CLI credentials report true | Successful hosted access, expired credentials and two-account cases |
+| Account status and login | Empty auth reports isAuthenticated:false; normal GitHub CLI credentials report true; guided shared device login and native cancellation are implemented | Successful hosted OAuth/access, real expired credentials, independent accounts and native Windows/Linux auth |
 | Catalog | models.list rejects unauthenticated access; normal authenticated credentials return an explicit HTTP 403 | Successful account-dependent model lists |
 | Session create/resume | Same native ID resumes and answers another prompt; JSONL-created session resumes through SDK with original history; facade dispatch uses SDK | Hosted account and platform qualification |
 | Conversation owner | Production facade cold-resumes ID/history across owned processes; cancellation reaps a real tool worker before immediate replacement | Windows/Linux SDK qualification |
@@ -426,3 +426,61 @@ pass. Reports retain f6c694e plus dirty state. The scoped public JSON-RPC
 compatibility layer also has a deterministic actual-SDK subprocess exit check
 for a truncated frame; this addresses a real reader timer leak exposed during
 media qualification, independently of model output quality.
+
+## Guided shared-terminal login (2026-11-04)
+
+Pinned Copilot 1.0.105 `login --help` advertises `--device-code`, with native
+OAuth credential storage in the OS credential store and config fallback when
+that store is unavailable. `help environment` confirms token precedence and
+that COPILOT_HOME changes configuration/state storage. GitHub's
+[authentication documentation](https://docs.github.com/en/copilot/how-tos/copilot-cli/set-up-copilot-cli/authenticate-copilot-cli)
+identifies the keychain service as `copilot-cli` and describes shared account
+switching. These facts do not establish credential isolation between config
+homes, so Settings continues offering only shared self-configured profiles.
+
+A temporary-HOME native probe confirmed that
+`--no-auto-update login --device-code` prints the verification URL and code to
+piped stdout with ignored stdin. It was cancelled before browser authorization;
+normal credentials were not replaced. Production guided auth now uses that
+native command through the existing process scope and job endpoints, drains
+login descendants before a fresh SDK credential/catalog probe, and invalidates
+catalog/quota caches on every outcome. Custom-provider credentials remain a
+separate server configuration path. No native plaintext-storage consent is
+automatically accepted.
+
+Two opt-in auth cases pass on CLI 1.0.105 / SDK 1.0.28 / Node 22.23.4 / macOS
+arm64 in report `copilot-auth-compat-d5LDcs`: logged-out fresh status and two real
+device-code/cancel cycles followed by another logged-out status. All eight
+recorded root/descendant PIDs exited. `deviceLoginAuthorized`,
+`hostedEntitlementVerified` and `twoAccountsVerified` are explicitly false.
+The first run (`copilot-auth-compat-fpUxDT`) exposed a test assumption that a dead
+PID meant the service reservation had already drained; immediate replacement
+now awaits the completion boundary, matching the owned cleanup guarantee.
+
+Normal-CI executable-peer HTTP tests exercise successful login verification,
+expired/missing credentials, denied HTTP 403 access, no inference/session work,
+shared profile persistence and detached-child cancellation/retry. These are
+protocol fixtures, not real hosted accounts. Direct tests cover shutdown,
+timeout/late success, split-token redaction and cleanup failure barriers.
+Browser auth state cases use injected job responses and retain that limitation
+separately from native CLI evidence. Successful OAuth completion, entitlement,
+real expired credentials, genuine independent accounts, and native Linux/Windows
+keychain/storage paths remain outstanding.
+
+A fresh read-only check of the normal shared terminal account on 2026-11-04
+still reports authenticated credentials but model catalog HTTP 403
+(`unauthorized: not authorized to use this Copilot feature`). No hosted inference
+was attempted. No Docker/Colima, Multipass, Parallels or VirtualBox CLI is
+available on this macOS host, so it supplies no new native Linux/Windows result.
+The pinned cross-platform SDK job is configured in the test workflow but has
+not run this local branch; configured jobs are not qualification evidence.
+
+Final shared-auth qualification passes 3,052 normal-CI cases, 34 native SDK
+cases (`copilot-sdk-compat-DX4F2G`), two native auth cases
+(`copilot-auth-compat-A0bPMd`), six native Memory/Context workflows and 40 browser
+cases (`cockpit-copilot-ui-Ijs6Wz`, 71 SDK launches). The auth runner's CLI
+metadata launch now uses the shared runtime resolver, and the final router
+shutdown regression proves auth cleanup failure cannot skip other backend
+cleanup. These results do not add native KB/Routine, Windows/Linux, real expired
+credential or successful hosted-account evidence. See the qualified checkpoint
+in [the testing spec](../spec-testing.md#copilot-shared-authentication-qualification).

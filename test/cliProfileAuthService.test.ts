@@ -7,7 +7,9 @@ import { CliProfileAuthService, redactCliAuthText, type CliAuthJobSnapshot } fro
 import { probeCopilotProfile } from '../src/services/backends/copilotProfileStatus';
 import type { CliProfile, Settings } from '../src/types';
 
-jest.mock('../src/services/backends/copilotProfileStatus', () => ({ probeCopilotProfile: jest.fn() }));
+jest.mock('../src/services/backends/copilotProfileStatus', () => ({
+  ...jest.requireActual('../src/services/backends/copilotProfileStatus'), probeCopilotProfile: jest.fn(),
+}));
 
 class FakeChild extends EventEmitter {
   stdout = new EventEmitter();
@@ -196,7 +198,6 @@ describe('CliProfileAuthService', () => {
         harness: 'copilot', available: true, authenticated: false, status: 'not-authenticated', modelsAvailable: false,
       });
       expect(spawn).toHaveBeenCalledWith(path.join(tmpDir, 'copilot'), ['--version'], expect.any(Object));
-      await expect(service.startAuth(profile)).rejects.toThrow('Remote authentication is not supported for GitHub Copilot');
     });
 
     test('reports Copilot version-check failures as errors rather than logged-out accounts', async () => {

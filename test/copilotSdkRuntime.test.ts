@@ -1,7 +1,8 @@
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
-import { startCopilotSdkRuntime } from '../src/services/backends/copilotSdkRuntime';
+import { CopilotRuntimeCleanupError, startCopilotSdkRuntime } from '../src/services/backends/copilotSdkRuntime';
+import { CopilotProcessScope } from '../src/services/backends/copilotProcess';
 import type { CopilotCliRuntime } from '../src/services/backends/copilotRuntime';
 
 const alive = (pid: number) => { try { process.kill(pid, 0); return true; } catch { return false; } };
@@ -129,5 +130,22 @@ server.listen(0,'127.0.0.1',()=>{
     expect((await active.closed).message).toContain('Copilot runtime exited');
     await active.stop();
     expect(alive(calls()[0].pid)).toBe(false);
+  }, 15000);
+
+  test.each(['startup', 'active'])('classifies failed %s cleanup so authentication cannot admit another worker', async phase => {
+    const stop = CopilotProcessScope.prototype.stop;
+    const spy = jest.spyOn(CopilotProcessScope.prototype, 'stop').mockImplementation(async function (this: CopilotProcessScope) {
+      await stop.call(this); // The negative fixture still terminates its real process.
+      throw new Error('Fixture could not prove cleanup');
+    });
+    try {
+      if (phase === 'startup') {
+        await expect(startCopilotSdkRuntime(runtime('exit'), dir)).rejects.toBeInstanceOf(CopilotRuntimeCleanupError);
+      } else {
+        const owned = await startCopilotSdkRuntime(runtime(), dir);
+        await expect(owned.stop()).rejects.toBeInstanceOf(CopilotRuntimeCleanupError);
+      }
+      expect(alive(calls()[0].pid)).toBe(false);
+    } finally { spy.mockRestore(); }
   }, 15000);
 });

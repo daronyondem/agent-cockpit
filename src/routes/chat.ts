@@ -4,6 +4,7 @@ import path from 'path';
 import type { ChatService } from '../services/chatService';
 import type { BackendRegistry } from '../services/backends/registry';
 import type { BaseBackendAdapter } from '../services/backends/base';
+import { CopilotAdapter } from '../services/backends/copilot';
 import type { UpdateService } from '../services/updateService';
 import type { CliUpdateService } from '../services/cliUpdateService';
 import type { ClaudePlanUsageService } from '../services/claudePlanUsageService';
@@ -671,7 +672,12 @@ export function createChatRouter({ chatService, backendRegistry, updateService, 
   const pendingMessageSends = streamSupervisor.pendingMessageSends;
   const streamJobs = streamSupervisor.registry;
   const memoryWatcher = new MemoryWatcher();
-  const cliProfileAuth = new CliProfileAuthService(chatService.baseDir);
+  const cliProfileAuth = new CliProfileAuthService(chatService.baseDir, {
+    onCopilotAuthChanged: async () => {
+      const adapter = backendRegistry.get('copilot');
+      if (adapter instanceof CopilotAdapter) await adapter.refreshAccountState();
+    },
+  });
   // Per-conversation map of last-known memory file fingerprints (filename → sha-ish)
   // used by the watcher to compute `changedFiles` for the `memory_update` WS frame.
   // Cleared when the watcher is unwatched so a re-watched conversation starts fresh.
@@ -1558,7 +1564,12 @@ export function createChatRouter({ chatService, backendRegistry, updateService, 
     sessionFinalizers.stop();
     memoryWatcher.unwatchAll();
     memoryFingerprints.clear();
-    await cliProfileAuth.shutdown();
+    try {
+      await cliProfileAuth.shutdown();
+    } catch (err: unknown) {
+      // Continue to updater and backend shutdown even when auth cleanup is unproved.
+      log.warn('Failed to clean up CLI authentication during shutdown', { error: err });
+    }
     if (updateService) updateService.stop();
     if (cliUpdateService) cliUpdateService.stop();
   }

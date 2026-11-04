@@ -122,21 +122,26 @@ validation.
 
 ## GitHub Copilot
 
-Install the GitHub Copilot CLI and authenticate it on the server machine before
-selecting GitHub Copilot as a backend:
+Install the GitHub Copilot CLI on the server machine:
 
 ```bash
 npm install -g @github/copilot
 ```
 
-Run `copilot login` (or start `copilot` and use `/login`) to sign in
-with your GitHub account. Agent Cockpit reuses that CLI login from `~/.copilot`.
+Use **Settings → CLI Profiles → Authenticate** to start Copilot's device-code
+login, then open the displayed URL and enter its code. **Cancel** stops the
+login. You can also run `copilot login` (or start `copilot` and use `/login`)
+in a terminal. Agent Cockpit reuses the server's native CLI credentials.
 Use **Check GitHub Copilot** on the profile to check installation,
 credentials and model catalog access. Credentials can be recognized while
 catalog access is denied; Settings reports that distinction and the returned
 error. This check does not run paid inference or prove access to every model.
-Login remains a terminal operation. Multiple named profiles still share the
-same terminal login; they are not independent accounts.
+Authentication succeeds only after a fresh process verifies credentials and
+model catalog access. If the CLI needs interactive credential-storage consent,
+finish login in a terminal. Custom providers use their server-configured provider
+credentials instead of this GitHub login. Environment tokens take precedence.
+Multiple named profiles share the same terminal login; they are not independent
+accounts.
 
 Agent Cockpit uses owned SDK chat sessions with visible thinking, tools,
 questions, steering, grouped delegated work and later-session resume. Opaque

@@ -46,6 +46,48 @@ function savedArtifacts(saved: { messages: Array<{ contentBlocks?: Array<{ type:
   return saved.messages.flatMap(message => (message.contentBlocks || []).flatMap(block => block.type === 'artifact' && block.artifact ? [block.artifact] : []));
 }
 
+for (const narrow of [false, true]) test(`Copilot guided auth renders cancellation, denied access and success at ${narrow ? 'narrow' : 'desktop'} width`, async ({ page }) => {
+  // UI state coverage uses auth-job responses; real RPC and native login are tested separately.
+  let state: 'running' | 'cancelled' | 'failed' | 'succeeded' = 'running';
+  let starts = 0;
+  const snapshot = () => ({ id: 'ui-auth', profileId, profileName: 'Copilot browser fixture', harness: 'copilot',
+    status: state, events: [{ type: 'stdout', text: 'To authenticate, visit https://github.com/login/device and enter code ABCD-1234' },
+      ...(state === 'failed' ? [{ type: 'error', text: 'Credentials found, but model access did not verify: HTTP 403.' }] : [])] });
+  await page.route(`**/api/chat/cli-profiles/${profileId}/auth/start`, async route => {
+    starts++; state = 'running'; await route.fulfill({ json: { job: snapshot() } });
+  });
+  await page.route('**/api/chat/cli-profiles/auth-jobs/ui-auth', route => route.fulfill({ json: { job: snapshot() } }));
+  await page.route('**/api/chat/cli-profiles/auth-jobs/ui-auth/cancel', async route => {
+    state = 'cancelled'; await route.fulfill({ json: { job: snapshot() } });
+  });
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  await page.goto('/v2/');
+  await page.getByTitle('Settings', { exact: true }).click();
+  await page.getByRole('navigation', { name: 'Settings sections' }).getByRole('button', { name: 'CLI Profiles', exact: true }).click();
+  const card = page.locator('.cli-card').filter({ hasText: 'Copilot browser fixture' });
+  if (await card.locator('.cli-card-head').getAttribute('aria-expanded') !== 'true') await card.locator('.cli-card-head').click();
+  if (narrow) await page.setViewportSize({ width: 390, height: 844 });
+  await expect(card).toContainText('All Copilot profiles share');
+  await expect(card).toContainText('Separate accounts per profile are not supported');
+  const authenticate = card.getByRole('button', { name: 'Authenticate', exact: true });
+  await authenticate.click();
+  await expect(card.locator('.cli-auth-log')).toContainText('ABCD-1234');
+  await expect(authenticate).toBeDisabled();
+  await expect(card.getByRole('button', { name: 'Cancel', exact: true })).toBeVisible();
+  await page.screenshot({ path: test.info().outputPath(`copilot-auth-${narrow ? 'narrow' : 'desktop'}.png`), fullPage: true });
+  await card.getByRole('button', { name: 'Cancel', exact: true }).click();
+  await expect(card.locator('.cli-auth-status')).toHaveText('cancelled');
+  await expect(authenticate).toBeEnabled();
+  await authenticate.click(); await expect(card.locator('.cli-auth-status')).toHaveText('running');
+  state = 'failed';
+  await expect(card.locator('.cli-auth-status')).toHaveText('failed');
+  await expect(card.locator('.cli-auth-log')).toContainText('HTTP 403');
+  await authenticate.click(); await expect(card.locator('.cli-auth-status')).toHaveText('running');
+  state = 'succeeded';
+  await expect(card.locator('.cli-auth-status')).toHaveText('succeeded');
+  expect(starts).toBe(3);
+});
+
 for (const mobile of [false, true]) {
   const client = mobile ? 'mobile' : 'desktop';
   const assistant = mobile ? '.message.assistant' : '.msg-agent';

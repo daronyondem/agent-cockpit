@@ -9,6 +9,7 @@ import { resolveOpenCodeCliRuntime } from './backends/opencode';
 import { grokAuthenticationStatus, resolveGrokCliRuntime } from './backends/grokRuntime';
 import { resolveCopilotCliRuntime } from './backends/copilot';
 import { probeCopilotProfile } from './backends/copilotProfileStatus';
+import { CopilotDeviceAuthJob } from './backends/copilotDeviceAuth';
 import { buildCliCommandInvocation, type CliCommandResolution } from './cliCommandResolver';
 import { isSetupAccountCliProfile } from './cliProfiles';
 
@@ -75,6 +76,8 @@ export class CliProfileAuthService {
   private readonly _statusPollIntervalMs: number;
   private readonly _jobs = new Map<string, { snapshot: CliAuthJobSnapshot; child?: ChildProcess; timeout?: NodeJS.Timeout }>();
   private readonly _copilotChecks = new Map<AbortController, Promise<void>>();
+  private _copilotLogin?: CopilotDeviceAuthJob;
+  private readonly _onCopilotAuthChanged?: () => Promise<void>;
   private _closed = false;
 
   constructor(baseDir: string, opts: {
@@ -82,12 +85,14 @@ export class CliProfileAuthService {
     authTimeoutMs?: number;
     statusPollTimeoutMs?: number;
     statusPollIntervalMs?: number;
+    onCopilotAuthChanged?: () => Promise<void>;
   } = {}) {
     this._baseDir = baseDir;
     this._spawn = opts.spawn || spawn;
     this._authTimeoutMs = opts.authTimeoutMs ?? DEFAULT_AUTH_TIMEOUT_MS;
     this._statusPollTimeoutMs = opts.statusPollTimeoutMs ?? DEFAULT_STATUS_POLL_TIMEOUT_MS;
     this._statusPollIntervalMs = opts.statusPollIntervalMs ?? DEFAULT_STATUS_POLL_INTERVAL_MS;
+    this._onCopilotAuthChanged = opts.onCopilotAuthChanged;
   }
 
   defaultConfigDir(profile: Pick<CliProfile, 'id'>): string {
@@ -104,6 +109,8 @@ export class CliProfileAuthService {
     const profile = profiles.find(candidate => candidate.id === profileId);
     if (!profile) throw new Error(`CLI profile not found: ${profileId}`);
     this._assertCanAuth(profile);
+
+    if (profile.harness === 'copilot') return { settings, profile, changed: false };
 
     if (isSetupAccountCliProfile(profile)) {
       const nextProfile = withoutSetupAuthHome(profile);
@@ -210,6 +217,13 @@ export class CliProfileAuthService {
   async startAuth(profile: CliProfile): Promise<CliAuthJobSnapshot> {
     if (this._closed) throw new Error('CLI authentication service is shutting down.');
     this._assertCanAuth(profile);
+    if (profile.harness === 'copilot') {
+      if (this._copilotLogin && this._copilotLogin.snapshot.status !== 'running') {
+        await this._copilotLogin.completion;
+        if (this._closed) throw new Error('CLI authentication service is shutting down.');
+      }
+      return this._startCopilotAuth(profile);
+    }
     for (const { snapshot } of this._jobs.values()) {
       if (snapshot.profileId === profile.id && snapshot.status === 'running') {
         throw new Error(`Authentication is already running for ${profile.name}`);
@@ -284,12 +298,15 @@ export class CliProfileAuthService {
     entry.snapshot.updatedAt = new Date().toISOString();
     entry.snapshot.error = 'Authentication cancelled.';
     this._addEvent(entry.snapshot, 'info', 'Authentication cancelled.');
+    if (this._copilotLogin?.snapshot === entry.snapshot) this._copilotLogin.controller.abort();
     entry.child?.kill('SIGTERM');
     return this._cloneSnapshot(entry.snapshot);
   }
 
   shutdown(): Promise<void> {
     this._closed = true;
+    const login = this._copilotLogin;
+    login?.controller.abort();
     for (const [jobId, entry] of this._jobs) {
       if (entry.snapshot.status !== 'running') continue;
       if (entry.timeout) clearTimeout(entry.timeout);
@@ -301,7 +318,19 @@ export class CliProfileAuthService {
     }
     const checks = [...this._copilotChecks.values()];
     for (const controller of this._copilotChecks.keys()) controller.abort();
-    return Promise.all(checks).then(() => {});
+    return Promise.all([...checks, ...(login ? [login.completion] : [])]).then(() => {});
+  }
+
+  private _startCopilotAuth(profile: CliProfile): CliAuthJobSnapshot {
+    if (this._copilotLogin) throw new Error('Copilot authentication is already running or cleaning up. All Copilot profiles share the terminal login.');
+    const job = new CopilotDeviceAuthJob(profile, this._authTimeoutMs,
+      (snapshot, type, text) => this._addEvent(snapshot, type, text), redactCliAuthText, this._onCopilotAuthChanged);
+    this._copilotLogin = job;
+    this._jobs.set(job.snapshot.id, { snapshot: job.snapshot });
+    this._trimJobs();
+    // Failed cleanup keeps the shared-login admission barrier until server restart.
+    void job.completion.then(() => { this._copilotLogin = undefined; }, () => {});
+    return this._cloneSnapshot(job.snapshot);
   }
 
   private async _checkCopilotAccess(profile: CliProfile, base: CliAuthCheckResult): Promise<CliAuthCheckResult> {
@@ -336,17 +365,19 @@ export class CliProfileAuthService {
   }
 
   private _assertCanAuth(profile: CliProfile): void {
-    if (profile.harness !== 'codex' && profile.harness !== 'claude-code' && profile.harness !== 'grok-build') {
+    if (profile.harness !== 'codex' && profile.harness !== 'claude-code' && profile.harness !== 'grok-build' && profile.harness !== 'copilot') {
       throw new Error(profile.harness === 'opencode'
         ? 'Remote authentication is not supported for OpenCode profiles yet. Configure OpenCode with opencode auth login.'
-        : profile.harness === 'copilot'
-          ? 'Remote authentication is not supported for GitHub Copilot profiles yet. Sign in from a terminal with copilot, then run /login.'
-          : 'Remote authentication is not supported for Kiro profiles yet.');
+        : 'Remote authentication is not supported for Kiro profiles yet.');
     }
     if (profile.disabled) {
       throw new Error(`CLI profile is disabled: ${profile.name}`);
     }
-    if (profile.authMode !== 'account') {
+    if (profile.harness === 'copilot') {
+      if (profile.authMode !== 'server-configured' || profile.configDir || profile.env) {
+        throw new Error('Copilot guided authentication requires a self-configured profile using shared terminal credentials. Account isolation is not supported.');
+      }
+    } else if (profile.authMode !== 'account') {
       throw new Error('Remote authentication is only available for account profiles.');
     }
   }
@@ -611,6 +642,7 @@ export function redactCliAuthText(input: string): string {
     .replace(/(access[_-]?token["']?\s*[:=]\s*["']?)[A-Za-z0-9._~+/-]+=*/gi, '$1[REDACTED]')
     .replace(/(refresh[_-]?token["']?\s*[:=]\s*["']?)[A-Za-z0-9._~+/-]+=*/gi, '$1[REDACTED]')
     .replace(/(api[_-]?key["']?\s*[:=]\s*["']?)[A-Za-z0-9._~+/-]+=*/gi, '$1[REDACTED]')
+    .replace(/\b(?:gh[pousr]_|github_pat_)[A-Za-z0-9_]+/g, '[REDACTED]')
     .replace(/(sk-[A-Za-z0-9]{8})[A-Za-z0-9_-]+/g, '$1[REDACTED]')
     .replace(/\bxai-[A-Za-z0-9_-]{20,}/g, 'xai-[REDACTED]');
 }

@@ -6,6 +6,9 @@ import { spawnCopilotProcess } from './copilotProcess';
 import type { CopilotCliRuntime } from './copilotRuntime';
 import { connectCopilotClient } from './copilotJsonRpc';
 
+/** Callers must retain admission when owned process termination is unproved. */
+export class CopilotRuntimeCleanupError extends Error {}
+
 export interface CopilotSdkRuntime {
   client: CopilotClient;
   process: ChildProcess;
@@ -79,6 +82,7 @@ export async function startCopilotSdkRuntime(
         if (client) await deadline<unknown>(failed ? client.forceStop() : client.stop(), 1000, 'Copilot SDK disconnect timed out.').catch(() => {});
       } finally {
         try { await scope.stop(); }
+        catch (cause) { throw new CopilotRuntimeCleanupError('Copilot process cleanup failed.', { cause }); }
         finally {
           if (client) await deadline(client.forceStop(), 1000, 'Copilot SDK close timed out.').catch(() => {});
         }

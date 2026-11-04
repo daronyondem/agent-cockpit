@@ -4,7 +4,7 @@ import type { CliProfile } from '../../src/types';
 import { copilotPng, copilotPdf } from './copilotMediaFixtures';
 
 /** Executable RPC peer, reached through the official SDK and real process scope. */
-export function writeCopilotSdkPeer(dir: string) {
+export function writeCopilotSdkPeer(dir: string, authScenario?: 'success' | 'denied' | 'expired' | 'wait') {
   const command = path.join(dir, 'peer.js');
   const log = path.join(dir, 'peer.jsonl');
   const release = path.join(dir, 'release');
@@ -16,6 +16,17 @@ const log = ${JSON.stringify(log)};
 const release = ${JSON.stringify(release)};
 const record = value => fs.appendFileSync(log, JSON.stringify({pid:process.pid,...value})+'\\n');
 record({method:'spawn',args:process.argv.slice(2)});
+const authScenario = ${JSON.stringify(authScenario || '')};
+const authFile = ${JSON.stringify(path.join(dir, 'authenticated'))};
+if(authScenario && process.argv.includes('login')) {
+ console.log('To authenticate, visit https://github.com/login/device and enter code ABCD-1234');
+ if(authScenario==='wait') {
+  const child=require('child_process').spawn(process.execPath,['-e','setInterval(()=>{},1000)'],{detached:process.platform!=='win32',stdio:'ignore'});
+  record({method:'auth-child',childPid:child.pid});setInterval(()=>{},1000);
+ } else {fs.writeFileSync(authFile,'yes');process.exit(0);}
+ return;
+}
+if(authScenario && process.argv.includes('--version')) {console.log('Copilot fixture 1.0.105');return;}
 if(!process.argv.includes('--headless')) {
  const prompt=process.argv[process.argv.indexOf('-p')+1];
  console.log(JSON.stringify({type:'assistant.message',data:{messageId:'jsonl',content:'jsonl:'+prompt}}));
@@ -38,7 +49,9 @@ net.createServer(socket => {
   record({method,params:method==='connect'?{tokenMatches:params.token===process.env.COPILOT_CONNECTION_TOKEN}:params});
   if(method==='connect') return {protocolVersion:3};
   if(method==='status.get') return {version:'fixture',protocolVersion:3};
+  if(method==='auth.getStatus') return {isAuthenticated:authScenario!=='expired' && fs.existsSync(authFile)};
   if(method==='models.list') {
+   if(authScenario==='denied') throw new rpc.ResponseError(-32603,'GenericFailure, {"kind":"http","status":403,"body":"policy denied"}');
    if(process.env.COPILOT_FIXTURE_CATALOG==='error') throw new rpc.ResponseError(-32603,'Catalog unavailable');
    if(process.env.COPILOT_FIXTURE_CATALOG==='hang') return new Promise(()=>{});
    return {models:JSON.parse(process.env.COPILOT_FIXTURE_MODELS || '[{"id":"gpt-6.1-sol","name":"Sol","capabilities":{"supports":{"reasoningEffort":true,"vision":true}},"supportedReasoningEfforts":["low","high","max"]}]')};

@@ -89,9 +89,11 @@ Native compatibility is verified on Grok Build 1.0.52, macOS arm64. See the
 - owned SDK/headless chat with one process per active turn and native cold resume;
   opaque custom commands and one-shots retain JSONL;
 - self-configured authentication that reuses the `copilot` CLI login under
-  `~/.copilot` (sign in with `copilot login`); the profile check verifies
+  the native terminal credential store (sign in through **Authenticate** or
+  `copilot login`); guided device login supports Cancel/timeout, awaited process
+  cleanup and fresh credential/catalog verification. The profile check verifies
   installation, native credential status and enabled-model catalog access
-  separately, while login remains a terminal operation;
+  separately. Named profiles share auth; independent accounts are unsupported;
 - profile/runtime-scoped model discovery with a clearly labeled curated fallback;
 - default `auto` routing plus explicit account-dependent model selections;
 - reasoning effort through `copilot --reasoning-effort <low|medium|high|xhigh>`

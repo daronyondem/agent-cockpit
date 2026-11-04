@@ -1558,7 +1558,7 @@ function CliProfilesTab({ settings, backends, onPatch, onSave, saving, onValidat
                             ) : isOpenCode ? (
                               <>Configure OpenCode on the server with <code>opencode auth login</code>. This profile selects the OpenCode provider.</>
                             ) : isCopilot ? (
-                              <>Sign in to GitHub Copilot on the server by running <code>copilot</code> and the <code>/login</code> command. This profile reuses that CLI login from <code>~/.copilot</code>.</>
+                              <>Use Authenticate or run <code>copilot login</code> to sign in. All Copilot profiles share terminal auth. Environment tokens take precedence. Separate accounts per profile are not supported.</>
                             ) : isClaudeBedrock ? (
                               <>This Bedrock profile inherits the host's existing <code>{cliSelfConfiguredHome(profile.harness)}</code> directory and applies the environment overrides above at runtime.</>
                             ) : (
@@ -1570,9 +1570,18 @@ function CliProfilesTab({ settings, backends, onPatch, onSave, saving, onValidat
                               <button
                                 type="button"
                                 className="btn"
-                                disabled={saving || authBusy}
+                                disabled={saving || authBusy || authRunning}
                                 onClick={() => checkProfileAuth(profile)}
                               >{isCopilot ? 'Check GitHub Copilot' : 'Check OpenCode'}</button>
+                              {isCopilot ? <>
+                                <button type="button" className="btn primary"
+                                  disabled={saving || authBusy || authRunning}
+                                  onClick={() => startProfileAuth(profile)}
+                                >Authenticate</button>
+                                {authRunning ? <button type="button" className="btn ghost" disabled={authBusy}
+                                  onClick={() => cancelProfileAuth(profile)}
+                                >Cancel</button> : null}
+                              </> : null}
                               <span className={`cli-auth-status ${authRunning ? 'running' : ''}`}>{authStateLabel(authState)}</span>
                             </div>
                           ) : null}

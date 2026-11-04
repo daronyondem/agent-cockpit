@@ -1,6 +1,8 @@
 import type { CliProfile } from '../../types';
 import { resolveCopilotCliRuntime } from './copilotRuntime';
-import { startCopilotSdkRuntime } from './copilotSdkRuntime';
+import { CopilotRuntimeCleanupError, startCopilotSdkRuntime } from './copilotSdkRuntime';
+
+export class CopilotAuthCleanupError extends CopilotRuntimeCleanupError {}
 
 function catalogError(error: unknown): string {
   const message = error instanceof Error ? error.message : String(error);
@@ -27,5 +29,8 @@ export async function probeCopilotProfile(profile: CliProfile, abortSignal: Abor
     } catch (error) {
       return { authenticated: true, modelsAvailable: false, modelCount: 0, modelListError: catalogError(error) };
     }
-  } finally { await runtime.stop(); }
+  } finally {
+    try { await runtime.stop(); }
+    catch (cause) { throw new CopilotAuthCleanupError('Copilot authentication probe cleanup failed. Restart the server before trying again.', { cause }); }
+  }
 }

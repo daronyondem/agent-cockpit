@@ -171,7 +171,7 @@ After a Worktrees enable or disable succeeds, `workspaceSettings.jsx` refreshes 
 - `web/AgentCockpitWeb/src/screens/cliProfileConfigDir.js` — exports `cliConfigDirField(harness)`, the `{ hint, placeholder }` copy for the account-profile **Config directory** field. The hint names the variable that harness's runtime sets from `configDir`: `CODEX_HOME` for Codex, `GROK_HOME` for Grok Build, and `CLAUDE_CONFIG_DIR` otherwise.
 - **GitHub Copilot profile UI** — the Harness selector includes `copilot`
   labeled **GitHub Copilot**. Cards remain self-configured, preserve an optional
-  command override, and hide account config-directory/env/login controls.
+  command override, and hide account config-directory/env controls.
   **Check GitHub Copilot** saves the profile through the shared Settings action,
   then calls `POST /cli-profiles/:id/test`. The server checks installation,
   native credentials and enabled-model catalog access separately. Installed but
@@ -179,8 +179,20 @@ After a Worktrees enable or disable succeeds, `workspaceSettings.jsx` refreshes 
   empty catalog report `authenticated · catalog unavailable`, with the redacted
   failure shown in the check output. `cliProfileAuthState.js` owns this pure
   status-label projection. A transport failure leaves authentication unknown;
-  a successful version check alone never verifies it. Login remains a terminal
-  operation. Shared metadata supplies the avatar, `auto` default model, curated
+  a successful version check alone never verifies it. **Authenticate** saves the
+  self-configured profile and starts the existing auth-job polling flow through
+  `POST /cli-profiles/:id/auth/start`. The log shows the native device URL/code;
+  **Cancel** aborts the job. Check/Authenticate are disabled while starting or
+  running; Cancel remains available during the native wait. Terminal
+  `cancelled`/`failed`/`succeeded` states permit another attempt. A denied catalog
+  leaves the job failed with its access error. The note explains that every
+  Copilot profile shares terminal auth, environment tokens take precedence, and
+  separate accounts are unsupported. The server serializes Cancel-to-restart
+  through cleanup. Terminal Copilot auth polling/cancel responses invalidate the
+  shared browser metadata cache even without a Settings payload; the revision
+  guard prevents earlier catalog replies from restoring the previous account. Browser tests cover these states at desktop/narrow widths
+  with injected auth-job responses; native login/HTTP verification are separate.
+  Shared metadata supplies the avatar, `auto` default model, curated
   explicit models, and model-dependent effort picker; auto/Haiku/Gemini do not show
   effort choices. Text/thinking/tool/session-recovery frames and per-turn
   token/credit counters use the normal desktop stream pipeline. Unsupported

@@ -114,11 +114,15 @@ export class CopilotAdapter extends BaseBackendAdapter {
   }
 
   async getMetadata(options: BackendCallOptions = {}): Promise<BackendMetadata> {
-    if (options.refreshModels) await Promise.all([this.catalog.shutdown(), this.quota.shutdown()]);
+    if (options.refreshModels) await this.refreshAccountState();
     if (this.closed || this.closing) return this.metadata;
     const interactive = copilotChatTransport(options.cliProfile) === 'sdk';
     return { ...this.metadata, capabilities: { ...this.metadata.capabilities, userQuestions: interactive, stdinInput: interactive, agents: interactive, goals: this.getGoalCapability(options) },
       ...await this.catalog.get(options.cliProfile) };
+  }
+
+  async refreshAccountState(): Promise<void> {
+    await Promise.all([this.catalog.shutdown(), this.quota.shutdown()]);
   }
 
   async getQuota(options: BackendCallOptions = {}) {
