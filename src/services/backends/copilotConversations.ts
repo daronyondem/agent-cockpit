@@ -5,7 +5,7 @@ import { resolveCopilotCliRuntime, resolveCopilotWorkingDir } from './copilotRun
 import { startCopilotSdkRuntime, type CopilotSdkRuntime } from './copilotSdkRuntime';
 import { copilotSessionConfig, composePrompt } from './copilotSessionConfig';
 import { createCopilotSdkEventState, reduceCopilotSdkEvent } from './copilotSdkEvents';
-import { copilotTurnUsage, readCopilotUsageBaseline } from './copilotUsage';
+import { copilotTurnUsage, copilotUsageMetrics } from './copilotUsage';
 import { buildNativeSessionRecovery, buildSessionRecoveryEvent, createRecoverySnapshot, isMissingNativeSessionError } from './sessionRecovery';
 
 const log = logger.child({ module: 'copilot-conversations' });
@@ -117,10 +117,6 @@ export class CopilotConversations {
       await this.wait(turn.predecessor || Promise.resolve(), turn);
       const workingDir = resolveCopilotWorkingDir(options.workingDir || this.options.workingDir);
       const runtime = resolveCopilotCliRuntime(options.cliProfile);
-      const emptyBaseline = { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, costUsd: 0 };
-      let baseline = !options.isNewSession && options.externalSessionId
-        ? await this.wait(readCopilotUsageBaseline(options.externalSessionId, runtime.env), turn)
-        : emptyBaseline;
       turn.controller.signal.throwIfAborted();
       turn.startup = this.startRuntime(runtime, workingDir, { abortSignal: turn.controller.signal });
       turn.runtime = await this.wait(turn.startup, turn);
@@ -133,7 +129,10 @@ export class CopilotConversations {
       const notify = () => { turn.wake?.(); };
       const finish = (error?: string, source?: 'transport') => {
         if (complete || !accepting || turn.controller.signal.aborted) return;
-        if (error) queued.push({ type: 'error', error, ...(source ? { source } : {}) });
+        if (error) {
+          state = { ...state, error };
+          queued.push({ type: 'error', error, ...(source ? { source } : {}) });
+        }
         complete = true; notify();
       };
       const onEvent = (event: SessionEvent) => {
@@ -162,7 +161,7 @@ export class CopilotConversations {
             reason: String(error), snapshot, currentPrompt: message });
           yield buildSessionRecoveryEvent(recovery.metadata);
           turn.controller.signal.throwIfAborted();
-          state = createCopilotSdkEventState(); queued.length = 0; complete = false; baseline = emptyBaseline;
+          state = createCopilotSdkEventState(); queued.length = 0; complete = false;
           session = await this.wait(turn.runtime.client.createSession({ ...config, trustWorkingDirectory: 'session' }), turn);
           prompt = composePrompt(recovery.prompt, options.systemPrompt, true);
         }
@@ -173,8 +172,11 @@ export class CopilotConversations {
       turn.controller.signal.throwIfAborted();
       yield { type: 'backend_runtime', externalSessionId: session.sessionId, processId: turn.runtime.process.pid ?? null };
       turn.controller.signal.throwIfAborted();
-      // Startup/resume snapshots describe history, not this prompt's usage.
-      state = { ...state, checkpoint: null };
+      // Read the runtime's reconciled ledger after resume, before this prompt.
+      // This also works when a launcher privately chooses the native auth home.
+      const baseline = await this.readUsage(session, turn);
+      turn.controller.signal.throwIfAborted();
+      if (complete) throw new Error(state.error || 'Copilot session closed before prompt submission.');
       // Completion may arrive before the send acknowledgement. Never enqueue a
       // second request or finish before admission has settled.
       void this.wait(session.send({ prompt }), turn).then(() => {
@@ -187,7 +189,15 @@ export class CopilotConversations {
         else await new Promise<void>(resolve => { turn.wake = resolve; });
       }
       turn.controller.signal.throwIfAborted();
-      if (!state.error && state.checkpoint && baseline) yield { type: 'usage', usage: copilotTurnUsage(state.checkpoint, baseline) };
+      if (!state.error && baseline) {
+        const current = await this.readUsage(session, turn);
+        if (current) {
+          const usage = copilotTurnUsage(current, baseline);
+          if ([usage.inputTokens, usage.outputTokens, usage.cacheReadTokens, usage.cacheWriteTokens, usage.credits].some(value => value && value > 0)) {
+            yield { type: 'usage', usage };
+          }
+        }
+      }
       accepting = false;
       await this.stop(turn);
       yield { type: 'done' };
@@ -199,6 +209,15 @@ export class CopilotConversations {
       accepting = false;
       try { await this.stop(turn); }
       catch (error) { log.warn('Copilot turn cleanup failed', { error: String(error) }); }
+    }
+  }
+
+  private async readUsage(session: CopilotSession, turn: ConversationTurn) {
+    try { return copilotUsageMetrics(await this.wait(session.rpc.usage.getMetrics(), turn)); }
+    catch {
+      turn.controller.signal.throwIfAborted();
+      log.warn('Copilot usage metrics unavailable; cumulative usage will not be charged');
+      return null;
     }
   }
 }

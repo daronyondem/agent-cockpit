@@ -1,7 +1,6 @@
 import type { SessionEvent } from '@github/copilot-sdk' with { 'resolution-mode': 'import' };
-import type { StreamEvent, Usage } from '../../types';
+import type { StreamEvent } from '../../types';
 import { copilotToolStartEvents, copilotToolCompleteEvents } from './copilotTools';
-import { copilotUsageCheckpoint } from './copilotUsage';
 
 export interface CopilotSdkEventState {
   textDeltas: ReadonlySet<string>;
@@ -10,7 +9,6 @@ export interface CopilotSdkEventState {
   reasoningFinals: ReadonlySet<string>;
   tools: ReadonlyMap<string, string>;
   finishedTools: ReadonlySet<string>;
-  checkpoint: Usage | null;
   hasOutput: boolean;
   started: boolean;
   idle: boolean;
@@ -20,7 +18,7 @@ export interface CopilotSdkEventState {
 
 export function createCopilotSdkEventState(): CopilotSdkEventState {
   return { textDeltas: new Set(), textFinals: new Set(), reasoningDeltas: new Set(), reasoningFinals: new Set(),
-    tools: new Map(), finishedTools: new Set(), checkpoint: null, hasOutput: false, started: false, idle: false, error: null };
+    tools: new Map(), finishedTools: new Set(), hasOutput: false, started: false, idle: false, error: null };
 }
 
 /** Pure projection. Session-wide idle, rather than a model-loop turn end, completes a stream. */
@@ -73,11 +71,6 @@ export function reduceCopilotSdkEvent(previous: CopilotSdkEventState, event: Ses
         events.push(...copilotToolCompleteEvents({ ...event.data, toolName: state.tools.get(event.data.toolCallId) }));
         const tools = new Map(state.tools); tools.delete(event.data.toolCallId); state.tools = tools;
       }
-      break;
-    case 'session.usage_checkpoint':
-      // Released runtimes may retain the JSONL accounting shape. Unknown SDK
-      // ledger units remain unavailable; never treat them as zero or credits.
-      state.checkpoint = copilotUsageCheckpoint({ type: event.type, data: event.data });
       break;
     case 'session.error':
       state.error = event.data.message || 'Copilot session failed.';

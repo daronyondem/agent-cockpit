@@ -4,8 +4,10 @@ import path from 'path';
 import http from 'http';
 import { startCopilotSdkRuntime, type CopilotSdkRuntime } from '../src/services/backends/copilotSdkRuntime';
 import { resolveCopilotCliRuntime } from '../src/services/backends/copilotRuntime';
-import { CopilotAdapter } from '../src/services/backends/copilot';
+import { CopilotAdapter, __copilotTestUtils } from '../src/services/backends/copilot';
 import { CopilotConversations } from '../src/services/backends/copilotConversations';
+import { spawnCopilotProcess } from '../src/services/backends/copilotProcess';
+import { buildCliCommandInvocation } from '../src/services/cliCommandResolver';
 import type { SendMessageOptions, StreamEvent } from '../src/types';
 import { waitForCopilotPeer } from './helpers/copilotSdkPeer';
 
@@ -26,6 +28,7 @@ native('real Copilot owned SDK runtime with fixed local model responses', () => 
 
   beforeEach(async () => {
     dir = fs.mkdtempSync(path.join(os.tmpdir(), 'copilot-sdk-native-'));
+    fs.writeFileSync(path.join(dir, 'AGENTS.md'), '# Synthetic instructions\nSDK_MANAGED_INSTRUCTIONS_MARKER\n');
     scenario = 'text'; requests = []; events = []; releaseSteer = undefined; question = undefined;
     provider = http.createServer((req, res) => {
       let body = '';
@@ -37,7 +40,8 @@ native('real Copilot owned SDK runtime with fixed local model responses', () => 
         const tools = (data.tools || []).map((tool: { function?: { name: string }; name?: string }) => tool.function || tool);
         const reply = (delta: object, finish = 'stop') => {
           res.writeHead(200, { 'Content-Type': 'text/event-stream' });
-          for (const [part, reason] of [[delta, null], [{}, finish]]) res.write(`data: ${JSON.stringify({ id: 'fixture', object: 'chat.completion.chunk', created: 1, model: 'gpt-4', choices: [{ index: 0, delta: part, finish_reason: reason }] })}\n\n`);
+          for (const [part, reason] of [[delta, null], [{}, finish]]) res.write(`data: ${JSON.stringify({ id: `fixture-${requests.length}`, object: 'chat.completion.chunk', created: 1, model: 'gpt-4', choices: [{ index: 0, delta: part, finish_reason: reason }],
+            ...(reason ? { usage: { prompt_tokens: 120, completion_tokens: 30, total_tokens: 150, prompt_tokens_details: { cached_tokens: 40 } } } : {}) })}\n\n`);
           res.end('data: [DONE]\n\n');
         };
         const say = (content: string) => reply({ role: 'assistant', content });
@@ -152,18 +156,20 @@ native('real Copilot owned SDK runtime with fixed local model responses', () => 
   }, 45000);
 
   test('resumes an existing JSONL conversation through the owned SDK runtime', async () => {
-    const legacy = new CopilotAdapter({ workingDir: dir });
     const env = Object.fromEntries(Object.entries(nativeEnv).filter((entry): entry is [string, string] => typeof entry[1] === 'string'));
     const profile = { id: 'legacy-interop', name: 'Legacy interop', harness: 'copilot' as const, authMode: 'server-configured' as const,
       command: process.env.COPILOT_SDK_CLI_PATH || 'copilot', createdAt: '', updatedAt: '',
       env: { ...env, COPILOT_GITHUB_TOKEN: '', GH_TOKEN: '', GITHUB_TOKEN: '', COPILOT_PROVIDER_TYPE: 'openai', COPILOT_PROVIDER_BASE_URL: baseUrl, COPILOT_PROVIDER_API_KEY: '', COPILOT_MODEL: 'gpt-4' } };
     let sessionId: string | undefined;
+    const resolved = resolveCopilotCliRuntime(profile);
+    const invocation = buildCliCommandInvocation(resolved, __copilotTestUtils.buildCopilotRunArgs('SDK_JSONL_SEED', { workingDir: dir, model: 'gpt-4', allowTools: true }));
+    const { proc, scope } = spawnCopilotProcess(invocation.command, invocation.args, { cwd: dir, env: resolved.env, stdio: ['ignore', 'pipe', 'pipe'] });
     try {
-      const sent = legacy.sendMessage('SDK_JSONL_SEED', { sessionId: 'fixture', conversationId: 'interop', isNewSession: true, systemPrompt: 'Synthetic compatibility fixture.', workingDir: dir, model: 'gpt-4', cliProfile: profile });
-      for await (const event of sent.stream) {
-        if (event.type === 'external_session') sessionId = event.sessionId;
-        expect(event.type).not.toBe('error');
-      }
+      let output = '';
+      proc.stdout!.setEncoding('utf8'); proc.stdout!.on('data', chunk => { output += chunk; }); proc.stderr!.resume();
+      const code = await new Promise<number | null>((resolve, reject) => { proc.once('error', reject); proc.once('close', resolve); });
+      expect(code).toBe(0);
+      sessionId = __copilotTestUtils.collectCopilotJson(output).sessionId || undefined;
       expect(sessionId).toBeDefined();
       const session = await runtime!.client.resumeSession(sessionId!, config());
       expect(session.sessionId).toBe(sessionId);
@@ -171,7 +177,7 @@ native('real Copilot owned SDK runtime with fixed local model responses', () => 
       const last = requests.at(-1)!.messages as Array<{ role: string; content: unknown }>;
       expect(JSON.stringify(last)).toContain('SDK_JSONL_SEED');
       await session.disconnect();
-    } finally { await legacy.shutdown(); }
+    } finally { await scope.stop(); }
   }, 45000);
 
   test('steers an active native tool loop without starting a second queued request', async () => {
@@ -219,6 +225,54 @@ native('real Copilot owned SDK runtime with fixed local model responses', () => 
       expect(JSON.stringify(requests.at(-1)?.messages)).toContain('SDK_CONVERSATION_SEED');
     } finally { await manager.shutdown(); }
   }, 60000);
+
+  test('production facade cold-resumes measured usage without charging history or counting cache twice', async () => {
+    await runtime!.stop(); runtime = undefined;
+    const adapter = new CopilotAdapter({ workingDir: dir });
+    try {
+      const first = await collectConversation(adapter.sendMessage('SDK_FACADE_SEED', conversationOptions({ model: 'auto' })).stream);
+      const session = first.find(frame => frame.type === 'external_session');
+      if (session?.type !== 'external_session') throw new Error('Missing session ID');
+      const second = await collectConversation(adapter.sendMessage('SDK_FACADE_RESUME', conversationOptions({ isNewSession: false, externalSessionId: session.sessionId })).stream);
+      for (const frames of [first, second]) {
+        expect(frames.some(frame => frame.type === 'error')).toBe(false);
+        expect(frames.filter(frame => frame.type === 'usage')).toEqual([{ type: 'usage', usage: {
+          inputTokens: 80, outputTokens: 30, cacheReadTokens: 40, cacheWriteTokens: 0, credits: 0, costUsd: 0, costSource: 'none',
+        } }]);
+      }
+      expect(second).toContainEqual(session);
+      expect(JSON.stringify(requests.at(-1)?.messages)).toContain('SDK_FACADE_SEED');
+      expect(JSON.stringify(requests.at(-1)?.messages)).toContain('SDK_MANAGED_INSTRUCTIONS_MARKER');
+      scenario = 'delegate';
+      const delegated = await collectConversation(adapter.sendMessage('SDK_FACADE_DELEGATE', conversationOptions({ isNewSession: false, externalSessionId: session.sessionId })).stream);
+      expect(delegated.some(frame => frame.type === 'error')).toBe(false);
+      expect(delegated.filter(frame => frame.type === 'usage')).toEqual([{ type: 'usage', usage: {
+        inputTokens: 240, outputTokens: 90, cacheReadTokens: 120, cacheWriteTokens: 0, credits: 0, costUsd: 0, costSource: 'none',
+      } }]);
+      expect(delegated.filter(frame => frame.type === 'text').map(frame => frame.content).join('')).toBe('SDK_PARENT_OK');
+    } finally { await adapter.shutdown(); }
+  }, 60000);
+
+  (process.platform === 'win32' ? test.skip : test)('preserves a command wrapper that privately configures its local provider', async () => {
+    await runtime!.stop(); runtime = undefined;
+    const command = path.join(dir, 'opaque-wrapper');
+    fs.writeFileSync(command, `#!${process.execPath}
+require('fs').writeFileSync(${JSON.stringify(path.join(dir, 'opaque-args.json'))},JSON.stringify(process.argv.slice(2)));
+const child=require('child_process').spawnSync(${JSON.stringify(process.env.COPILOT_SDK_CLI_PATH || 'copilot')},process.argv.slice(2),{stdio:'inherit',env:{...process.env,COPILOT_PROVIDER_TYPE:'openai',COPILOT_PROVIDER_BASE_URL:${JSON.stringify(baseUrl)},COPILOT_MODEL:'gpt-4'}});
+if(child.error)throw child.error;process.exit(child.status??1);
+`, { mode: 0o755 });
+    const adapter = new CopilotAdapter({ workingDir: dir });
+    const options = conversationOptions();
+    options.cliProfile = { ...options.cliProfile!, command, env: { ...options.cliProfile!.env, COPILOT_PROVIDER_BASE_URL: '' } };
+    try {
+      const frames = await collectConversation(adapter.sendMessage('SDK_OPAQUE_PROVIDER', options).stream);
+      expect(frames.some(frame => frame.type === 'error')).toBe(false);
+      expect(frames.some(frame => frame.type === 'text' && frame.content === 'SDK_TEXT_OK')).toBe(true);
+      const args = JSON.parse(fs.readFileSync(path.join(dir, 'opaque-args.json'), 'utf8'));
+      expect(args).toEqual(expect.arrayContaining(['--output-format', 'json']));
+      expect(args).not.toContain('--headless');
+    } finally { await adapter.shutdown(); }
+  }, 45000);
 
   test('cancels a native tool worker and immediately starts a replacement conversation turn', async () => {
     await runtime!.stop(); runtime = undefined;

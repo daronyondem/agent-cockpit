@@ -181,9 +181,16 @@ switching chat dispatch. Session idle drains attached background work; model
 replies, loop ends and child idle do not. Drain late startups and failed cleanup
 before admitting replacements. Resume must not continue interrupted tool work;
 recovery is permitted only before sending a prompt and before observable work.
-The staged conversation owner is not the current production chat path. Unknown
-SDK accounting units must remain unavailable rather than being converted to
-premium-request credits or USD. Verify ledger reconciliation before migration.
+Normal chat dispatch uses the SDK owner; opaque explicit command overrides stay
+on JSONL unless their provider configuration is visible in the merged runtime
+environment. Never retry an SDK failure through JSONL. Review
+`test/copilotAdapterRuntime.test.ts` for shared admission and Stop/reset/shutdown
+across transports. SDK usage reads native metrics before submission and after
+root idle; model input includes both cache buckets, and provider/model/agent
+maps overlap. Keep parsing in `copilotUsage.ts`, subtract the native baseline,
+and never convert nano-AIU to premium-request credits or USD. Native workflow
+and browser fixtures must configure the server environment and assert SDK
+dispatch: Settings intentionally strips Copilot profile-local env values.
 Review `test/copilotProfileStatus.test.ts`, `test/cliProfileAuthService.test.ts`
 and the profile-auth route tests for credential/catalog checks. Preserve the
 distinction between installed CLI, authenticated credentials and enabled-model

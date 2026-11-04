@@ -11,6 +11,41 @@ function record(value: unknown): Record<string, unknown> {
   return value !== null && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {};
 }
 
+function counter(value: unknown): value is number {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0;
+}
+
+/** Native metrics include children already; provider/model and agent maps overlap. */
+export function copilotUsageMetrics(value: unknown): Usage | null {
+  const metrics = record(value);
+  let counters: unknown[];
+  if (metrics.tokenDetails !== undefined) {
+    const details = record(metrics.tokenDetails);
+    counters = ['input', 'output', 'cache_read', 'cache_write'].map(key => record(details[key]).tokenCount);
+  } else {
+    const models = Array.isArray(metrics.providerModelMetrics)
+      ? metrics.providerModelMetrics.map(entry => record(entry).metrics)
+      : metrics.modelMetrics && typeof metrics.modelMetrics === 'object' && !Array.isArray(metrics.modelMetrics)
+        ? Object.values(metrics.modelMetrics) : null;
+    if (!models || (!models.length && metrics.totalUserRequests !== 0)) return null;
+    const totals = [0, 0, 0, 0];
+    for (const model of models) {
+      const usage = record(record(model).usage);
+      const counts = [usage.inputTokens, usage.outputTokens, usage.cacheReadTokens, usage.cacheWriteTokens];
+      if (!counts.every(counter)) return null;
+      const [input, output, read, write] = counts;
+      // Native model metrics include both cache buckets in their input total.
+      if (input < read + write) return null;
+      [input - read - write, output, read, write].forEach((count, index) => { totals[index] += count; });
+    }
+    counters = totals;
+  }
+  if (!counters.every(counter)) return null;
+  const [inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens] = counters;
+  return { inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens, costUsd: 0, costSource: 'none',
+    ...(counter(metrics.totalPremiumRequestCost) ? { credits: metrics.totalPremiumRequestCost } : {}) };
+}
+
 export function copilotUsageCheckpoint(event: Record<string, unknown>): Usage | null {
   if (event.type !== 'session.usage_checkpoint') return null;
   const data = record(event.data);
@@ -29,7 +64,7 @@ export function copilotTurnUsage(current: Usage, previous: Usage): Usage {
     outputTokens: Math.max(0, current.outputTokens - previous.outputTokens),
     cacheReadTokens: Math.max(0, current.cacheReadTokens - previous.cacheReadTokens),
     cacheWriteTokens: Math.max(0, current.cacheWriteTokens - previous.cacheWriteTokens),
-    credits: Math.max(0, (current.credits || 0) - (previous.credits || 0)),
+    ...(counter(current.credits) && counter(previous.credits) ? { credits: Math.max(0, current.credits - previous.credits) } : {}),
     costUsd: 0,
     costSource: 'none',
   };

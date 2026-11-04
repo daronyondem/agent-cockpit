@@ -124,7 +124,11 @@ for (const mobile of [false, true]) {
     }
     await expect.poll(async () => (await (await request.get(`/api/chat/conversations/${conv.id}`)).json()).archived).toBe(true);
     if (mobile) {
+      await expect(page.locator('.list-screen')).toBeVisible();
+      await expect(page.locator('.list-screen .mini-spinner')).toHaveCount(0);
       await page.getByRole('button', { name: 'Archive', exact: true }).click();
+      await expect(page.getByRole('button', { name: 'Archive', exact: true })).toHaveAttribute('aria-pressed', 'true');
+      await expect(page.locator('.list-screen .mini-spinner')).toHaveCount(0);
       await page.locator('.conversation-card').filter({ hasText: conv.title }).click();
       await page.getByLabel('More', { exact: true }).click();
       await page.getByRole('button', { name: 'Restore', exact: true }).click();
@@ -137,7 +141,11 @@ for (const mobile of [false, true]) {
     await expect.poll(async () => Boolean((await (await request.get(`/api/chat/conversations/${conv.id}`)).json()).archived)).toBe(false);
     // Desktop exposes permanent deletion from the archived view.
     if (mobile) {
+      await expect(page.locator('.list-screen')).toBeVisible();
+      await expect(page.locator('.list-screen .mini-spinner')).toHaveCount(0);
       await page.getByRole('button', { name: /^Active/ }).click();
+      await expect(page.getByRole('button', { name: /^Active/ })).toHaveAttribute('aria-pressed', 'true');
+      await expect(page.locator('.list-screen .mini-spinner')).toHaveCount(0);
       await page.locator('.conversation-card').filter({ hasText: conv.title }).click();
       await page.getByLabel('More', { exact: true }).click();
       await page.getByRole('button', { name: 'Delete', exact: true }).click();

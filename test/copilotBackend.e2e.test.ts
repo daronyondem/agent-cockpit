@@ -5,7 +5,10 @@ import http from 'http';
 import { createCanvas } from '@napi-rs/canvas';
 import { execFileSync } from 'child_process';
 import { CopilotAdapter } from '../src/services/backends/copilot';
-import { readCopilotUsageBaseline } from '../src/services/backends/copilotUsage';
+import { copilotUsageMetrics } from '../src/services/backends/copilotUsage';
+import { startCopilotSdkRuntime } from '../src/services/backends/copilotSdkRuntime';
+import { resolveCopilotCliRuntime } from '../src/services/backends/copilotRuntime';
+import { copilotSessionConfig } from '../src/services/backends/copilotSessionConfig';
 import { spawnCopilotProcess } from '../src/services/backends/copilotProcess';
 import type { StreamEvent } from '../src/types';
 
@@ -197,7 +200,13 @@ readline.createInterface({ input: process.stdin }).on('line', line => {
     const second = await turn('What exact marker did I ask you to remember? Reply with only that marker.', first.sessionId);
     expect(second.sessionId).toBe(first.sessionId);
     expect(second.text.trim()).toBe('COPILOT_PARITY_5729');
-    const total = await readCopilotUsageBaseline(first.sessionId, process.env);
+    const runtime = resolveCopilotCliRuntime();
+    const owned = await startCopilotSdkRuntime(runtime, workdir);
+    let total;
+    try {
+      const session = await owned.client.resumeSession(first.sessionId, { ...copilotSessionConfig({ sessionId: 'native-ledger', isNewSession: false, systemPrompt: '', workingDir: workdir }, runtime.env, workdir), continuePendingWork: false });
+      total = copilotUsageMetrics(await session.rpc.usage.getMetrics());
+    } finally { await owned.stop(); }
     if (!total) throw new Error('Copilot omitted the saved usage checkpoint');
     for (const key of ['inputTokens', 'outputTokens', 'cacheReadTokens', 'cacheWriteTokens', 'credits'] as const) {
       expect((first.usage[key] || 0) + (second.usage[key] || 0)).toBe(total[key] || 0);

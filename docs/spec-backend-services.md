@@ -994,9 +994,9 @@ in [ADR-0092](adr/0092-integrate-grok-build-through-acp-and-native-extensions.md
 
 **Runtime resolution:** `resolveCopilotCliRuntime(profile?)` rejects non-Copilot profiles, defaults the command to `copilot`, merges `cliProfile.env` when present, and resolves the executable through `src/services/cliCommandResolver.ts` (PATH plus common user-local locations such as `/opt/homebrew/bin`). Windows prefers `node.exe <prefix>\node_modules\@github\copilot\npm-loader.js` over npm `.cmd` shims, using the same shared resolver for backend, auth checks, and updates. Copilot profiles are self-configured/server-configured: Settings strips profile-local `configDir`/`env`, preserves the command override, and reuses the host login under `COPILOT_HOME` or `~/.copilot`.
 
-**Streaming:** `sendMessage()` validates the effective working directory, then spawns `copilot -p <prompt> --output-format json --stream on --no-auto-update --no-ask-user --no-color --log-level none --allow-all [--model <model>] [--reasoning-effort <effort>] [--additional-mcp-config <json>] [--resume <externalSessionId>]` with that directory as `cwd`. Explicit streaming avoids persisted CLI streaming preferences; disabling automatic updates keeps CLI updates in the managed update flow. The first turn prepends the Cockpit system prompt; later turns resume the persisted session. UTF-8 stream decoding preserves characters split across chunks. `assistant.message_delta` maps to streaming text, `assistant.reasoning_delta` to thinking, `tool.execution_start` to deduplicated tool activity, and `tool.execution_complete` to outcomes. Tool names are remembered by call ID because native completion events omit them; built-in `rg`/`apply_patch` map to Grep/Edit, and Memory/KB MCP tool names accept hyphen and underscore separators. The terminal `result.sessionId` emits `external_session` and `backend_runtime.externalSessionId`. Structured `session.error` and nonzero `result.exitCode` are errors even when the process closes with code zero. Missing-session diagnostics from JSON or stderr trigger one recovery-snapshot retry without `--resume`. Pre-start cancellation does not spawn; in-flight abort sends `SIGTERM` and emits an abort error. Closing the stream iterator also terminates an unfinished child.
+**Streaming:** The facade selects owned SDK chat for the default CLI and server-visible custom providers; the dispatch, admission and native metrics contracts are specified below. Opaque custom command overrides retain the JSONL compatibility path. On that path, `sendMessage()` validates the effective working directory, then spawns `copilot -p <prompt> --output-format json --stream on --no-auto-update --no-ask-user --no-color --log-level none --allow-all [--model <model>] [--reasoning-effort <effort>] [--additional-mcp-config <json>] [--resume <externalSessionId>]` with that directory as `cwd`. Explicit streaming avoids persisted CLI streaming preferences; disabling automatic updates keeps CLI updates in the managed update flow. The first turn prepends the Cockpit system prompt; later turns resume the persisted session. UTF-8 stream decoding preserves characters split across chunks. `assistant.message_delta` maps to streaming text, `assistant.reasoning_delta` to thinking, `tool.execution_start` to deduplicated tool activity, and `tool.execution_complete` to outcomes. Tool names are remembered by call ID because native completion events omit them; built-in `rg`/`apply_patch` map to Grep/Edit, and Memory/KB MCP tool names accept hyphen and underscore separators. The terminal `result.sessionId` emits `external_session` and `backend_runtime.externalSessionId`. Structured `session.error` and nonzero `result.exitCode` are errors even when the process closes with code zero. Missing-session diagnostics from JSON or stderr trigger one recovery-snapshot retry without `--resume`. Pre-start cancellation does not spawn; in-flight abort sends `SIGTERM` and emits an abort error. Closing the stream iterator also terminates an unfinished child.
 
-**Usage (`copilotUsage.ts`):** Current CLI `session.usage_checkpoint.data.accountingSnapshot.tokenDetails` provides disjoint `input`, `output`, `cache_read`, and `cache_write` buckets, each containing `tokenCount`; `data.totalPremiumRequests` provides credits. These values and terminal `result.usage.premiumRequests` are cumulative across resumed sessions, not per-turn charges. Before resuming, the adapter reads the last usable checkpoint from the final 4 MiB of `<COPILOT_HOME>/session-state/<nativeSessionId>/events.jsonl` (default home: `~/.copilot`). It subtracts those saved counters from the final checkpoint, clamps negative differences to zero, and emits only the current turn's usage. This also works after adapter/server restarts without a new Cockpit persistence format. Session IDs must contain only letters, digits, underscores, or hyphens before constructing the transcript path. Unreadable, absent, malformed, or oversized-tail checkpoints produce a backend warning and suppress cumulative charges instead of billing the whole native session again. Older JSONL shapes may still report per-message `assistant.message.data.outputTokens`; those remain a fallback when checkpoint counters are unavailable. Copilot usage retains `costUsd:0` and `costSource:'none'`; token reporting does not imply a USD pricing estimate.
+**Usage (`copilotUsage.ts`):** SDK chat reads reconciled native metrics before/after the turn as specified below. The JSONL compatibility parser accepts the older `session.usage_checkpoint.data.accountingSnapshot.tokenDetails` provides disjoint `input`, `output`, `cache_read`, and `cache_write` buckets, each containing `tokenCount`; `data.totalPremiumRequests` provides credits. These values and terminal `result.usage.premiumRequests` are cumulative across resumed sessions, not per-turn charges. Before resuming, the adapter reads the last usable checkpoint from the final 4 MiB of `<COPILOT_HOME>/session-state/<nativeSessionId>/events.jsonl` (default home: `~/.copilot`). It subtracts those saved counters from the final checkpoint, clamps negative differences to zero, and emits only the current turn's usage. This also works after adapter/server restarts without a new Cockpit persistence format. Session IDs must contain only letters, digits, underscores, or hyphens before constructing the transcript path. Unreadable, absent, malformed, or oversized-tail checkpoints produce a backend warning and suppress cumulative charges instead of billing the whole native session again. Older JSONL shapes may still report per-message `assistant.message.data.outputTokens`; those remain a fallback when checkpoint counters are unavailable. Copilot usage retains `costUsd:0` and `costSource:'none'`; token reporting does not imply a USD pricing estimate.
 
 **Process containment (`copilotProcess.ts`):** `spawnCopilotProcess(command, args, options)` is the shared chat/one-shot spawn boundary. It copies the selected environment, adds a fresh UUID under `AGENT_COCKPIT_COPILOT_SCOPE`, creates a dedicated POSIX process group, and hides Windows launches. The server/profile environment is never mutated. The scope polls PID/parent/group/start identities every 100 ms without inspecting environments. At stop, it waits for a pending ancestry poll, then runs `ps eww -U <current-uid> -o pid=,ppid=,pgid=,lstart=,command=` with `LC_ALL=C`, a 500 ms deadline, and an 8 MiB output bound. The untruncated current-user snapshot recovers exact marker matches even when their detached shell leader exited before any poll. Command/environment text is discarded after matching and never logged or persisted. Start identities are normalized for whitespace across both snapshot formats. A failed/empty environment snapshot falls back to numeric ancestry/group enumeration.
 
@@ -1016,17 +1016,17 @@ archive state or removing the conversation/checkout. Conflicts return `409`,
 new turns return temporary `503`, and failure releases the reservation without
 archiving/deleting. This drain also applies after Stop has detached the runtime.
 
-**One-shot calls:** `runOneShot()` validates the working directory and uses the same JSONL transport. Without `allowTools:true` or injected MCP servers, it adds `--allow-all-tools --available-tools none`: the first flag enables non-interactive execution, while the second exposes zero tools to the model. An empty `--available-tools` value is not equivalent and must not replace the literal `none`. Tool-enabled and MCP calls use `--allow-all` instead. Image/PDF attachments map to repeated `--attachment <path>`. Complete final assistant messages take precedence over partial delta text, each message ID is included once, and output is trimmed. JSON failures reject with their diagnostics even on nonzero exits; timeout/abort reject even when termination causes a clean child close. Already-aborted signals never spawn. `generateSummary()` and `generateTitle()` use this restricted path and preserve their supplied fallbacks.
+**One-shot calls:** `runOneShot()` validates the working directory and uses JSONL regardless of the chat transport. Without `allowTools:true` or injected MCP servers, it adds `--allow-all-tools --available-tools none`: the first flag enables non-interactive execution, while the second exposes zero tools to the model. An empty `--available-tools` value is not equivalent and must not replace the literal `none`. Tool-enabled and MCP calls use `--allow-all` instead. Image/PDF attachments map to repeated `--attachment <path>`. Complete final assistant messages take precedence over partial delta text, each message ID is included once, and output is trimmed. JSON failures reject with their diagnostics even on nonzero exits; timeout/abort reject even when termination causes a clean child close. Already-aborted signals never spawn. `generateSummary()` and `generateTitle()` use this restricted path and preserve their supplied fallbacks.
 
-**MCP injection:** When Cockpit passes `mcpServers`, the adapter converts the ACP-shaped `{ name, command, args, env[] }` entries into Copilot local MCP entries (`{ type: 'local', command, args, tools: ['*'], env }`) and injects them via `--additional-mcp-config <json>` for that spawned process only, augmenting the user's `~/.copilot/mcp-config.json` without writing Memory or KB tokens to disk.
+**MCP injection:** When Cockpit passes `mcpServers`, the adapter converts the ACP-shaped `{ name, command, args, env[] }` entries into Copilot local MCP entries (`{ type: 'local', command, args, tools: ['*'], env }`) and supplies them in SDK session configuration or via `--additional-mcp-config <json>` for JSONL execution only, augmenting the user's `~/.copilot/mcp-config.json` without writing Memory or KB tokens to disk.
 
-**Response/retry boundaries:** Envelope `agentId` or `data.parentToolCallId` marks delegated output. Child/grandchild text deltas, final-message fallbacks, reasoning, tool activity/outcomes, and child session errors are suppressed from the root presentation until grouped child UI is implemented. Only root tools clear pre-tool narration in one-shot collection; late child work cannot erase an already-collected root answer. Session-wide usage checkpoints are processed independently of presentation and include delegated work once. Any root or child tool start blocks missing-session replay, even when the child activity is hidden.
+**Response/retry boundaries:** Envelope `agentId` or `data.parentToolCallId` marks delegated output. Child/grandchild text deltas, final-message fallbacks, reasoning, tool activity/outcomes, and child session errors are suppressed from the root presentation until grouped child UI is implemented. Only root tools clear pre-tool narration in one-shot collection; late child work cannot erase an already-collected root answer. Session-wide native usage aggregates are processed independently of presentation and include delegated work once. Any root or child tool start blocks missing-session replay, even when the child activity is hidden.
 
-**Initial scope and evidence:** Native questions, delegation, plan mode, and goal/autopilot exist in Copilot; the per-turn adapter deliberately does not integrate interactive controls or grouped child presentation. ACP is a possible future transport, not evidence of equivalent controls. Multiple named profiles share host auth and do not provide account isolation; `--version` checks only availability, not credentials, entitlement, model permissions, or account identity. Guided device login/account profiles, remaining quotas/resets/context occupancy, native memory import, and native sequential `runSessionShot()` are follow-ups. Sequential gleaning currently uses the base transcript-replay fallback and remains functional.
+**Initial scope and evidence:** Native questions, delegation, plan mode, and goal/autopilot exist in Copilot; the application deliberately does not integrate interactive controls or grouped child presentation. ACP is a possible future transport, not evidence of equivalent controls. Multiple named profiles share host auth and do not provide account isolation; `--version` checks only availability, not credentials, entitlement, model permissions, or account identity. Guided device login/account profiles, remaining quotas/resets/context occupancy, native memory import, and native sequential `runSessionShot()` are follow-ups. Sequential gleaning currently uses the base transcript-replay fallback and remains functional.
 
 The authenticated native suite verifies direct image/PDF transport, fixture MCP calls, text/stream/later-session resume, and usage. The separate `npm run e2e:copilot-workflows` suite exercises the production chat router, Memory stdio shim/HTTP routes, Copilot governance processor, durable Memory search, workspace update frames, Workspace Context maintenance, and a fresh chat reading managed Context instructions/files. Six native cases cover successful note/search and recall, Memory-to-Context consumption plus reference ingestion, rejected Memory governance without fallback files, invalid Context output preserving the inbox until a successful retry, automatic scheduled maintenance, and reset finalization over the ended session. It runs the real CLI with an isolated temporary auth home and fixed local OpenAI-compatible model responses, without hosted accounts, live model reasoning, or CLI updates. The evidence is Copilot 1.0.105 on macOS arm64; each run prints CLI/OS/architecture/revision evidence. Normal CI runs `test/copilotMemoryContext.test.ts` against the real adapter, MCP shim, routes and stores with an executable JSONL fixture instead of requiring Copilot. It additionally checks duplicate governance, persisted metadata/reload, workspace isolation, disabled writes, reset token revocation, restricted governance versus tool-enabled Context arguments, unaccepted-note retention, processor failures, and cancellation/retry. These checks validate integration and persistence, not model quality or account/entitlement behavior.
 
-KB digestion/dreaming/gleaning and Routine workflows have separate executable-fixture integration coverage. Context scheduling/session finalizers are covered by both fixture and native suites; eight desktop/mobile lifecycle browser cases pass with real CLI/local replies on macOS and Ubuntu 24.04. File downloads and actual server-restart/missing-session recovery remain outside that native certification. Native installs expose a runnable updater without background latest-version discovery; npm installs support discovery with full prerelease semver precedence. Compatibility evidence must record CLI version, OS/architecture, and revision, without extending macOS evidence to native Windows/Linux.
+KB digestion/dreaming/gleaning and Routine workflows have separate executable-fixture integration coverage. Context scheduling/session finalizers are covered by both fixture and native suites; the baseline JSONL desktop/mobile lifecycle browser cases pass with real CLI/local replies on macOS and Ubuntu 24.04; the SDK path passes the same eight cases on macOS, with eight headless launches recorded separately. SDK Windows/Linux qualification remains pending. File downloads and actual server-restart/missing-session recovery remain outside that native certification. Native installs expose a runnable updater without background latest-version discovery; npm installs support discovery with full prerelease semver precedence. Compatibility evidence must record CLI version, OS/architecture, and revision, without extending macOS evidence to native Windows/Linux.
 
 **Memory:** GitHub Copilot has no confirmed native durable-memory directory that maps to Cockpit's `extractMemory(workspacePath)` / `getMemoryDir(workspacePath)` adapter API. The Copilot adapter therefore inherits the base `null` native-memory behavior. Memory-enabled Copilot conversations use Cockpit's Memory MCP tools (`memory_search` / `memory_note`) for durable workspace memory.
 
@@ -1058,7 +1058,10 @@ Already-aborted calls do not spawn. Exit/error/cancellation resolves `closed`
 immediately, even when descendants retain output pipes, and initiates awaited
 cleanup. Startup failures always drain the scope. Stop removes its abort
 listener, permits at most one second for SDK disconnect, awaits process-tree
-termination, and bounds SDK force-close to one second. CLI stderr and inspected
+termination, and bounds SDK force-close to one second. On unexpected process
+error/exit, force-close the connection before cleanup instead of sending graceful
+session-detach RPCs to an ended socket; this avoids an unhandled JSON-RPC write
+rejection. Normal completion and requested cancellation retain graceful cleanup. CLI stderr and inspected
 environments are not retained in this layer.
 
 `copilotProfileStatus.ts` uses this connection for profile checks. After the
@@ -1083,23 +1086,41 @@ Copilot's static adapter metadata warm-up so curated fallback models cannot
 overwrite denied or failed native catalog results. The existing response fields
 and persistence formats are unchanged; checks do not populate the chat picker.
 
-Existing user chat and processor one-shots still use the verified JSONL adapter,
-with their existing capabilities. Settings distinguishes authenticated
+User chat now uses the owned SDK conversation path described below. Custom
+command compatibility and processor one-shots retain JSONL. Settings distinguishes authenticated
 credentials with unavailable catalog access. Mobile has no account-management
-surface, new assets or stream-frame changes in this step. Seven native SDK cases
+surface, new assets or stream-frame changes in this step. Nine native SDK cases
 exercise local-provider sessions directly, including resuming a JSONL-created
 session with the same native ID and prior history; these do not certify browser
 controls or hosted-account access. See [ADR-0098](adr/0098-connect-copilot-interactive-sessions-through-an-owned-sdk-runtime.md)
 and the [versioned evaluation](research/copilot-sdk-parity-evaluation.md).
 
-#### Staged SDK conversation ownership
+#### SDK conversation ownership and dispatch
 
-`copilotConversations.ts` implements the next transport layer; `CopilotAdapter`
-does not delegate production chat to it yet. The class exposes `sendMessage`,
+`copilotConversations.ts` implements production SDK chat behind `CopilotAdapter`.
+The class exposes `sendMessage`,
 `onSessionReset` and reusable/permanent `shutdown` with the existing backend
 shapes. No endpoint, browser frame, stored conversation field or capability flag
 changes in this checkpoint. Restricted processor/summary/title one-shots remain
 on their existing JSONL execution path.
+
+`copilotChatTransport(profile?)` selects SDK for the normal `copilot` command,
+including resolver-discovered npm/native entrypoints, and for explicit custom
+commands whose merged runtime environment has `COPILOT_PROVIDER_BASE_URL`.
+Other explicit command overrides retain JSONL because wrappers can privately
+set provider configuration which SDK sessions do not inherit. This decision is
+made before starting work; an SDK failure never falls back to JSONL or resends
+the prompt. Settings continues to strip Copilot profile-local env/config homes;
+server environment is the supported persisted-configuration path. Direct
+internal runtime callers can still supply profile env. A custom wrapper using
+SDK must preserve `COPILOT_CONNECTION_TOKEN` when it launches the real CLI.
+
+The facade reserves the conversation across both transports, rejects overlapping
+turns, and waits for aborted owners before allocating a replacement, including
+when the profile switches transport. Reset, iterator closure, and shutdown use
+one idempotent cleanup promise per facade turn. Cleanup rejection remains a
+barrier to replacement. Shutdown awaits every scope/owner with `allSettled`,
+including one-shots, before reporting errors or reopening reusable admission.
 
 Admission is keyed by `conversation:<conversationId>`, falling back to
 `session:<sessionId>` for callers without a conversation ID. Reserve a slot when
@@ -1122,11 +1143,14 @@ directory, streaming, selected model and verified effort gates, local MCP server
 names/argv/environment/all-tools selection, and the existing explicit BYOK
 `COPILOT_PROVIDER_BASE_URL`, `COPILOT_PROVIDER_TYPE` and
 `COPILOT_PROVIDER_API_KEY` environment into SDK configuration. `COPILOT_MODEL`
-provides a fallback when no model option is supplied. With an explicit provider
+provides a fallback when no explicit model is supplied, including `auto`, which
+omits a literal model override as on the JSONL path. With an explicit provider
 base URL, provider types are limited to the SDK's `openai`, `anthropic`, and
 `azure`; only local OpenAI-compatible inference has native qualification here.
 Unknown types in that explicit mapping fail instead of using hosted inference. Do not infer a wrapper's private
-environment overrides from the parent process. Chat grants native permission
+environment overrides from the parent process. Enable native config discovery
+so managed `AGENTS.md` instructions remain available, and set `coauthorEnabled:false`
+to avoid adding a runtime commit trailer. Chat grants native permission
 requests as `approve-once`, matching existing broad tool access. `ask_user` is
 excluded and `sendInput` remains inert until request ownership/UI integration.
 New sessions grant directory trust for that session; resumes explicitly pass
@@ -1162,23 +1186,46 @@ even when no final/idle notification arrives, and owned descendants are reaped.
 Missing-session recovery is limited to `resumeSession` failures before any
 observable root/child work and before sending the prompt. Invoke the existing
 snapshot hook, emit the normal recovery frame, create one fresh native session,
-and reset the usage baseline to zero. Failed snapshot creation logs the failure
+and read a fresh native usage baseline. Failed snapshot creation logs the failure
 and uses the existing explicit incomplete-context recovery prompt; it does not
 write any fallback Memory files. Authorization failures and errors after
 submission never trigger replay or a fresh-session retry.
 
-Known legacy cumulative checkpoint shapes retain the existing saved-baseline
-subtraction and emit at most one usage frame at terminal idle. Missing baselines
-suppress cumulative charges. Discard pre-submission snapshots from startup or
-resume; they are historical state, not this prompt's charges or a measured zero.
-The SDK's generated checkpoint type also exposes
-`totalNanoAiu`/`providerModelMetrics`, unlike the currently supported JSONL
-`accountingSnapshot`/`totalPremiumRequests` shape. Those units are not converted
-to credits or USD, and an unknown checkpoint clears a previously usable snapshot
-rather than presenting stale accounting. Reconciliation of that native ledger
-remains a gate before production chat dispatch switches. Native fixed-model
-checks prove cold resume/history and real tool-worker cancellation/replacement;
-they do not prove hosted billing, account entitlement or browser SDK controls.
+SDK usage is read through `session.rpc.usage.getMetrics()` after create/resume
+but before prompt submission, and again after terminal root idle. The native
+runtime reconciles saved usage records and shutdown snapshots itself; do not
+guess a transcript path or depend on receiving a live checkpoint. Copilot
+1.0.105 fixed-provider evidence includes durable `session.usage_record` and
+`session.shutdown` records without live `session.usage_checkpoint` events.
+Subtract the pre-turn aggregate to emit at most one per-turn usage frame.
+
+`copilotUsageMetrics(unknown)` lives in `copilotUsage.ts`. Prefer the native
+disjoint `tokenDetails` map when present, requiring all four nonnegative finite
+`input`, `output`, `cache_read`, and `cache_write` token counts. Otherwise sum
+`providerModelMetrics[].metrics.usage` when provided, or `modelMetrics.*.usage`
+as the compatibility fallback. Do not add both maps or `agentMetrics`: native
+aggregates already include child calls. Provider entries with identical model
+IDs remain separate contributions. Each usage entry requires finite nonnegative
+input/output/cache-read/cache-write counters; native model input includes both
+cache buckets, so subtract both to obtain Cockpit's disjoint fresh-input count.
+Reject inconsistent entries whose caches exceed input and reject invalid sums.
+An empty aggregate is usable only with explicit `totalUserRequests:0`.
+
+Only a finite nonnegative native `totalPremiumRequestCost` maps to existing
+`Usage.credits` (premium requests). Missing billing fields stay absent; neither
+`totalNanoAiu` nor underlying model API prices are converted to legacy credits
+or USD. Differences include credits only when both snapshots report that field.
+Keep `costUsd:0` / `costSource:'none'`. Missing, malformed, failed or timed-out
+metrics suppress usage while allowing chat to finish. Metric waits use the same
+30-second request deadline and abort signal as session admission. Warn on RPC
+failure without retaining diagnostics/credentials. Omit all-zero differences,
+and never charge historical startup checkpoint notifications. Root errors and
+failed send admission do not trigger a final usage query.
+
+Native fixed-model checks prove cold resume/history, cache-disjoint per-turn
+accounting, aggregate delegated usage exactly once, managed instruction discovery,
+opaque-wrapper JSONL compatibility, and real tool-worker cancellation/replacement.
+They do not prove hosted billing, account entitlement or browser SDK controls.
 
 ### ClaudeCodeAdapter (`src/services/backends/claudeCode.ts`)
 

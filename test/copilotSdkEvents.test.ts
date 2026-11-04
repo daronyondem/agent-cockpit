@@ -77,12 +77,11 @@ test('native abort and root errors are terminal and cannot reopen the projection
   expect(reduceCopilotSdkEvent(failed.state, event('assistant.message_delta', { messageId: 'late', deltaContent: 'late' })).events).toEqual([]);
 });
 
-test('retains known cumulative accounting without converting unknown SDK ledger units', () => {
+test('leaves accounting to the reconciled native metrics API rather than projecting checkpoints', () => {
   const data = { totalPremiumRequests: 2, accountingSnapshot: { tokenDetails: {
     input: { tokenCount: 10 }, output: { tokenCount: 20 }, cache_read: { tokenCount: 3 }, cache_write: { tokenCount: 4 },
   } } };
   const known = reduceCopilotSdkEvent(createCopilotSdkEventState(), event('session.usage_checkpoint', data));
-  expect(known.state.checkpoint).toMatchObject({ inputTokens: 10, outputTokens: 20, cacheReadTokens: 3, cacheWriteTokens: 4, credits: 2 });
-  expect(reduceCopilotSdkEvent(known.state, event('session.usage_checkpoint', { totalNanoAiu: 100 })).state.checkpoint).toBeNull();
-  expect(reduceCopilotSdkEvent(createCopilotSdkEventState(), event('session.usage_checkpoint', { totalNanoAiu: 100 })).state.checkpoint).toBeNull();
+  expect(known.events).toEqual([]);
+  expect(reduceCopilotSdkEvent(known.state, event('session.usage_checkpoint', { totalNanoAiu: 100 })).events).toEqual([]);
 });

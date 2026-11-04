@@ -14,11 +14,21 @@ const rpc = require(${JSON.stringify(require.resolve('vscode-jsonrpc/node'))});
 const log = ${JSON.stringify(log)};
 const release = ${JSON.stringify(release)};
 const record = value => fs.appendFileSync(log, JSON.stringify({pid:process.pid,...value})+'\\n');
-record({method:'spawn'});
+record({method:'spawn',args:process.argv.slice(2)});
+if(!process.argv.includes('--headless')) {
+ const prompt=process.argv[process.argv.indexOf('-p')+1];
+ console.log(JSON.stringify({type:'assistant.message',data:{messageId:'jsonl',content:'jsonl:'+prompt}}));
+ const finish=()=>{console.log(JSON.stringify({type:'result',sessionId:'jsonl-saved',exitCode:0,usage:{}}));process.exit(0);};
+ if(prompt.includes('DEFERRED')) { const timer=setInterval(()=>{if(fs.existsSync(release)){clearInterval(timer);finish();}},10); }
+ else finish();
+ return;
+}
 let serial = 0;
 const checkpoint = { totalPremiumRequests:4,accountingSnapshot:{tokenDetails:{input:{tokenCount:110},output:{tokenCount:30},cache_read:{tokenCount:5},cache_write:{tokenCount:2}}}};
 net.createServer(socket => {
  const connection = rpc.createMessageConnection(socket,socket);
+ let baseline = {tokenDetails:{input:{tokenCount:0},output:{tokenCount:0},cache_read:{tokenCount:0},cache_write:{tokenCount:0}},totalPremiumRequestCost:0};
+ let sent = false;
  const emit = (sessionId,type,data={},agentId) => connection.sendNotification('session.event', {sessionId,event:{type,data,id:'event-'+(++serial),parentId:null,timestamp:new Date().toISOString(),...(agentId?{agentId}:{})}});
  connection.onRequest(async (method,params) => {
   record({method,params:method==='connect'?{tokenMatches:params.token===process.env.COPILOT_CONNECTION_TOKEN}:params});
@@ -36,9 +46,21 @@ net.createServer(socket => {
     emit(params.sessionId,'session.error',{message:'Session not found',errorType:'query'});
     throw new rpc.ResponseError(-32603,'Session not found');
    }
+   try { const lines=fs.readFileSync(require('path').join(process.env.COPILOT_HOME,'session-state',params.sessionId,'events.jsonl'),'utf8').trim().split('\\n');
+    const saved=JSON.parse(lines.at(-1)).data;baseline={...saved.accountingSnapshot,totalPremiumRequestCost:saved.totalPremiumRequests};
+   } catch { baseline={totalNanoAiu:100}; }
    return {sessionId:params.sessionId};
   }
+  if(method==='session.usage.getMetrics') {
+   if(process.env.COPILOT_FIXTURE_METRICS==='session-error') emit(params.sessionId,'session.error',{message:'Session failed during usage query',errorType:'query'});
+   if(process.env.COPILOT_FIXTURE_METRICS==='hang') return new Promise(()=>{});
+   if(process.env.COPILOT_FIXTURE_METRICS==='error') throw new rpc.ResponseError(-32603,'Usage unavailable');
+   if(!sent || process.env.COPILOT_FIXTURE_LEDGER==='resume-only') return baseline;
+   if(process.env.COPILOT_FIXTURE_LEDGER==='new') return {totalNanoAiu:100};
+   return {...checkpoint.accountingSnapshot,totalPremiumRequestCost:checkpoint.totalPremiumRequests};
+  }
   if(method==='session.send') {
+   sent = true;
    const id = params.sessionId;
    const prompt = params.prompt;
    if(prompt.includes('EARLY_IDLE')) emit(id,'session.idle');
@@ -81,7 +103,7 @@ net.createServer(socket => {
 }).listen(0,'127.0.0.1',function(){process.stdout.write('Listening on port '+this.address().port+'\\n');});
 `, { mode: 0o755 });
   return { command, release, log,
-    calls: (): Array<{ pid: number; method: string; params?: Record<string, unknown>; child?: number; sessionId?: string }> =>
+    calls: (): Array<{ pid: number; method: string; params?: Record<string, unknown>; child?: number; sessionId?: string; args?: string[] }> =>
       fs.existsSync(log) ? fs.readFileSync(log, 'utf8').trim().split('\n').filter(Boolean).map(line => JSON.parse(line)) : [],
     profile: (env: Record<string, string> = {}): CliProfile => ({
       id: 'sdk-peer', name: 'SDK peer', harness: 'copilot', authMode: 'server-configured', command,

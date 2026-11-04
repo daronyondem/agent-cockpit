@@ -24,6 +24,7 @@ function copilotProfile(overrides: Partial<CliProfile> = {}): CliProfile {
     name: 'GitHub Copilot',
     harness: 'copilot',
     authMode: 'server-configured',
+    command: 'fixture-copilot-jsonl',
     createdAt: now,
     updatedAt: now,
     ...overrides,
@@ -464,6 +465,7 @@ describe('CopilotAdapter streaming', () => {
       const { CopilotAdapter: IsolatedAdapter } = require('../src/services/backends/copilot');
       const adapter = new IsolatedAdapter({ workingDir: workdir });
       streamRef = adapter.sendMessage('hi', {
+        cliProfile: copilotProfile(),
         sessionId: 'session-1',
         conversationId: 'conv-copilot',
         isNewSession: true,
@@ -533,6 +535,7 @@ describe('CopilotAdapter streaming', () => {
       const { CopilotAdapter: IsolatedAdapter } = require('../src/services/backends/copilot');
       const adapter = new IsolatedAdapter({ workingDir: workdir });
       streamRef = adapter.sendMessage('follow up', {
+        cliProfile: copilotProfile(),
         sessionId: 'session-1',
         conversationId: 'conv-copilot-resume',
         isNewSession: false,
@@ -607,7 +610,7 @@ describe('Copilot lifecycle regressions', () => {
   }
 
   function options() {
-    return { sessionId: 'test-session', workingDir: workdir, systemPrompt: '', isNewSession: true };
+    return { sessionId: 'test-session', workingDir: workdir, systemPrompt: '', isNewSession: true, cliProfile: copilotProfile() };
   }
 
   async function collect(stream: AsyncGenerator<StreamEvent>): Promise<StreamEvent[]> {

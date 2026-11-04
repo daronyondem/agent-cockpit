@@ -65,6 +65,23 @@ describe('Copilot SDK conversation ownership through an executable RPC peer', ()
     expect(peer.calls().find(call => call.method === 'session.resume')?.params).toMatchObject({ sessionId: 'saved', continuePendingWork: false });
     expect(peer.calls().find(call => call.method === 'session.send')?.params?.prompt).toBe('next');
     expect(peer.calls().some(call => call.method === 'session.create')).toBe(false);
+    const methods = peer.calls().map(call => call.method);
+    expect(methods.indexOf('session.usage.getMetrics')).toBeLessThan(methods.indexOf('session.send'));
+    expect(methods.lastIndexOf('session.usage.getMetrics')).toBeGreaterThan(methods.indexOf('ack'));
+  }, 15000);
+
+  test.each(['error', 'hang'])('metrics %s leaves chat usable and omits uncertain charges', async mode => {
+    conversations = new CopilotConversations({ requestTimeoutMs: 1000 });
+    const frames = await collect(conversations.sendMessage('hello', options({ cliProfile: peer.profile({ COPILOT_FIXTURE_METRICS: mode }) })).stream);
+    expect(frames.some(frame => frame.type === 'text')).toBe(true);
+    expect(frames.some(frame => frame.type === 'error' || frame.type === 'usage')).toBe(false);
+    expect(alive(peer.calls()[0].pid)).toBe(false);
+  }, 15000);
+
+  test('a terminal session error during the baseline query cannot submit a late prompt', async () => {
+    const frames = await collect(conversations.sendMessage('must not submit', options({ cliProfile: peer.profile({ COPILOT_FIXTURE_METRICS: 'session-error' }) })).stream);
+    expect(frames).toContainEqual({ type: 'error', error: 'Session failed during usage query' });
+    expect(peer.calls().some(call => call.method === 'session.send')).toBe(false);
   }, 15000);
 
   test.each(['unknown baseline', 'unknown ledger'])('omits uncertain charges for %s', async kind => {

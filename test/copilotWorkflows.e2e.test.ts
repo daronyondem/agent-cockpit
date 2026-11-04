@@ -38,6 +38,8 @@ native('real Copilot Memory and Workspace Context workflows with a local model f
 
   test('chat uses production Memory MCP, Copilot governance, durable recall, and live update frames', async () => {
     const first = await chat(`Save ${MEMORY_MARKER} through memory_note, then retrieve it with memory_search. Do not write fallback files.`);
+    expect(fs.readFileSync(env.callsPath, 'utf8').trim().split('\n').map(line => JSON.parse(line).args)
+      .some((args: string[]) => args.includes('--headless'))).toBe(true);
     expect(first.events.some(event => event.type === 'tool_activity' && /memory_note/.test(event.tool))).toBe(true);
     expect(first.events.some(event => event.type === 'tool_activity' && /memory_search/.test(event.tool))).toBe(true);
     expect(first.events.some(event => event.type === 'memory_update' && event.changedFiles.length === 1)).toBe(true);

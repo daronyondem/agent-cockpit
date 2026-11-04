@@ -66,13 +66,16 @@ export async function startCopilotSdkRuntime(
   const closed = new Promise<Error>(resolve => { resolveClosed = resolve; });
   let client: CopilotClient | undefined;
   let stopping: Promise<void> | undefined;
+  let failed = false;
   const stop = (): Promise<void> => {
     if (stopping) return stopping;
     abortSignal?.removeEventListener('abort', abort);
     resolveClosed(new Error('Copilot runtime stopped.'));
     stopping = (async () => {
       try {
-        if (client) await deadline(client.stop(), 1000, 'Copilot SDK disconnect timed out.').catch(() => {});
+        // A dead process cannot acknowledge session.detach. Force-close first
+        // so JSON-RPC never writes graceful teardown requests to its ended socket.
+        if (client) await deadline<unknown>(failed ? client.forceStop() : client.stop(), 1000, 'Copilot SDK disconnect timed out.').catch(() => {});
       } finally {
         try { await scope.stop(); }
         finally {
@@ -83,12 +86,16 @@ export async function startCopilotSdkRuntime(
     return stopping;
   };
   const fail = (error: Error) => {
+    failed = true;
     resolveClosed(error);
     // Startup and adapter callers await stop; the exit handler must not reject
     // an unobserved promise if the process disappears while no turn is attached.
     void stop().catch(() => {});
   };
-  const abort = () => fail(new Error('Copilot runtime aborted.'));
+  const abort = () => {
+    resolveClosed(new Error('Copilot runtime aborted.'));
+    void stop().catch(() => {});
+  };
   proc.once('error', fail);
   proc.once('exit', (code, signal) => fail(new Error(`Copilot runtime exited (${signal || code}).`)));
   abortSignal?.addEventListener('abort', abort, { once: true });

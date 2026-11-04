@@ -31,6 +31,7 @@ const server = net.createServer(socket => {
     fs.appendFileSync(log,JSON.stringify({method,tokenMatches:params?.token===process.env.COPILOT_CONNECTION_TOKEN})+'\\n');
     if (mode === 'handshake-hang') return new Promise(()=>{});
     if (method === 'connect') return {protocolVersion:mode==='old-protocol'?2:3};
+    if (method === 'status.get' && mode === 'exit-on-status') { process.exit(7); }
     if (method === 'status.get') return {version:'fixture',protocolVersion:3};
     if (method === 'auth.getStatus') return {isAuthenticated:false};
     return {};
@@ -79,6 +80,19 @@ server.listen(0,'127.0.0.1',()=>{
     await expect(startCopilotSdkRuntime(runtime(), dir, { abortSignal: controller.signal })).rejects.toThrow('startup aborted');
     expect(fs.existsSync(log)).toBe(false);
   });
+
+  test('unexpected process exit force-closes without writing graceful session teardown to a dead socket', async () => {
+    active = await startCopilotSdkRuntime(runtime('exit-on-status'), dir);
+    const graceful = jest.spyOn(active.client, 'stop');
+    const forced = jest.spyOn(active.client, 'forceStop');
+    const status = active.client.getStatus().catch(error => error);
+    expect((await active.closed).message).toContain('exited');
+    await active.stop();
+    expect(await status).toBeInstanceOf(Error);
+    expect(graceful).not.toHaveBeenCalled();
+    expect(forced).toHaveBeenCalled();
+    expect(alive(active.process.pid!)).toBe(false);
+  }, 15000);
 
   test('abort after startup closes the connection and owned process', async () => {
     const controller = new AbortController();

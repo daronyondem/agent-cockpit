@@ -25,9 +25,11 @@ async function main(): Promise<void> {
   };
   const provider = await createCopilotLocalProvider(() => plan, workspace, MEMORY_MARKER);
   const launcher = path.join(root, 'copilot-fixture');
+  const sdkLaunches = path.join(root, 'sdk-launches.log');
   await fs.writeFile(launcher, `#!${process.execPath}
+if(process.argv.includes('--headless')) require('fs').appendFileSync(${JSON.stringify(sdkLaunches)},'SDK\\n');
 const result = require('child_process').spawnSync(${JSON.stringify(cli)}, [...process.argv.slice(2), '--disable-client-telemetry', '--disable-builtin-mcps'], {
-  stdio: 'inherit', env: { PATH: process.env.PATH, HOME: ${JSON.stringify(root)}, COPILOT_HOME: ${JSON.stringify(path.join(root, 'copilot-home'))},
+  stdio: 'inherit', env: { ...process.env, HOME: ${JSON.stringify(root)}, COPILOT_HOME: ${JSON.stringify(path.join(root, 'copilot-home'))},
     COPILOT_PROVIDER_TYPE: 'openai', COPILOT_PROVIDER_BASE_URL: ${JSON.stringify(provider.baseUrl)}, COPILOT_MODEL: 'gpt-4' }
 });
 if (result.error) throw result.error;
@@ -52,11 +54,14 @@ process.exit(result.status ?? 1);
   const config = path.join(root, 'ecosystem.config.cjs');
   await fs.writeFile(config, `module.exports=${JSON.stringify({ apps: [{ name: app, cwd, script: 'server.ts', interpreter: process.execPath, node_args: ['--import', 'tsx'], autorestart: false,
     env: { NODE_ENV: 'test', PORT: port, BASE_PATH: '', AGENT_COCKPIT_DATA_DIR: data, AUTH_DATA_DIR: path.join(data, 'auth'), DEFAULT_WORKSPACE: workspace,
-      SESSION_SECRET: `copilot-ui-fixture-${process.pid}`, WEB_BUILD_MODE: 'skip' },
+      SESSION_SECRET: `copilot-ui-fixture-${process.pid}`, WEB_BUILD_MODE: 'skip',
+      COPILOT_PROVIDER_TYPE: 'openai', COPILOT_PROVIDER_BASE_URL: provider.baseUrl, COPILOT_PROVIDER_API_KEY: '', COPILOT_MODEL: 'gpt-4',
+      COPILOT_GITHUB_TOKEN: '', GH_TOKEN: '', GITHUB_TOKEN: '', GH_CONFIG_DIR: path.join(root, 'gh'), COPILOT_DISABLE_KEYTAR: '1' },
     out_file: path.join(root, 'server-out.log'), error_file: path.join(root, 'server-error.log'),
   }] })};\n`);
   const pm2 = (args: string[]) => spawnSync(process.execPath, [path.join(cwd, 'node_modules/pm2/bin/pm2'), ...args], { cwd, encoding: 'utf8', env: { ...process.env, PM2_HOME: path.join(root, 'pm2') } });
   let exitCode = 1;
+  let sdkRuntimeLaunches = 0;
   let pm2Started = false;
   let playwright: ChildProcess | undefined;
   let interrupted = false;
@@ -79,13 +84,18 @@ process.exit(result.status ?? 1);
       await new Promise(resolve => setTimeout(resolve, 500));
     }
     if (!ready) throw new Error('Fixture server did not become ready');
-    exitCode = await new Promise<number>((resolve, reject) => {
+    const browserExitCode = await new Promise<number>((resolve, reject) => {
       const child = playwright = spawn(process.execPath, [path.join(cwd, 'node_modules/playwright/cli.js'), 'test', 'test/e2e/copilot.ui.pw.ts', '--config', 'playwright.config.ts', '--project', 'chromium', ...process.argv.slice(2)], {
         cwd, stdio: 'inherit', env: { ...process.env, COPILOT_UI_E2E: '1', COPILOT_UI_WORKSPACE: workspace, COPILOT_UI_PROFILE_ID: profileId, AGENT_COCKPIT_E2E_BASE_URL: baseUrl },
       });
       child.once('error', reject);
       child.once('exit', code => resolve(code ?? 1));
     });
+    if (browserExitCode === 0) {
+      sdkRuntimeLaunches = (await fs.readFile(sdkLaunches, 'utf8')).trim().split('\n').filter(Boolean).length;
+      if (!sdkRuntimeLaunches) throw new Error('Browser fixtures did not exercise SDK chat dispatch.');
+    }
+    exitCode = browserExitCode;
   } finally {
     process.removeListener('SIGINT', interrupt);
     process.removeListener('SIGTERM', interrupt);
@@ -93,7 +103,7 @@ process.exit(result.status ?? 1);
     await provider.close();
     const revision = spawnSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' }).stdout.trim();
     const dirty = Boolean(spawnSync('git', ['status', '--porcelain'], { encoding: 'utf8' }).stdout.trim());
-    await fs.writeFile(path.join(root, 'compatibility-report.json'), JSON.stringify({ startedAt: now, finishedAt: new Date().toISOString(), revision, dirty, platform: process.platform, arch: process.arch, nodeVersion: process.version, copilotVersion: version, model: 'fixed local responses; isolated auth; no hosted account', exitCode }, null, 2));
+    await fs.writeFile(path.join(root, 'compatibility-report.json'), JSON.stringify({ startedAt: now, finishedAt: new Date().toISOString(), revision, dirty, platform: process.platform, arch: process.arch, nodeVersion: process.version, copilotVersion: version, model: 'fixed local responses; isolated auth; no hosted account', sdkRuntimeLaunches, exitCode }, null, 2));
     process.stdout.write(`Copilot UI compatibility artifacts: ${root}\n`);
   }
   process.exitCode = exitCode;

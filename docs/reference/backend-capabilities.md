@@ -85,7 +85,8 @@ Native compatibility is verified on Grok Build 1.0.52, macOS arm64. See the
 
 ## GitHub Copilot
 
-- direct `copilot -p <prompt> --output-format json` CLI spawn per message;
+- owned SDK/headless chat with one process per active turn and native cold resume;
+  opaque custom commands and one-shots retain JSONL;
 - self-configured authentication that reuses the `copilot` CLI login under
   `~/.copilot` (sign in with `copilot login`); the profile check verifies
   installation, native credential status and enabled-model catalog access
@@ -94,20 +95,20 @@ Native compatibility is verified on Grok Build 1.0.52, macOS arm64. See the
 - default `auto` routing plus explicit account-dependent model selections;
 - reasoning effort through `copilot --reasoning-effort <low|medium|high|xhigh>`
   for explicit reasoning models, not automatic routing or Haiku;
-- visible thinking mapped from `assistant.reasoning_delta` JSONL events;
+- visible thinking mapped from `assistant.reasoning_delta` events;
 - streaming assistant text mapped from `assistant.message_delta` events;
 - tool activity and outcomes mapped from `tool.execution_start` and
   `tool.execution_complete` events;
-- session continuity through persisted Copilot session IDs passed back with
-  `copilot --resume <sessionId>`;
+- session continuity through persisted Copilot session IDs, resumed through SDK
+  or `copilot --resume <sessionId>` on the compatibility path;
 - one-shot image/PDF attachments through `copilot --attachment <path>` with
   explicitly verified `gpt-6.1-sol`; auto and unverified models are not eligible
   for media processors;
-- Memory and Knowledge Base MCP injection through
+- Memory and Knowledge Base MCP injection through SDK session config or JSONL
   `copilot --additional-mcp-config <json>`;
 - per-turn input/output/cache tokens and premium-request credits, derived by
-  subtracting saved native session checkpoints rather than recharging cumulative
-  resumed-session totals; no per-turn USD cost or estimate;
+  subtracting native metrics before/after a turn (saved checkpoints for JSONL)
+  and separating cache-inclusive input; no nano-AIU conversion or USD estimate;
 - restricted text-only one-shots explicitly expose zero tools using
   `--available-tools none`;
 - native delegation output isolated from the root answer; grouped child UI,
@@ -116,20 +117,25 @@ Native compatibility is verified on Grok Build 1.0.52, macOS arm64. See the
 - no confirmed native durable-memory directory for Agent Cockpit to import or
   watch. Copilot memory integration uses Agent Cockpit's Memory MCP tools.
 
-Native image/PDF/MCP/text/stream/resume/usage compatibility is verified with Copilot
-CLI 1.0.103-0 and 1.0.105 on macOS arm64 through `npm run e2e:copilot`.
-Six production Memory/Context workflows pass on macOS with fixed local replies;
-eight desktop/mobile Chromium cases pass on macOS and Ubuntu 24.04 x64.
+The earlier JSONL integration has native image/PDF/MCP/text/stream/resume/usage
+evidence with CLI 1.0.103-0 and 1.0.105 on macOS arm64 through
+`npm run e2e:copilot`. The updated hosted SDK stream check has not been rerun
+with entitled credentials; local SDK evidence is recorded separately below.
+Six production Memory/Context workflows pass through SDK chat on macOS with
+fixed local replies. Eight SDK desktop/mobile Chromium cases pass on macOS
+with eight observed headless launches; the earlier Ubuntu 24.04 browser evidence
+covers JSONL.
 KB/Routine workflow coverage uses executable fixtures. Windows Job ownership has
 native process-fixture evidence, not real Windows Copilot certification.
 Hosted account/model behavior remains separate from local-model integration.
 
-The internal SDK foundation uses pinned SDK 1.0.28 and an authenticated
-Cockpit-owned headless runtime. Seven opt-in native cases through
+SDK chat uses pinned SDK 1.0.28 and an authenticated
+Cockpit-owned headless runtime. Nine opt-in native cases through
 `npm run e2e:copilot-sdk` cover session resume/context, JSONL-session migration,
 questions, steering, child identity, conversation ownership/cold resume, and real tool-worker Stop-to-send on macOS arm64 with CLI 1.0.105 and fixed
-local replies, including Node 22.23.4. Profile checks use this runtime; the staged SDK conversation layer is tested directly. Production chat
-still uses JSONL and does not expose those controls. Native goal clear is removed
+local replies, including Node 22.23.4. They also verify cache-disjoint accounting
+after cold resume, aggregate delegated usage once, managed instructions and opaque
+wrapper compatibility. These probes do not expose question/steering/child controls. Native goal clear is removed
 in that CLI, and switching autopilot on does not resume a paused objective.
 See the [SDK evaluation](../research/copilot-sdk-parity-evaluation.md).
 Named profiles share terminal authentication and do not isolate accounts.

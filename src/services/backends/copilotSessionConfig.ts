@@ -14,13 +14,15 @@ function providerFromEnv(env: NodeJS.ProcessEnv): ProviderConfig | undefined {
 }
 
 export function copilotSessionConfig(options: SendMessageOptions, env: NodeJS.ProcessEnv, workingDir: string): SessionConfigBase {
-  const model = options.model?.trim() || env.COPILOT_MODEL || undefined;
+  const selection = options.model?.trim();
+  const model = selection && selection !== 'auto' ? selection : env.COPILOT_MODEL || undefined;
   const selected = COPILOT_MODELS.find(candidate => candidate.id === model);
   const effort = options.effort && selected?.supportedEffortLevels?.includes(options.effort)
     ? COPILOT_EFFORT_ORDER.find(candidate => candidate === options.effort) : undefined;
   const mcp = copilotMcpServers(options.mcpServers);
   return {
     clientName: 'agent-cockpit', model, workingDirectory: workingDir, streaming: true,
+    enableConfigDiscovery: true, coauthorEnabled: false,
     ...(effort ? { reasoningEffort: effort } : {}),
     ...(Object.keys(mcp).length ? { mcpServers: mcp } : {}),
     provider: providerFromEnv(env),

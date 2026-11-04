@@ -11,6 +11,8 @@ affects:
   - src/services/backends/copilotRuntime.ts
   - src/services/backends/copilotProfileStatus.ts
   - src/services/backends/copilotConversations.ts
+  - src/services/backends/copilot.ts
+  - src/services/backends/copilotUsage.ts
   - src/services/backends/copilotSdkEvents.ts
   - src/services/backends/copilotSessionConfig.ts
   - src/services/backends/copilotModels.ts
@@ -23,6 +25,7 @@ affects:
   - test/copilotSdkRuntime.test.ts
   - test/copilotProfileStatus.test.ts
   - test/copilotConversations.test.ts
+  - test/copilotAdapterRuntime.test.ts
   - test/copilotSdkEvents.test.ts
   - test/copilotSessionConfig.test.ts
   - docs/research/copilot-sdk-parity-evaluation.md
@@ -87,8 +90,23 @@ retains fresh per-turn MCP configuration and avoids idle runtime accumulation.
 Wait for late startup/cleanup before replacement, including cancellation before
 iterator consumption. Separate pure event projection from process/session effects.
 Recover missing history only on resume failure before prompt submission or
-observable work; never replay an interrupted tool loop. Keep unknown SDK ledger
-units unavailable until reconciliation with existing accounting is verified.
+observable work; never replay an interrupted tool loop.
+
+Route normal chat through this owner. Keep explicit custom command overrides
+on JSONL unless their provider base URL is visible in the runtime environment:
+native headless sessions do not inherit BYOK configuration privately installed
+by a wrapper. Choose the transport before execution, with no fallback after an
+SDK failure. Keep one facade admission/cleanup boundary across both paths, so a
+profile change after Stop cannot overlap native workers. Preserve Settings'
+self-configured profile normalization and server-level environment configuration.
+
+Read the native reconciled usage API before prompt submission and after idle,
+instead of reconstructing a newer ledger from disk. Native 1.0.105 local-provider
+records differ from the older checkpoint schema. Prefer authoritative disjoint
+token details, otherwise normalize cache-inclusive model aggregates, and count
+children once without adding overlapping provider/model/agent maps. Preserve
+native premium-request counters separately from nano-AIU. Unknown units and
+unavailable metrics are not zero charges or USD estimates.
 
 ## Alternatives Considered
 
@@ -103,6 +121,9 @@ units unavailable until reconciliation with existing accounting is verified.
 - **Use the SDK's bundled/in-process runtime:** bypasses the configured CLI and
   updater; in-process execution also loses per-runtime environment/process
   isolation. Explicit external connection avoids both paths.
+- **Force every command wrapper onto SDK:** breaks wrappers whose provider
+  environment is private. Extracting process environments would add sensitive,
+  platform-dependent inspection. Preserve their existing JSONL path instead.
 
 ## Consequences
 

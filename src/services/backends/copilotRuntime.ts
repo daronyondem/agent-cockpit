@@ -10,6 +10,13 @@ export interface CopilotCliRuntime extends CliCommandResolution {
   profileKey: string;
 }
 
+/** Opaque command wrappers can privately configure providers that SDK sessions cannot inherit. */
+export function copilotChatTransport(profile?: CliProfile): 'sdk' | 'jsonl' {
+  const command = profile?.command?.trim();
+  const env = { ...process.env, ...profile?.env };
+  return command && command !== 'copilot' && !env.COPILOT_PROVIDER_BASE_URL ? 'jsonl' : 'sdk';
+}
+
 export function resolveCopilotCliRuntime(profile?: CliProfile): CopilotCliRuntime {
   if (profile && profile.harness !== 'copilot') {
     throw new Error(`CLI profile harness ${profile.harness} is not copilot`);

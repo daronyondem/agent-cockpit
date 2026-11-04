@@ -24,6 +24,9 @@ export interface CopilotWorkflowPlan {
 export async function createCopilotWorkflowEnv(native = false) {
   const env = await createChatRouterEnv({ configureDefaultCli: false });
   const previousPort = process.env.PORT;
+  const nativeKeys = ['COPILOT_PROVIDER_BASE_URL', 'COPILOT_PROVIDER_TYPE', 'COPILOT_PROVIDER_API_KEY', 'COPILOT_MODEL',
+    'COPILOT_GITHUB_TOKEN', 'GH_TOKEN', 'GITHUB_TOKEN', 'GH_CONFIG_DIR', 'COPILOT_DISABLE_KEYTAR'];
+  const previousNativeEnv = Object.fromEntries(nativeKeys.map(key => [key, process.env[key]]));
   process.env.PORT = String((env.server.address() as { port: number }).port);
   const workspace = path.join(env.tmpDir, 'workspace');
   const planPath = path.join(env.tmpDir, 'copilot-plan.json');
@@ -43,6 +46,10 @@ export async function createCopilotWorkflowEnv(native = false) {
       await destroyChatRouterEnv(env);
     } finally {
       await provider?.close();
+      if (native) for (const key of nativeKeys) {
+        if (previousNativeEnv[key] === undefined) delete process.env[key];
+        else process.env[key] = previousNativeEnv[key];
+      }
       if (previousPort === undefined) delete process.env.PORT;
       else process.env.PORT = previousPort;
     }
@@ -54,10 +61,12 @@ export async function createCopilotWorkflowEnv(native = false) {
     const record = `require('fs').appendFileSync(${JSON.stringify(callsPath)}, JSON.stringify({args:process.argv.slice(2),cwd:process.cwd(),pid:process.pid})+'\\n');`;
     if (native) {
       provider = await createCopilotLocalProvider(() => plan, workspace, MEMORY_MARKER);
+      Object.assign(process.env, { COPILOT_PROVIDER_TYPE: 'openai', COPILOT_PROVIDER_BASE_URL: provider.baseUrl, COPILOT_PROVIDER_API_KEY: '', COPILOT_MODEL: 'gpt-4',
+        COPILOT_GITHUB_TOKEN: '', GH_TOKEN: '', GITHUB_TOKEN: '', GH_CONFIG_DIR: path.join(env.tmpDir, 'gh'), COPILOT_DISABLE_KEYTAR: '1' });
       fs.writeFileSync(launcher, `#!${process.execPath}
 ${record}
 const result = require('child_process').spawnSync('copilot', [...process.argv.slice(2), '--disable-client-telemetry', '--disable-builtin-mcps'], {
-  stdio: 'inherit', env: { PATH: process.env.PATH, HOME: ${JSON.stringify(env.tmpDir)}, COPILOT_HOME: ${JSON.stringify(path.join(env.tmpDir, 'copilot-home'))},
+  stdio: 'inherit', env: { ...process.env, HOME: ${JSON.stringify(env.tmpDir)}, COPILOT_HOME: ${JSON.stringify(path.join(env.tmpDir, 'copilot-home'))},
     COPILOT_PROVIDER_TYPE: 'openai', COPILOT_PROVIDER_BASE_URL: ${JSON.stringify(provider.baseUrl)}, COPILOT_MODEL: 'gpt-4' }
 });
 if (result.error) throw result.error;

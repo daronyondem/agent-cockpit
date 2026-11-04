@@ -5,9 +5,14 @@ const options: SendMessageOptions = { sessionId: 'cockpit', isNewSession: true, 
 
 test('preserves streaming, directory, permission and non-interactive question policy', async () => {
   const config = copilotSessionConfig({ ...options, model: 'gpt-6.1-sol', effort: 'high' }, {}, '/canonical');
-  expect(config).toMatchObject({ clientName: 'agent-cockpit', model: 'gpt-6.1-sol', reasoningEffort: 'high', workingDirectory: '/canonical', streaming: true, excludedTools: ['ask_user'] });
+  expect(config).toMatchObject({ clientName: 'agent-cockpit', model: 'gpt-6.1-sol', reasoningEffort: 'high', workingDirectory: '/canonical', streaming: true, excludedTools: ['ask_user'], enableConfigDiscovery: true, coauthorEnabled: false });
   expect(await config.onPermissionRequest!({} as never, {} as never)).toEqual({ kind: 'approve-once' });
   expect(config.onUserInputRequest).toBeUndefined();
+});
+
+test('automatic selection retains the CLI environment/default model instead of sending a literal auto BYOK model', () => {
+  expect(copilotSessionConfig({ ...options, model: 'auto' }, { COPILOT_MODEL: 'fixture-model' }, '/tmp').model).toBe('fixture-model');
+  expect(copilotSessionConfig({ ...options, model: 'auto' }, {}, '/tmp').model).toBeUndefined();
 });
 
 test.each(['auto', 'claude-haiku-5.5', 'gemini-3.8-flash', 'unknown'])('keeps unsupported effort absent for %s', model => {

@@ -14,7 +14,8 @@ import {
   isMissingNativeSessionError,
 } from './sessionRecovery';
 import { buildCliCommandInvocation } from '../cliCommandResolver';
-import { resolveCopilotCliRuntime, resolveCopilotWorkingDir, type CopilotCliRuntime } from './copilotRuntime';
+import { copilotChatTransport, resolveCopilotCliRuntime, resolveCopilotWorkingDir, type CopilotCliRuntime } from './copilotRuntime';
+import { CopilotConversations } from './copilotConversations';
 export { resolveCopilotCliRuntime, type CopilotCliRuntime } from './copilotRuntime';
 import { logger } from '../../utils/logger';
 import type {
@@ -41,9 +42,12 @@ interface CopilotRunResult {
 }
 
 interface StreamState {
+  key: string;
   proc: ChildProcess | null;
   scope?: CopilotProcessScope;
   aborted: boolean;
+  sdk?: SendMessageResult;
+  cleanup?: Promise<void>;
 }
 
 interface CopilotLineInfo {
@@ -57,7 +61,8 @@ interface CopilotLineInfo {
 }
 
 export class CopilotAdapter extends BaseBackendAdapter {
-  private turns = new Map<StreamState, string | undefined>();
+  private turns = new Set<StreamState>();
+  private conversations: CopilotConversations;
   private scopes = new Set<CopilotProcessScope>();
   private closing: Promise<void> | null = null;
   private closed = false;
@@ -65,6 +70,7 @@ export class CopilotAdapter extends BaseBackendAdapter {
   constructor(options: { workingDir?: string } = {}) {
     super(options);
     this.workingDir = options.workingDir || path.resolve(os.homedir(), '.agent-cockpit', 'workspace');
+    this.conversations = new CopilotConversations({ workingDir: this.workingDir });
   }
 
   get metadata(): BackendMetadata {
@@ -86,9 +92,9 @@ export class CopilotAdapter extends BaseBackendAdapter {
       },
       resumeCapabilities: {
         activeTurnResume: 'unsupported',
-        activeTurnResumeReason: 'The GitHub Copilot CLI runs one non-interactive process per turn and does not expose a way to reattach to an already-running turn stream.',
+        activeTurnResumeReason: 'Agent Cockpit owns one Copilot runtime per active turn and does not reattach to running streams after a server restart.',
         sessionResume: 'supported',
-        sessionResumeReason: 'The adapter persists Copilot session IDs via external_session and passes them back with copilot --resume on later turns.',
+        sessionResumeReason: 'The adapter persists Copilot session IDs via external_session and cold-resumes them through the SDK or the custom-command JSONL compatibility path.',
       },
       models: COPILOT_MODELS,
     };
@@ -99,13 +105,19 @@ export class CopilotAdapter extends BaseBackendAdapter {
   }
 
   sendMessage(message: string, options: SendMessageOptions): SendMessageResult {
-    const state: StreamState = { proc: null, aborted: this.closed || this.closing !== null };
-    this.turns.set(state, options.conversationId);
+    const key = options.conversationId || options.sessionId;
+    const previous = [...this.turns].filter(turn => turn.key === key);
+    if (previous.some(turn => !turn.aborted)) return { stream: this.rejectedTurn('Copilot already has an active turn for this conversation.'), abort: () => {}, sendInput: () => {} };
+    const state: StreamState = { key, proc: null, aborted: this.closed || this.closing !== null };
+    this.turns.add(state);
+    const stream = this.streamTurn(message, options, state, previous);
+    const close = stream.return.bind(stream), fail = stream.throw.bind(stream);
+    stream.return = async value => { await this.closeTurn(state); return close(value); };
+    stream.throw = async error => { await this.closeTurn(state); return fail(error); };
     return {
-      stream: this._streamMessage(message, options, state),
+      stream,
       abort: () => {
-        state.aborted = true;
-        void state.scope?.stop();
+        void this.closeTurn(state).catch(error => copilotLog.warn('Copilot turn cleanup failed', { error: String(error) }));
       },
       sendInput: () => {},
     };
@@ -114,22 +126,17 @@ export class CopilotAdapter extends BaseBackendAdapter {
   shutdown(options: { permanent?: boolean } = {}): Promise<void> {
     if (options.permanent) this.closed = true;
     if (this.closing) return this.closing;
-    for (const state of this.turns.keys()) state.aborted = true;
     for (const controller of this.oneShots) controller.abort();
-    this.closing = Promise.all([...this.scopes].map(scope => scope.stop()))
-      .then(() => {})
+    this.closing = settleCopilotCleanup([
+      ...[...this.turns].map(state => this.closeTurn(state)),
+      ...[...this.scopes].map(scope => scope.stop()), this.conversations.shutdown(options),
+    ])
       .finally(() => { this.closing = null; });
     return this.closing;
   }
 
   async onSessionReset(conversationId: string): Promise<void> {
-    const cleanup: Promise<void>[] = [];
-    for (const [state, id] of this.turns) {
-      if (id !== conversationId) continue;
-      state.aborted = true;
-      if (state.scope) cleanup.push(state.scope.stop());
-    }
-    await Promise.all(cleanup);
+    await settleCopilotCleanup([...this.turns].filter(state => state.key === conversationId).map(state => this.closeTurn(state)));
   }
 
   async runOneShot(prompt: string, options: RunOneShotOptions = {}): Promise<string> {
@@ -185,17 +192,34 @@ export class CopilotAdapter extends BaseBackendAdapter {
     }
   }
 
-  private async *_streamMessage(message: string, options: SendMessageOptions, state: StreamState): AsyncGenerator<StreamEvent> {
+  private async *rejectedTurn(error: string): AsyncGenerator<StreamEvent> {
+    yield { type: 'error', error }; yield { type: 'done' };
+  }
+
+  private closeTurn(state: StreamState): Promise<void> {
+    if (state.cleanup) return state.cleanup;
+    state.aborted = true;
+    state.sdk?.abort();
+    state.cleanup = settleCopilotCleanup([state.scope?.stop() || Promise.resolve(),
+      ...(state.sdk ? [this.conversations.onSessionReset(state.key)] : [])])
+      .then(() => { this.turns.delete(state); });
+    return state.cleanup;
+  }
+
+  private async *streamTurn(message: string, options: SendMessageOptions, state: StreamState, previous: StreamState[]): AsyncGenerator<StreamEvent> {
     try {
-      // Stop can detach the stream before native worker termination finishes.
-      for (const [previous, conversationId] of this.turns) {
-        if (previous !== state && conversationId && conversationId === options.conversationId && previous.aborted) {
-          await previous.scope?.stop();
-        }
+      if (!state.aborted && previous.length) await settleCopilotCleanup(previous.map(turn => this.closeTurn(turn)));
+      if (state.aborted) {
+        yield { type: 'error', error: 'Copilot turn aborted.', source: 'abort' }; yield { type: 'done' }; return;
       }
-      yield* this._streamMessageAttempt(message, options, state, false);
+      if (copilotChatTransport(options.cliProfile) === 'sdk') {
+        state.sdk = this.conversations.sendMessage(message, { ...options, conversationId: state.key });
+        yield* state.sdk.stream;
+      } else yield* this._streamMessageAttempt(message, options, state, false);
+    } catch (error) {
+      yield { type: 'error', error: error instanceof Error ? error.message : String(error) }; yield { type: 'done' };
     } finally {
-      this.turns.delete(state);
+      await this.closeTurn(state);
     }
   }
 
@@ -220,7 +244,7 @@ export class CopilotAdapter extends BaseBackendAdapter {
       const runtime = resolveCopilotCliRuntime(options.cliProfile);
       usageBaseline = !options.isNewSession && options.externalSessionId
         ? await readCopilotUsageBaseline(options.externalSessionId, runtime.env)
-        : copilotUsage(0, 0);
+        : { ...copilotUsage(0, 0), credits: 0 };
       if (state.aborted) {
         yield { type: 'error', error: 'Copilot turn aborted.', source: 'abort' };
         yield { type: 'done' };
@@ -406,6 +430,12 @@ export class CopilotAdapter extends BaseBackendAdapter {
       if (state.proc === proc) state.proc = null;
     }
   }
+}
+
+async function settleCopilotCleanup(cleanups: Promise<void>[]): Promise<void> {
+  const results = await Promise.allSettled(cleanups);
+  const errors = results.filter((result): result is PromiseRejectedResult => result.status === 'rejected').map(result => result.reason);
+  if (errors.length) throw new AggregateError(errors, 'Copilot cleanup failed.');
 }
 
 function buildCopilotRunArgs(prompt: string, options: {
