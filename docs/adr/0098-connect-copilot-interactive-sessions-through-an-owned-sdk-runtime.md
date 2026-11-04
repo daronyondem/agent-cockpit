@@ -10,6 +10,11 @@ affects:
   - src/services/backends/copilotSdkRuntime.ts
   - src/services/backends/copilotRuntime.ts
   - src/services/backends/copilotProfileStatus.ts
+  - src/services/backends/copilotConversations.ts
+  - src/services/backends/copilotSdkEvents.ts
+  - src/services/backends/copilotSessionConfig.ts
+  - src/services/backends/copilotModels.ts
+  - src/services/backends/copilotTools.ts
   - src/services/backends/copilotProcess.ts
   - src/services/cliProfileAuthService.ts
   - src/services/nodeRuntimeRequirement.ts
@@ -17,6 +22,9 @@ affects:
   - src/services/installDoctorService.ts
   - test/copilotSdkRuntime.test.ts
   - test/copilotProfileStatus.test.ts
+  - test/copilotConversations.test.ts
+  - test/copilotSdkEvents.test.ts
+  - test/copilotSessionConfig.test.ts
   - docs/research/copilot-sdk-parity-evaluation.md
   - docs/spec-backend-services.md
   - package.json
@@ -71,6 +79,16 @@ Keep individual feature capabilities disabled until their native semantics,
 server handling, and desktop/mobile behavior are verified. Native autopilot
 does not imply Codex-equivalent goal controls: the tested CLI removes clear,
 and toggling autopilot on does not resume a paused objective.
+
+Stage conversation ownership and event projection separately from switching
+production chat. Use one owned process per active conversation turn, cold-resume
+the persisted native ID, and close the process after session-wide idle. This
+retains fresh per-turn MCP configuration and avoids idle runtime accumulation.
+Wait for late startup/cleanup before replacement, including cancellation before
+iterator consumption. Separate pure event projection from process/session effects.
+Recover missing history only on resume failure before prompt submission or
+observable work; never replay an interrupted tool loop. Keep unknown SDK ledger
+units unavailable until reconciliation with existing accounting is verified.
 
 ## Alternatives Considered
 

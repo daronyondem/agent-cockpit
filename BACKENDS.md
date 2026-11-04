@@ -26,7 +26,7 @@ catalog access. A denied catalog remains an error even when credentials are
 recognized. This does not populate the chat picker, perform inference or manage
 login; named profiles still share terminal auth. Chat and restricted one-shots
 continue to use JSONL. The SDK foundation's native session/question/steering/child
-tests do not enable those controls in the table above. See the
+tests and staged conversation-owner resume/cancellation checks do not enable those controls in the table above. Production dispatch migration still needs native ledger reconciliation. See the
 [versioned evaluation](docs/research/copilot-sdk-parity-evaluation.md).
 
 ## Codex: feature-flag and deferred-work tracker

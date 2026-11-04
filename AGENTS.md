@@ -173,6 +173,17 @@ headless process with a fresh loopback connection token; never select the SDK's
 bundled/in-process runtime or bypass the existing process/Windows Job boundary.
 The native suite isolates auth and uses fixed local replies, so it is not
 hosted-account or model-judgment evidence. Record actual CLI/SDK/OS/revision.
+SDK conversation ownership lives in `copilotConversations.ts`; keep native event
+projection pure in `copilotSdkEvents.ts` and shared model/tool/config helpers in
+their focused Copilot modules. Review `test/copilotConversations.test.ts`,
+`test/copilotSdkEvents.test.ts` and `test/copilotSessionConfig.test.ts` before
+switching chat dispatch. Session idle drains attached background work; model
+replies, loop ends and child idle do not. Drain late startups and failed cleanup
+before admitting replacements. Resume must not continue interrupted tool work;
+recovery is permitted only before sending a prompt and before observable work.
+The staged conversation owner is not the current production chat path. Unknown
+SDK accounting units must remain unavailable rather than being converted to
+premium-request credits or USD. Verify ledger reconciliation before migration.
 Review `test/copilotProfileStatus.test.ts`, `test/cliProfileAuthService.test.ts`
 and the profile-auth route tests for credential/catalog checks. Preserve the
 distinction between installed CLI, authenticated credentials and enabled-model

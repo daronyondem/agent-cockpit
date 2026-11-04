@@ -5,6 +5,9 @@ import http from 'http';
 import { startCopilotSdkRuntime, type CopilotSdkRuntime } from '../src/services/backends/copilotSdkRuntime';
 import { resolveCopilotCliRuntime } from '../src/services/backends/copilotRuntime';
 import { CopilotAdapter } from '../src/services/backends/copilot';
+import { CopilotConversations } from '../src/services/backends/copilotConversations';
+import type { SendMessageOptions, StreamEvent } from '../src/types';
+import { waitForCopilotPeer } from './helpers/copilotSdkPeer';
 
 const native = process.env.COPILOT_SDK_E2E === '1' ? describe : describe.skip;
 
@@ -13,7 +16,7 @@ native('real Copilot owned SDK runtime with fixed local model responses', () => 
   let runtime: CopilotSdkRuntime | undefined;
   let provider: http.Server;
   let baseUrl: string;
-  let scenario: 'text' | 'question' | 'steer' | 'delegate';
+  let scenario: 'text' | 'question' | 'steer' | 'delegate' | 'wait';
   let requests: Array<Record<string, unknown>>;
   let events: Array<Record<string, unknown>>;
   let releaseSteer: (() => void) | undefined;
@@ -44,7 +47,12 @@ native('real Copilot owned SDK runtime with fixed local model responses', () => 
         };
         const hasTool = messages.some(message => message.role === 'tool');
         if (scenario === 'question' && !hasTool) call('ask_user', { question: 'Choose a fixture answer', choices: ['Alpha', 'Beta'] });
-        else if (scenario === 'steer' && !hasTool) {
+        else if (scenario === 'wait' && !hasTool) {
+          const powershell = process.platform === 'win32' && tools.some((tool: { name: string }) => tool.name === 'powershell');
+          const quote = (value: string) => powershell ? `'${value.replace(/'/g, "''")}'` : `'${value.replace(/'/g, "'\\''")}'`;
+          const program = `const fs=require('fs');fs.writeFileSync(${JSON.stringify(path.join(dir, 'worker.pid.tmp'))},String(process.pid));fs.renameSync(${JSON.stringify(path.join(dir, 'worker.pid.tmp'))},${JSON.stringify(path.join(dir, 'worker.pid'))});process.on('SIGTERM',()=>{});setTimeout(()=>fs.writeFileSync(${JSON.stringify(path.join(dir, 'worker-finished'))},'unexpected'),45000);`;
+          call(powershell ? 'powershell' : 'bash', { command: `${powershell ? '& ' : ''}${quote(process.execPath)} -e ${quote(program)}`, description: 'Synthetic cancellable SDK worker', initial_wait: 1000 });
+        } else if (scenario === 'steer' && !hasTool) {
           releaseSteer = () => {
             releaseSteer = undefined;
             const shell = process.platform === 'win32' && tools.some((tool: { name: string }) => tool.name === 'powershell') ? 'powershell' : 'bash';
@@ -55,7 +63,8 @@ native('real Copilot owned SDK runtime with fixed local model responses', () => 
           if (lastUser.includes('SDK_CHILD_ONLY')) say('SDK_CHILD_OK');
           else if (!hasTool) call('task', { name: 'fixture-child', agent_type: 'general-purpose', prompt: 'SDK_CHILD_ONLY', description: 'Run local delegate fixture' });
           else say('SDK_PARENT_OK');
-        } else if (scenario === 'steer') say(JSON.stringify(messages).includes('SDK_CORRECTION') ? 'SDK_STEER_OK' : 'SDK_STEER_MISSING');
+        } else if (scenario === 'wait') say('SDK_WAIT_RETURNED');
+        else if (scenario === 'steer') say(JSON.stringify(messages).includes('SDK_CORRECTION') ? 'SDK_STEER_OK' : 'SDK_STEER_MISSING');
         else if (scenario === 'question') say(JSON.stringify(messages.at(-1)?.content));
         else say('SDK_TEXT_OK');
       });
@@ -99,6 +108,21 @@ native('real Copilot owned SDK runtime with fixed local model responses', () => 
     onUserInputRequest: (request: unknown) => { question = request; return { answer: 'Beta', wasFreeform: false }; },
     onEvent: (event: unknown) => { events.push(event as Record<string, unknown>); },
   });
+
+  const conversationOptions = (overrides: Partial<SendMessageOptions> = {}): SendMessageOptions => ({
+    sessionId: 'cockpit-native', conversationId: 'native-conversation', workingDir: dir,
+    isNewSession: true, systemPrompt: 'Synthetic SDK conversation rules.', model: 'gpt-4',
+    cliProfile: { id: 'conversation-native', name: 'Native conversation', harness: 'copilot', authMode: 'server-configured',
+      command: process.env.COPILOT_SDK_CLI_PATH || 'copilot', createdAt: '', updatedAt: '',
+      env: { ...Object.fromEntries(Object.entries(nativeEnv).filter((entry): entry is [string, string] => typeof entry[1] === 'string')),
+        COPILOT_GITHUB_TOKEN: '', GH_TOKEN: '', GITHUB_TOKEN: '', COPILOT_PROVIDER_TYPE: 'openai', COPILOT_PROVIDER_BASE_URL: baseUrl, COPILOT_MODEL: 'gpt-4' },
+    }, ...overrides,
+  });
+  const collectConversation = async (stream: AsyncGenerator<StreamEvent>) => {
+    const frames: StreamEvent[] = [];
+    for await (const frame of stream) { frames.push(frame); events.push({ source: 'cockpit', ...frame }); }
+    return frames;
+  };
 
   test('verifies native status, empty authentication, same-ID session resume, and context APIs', async () => {
     const status = await runtime!.client.getStatus();
@@ -177,4 +201,52 @@ native('real Copilot owned SDK runtime with fixed local model responses', () => 
     expect(events).toContainEqual(expect.objectContaining({ type: 'assistant.message', agentId: started.agentId, data: expect.objectContaining({ content: 'SDK_CHILD_OK' }) }));
     await session.disconnect();
   }, 45000);
+
+  test('streams and cold-resumes a conversation through Cockpit ownership without losing its native history', async () => {
+    await runtime!.stop(); runtime = undefined;
+    const manager = new CopilotConversations({ startRuntime: async (...args) => { runtime = await startCopilotSdkRuntime(...args); return runtime; } });
+    try {
+      const first = await collectConversation(manager.sendMessage('SDK_CONVERSATION_SEED', conversationOptions()).stream);
+      expect(first.some(frame => frame.type === 'error')).toBe(false);
+      expect(first.filter(frame => frame.type === 'text')).toEqual([{ type: 'text', content: 'SDK_TEXT_OK', streaming: true }]);
+      const id = first.find(frame => frame.type === 'external_session')!;
+      expect(id).toMatchObject({ sessionId: expect.any(String) });
+      if (id.type !== 'external_session') throw new Error('Missing native session ID');
+      const resumed = await collectConversation(manager.sendMessage('SDK_CONVERSATION_RESUME', conversationOptions({ isNewSession: false, externalSessionId: id.sessionId })).stream);
+      expect(resumed).toContainEqual(id);
+      expect(resumed.some(frame => frame.type === 'error')).toBe(false);
+      expect(resumed.filter(frame => frame.type === 'done')).toHaveLength(1);
+      expect(JSON.stringify(requests.at(-1)?.messages)).toContain('SDK_CONVERSATION_SEED');
+    } finally { await manager.shutdown(); }
+  }, 60000);
+
+  test('cancels a native tool worker and immediately starts a replacement conversation turn', async () => {
+    await runtime!.stop(); runtime = undefined;
+    const manager = new CopilotConversations({ startRuntime: async (...args) => { runtime = await startCopilotSdkRuntime(...args); return runtime; } });
+    let worker = 0;
+    const alive = () => { try { process.kill(worker, 0); return true; } catch { return false; } };
+    try {
+      scenario = 'wait';
+      const active = manager.sendMessage('SDK_CANCELLABLE_WORKER', conversationOptions());
+      const pending = collectConversation(active.stream);
+      await waitForCopilotPeer(() => fs.existsSync(path.join(dir, 'worker.pid')));
+      worker = Number(fs.readFileSync(path.join(dir, 'worker.pid'), 'utf8'));
+      expect(worker).toBeGreaterThan(0);
+      const sessionId = events.find(event => event.source === 'cockpit' && event.type === 'external_session')?.sessionId;
+      expect(sessionId).toEqual(expect.any(String));
+      active.abort();
+      scenario = 'text';
+      const replacement = collectConversation(manager.sendMessage('SDK_AFTER_STOP', conversationOptions({ isNewSession: false, externalSessionId: String(sessionId) })).stream);
+      expect((await pending).some(frame => frame.type === 'error' && frame.source === 'abort')).toBe(true);
+      const resumed = await replacement;
+      expect(resumed).toContainEqual({ type: 'external_session', sessionId });
+      expect(resumed.some(frame => frame.type === 'text' && frame.content === 'SDK_TEXT_OK')).toBe(true);
+      await waitForCopilotPeer(() => !alive());
+      expect(Number(fs.readFileSync(path.join(dir, 'worker.pid'), 'utf8'))).toBe(worker);
+      expect(fs.existsSync(path.join(dir, 'worker-finished'))).toBe(false);
+    } finally {
+      await manager.shutdown();
+      if (worker && alive()) process.kill(worker, 'SIGKILL');
+    }
+  }, 60000);
 });

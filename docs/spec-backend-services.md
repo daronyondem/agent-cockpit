@@ -1032,7 +1032,7 @@ KB digestion/dreaming/gleaning and Routine workflows have separate executable-fi
 
 ### Copilot SDK runtime foundation
 
-`copilotRuntime.ts` owns the shared CLI command/environment resolver;
+`copilotRuntime.ts` owns the shared CLI command/environment and directory resolver;
 `copilot.ts` preserves its existing resolver/type re-exports. Runtime identity
 continues to hash profile ID, requested command and profile environment, with
 the existing server-configured/shared-auth behavior unchanged.
@@ -1086,11 +1086,99 @@ and persistence formats are unchanged; checks do not populate the chat picker.
 Existing user chat and processor one-shots still use the verified JSONL adapter,
 with their existing capabilities. Settings distinguishes authenticated
 credentials with unavailable catalog access. Mobile has no account-management
-surface, new assets or stream-frame changes in this step. Five native SDK cases
+surface, new assets or stream-frame changes in this step. Seven native SDK cases
 exercise local-provider sessions directly, including resuming a JSONL-created
 session with the same native ID and prior history; these do not certify browser
 controls or hosted-account access. See [ADR-0098](adr/0098-connect-copilot-interactive-sessions-through-an-owned-sdk-runtime.md)
 and the [versioned evaluation](research/copilot-sdk-parity-evaluation.md).
+
+#### Staged SDK conversation ownership
+
+`copilotConversations.ts` implements the next transport layer; `CopilotAdapter`
+does not delegate production chat to it yet. The class exposes `sendMessage`,
+`onSessionReset` and reusable/permanent `shutdown` with the existing backend
+shapes. No endpoint, browser frame, stored conversation field or capability flag
+changes in this checkpoint. Restricted processor/summary/title one-shots remain
+on their existing JSONL execution path.
+
+Admission is keyed by `conversation:<conversationId>`, falling back to
+`session:<sessionId>` for callers without a conversation ID. Reserve a slot when
+`sendMessage` returns, but allocate the runtime lazily when the iterator starts.
+Reject overlapping active turns for the same key and new admission during reset
+or shutdown. Other conversations remain independent. Aborting a turn starts
+cleanup immediately; a replacement awaits that cleanup, including a runtime
+factory that completes after cancellation. Returning or throwing into an
+unstarted iterator also releases admission, because a generator's own `finally`
+does not execute before its first `next`. Reset drains the selected owner only.
+Shutdown cancels all owners, awaits every result with `allSettled`, and rejects
+after all drains if any failed. A failed cleanup remains a barrier to replacement.
+Reusable shutdown reopens global admission after drains; permanent shutdown does
+not. Iterator closure and every terminal path await idempotent process cleanup.
+
+Each active turn owns one headless process through `copilotSdkRuntime.ts` and
+closes it at completion. The next turn cold-resumes the saved native session ID;
+there is no retained idle process. `copilotSessionConfig.ts` maps working
+directory, streaming, selected model and verified effort gates, local MCP server
+names/argv/environment/all-tools selection, and the existing explicit BYOK
+`COPILOT_PROVIDER_BASE_URL`, `COPILOT_PROVIDER_TYPE` and
+`COPILOT_PROVIDER_API_KEY` environment into SDK configuration. `COPILOT_MODEL`
+provides a fallback when no model option is supplied. With an explicit provider
+base URL, provider types are limited to the SDK's `openai`, `anthropic`, and
+`azure`; only local OpenAI-compatible inference has native qualification here.
+Unknown types in that explicit mapping fail instead of using hosted inference. Do not infer a wrapper's private
+environment overrides from the parent process. Chat grants native permission
+requests as `approve-once`, matching existing broad tool access. `ask_user` is
+excluded and `sendInput` remains inert until request ownership/UI integration.
+New sessions grant directory trust for that session; resumes explicitly pass
+`continuePendingWork:false` so interrupted native work is not replayed.
+
+The shared model catalog/effort constants live in `copilotModels.ts`, while
+canonical tool names/descriptions/outcomes live in `copilotTools.ts`. The facade
+keeps its test compatibility exports. Both transports use the same MCP config
+and first-turn `System instructions`/`User message` prompt composition; later
+turns do not prepend the system prompt again. The SDK owner does not alter the
+existing session-ID or usage storage formats.
+
+`copilotSdkEvents.ts` is a pure reducer with explicit per-turn state. It forwards
+root text/thinking, falls back to complete messages when no deltas were sent,
+suppresses repeated finals and tool starts/outcomes, remembers native tool names
+omitted from completion events, and isolates child `agentId` and legacy
+`parentToolCallId` output. Child activity still records observable work for the
+recovery guard. Adjacent duplicate event IDs are ignored; the SDK connection is
+ordered and has no active-turn reattachment/replay support. An initial idle
+before request activity does not finish the turn. Only root `session.idle`
+finishes normal execution, after attached shells and agents drain; assistant
+messages, `assistant.turn_end` and child idle are intermediate. Root native
+errors and aborted idle are terminal, and a terminal projection ignores late
+output. SDK callbacks also stop forwarding once the owner is cancelled/closed.
+
+Startup/session initialization and send-admission waits are cancellation-aware;
+session requests have a 30-second default bound. The running tool loop has no
+fixed response deadline. If native idle arrives before the send acknowledgement,
+wait for admission to settle before completion. Never submit a second native
+request to repair an ambiguous acknowledgement. Process exit closes the stream
+even when no final/idle notification arrives, and owned descendants are reaped.
+
+Missing-session recovery is limited to `resumeSession` failures before any
+observable root/child work and before sending the prompt. Invoke the existing
+snapshot hook, emit the normal recovery frame, create one fresh native session,
+and reset the usage baseline to zero. Failed snapshot creation logs the failure
+and uses the existing explicit incomplete-context recovery prompt; it does not
+write any fallback Memory files. Authorization failures and errors after
+submission never trigger replay or a fresh-session retry.
+
+Known legacy cumulative checkpoint shapes retain the existing saved-baseline
+subtraction and emit at most one usage frame at terminal idle. Missing baselines
+suppress cumulative charges. Discard pre-submission snapshots from startup or
+resume; they are historical state, not this prompt's charges or a measured zero.
+The SDK's generated checkpoint type also exposes
+`totalNanoAiu`/`providerModelMetrics`, unlike the currently supported JSONL
+`accountingSnapshot`/`totalPremiumRequests` shape. Those units are not converted
+to credits or USD, and an unknown checkpoint clears a previously usable snapshot
+rather than presenting stale accounting. Reconciliation of that native ledger
+remains a gate before production chat dispatch switches. Native fixed-model
+checks prove cold resume/history and real tool-worker cancellation/replacement;
+they do not prove hosted billing, account entitlement or browser SDK controls.
 
 ### ClaudeCodeAdapter (`src/services/backends/claudeCode.ts`)
 

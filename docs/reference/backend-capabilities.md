@@ -125,10 +125,10 @@ native process-fixture evidence, not real Windows Copilot certification.
 Hosted account/model behavior remains separate from local-model integration.
 
 The internal SDK foundation uses pinned SDK 1.0.28 and an authenticated
-Cockpit-owned headless runtime. Five opt-in native cases through
+Cockpit-owned headless runtime. Seven opt-in native cases through
 `npm run e2e:copilot-sdk` cover session resume/context, JSONL-session migration,
-questions, steering and child identity on macOS arm64 with CLI 1.0.105 and fixed
-local replies, including Node 22.23.4. Profile checks use this runtime; chat
+questions, steering, child identity, conversation ownership/cold resume, and real tool-worker Stop-to-send on macOS arm64 with CLI 1.0.105 and fixed
+local replies, including Node 22.23.4. Profile checks use this runtime; the staged SDK conversation layer is tested directly. Production chat
 still uses JSONL and does not expose those controls. Native goal clear is removed
 in that CLI, and switching autopilot on does not resume a paused objective.
 See the [SDK evaluation](../research/copilot-sdk-parity-evaluation.md).

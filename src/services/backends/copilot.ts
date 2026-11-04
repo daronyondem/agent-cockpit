@@ -1,9 +1,10 @@
 import type { ChildProcess } from 'child_process';
-import fs from 'fs';
 import os from 'os';
 import path from 'path';
 import { BaseBackendAdapter, type BackendCallOptions, type RunOneShotAttachment, type RunOneShotOptions } from './base';
-import { extractToolOutcome, shortenPath } from './toolUtils';
+import { copilotToolStartEvents, copilotToolCompleteEvents, canonicalCopilotToolName } from './copilotTools';
+import { COPILOT_MODELS, COPILOT_EFFORT_SET } from './copilotModels';
+import { copilotMcpConfig, composePrompt } from './copilotSessionConfig';
 import { copilotTurnUsage, copilotUsageCheckpoint, readCopilotUsageBaseline } from './copilotUsage';
 import { CopilotProcessScope, spawnCopilotProcess } from './copilotProcess';
 import {
@@ -13,15 +14,13 @@ import {
   isMissingNativeSessionError,
 } from './sessionRecovery';
 import { buildCliCommandInvocation } from '../cliCommandResolver';
-import { resolveCopilotCliRuntime, type CopilotCliRuntime } from './copilotRuntime';
+import { resolveCopilotCliRuntime, resolveCopilotWorkingDir, type CopilotCliRuntime } from './copilotRuntime';
 export { resolveCopilotCliRuntime, type CopilotCliRuntime } from './copilotRuntime';
 import { logger } from '../../utils/logger';
 import type {
   BackendMetadata,
   EffortLevel,
   McpServerConfig,
-  ModelCapabilities,
-  ModelOption,
   SendMessageOptions,
   SendMessageResult,
   StreamEvent,
@@ -33,70 +32,7 @@ import type {
 const COPILOT_ICON = '<svg width="28" height="28" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><rect width="24" height="24" rx="6" fill="#0D1117"/><path d="M12 6.4c-3.7 0-6.2 1.7-6.2 1.7-.5-1.3-.4-2.6-.4-2.6S4.1 6.6 4.1 8.5c-.5.6-.8 1.4-.8 2.4v2.2c0 2.9 3.9 4.7 8.7 4.7s8.7-1.8 8.7-4.7v-2.2c0-1-.3-1.8-.8-2.4 0-1.9-1.3-3-1.3-3s.1 1.3-.4 2.6c0 0-2.5-1.7-6.2-1.7Z" fill="#fff"/><path d="M9 11.4c-.9 0-1.6.9-1.6 2s.7 2 1.6 2 1.6-.9 1.6-2-.7-2-1.6-2Zm6 0c-.9 0-1.6.9-1.6 2s.7 2 1.6 2 1.6-.9 1.6-2-.7-2-1.6-2Z" fill="#0D1117"/></svg>';
 
 const COPILOT_EXEC_TIMEOUT_MS = 60_000;
-const COPILOT_EFFORT_ORDER: EffortLevel[] = ['low', 'medium', 'high', 'xhigh'];
-const COPILOT_EFFORT_SET = new Set<string>(COPILOT_EFFORT_ORDER);
 const copilotLog = logger.child({ module: 'copilot-backend' });
-
-const TEXT_MODEL_CAPABILITIES: ModelCapabilities = {
-  input: { text: true },
-  output: { text: true },
-  reasoning: true,
-};
-
-interface CopilotModelSeed {
-  id: string;
-  family: string;
-  costTier: 'high' | 'medium' | 'low';
-  description: string;
-  default?: boolean;
-  reasoning?: boolean;
-  mediaVerified?: boolean;
-}
-
-// Curated catalog. GitHub Copilot CLI has no machine-readable `models` listing,
-// so the available model identifiers are tracked here (see `copilot help config`).
-const COPILOT_MODEL_SEEDS: CopilotModelSeed[] = [
-  { id: 'auto', family: 'auto', costTier: 'medium', description: 'Let GitHub Copilot choose an available model', default: true, reasoning: false },
-  { id: 'claude-sonnet-5.5', family: 'claude', costTier: 'medium', description: 'Balanced Claude Sonnet model for everyday agentic coding' },
-  { id: 'claude-sonnet-5', family: 'claude', costTier: 'medium', description: 'Claude Sonnet 5' },
-  { id: 'claude-sonnet-4.6', family: 'claude', costTier: 'medium', description: 'Claude Sonnet 4.6' },
-  { id: 'claude-fable-5.1', family: 'claude', costTier: 'high', description: 'Claude Fable 5.1' },
-  { id: 'claude-fable-5', family: 'claude', costTier: 'high', description: 'Claude Fable 5' },
-  { id: 'claude-haiku-5.5', family: 'claude', costTier: 'low', description: 'Fast Claude Haiku model', reasoning: false },
-  { id: 'claude-haiku-4.5', family: 'claude', costTier: 'low', description: 'Claude Haiku 4.5', reasoning: false },
-  { id: 'claude-opus-5.5', family: 'claude', costTier: 'high', description: 'Claude Opus 5.5' },
-  { id: 'claude-opus-5', family: 'claude', costTier: 'high', description: 'Claude Opus 5' },
-  { id: 'claude-opus-4.8', family: 'claude', costTier: 'high', description: 'Claude Opus 4.8' },
-  { id: 'claude-opus-4.8-fast', family: 'claude', costTier: 'high', description: 'Latency-optimized Claude Opus 4.8' },
-  { id: 'gpt-6.1-sol', family: 'gpt', costTier: 'high', description: 'OpenAI GPT-6.1 Sol', mediaVerified: true },
-  { id: 'gpt-6-sol', family: 'gpt', costTier: 'high', description: 'OpenAI GPT-6 Sol' },
-  { id: 'gpt-6-luna', family: 'gpt', costTier: 'high', description: 'OpenAI GPT-6 Luna' },
-  { id: 'gpt-6-astra', family: 'gpt', costTier: 'high', description: 'OpenAI GPT-6 Astra' },
-  { id: 'gpt-5.6-sol', family: 'gpt', costTier: 'high', description: 'OpenAI GPT-5.6 Sol' },
-  { id: 'gpt-5.6-terra', family: 'gpt', costTier: 'high', description: 'OpenAI GPT-5.6 Terra' },
-  { id: 'gpt-5.6-luna', family: 'gpt', costTier: 'high', description: 'OpenAI GPT-5.6 Luna' },
-  { id: 'gpt-5.5', family: 'gpt', costTier: 'high', description: 'OpenAI GPT-5.5 reasoning model' },
-  { id: 'gpt-5.4', family: 'gpt', costTier: 'medium', description: 'OpenAI GPT-5.4 model' },
-  { id: 'gpt-5.3-codex', family: 'gpt', costTier: 'medium', description: 'OpenAI GPT-5.3 Codex coding model' },
-  { id: 'gpt-5.4-mini', family: 'gpt', costTier: 'low', description: 'Fast, low-cost GPT-5.4 mini model' },
-  { id: 'gpt-5-mini', family: 'gpt', costTier: 'low', description: 'Fast, low-cost GPT-5 mini model' },
-  { id: 'gemini-3.8-flash', family: 'gemini', costTier: 'low', description: 'Gemini Flash; account availability and media/effort support are not verified', reasoning: false },
-];
-
-const COPILOT_MODELS: ModelOption[] = COPILOT_MODEL_SEEDS.map(seed => ({
-  id: seed.id,
-  label: seed.id,
-  family: seed.family,
-  description: seed.description,
-  costTier: seed.costTier,
-  ...(seed.default ? { default: true } : {}),
-  ...(seed.reasoning === false ? {} : { supportedEffortLevels: [...COPILOT_EFFORT_ORDER] }),
-  capabilities: {
-    ...TEXT_MODEL_CAPABILITIES,
-    input: { text: true, image: seed.mediaVerified === true, pdf: seed.mediaVerified === true },
-    reasoning: seed.reasoning !== false,
-  },
-}));
 
 interface CopilotRunResult {
   text: string;
@@ -521,33 +457,6 @@ function copilotAttachmentFiles(attachments: RunOneShotAttachment[] | undefined)
   return files;
 }
 
-function copilotMcpConfig(mcpServers: McpServerConfig[] | undefined): string | null {
-  if (!Array.isArray(mcpServers) || mcpServers.length === 0) return null;
-  const servers: Record<string, unknown> = {};
-  for (const server of mcpServers) {
-    if (!server?.name || !server.command) continue;
-    const env: Record<string, string> = {};
-    for (const entry of server.env || []) {
-      if (entry?.name && typeof entry.value === 'string') env[entry.name] = entry.value;
-    }
-    servers[server.name] = {
-      type: 'local',
-      command: server.command,
-      args: Array.isArray(server.args) ? server.args : [],
-      tools: ['*'],
-      ...(Object.keys(env).length > 0 ? { env } : {}),
-    };
-  }
-  if (Object.keys(servers).length === 0) return null;
-  return JSON.stringify({ mcpServers: servers });
-}
-
-function composePrompt(message: string, systemPrompt: string | undefined, isNewSession: boolean): string {
-  const system = isNewSession ? String(systemPrompt || '').trim() : '';
-  if (!system) return message;
-  return `System instructions:\n${system}\n\nUser message:\n${message}`;
-}
-
 function copilotUsage(outputTokens: number, premiumRequests: number): Usage {
   return {
     inputTokens: 0,
@@ -715,133 +624,6 @@ function translateCopilotLine(line: string, toolNames?: Map<string, string>): St
   return events;
 }
 
-function copilotToolStartEvents(data: Record<string, unknown>): StreamEvent[] {
-  const detail = copilotToolDetail(data);
-  if (!detail) return [];
-  return [{ type: 'tool_activity', ...detail }];
-}
-
-function copilotToolCompleteEvents(data: Record<string, unknown>): StreamEvent[] {
-  const id = stringOrNull(data.toolCallId);
-  if (!id) return [];
-  const rawName = stringOrNull(data.toolName) || '';
-  const tool = canonicalCopilotToolName(rawName);
-  const success = data.success !== false;
-  const result = isRecord(data.result) ? data.result : {};
-  const content = typeof result.content === 'string' ? result.content : '';
-  const outcome = success
-    ? (extractToolOutcome(tool, content) || { outcome: 'done', status: 'success' as const })
-    : { outcome: 'error', status: 'error' as const };
-  return [{
-    type: 'tool_outcomes',
-    outcomes: [{
-      toolUseId: id,
-      isError: !success,
-      outcome: outcome.outcome,
-      status: outcome.status,
-    }],
-  }];
-}
-
-function copilotToolDetail(data: Record<string, unknown>): {
-  tool: string;
-  description: string;
-  id: string | null;
-} | null {
-  const rawName = stringOrNull(data.toolName);
-  if (!rawName) return null;
-  const id = stringOrNull(data.toolCallId);
-  const input = isRecord(data.arguments) ? data.arguments : {};
-
-  const mcp = copilotMcpToolName(rawName);
-  if (mcp) {
-    return { tool: mcp.tool, id, description: `${mcp.server}.${mcp.tool}` };
-  }
-
-  const canonical = canonicalCopilotToolName(rawName);
-  switch (canonical) {
-    case 'Read': {
-      const filePath = firstString(input.path, input.file_path, input.filePath);
-      return { tool: 'Read', id, description: filePath ? `Reading \`${shortenPath(filePath)}\`` : 'Reading file' };
-    }
-    case 'Write': {
-      const filePath = firstString(input.path, input.file_path, input.filePath);
-      return { tool: 'Write', id, description: filePath ? `Writing \`${shortenPath(filePath)}\`` : 'Writing file' };
-    }
-    case 'Edit': {
-      const filePath = firstString(input.path, input.file_path, input.filePath);
-      return { tool: 'Edit', id, description: filePath ? `Editing \`${shortenPath(filePath)}\`` : 'Editing file' };
-    }
-    case 'Bash': {
-      const description = firstString(input.description);
-      const command = firstString(input.command, input.cmd);
-      if (description) return { tool: 'Bash', id, description };
-      const short = command && command.length > 60 ? command.slice(0, 60) + '...' : command;
-      return { tool: 'Bash', id, description: short ? `Running: \`${short}\`` : 'Running command' };
-    }
-    case 'Grep': {
-      const pattern = firstString(input.pattern, input.query);
-      return { tool: 'Grep', id, description: pattern ? `Searching for \`${pattern}\`` : 'Searching files' };
-    }
-    case 'Glob': {
-      const pattern = firstString(input.pattern);
-      return { tool: 'Glob', id, description: pattern ? `Finding files matching \`${pattern}\`` : 'Finding files' };
-    }
-    case 'WebFetch': {
-      const url = firstString(input.url);
-      return { tool: 'WebFetch', id, description: url ? `Fetching: ${url}` : 'Fetching web content' };
-    }
-    case 'WebSearch': {
-      const query = firstString(input.query, input.q);
-      return { tool: 'WebSearch', id, description: query ? `Searching: \`${query}\`` : 'Searching the web' };
-    }
-    default:
-      return { tool: canonical, id, description: `Using ${canonical}` };
-  }
-}
-
-function canonicalCopilotToolName(rawName: string): string {
-  const normalized = rawName.replace(/[-_\s]/g, '').toLowerCase();
-  const map: Record<string, string> = {
-    bash: 'Bash',
-    shell: 'Bash',
-    runcommand: 'Bash',
-    view: 'Read',
-    read: 'Read',
-    readfile: 'Read',
-    create: 'Write',
-    write: 'Write',
-    writefile: 'Write',
-    str_replace: 'Edit',
-    strreplace: 'Edit',
-    strreplaceeditor: 'Edit',
-    edit: 'Edit',
-    editfile: 'Edit',
-    applypatch: 'Edit',
-    grep: 'Grep',
-    rg: 'Grep',
-    search: 'Grep',
-    glob: 'Glob',
-    list: 'List',
-    ls: 'List',
-    webfetch: 'WebFetch',
-    fetch: 'WebFetch',
-    websearch: 'WebSearch',
-    reportintent: 'Intent',
-  };
-  return map[normalized] || titleCase(rawName);
-}
-
-function copilotMcpToolName(rawName: string): { server: string; tool: string } | null {
-  const knownPrefixes = ['agent-cockpit-memory_', 'agent-cockpit-kb-search_', 'agent-cockpit-memory-', 'agent-cockpit-kb-search-'];
-  for (const prefix of knownPrefixes) {
-    if (rawName.startsWith(prefix)) {
-      return { server: prefix.slice(0, -1), tool: rawName.slice(prefix.length) };
-    }
-  }
-  return null;
-}
-
 function copilotLineInfo(line: string): CopilotLineInfo {
   const empty: CopilotLineInfo = {
     sessionId: null,
@@ -926,33 +708,8 @@ function firstString(...values: unknown[]): string | null {
   return null;
 }
 
-function titleCase(raw: string): string {
-  const parts = raw.split(/[-_\s]+/).filter(Boolean);
-  if (parts.length === 0) return raw;
-  return parts.map(part => part.charAt(0).toUpperCase() + part.slice(1)).join('');
-}
-
 function stripAnsi(text: string): string {
   return text.replace(/\x1B\[[0-9;]*m/g, '');
-}
-
-function resolveCopilotWorkingDir(workingDir: string | null | undefined): string {
-  const cwd = workingDir?.trim() || process.cwd();
-  try {
-    const stat = fs.statSync(cwd);
-    if (!stat.isDirectory()) {
-      throw new Error(`Copilot working directory is not a directory: ${cwd}`);
-    }
-  } catch (err: unknown) {
-    if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
-      throw new Error(`Copilot working directory does not exist: ${cwd}`);
-    }
-    if ((err as NodeJS.ErrnoException).code === 'ENOTDIR') {
-      throw new Error(`Copilot working directory is not a directory: ${cwd}`);
-    }
-    throw err;
-  }
-  return cwd;
 }
 
 function formatCopilotProcessError(err: Error & { code?: string }): string {

@@ -5,16 +5,16 @@ import { EventEmitter } from 'events';
 import { PassThrough } from 'stream';
 import type { CliProfile, StreamEvent } from '../src/types';
 import { CopilotAdapter, __copilotTestUtils, resolveCopilotCliRuntime } from '../src/services/backends/copilot';
+import { COPILOT_MODELS } from '../src/services/backends/copilotModels';
+import { canonicalCopilotToolName } from '../src/services/backends/copilotTools';
+import { copilotMcpConfig } from '../src/services/backends/copilotSessionConfig';
 import { checkOneShotMediaInput } from '../src/services/backends/mediaCapabilities';
 
 const {
   buildCopilotRunArgs,
   collectCopilotJson,
   copilotLineInfo,
-  copilotMcpConfig,
-  canonicalCopilotToolName,
   translateCopilotLine,
-  COPILOT_MODELS,
 } = __copilotTestUtils;
 
 function copilotProfile(overrides: Partial<CliProfile> = {}): CliProfile {

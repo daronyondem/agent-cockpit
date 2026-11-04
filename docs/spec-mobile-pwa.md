@@ -144,6 +144,9 @@ The PWA currently covers:
   and hosted-account behavior remain outside that evidence. Server-side profile
   checks now distinguish credentials from catalog access using existing result
   fields; mobile has no account-management screen to update in this step.
+  The staged SDK conversation owner is not yet wired into production sends.
+  Its native lifecycle tests do not change mobile UX, API frames, PWA metadata,
+  service-worker behavior or assets.
   Session reset waits for backend cleanup before replacing its session/checkout.
   During that interval, sends and goal starts/resume return temporary `503` with
   `Retry-After: 1`; repeat resets and worktree changes retain busy `409`. The

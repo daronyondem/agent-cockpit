@@ -14,7 +14,8 @@ not hosted model quality or Copilot account access.
 | Headless protocol | SDK getStatus reports CLI 1.0.105/protocol 3 | Real Windows/Linux CLI runs |
 | Account status | Empty auth reports isAuthenticated:false; normal terminal GitHub CLI credentials report true | Successful hosted access, expired credentials and two-account cases |
 | Catalog | models.list rejects unauthenticated access; normal authenticated credentials return an explicit HTTP 403 | Successful account-dependent model lists |
-| Session create/resume | Same native ID resumes and answers another prompt; JSONL-created session resumes through SDK with original history | Cockpit conversation lifecycle and server restart migration |
+| Session create/resume | Same native ID resumes and answers another prompt; JSONL-created session resumes through SDK with original history | Production route dispatch and server restart migration |
+| Conversation owner | New Cockpit SDK layer cold-resumes the native ID/history across owned processes; cancellation reaps a real tool worker before immediate replacement | Production dispatch migration and Windows/Linux runs |
 | Questions | Native ask_user calls SDK onUserInputRequest; Beta reaches the next model request | Desktop/mobile request ownership and reload |
 | Steering | An immediate message sent during an in-flight model request reaches the next tool-loop iteration | Boundary-to-enqueue behavior and both clients |
 | Delegation | Native task starts/completes a child with agentId and root toolCallId; root finishes separately | Parallel/nested/background display and cleanup |
@@ -45,6 +46,26 @@ completion can then generate another model call before session.idle. Assert
 the correction's single user.message with delivery:steering, not a fixed count
 of model requests. A first assistant reply or tool-loop turn end is not a
 sufficient stream-completion boundary.
+
+The staged `CopilotConversations` owner now has executable RPC-fixture coverage
+for concurrent owners, late startup after reset/shutdown, immediate replacement,
+pre-start iterator closure, admission ordering, request deadlines, process/orphan
+exit, and failed cleanup as an admission barrier. Missing-session recovery is
+limited to a failed resume before observable work or prompt submission. Native
+checks cold-resume through this owner and retain actual history, then separately
+abort a TERM-resistant native tool worker and immediately resume the same native session without starting that worker again.
+Production chat remains JSONL; these tests do not expose SDK controls in either
+browser client.
+
+The published SDK's generated `UsageCheckpointData` contains `totalNanoAiu` and
+optional `providerModelMetrics`; the existing CLI JSONL parser expects
+`accountingSnapshot.tokenDetails` and `totalPremiumRequests`. Fixed local model
+tests do not establish billable hosted counters or a conversion between these
+units. The new owner preserves known legacy baseline subtraction, suppresses
+unknown accounting and clears stale snapshots on unknown checkpoints. Inspect
+and reconcile the actual supported native ledger before switching production
+dispatch; do not interpret missing data as zero or price credits as model API
+USD.
 
 ## Process ownership
 
@@ -82,9 +103,10 @@ to per-run temporary folders referenced by `sdk-evidence-path.txt` and
 `owned-evidence-path.txt`; ACP evidence is referenced by
 `acp-evidence-path.txt`. These temporary paths are not shipped data stores.
 
-`npm run e2e:copilot-sdk` retains five reproducible native cases and emits a
+`npm run e2e:copilot-sdk` retains seven reproducible native cases and emits a
 temporary compatibility report with CLI/SDK/OS/Node/revision/dirty metadata,
-plus per-case local requests and native events. The five-case run passes on
+plus per-case local requests and native events (or explicitly labeled Cockpit
+frames for the two conversation-owner cases). The seven-case run passes on
 Node 22.23.4/macOS arm64. The test workflow adds a pinned 1.0.105 matrix on
 macOS 15, Ubuntu 24.04 and Windows; until those jobs run, their presence is not
 platform certification. Machine-local evidence does not substitute for

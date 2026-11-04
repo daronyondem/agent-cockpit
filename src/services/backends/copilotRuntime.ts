@@ -1,3 +1,4 @@
+import fs from 'fs';
 import crypto from 'crypto';
 import type { CliProfile } from '../../types';
 import { resolveCliCommandForRuntime, type CliCommandResolution } from '../cliCommandResolver';
@@ -25,4 +26,23 @@ export function resolveCopilotCliRuntime(profile?: CliProfile): CopilotCliRuntim
     env,
     profileKey: profile ? `${profile.id}:${hash}` : `server-configured:${hash}`,
   };
+}
+
+export function resolveCopilotWorkingDir(workingDir: string | null | undefined): string {
+  const cwd = workingDir?.trim() || process.cwd();
+  try {
+    const stat = fs.statSync(cwd);
+    if (!stat.isDirectory()) {
+      throw new Error(`Copilot working directory is not a directory: ${cwd}`);
+    }
+  } catch (err: unknown) {
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
+      throw new Error(`Copilot working directory does not exist: ${cwd}`);
+    }
+    if ((err as NodeJS.ErrnoException).code === 'ENOTDIR') {
+      throw new Error(`Copilot working directory is not a directory: ${cwd}`);
+    }
+    throw err;
+  }
+  return cwd;
 }
