@@ -17,7 +17,7 @@ import { KiroPlanUsageStore } from './kiroPlanUsageStore.js';
 import { GrokPlanUsageStore } from './grokPlanUsageStore.js';
 import { CodexPlanUsageStore } from './codexPlanUsageStore.js';
 import { cleanGoalObjectiveText, goalSnapshotTimeMs, isActiveGoal } from './goalState.js';
-import { reduceStreamFrame } from './stream/streamFrameReducer.ts';
+import { reduceStreamFrame, mergeInitialStreamMessages } from './stream/streamFrameReducer.ts';
 
   /** @typedef {import('../../../src/contracts/streams').ConversationInputRequest} ConversationInputRequest */
   /** @typedef {import('../../../src/contracts/streams').SendMessageRequest} SendMessageRequest */
@@ -709,7 +709,7 @@ import { reduceStreamFrame } from './stream/streamFrameReducer.ts';
       update(convId, cur => ({
         ...cur,
         conv: data,
-        messages,
+        messages: mergeInitialStreamMessages(messages, cur.messages),
         messageWindow,
         pinnedMessages,
         loadingOlder: false,

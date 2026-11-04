@@ -128,6 +128,7 @@ export default function App() {
   });
   const {
     streamText,
+    streamTools,
     setStreamText,
     showStreamPlaceholder,
     setShowStreamPlaceholder,
@@ -747,6 +748,7 @@ export default function App() {
           draft={draft}
           setDraft={setDraft}
           streamText={streamText}
+          streamTools={streamTools}
           showStreamPlaceholder={showStreamPlaceholder}
           isStreaming={isStreaming}
           isSending={isSending}

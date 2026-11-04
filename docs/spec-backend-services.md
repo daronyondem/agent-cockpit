@@ -990,7 +990,7 @@ in [ADR-0092](adr/0092-integrate-grok-build-through-acp-and-native-extensions.md
 
 ### CopilotAdapter (`src/services/backends/copilot.ts`)
 
-**Metadata:** `id: 'copilot'`, label `GitHub Copilot`, inline SVG icon, conservative synchronous capabilities `{ thinking:true, planMode:false, agents:false, toolActivity:true, userQuestions:false, stdinInput:false, oneShotMediaInput:{ image:['explicit-attachment'], pdf:['explicit-attachment'] } }`, and later-session resume. Synchronous registry metadata uses a curated fallback with `modelCatalog:{source:'fallback',reason}`. Async profile metadata discovers account models and enables `userQuestions`/`stdinInput` for the SDK transport; opaque JSONL profiles retain false. Actual steering requires that turn's `input_ready` token, emitted only after queue control succeeds. Delegation UI and goals remain disabled. See [ADR-0098](adr/0098-connect-copilot-interactive-sessions-through-an-owned-sdk-runtime.md) and the contracts below.
+**Metadata:** `id: 'copilot'`, label `GitHub Copilot`, inline SVG icon, conservative synchronous capabilities `{ thinking:true, planMode:false, agents:false, toolActivity:true, userQuestions:false, stdinInput:false, oneShotMediaInput:{ image:['explicit-attachment'], pdf:['explicit-attachment'] } }`, and later-session resume. Synchronous registry metadata uses a curated fallback with `modelCatalog:{source:'fallback',reason}`. Async profile metadata discovers account models and enables `userQuestions`/`stdinInput`/`agents` for the SDK transport; opaque JSONL profiles retain false. Actual steering requires that turn's `input_ready` token, emitted only after queue control succeeds. SDK delegation uses grouped cards and summaries as specified below; goals remain disabled. See [ADR-0098](adr/0098-connect-copilot-interactive-sessions-through-an-owned-sdk-runtime.md) and the contracts below.
 
 **Profile-scoped model catalog (`copilotCatalog.ts`, `copilotModels.ts`):**
 
@@ -1035,9 +1035,9 @@ archiving/deleting. This drain also applies after Stop has detached the runtime.
 
 **MCP injection:** When Cockpit passes `mcpServers`, the adapter converts the ACP-shaped `{ name, command, args, env[] }` entries into Copilot local MCP entries (`{ type: 'local', command, args, tools: ['*'], env }`) and supplies them in SDK session configuration or via `--additional-mcp-config <json>` for JSONL execution only, augmenting the user's `~/.copilot/mcp-config.json` without writing Memory or KB tokens to disk.
 
-**Response/retry boundaries:** Envelope `agentId` or `data.parentToolCallId` marks delegated output. Child/grandchild text deltas, final-message fallbacks, reasoning, tool activity/outcomes, and child session errors are suppressed from the root presentation until grouped child UI is implemented. Only root tools clear pre-tool narration in one-shot collection; late child work cannot erase an already-collected root answer. Session-wide native usage aggregates are processed independently of presentation and include delegated work once. Any root or child tool start blocks missing-session replay, even when the child activity is hidden.
+**Response/retry boundaries:** Envelope `agentId` or `data.parentToolCallId` marks delegated output. Child/grandchild text deltas, reasoning and session errors never enter the root answer. SDK chat projects owned child tools/lifecycle into grouped cards and stores final child summaries there. Opaque JSONL chat and all one-shot collection continue suppressing child presentation. Only root tools clear pre-tool narration in one-shot collection; late child work cannot erase an already-collected root answer. Session-wide native usage aggregates are processed independently of presentation and include delegated work once. Any root or child tool start blocks missing-session replay, even when the child activity is hidden.
 
-**Scope and evidence:** SDK chat integrates native questions and explicit active-turn steering as specified below. Grouped child presentation, plan mode and native goal controls remain follow-ups. ACP probes do not establish equivalent controls. Multiple named profiles share host auth and do not provide account isolation; `--version` checks only availability, not credentials, entitlement, model permissions, or account identity. Guided device login/account profiles, remaining quotas/resets/context occupancy, native memory import, and native sequential `runSessionShot()` are follow-ups. Sequential gleaning currently uses the base transcript-replay fallback and remains functional.
+**Scope and evidence:** SDK chat integrates native questions and explicit active-turn steering as specified below. SDK delegated cards, summaries and cancellation are integrated; plan mode and native goal controls remain follow-ups. ACP probes do not establish equivalent controls. Multiple named profiles share host auth and do not provide account isolation; `--version` checks only availability, not credentials, entitlement, model permissions, or account identity. Guided device login/account profiles, remaining quotas/resets/context occupancy, native memory import, and native sequential `runSessionShot()` are follow-ups. Sequential gleaning currently uses the base transcript-replay fallback and remains functional.
 
 The authenticated native suite verifies direct image/PDF transport, fixture MCP calls, text/stream/later-session resume, and usage. The separate `npm run e2e:copilot-workflows` suite exercises the production chat router, Memory stdio shim/HTTP routes, Copilot governance processor, durable Memory search, workspace update frames, Workspace Context maintenance, and a fresh chat reading managed Context instructions/files. Six native cases cover successful note/search and recall, Memory-to-Context consumption plus reference ingestion, rejected Memory governance without fallback files, invalid Context output preserving the inbox until a successful retry, automatic scheduled maintenance, and reset finalization over the ended session. It runs the real CLI with an isolated temporary auth home and fixed local OpenAI-compatible model responses, without hosted accounts, live model reasoning, or CLI updates. The evidence is Copilot 1.0.105 on macOS arm64; each run prints CLI/OS/architecture/revision evidence. Normal CI runs `test/copilotMemoryContext.test.ts` against the real adapter, MCP shim, routes and stores with an executable JSONL fixture instead of requiring Copilot. It additionally checks duplicate governance, persisted metadata/reload, workspace isolation, disabled writes, reset token revocation, restricted governance versus tool-enabled Context arguments, unaccepted-note retention, processor failures, and cancellation/retry. These checks validate integration and persistence, not model quality or account/entitlement behavior.
 
@@ -1107,8 +1107,8 @@ refreshed cache.
 User chat now uses the owned SDK conversation path described below. Custom
 command compatibility and processor one-shots retain JSONL. Settings distinguishes authenticated
 credentials with unavailable catalog access. Mobile has no account-management
-surface, new assets or stream-frame changes in this step. Nine native SDK cases
-exercise local-provider sessions directly, including resuming a JSONL-created
+surface or new static assets in this step. Twenty native SDK cases
+exercise local-provider sessions and production ownership directly, including resuming a JSONL-created
 session with the same native ID and prior history; these do not certify browser
 controls or hosted-account access. See [ADR-0098](adr/0098-connect-copilot-interactive-sessions-through-an-owned-sdk-runtime.md)
 and the [versioned evaluation](research/copilot-sdk-parity-evaluation.md).
@@ -1185,9 +1185,9 @@ existing session-ID or usage storage formats.
 
 `copilotSdkEvents.ts` is a pure reducer with explicit per-turn state. It forwards
 root text/thinking, falls back to complete messages when no deltas were sent,
-suppresses repeated finals and tool starts/outcomes, remembers native tool names
-omitted from completion events, and isolates child `agentId` and legacy
-`parentToolCallId` output. Child activity still records observable work for the
+suppresses repeated finals, and delegates scoped tool/lifecycle projection to
+`copilotAgents.ts`. Child `agentId` and legacy `parentToolCallId` output remain
+isolated from root prose. Child activity still records observable work for the
 recovery guard. Adjacent duplicate event IDs are ignored; the SDK connection is
 ordered and has no active-turn reattachment/replay support. An initial idle
 before request activity does not finish the turn. Only root `session.idle`
@@ -1195,6 +1195,63 @@ finishes normal execution, after attached shells and agents drain; assistant
 messages, `assistant.turn_end` and child idle are intermediate. Root native
 errors and aborted idle are terminal, and a terminal projection ignores late
 output. SDK callbacks also stop forwarding once the owner is cancelled/closed.
+
+#### SDK delegated ownership and presentation
+
+`copilotAgents.ts` owns pure per-turn maps of tool calls, native agents and
+finished IDs. `CopilotConversations` supplies a fresh UUID namespace each turn;
+`copilotToolId` encodes `copilot:<namespace>:<JSON tuple [ownerAgentId|null,rawId]>`.
+Tuple encoding prevents delimiter collisions; root, siblings and nested agents
+can reuse raw tool IDs without sharing rows or outcomes. Native transcript IDs
+and external session IDs remain unchanged. Previous reducer state is immutable.
+
+On `subagent.started`, the envelope `agentId` identifies the new child,
+`data.parentId` identifies its native parent (absent for root), and
+`data.toolCallId` identifies the spawning `task` call in that parent's scope.
+Use remembered task ownership only when unambiguous. Explicit native agent IDs
+are authoritative; completion can use legacy raw-ID lookup only when no
+envelope agent ID exists. An unknown ID cannot claim another card. Suppress unknown parents
+and ambiguous legacy `parentToolCallId` lookup rather than promoting work to
+root. Emit one `tool_activity` with `tool:'Agent'`, `isAgent:true`, scoped spawn
+ID, native type/name and description; prefix background descriptions with
+`Background: `. Suppress the raw task row. Descendant Agent cards and normal
+child tools carry `parentAgentId` equal to the top ancestor's scoped card ID.
+Clients flatten them into that card's tool rows, maintaining the existing
+one-level nesting contract. Sibling cards remain independent.
+
+Normal child tools use shared tool-name/description/outcome translation, scoped
+IDs, and top-card ancestry. Duplicate starts/completions are ignored. Child
+text/reasoning never becomes parent text/thinking or structured one-shot output.
+The most recent nonempty final child `assistant.message` without `toolRequests`
+becomes its summary, trimmed and capped at 4,000 characters plus an ellipsis.
+It stays in reducer state until `subagent.completed`/`subagent.failed` emits one
+`tool_outcomes` item with optional `summary`. Completion maps to done/success,
+`cancelled:true` to cancelled/warning, failure to failed/error with bounded
+native error summary. Child failure alone does not terminate the root turn.
+A task that fails before a child starts emits a failed Agent card and diagnostic
+summary. A background task's early `tool.execution_complete` is acknowledgement,
+not card completion; its lifecycle owns the eventual summary/outcome.
+
+Only root `session.idle` closes the stream after native background workers and
+completion notifications drain. An early parent reply, task acknowledgement or
+child completion cannot finish it. Late terminal events cannot reopen it.
+Abort marks unfinished cards/tools cancelled/warning; root error, unexpected
+closure or incomplete idle marks them interrupted/warning, exactly once.
+`processStream` also settles unfinished Copilot Agent/child rows during terminal
+persistence, since HTTP Stop can finalize before consuming generator cleanup.
+Completed outcomes/summaries survive either path. Session-wide usage is read
+only after drain and counts children once; agent/model/provider aggregates must
+not be added together. Cold resume cannot replay cancelled child tools.
+
+`ToolActivity` and `ToolOutcome` add optional plain-text `summary` in server
+types and browser-safe response/stream contracts. The route patches both
+`contentBlocks[].activity` and legacy `toolActivity[]`, preserving summaries
+through normal saves, terminal partial saves and session reload. Desktop's pure
+frame reducer and mobile's focused live-tool reducer update summaries/outcomes
+immutably. Desktop and mobile render summary disclosure controls as escaped
+text; neither executes HTML or imports backend modules. No storage migration or
+new endpoint is required. Opaque JSONL profiles retain `agents:false` and prior
+root-output isolation. See ADR-0098 and the versioned native evaluation.
 
 #### SDK questions and steering
 
@@ -1226,31 +1283,40 @@ responses from releasing another model request during Stop.
 Steering is an explicit secondary composer action; Enter/send while running
 still uses Cockpit's existing persisted message queue. Initial `session.send`
 acknowledgement alone is insufficient to acquire the native queue pause: wait
-for both acknowledgement and root `assistant.turn_start`, then call
-`session.rpc.queue.setDrainPaused({paused:true})`. Pausing before root start can
-block the initial prompt itself. On success, emit
+for both acknowledgement and root `assistant.turn_start`, then probe
+`queue.pendingItems()` and `queue.setDrainPaused` true/false. Pausing before root
+start can block the initial prompt itself. Release the probe pause so native
+background-completion notifications can drain. On success, emit
 `{type:'input_ready',turnId:<UUID>}`. Unsupported/failed queue control leaves
 questions/chat usable without steering readiness. Child starts do not qualify.
 
 `deliverInput` steering requires the current `turnId`, a client-generated unique
 `inputId`, nonblank text, no pending question, and no other pending steering.
-Remember submitted IDs for that turn to reject duplicate requests. Submit once
-with `session.send({prompt:text,mode:'immediate'})`; its returned native
+Remember submitted IDs for that turn to reject duplicate requests. Acquire
+`queue.setDrainPaused({paused:true})` before submitting once with
+`session.send({prompt:text,mode:'immediate'})`; its returned native
 message ID is an admission acknowledgement. Accept the HTTP input only after a
 root `user.message` with that ID and `delivery:'steering'`. Handle notification
 before acknowledgement as well. Child/unrelated delivery events cannot accept
 the pending input. The delivery request has no consumption timeout; Stop and
 native completion release it. Native RPC admission retains the 30-second bound.
 
-Copilot promotes an unconsumed immediate message into its follow-up queue at
-idle. Hold that lane paused, await admission, and call
-`queue.withdrawMessage({messageId,expectedPrompt})` for the exact unconsumed
-message before finishing. Only `{removed:true,interrupted:false}` proves safe
-withdrawal: return 409 explaining that the turn finished before consuming the
-input. Never release the native pause, append to Cockpit's queue, resend, or
-launch a second execution automatically. The owned runtime closes on completion;
-cold resume uses `continuePendingWork:false` and a fresh turn token. Failed
-admission or uncertain withdrawal returns 503 and stops the turn without retry.
+Copilot promotes an unconsumed immediate message into its follow-up queue.
+While its transaction holds that lane paused, poll `queue.pendingItems()` every
+100 ms after admission. Finding that exact `messageId` proves promotion, even
+before session idle when native background notifications wait behind it. Call
+`queue.withdrawMessage({messageId,expectedPrompt})`; only
+`{removed:true,interrupted:false}` proves safe withdrawal. Release the pause
+only after confirmed consumption or exact removal, and return 200 or 409
+respectively. The 409 explains that work finished before consumption and retains
+the draft/files. Idle finalization awaits admission and shares the same
+single-flight cleanup with polling/consumption. Clear polling on settlement,
+completion or cancellation. Never append to Cockpit's queue, resend, or launch
+a second user execution automatically. Native background completion may resume
+after safe release. The owned runtime closes at session-wide idle; cold resume
+uses `continuePendingWork:false` and a fresh turn token. Failed admission,
+inspection, uncertain withdrawal or failed release returns 503 and stops
+without retry. Stop force-closes the runtime and never unpauses cancelled work.
 Readiness clears with `input_ready`/null on completion/cancellation. Inputs are
 recorded by native session history, not added as new Cockpit user messages.
 

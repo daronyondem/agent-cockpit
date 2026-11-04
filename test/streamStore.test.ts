@@ -477,6 +477,20 @@ test('respond() with mode:stdin clears pendingInteraction without a fresh send',
   expect(state.uiState).toBeNull();
 });
 
+test('delegated tool outcomes retain summary and ownership without mutating an earlier live message', async () => {
+  const ws = await openWs('c1');
+  const Store = (window as any).StreamStore;
+  await startAcceptedStream('c1', ws);
+  ws.dispatch({ type: 'tool_activity', tool: 'Agent', id: 'scoped-agent', isAgent: true, description: 'Delegate' });
+  ws.dispatch({ type: 'tool_activity', tool: 'Bash', id: 'scoped-tool', parentAgentId: 'scoped-agent', description: 'Child command' });
+  const before = Store.getState('c1').messages.at(-1);
+  ws.dispatch({ type: 'tool_outcomes', outcomes: [{ toolUseId: 'scoped-agent', outcome: 'done', status: 'success', summary: 'Child summary' }] });
+  const blocks = Store.getState('c1').messages.at(-1).contentBlocks;
+  expect(before.contentBlocks.find((block: any) => block.activity?.id === 'scoped-agent').activity.summary).toBeUndefined();
+  expect(blocks.find((block: any) => block.activity?.id === 'scoped-agent').activity).toMatchObject({ summary: 'Child summary', outcome: 'done', isAgent: true });
+  expect(blocks.find((block: any) => block.activity?.id === 'scoped-tool').activity.parentAgentId).toBe('scoped-agent');
+});
+
 test('correlated question answers keep their request identity after reload and never use message fallback', async () => {
   const ws = await openWs('c1');
   const Store = (window as any).StreamStore;
@@ -755,6 +769,29 @@ test('ocrAttachment() posts the selected replacement profile and updates convers
   });
   expect(Store.getState('c1').messages).toEqual(expect.arrayContaining([recoveryMessage]));
   expect(Store.getState('c1').conv.messages).toEqual(expect.arrayContaining([recoveryMessage]));
+});
+
+test.each([false, true])('late initial history preserves replayed delegated work (completed: %s)', async completed => {
+  const Store = (window as any).StreamStore;
+  const api = (global as any).AgentApi;
+  let history!: (response: ReturnType<typeof makeResponse>) => void;
+  api.fetch.mockImplementationOnce(() => new Promise(resolve => { history = resolve; }));
+  const loading = Store.load('c1');
+  const ws = await openWs('c1');
+  ws.dispatch({ type: 'replay_start' });
+  ws.dispatch({ type: 'tool_activity', tool: 'Agent', id: 'agent', isAgent: true, description: 'Background child' });
+  ws.dispatch({ type: 'tool_activity', tool: 'Bash', id: 'child', parentAgentId: 'agent', description: 'Child command' });
+  const final = { id: 'final', role: 'assistant', backend: 'copilot', content: 'Root answer', timestamp: '', contentBlocks: Store.getState('c1').messages.at(-1).contentBlocks };
+  if (completed) ws.dispatch({ type: 'assistant_message', message: final });
+  ws.dispatch({ type: 'replay_end' });
+  history(makeResponse({ id: 'c1', backend: 'copilot', messages: [{ id: 'user', role: 'user', content: 'Delegate' }], messageQueue: [] }));
+  await loading;
+  const messages = Store.getState('c1').messages;
+  expect(messages).toHaveLength(2);
+  expect(messages[0].id).toBe('user');
+  expect(messages[1].contentBlocks.map((block: any) => block.activity.id)).toEqual(['agent', 'child']);
+  if (completed) expect(messages[1].id).toBe('final');
+  else expect(messages[1].id).toBe(Store.getState('c1').streamingMsgId);
 });
 
 test('replay_start wipes placeholder contentBlocks so replayed frames rebuild cleanly', async () => {

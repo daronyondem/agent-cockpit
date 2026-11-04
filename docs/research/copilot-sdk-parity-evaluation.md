@@ -18,7 +18,7 @@ not hosted model quality or Copilot account access.
 | Conversation owner | Production facade cold-resumes ID/history across owned processes; cancellation reaps a real tool worker before immediate replacement | Windows/Linux SDK qualification |
 | Questions | Production UUID-correlated callbacks handle repeated questions/freeform, stale refusal, active reload and Stop in desktop/mobile | Hosted models and Windows/Linux |
 | Steering | Production consumption correlation, paused boundary withdrawal and cold resume prevent late follow-up execution; desktop/mobile draft/file preservation passes | Hosted models and Windows/Linux |
-| Delegation | Native task starts/completes a child with agentId and root toolCallId; root finishes separately | Parallel/nested/background display and cleanup |
+| Delegation | Production parallel/nested/background cards, scoped tools, final summaries, child failure, cancellation and usage-once checks pass on CLI 1.0.105 | Hosted-model and Windows/Linux qualification |
 | Context | metadata.contextInfo returns token categories, totalTokens and prompt limit | Native live UI, supported versions, hosted models |
 | Usage | Measured local-provider totals survive cold resume; cache-inclusive input is split into fresh/cache buckets; delegated usage is included once | Hosted billing/entitlements, nano-AIU display, quota/context UI |
 | Goal set/status | commands.invoke(autopilot, objective) creates active native objective and returns an agent-prompt reservation | Sending/finalizing objective prompts, completion and background ownership |
@@ -56,7 +56,8 @@ checks cold-resume through this owner and retain actual history, then separately
 abort a TERM-resistant native tool worker and immediately resume the same native session without starting that worker again.
 Normal production chat now uses SDK; explicit opaque command overrides retain
 JSONL. The subsequent structured-input checkpoint exposes questions and explicit
-steering in both clients. Grouped child presentation remains pending.
+steering in both clients. The delegated-work checkpoint also adds grouped
+child tools and summaries without promoting child prose to the root answer.
 
 The published SDK's generated checkpoint schema differs from the older JSONL
 accounting shape. A measured native 1.0.105 probe supplied 120 input tokens,
@@ -127,10 +128,10 @@ to per-run temporary folders referenced by `sdk-evidence-path.txt` and
 `owned-evidence-path.txt`; ACP evidence is referenced by
 `acp-evidence-path.txt`. These temporary paths are not shipped data stores.
 
-`npm run e2e:copilot-sdk` retains fourteen reproducible native cases and emits a
+`npm run e2e:copilot-sdk` retains twenty reproducible native cases and emits a
 temporary compatibility report with CLI/SDK/OS/Node/revision/dirty metadata,
 plus per-case local requests and native events (or explicitly labeled Cockpit
-frames for the conversation-owner/facade cases). The fourteen-case run passes on
+frames for the conversation-owner/facade cases). The twenty-case run passes on
 Node 22.23.4/macOS arm64. The test workflow adds a pinned 1.0.105 matrix on
 macOS 15, Ubuntu 24.04 and Windows; until those jobs run, their presence is not
 platform certification. Machine-local evidence does not substitute for
@@ -214,3 +215,66 @@ The [official steering and queueing documentation](https://github.com/github/cop
 and installed public SDK declarations inform the integration; the selected
 native runtime establishes actual queue semantics. Successful hosted accounts,
 auth isolation and real Windows/Linux qualification remain outstanding.
+
+## Delegated-work implementation checkpoint — 2026-11-04
+
+Native SDK 1.0.28 / CLI 1.0.105 probes establish that `subagent.started`'s
+**envelope** `agentId` names the new child, while `data.toolCallId` belongs to
+the spawning parent's tool scope. `data.parentId` supplies nested ancestry.
+Child messages/tools carry their own `agentId`; deprecated `parentToolCallId`
+refers to the immediate spawn. Completion/failure uses the same child identity.
+The production reducer now scopes tool IDs by fresh turn/owner/raw ID, projects
+parallel/nested tools under Agent cards, and stores bounded final child summaries
+without adding child prose to the root answer or restricted one-shot output.
+
+A native background `task` returns its tool acknowledgement before the child
+finishes. The parent can answer early, but `session.idle` waits for the child
+and subsequent native completion notifications. Card completion follows native
+`subagent.completed`, not task acknowledgement. Native child model HTTP 400
+produces `subagent.failed`; it does not inherently fail the parent. Tests retain
+that diagnostic on the card and allow the parent's final answer.
+
+This exposed a phase-5 interaction: pausing the queue throughout a turn also
+blocks the native background-completion lane. Readiness now probes and releases
+queue control after initial acknowledgement plus root start. Each pending
+steering transaction holds its own pause. Polling `queue.pendingItems()` finds
+an exact promoted correction even before idle; withdraw that message with
+`expectedPrompt` and verify removal before releasing native background work.
+Only confirmed consumption accepts input. Failed inspection/withdrawal/release
+stops without retry; Stop force-closes the transport. The native combined
+background/steering case proves the work can finish without an unexpected
+queued correction. The earlier structured-input counts above record the
+preceding checkpoint rather than this queue-policy revision.
+
+Twenty native SDK cases pass on Node 22.23.4/macOS arm64. The six new cases
+cover parallel, nested, held background, background plus steering, child failure,
+and stopping a delegated worker followed by cold resume without replay. Measured
+successful local responses contribute 80 fresh input, 30 output and 40 cache-read
+tokens each; child usage is included once and a failed HTTP response adds no
+invented tokens. Native reports preserve CLI/SDK/OS/revision and dirty state.
+Six real-CLI Memory/Workspace Context application workflows also pass. Final
+coverage and rebuilt desktop/mobile browser qualification are recorded below. Hosted account/model behavior, two-account auth isolation and
+native Windows/Linux qualification remain separate outstanding work.
+
+The first delegated browser run passed twenty of twenty-two cases, including
+both mobile additions. Desktop reload exposed a real initialization race:
+WebSocket replay rebuilt the running tools before initial HTTP history returned;
+the late response replaced those rows with saved history only. Initial
+hydration now merges the current rows by ID through a pure projection, with
+running/final regression tests. The Stop assertion also needed to expand the
+existing collapsed progress section before inspecting its cancelled card;
+no product expansion policy changed. Failure screenshots/traces are retained.
+The final rebuilt qualification passes after this correction.
+
+Final local qualification: 159 suites / 2,937 normal-CI tests pass, with 54
+opt-in/platform tests skipped. Coverage is 88.74% statements/lines, 76.49%
+branches and 93.70% functions; the branch floor rises to 76.3%, with other
+floors retained. Twenty native SDK checks and six application workflows pass.
+All twenty-two rebuilt desktop/mobile Chromium cases pass, with twenty-two
+headless launches observed. Final focused client checks pass 123 cases. Web JS
+is 901.6 KiB / 903 and CSS 201.7 / 230, with no further budget changes. All
+three typechecks, zero-warning lint, maintainability, spec drift and ADR lint
+pass. Screenshots were reviewed; fixture PM2/workers and 29 recorded SDK runtime
+PIDs are stopped. Reports retain their pre-commit revision plus dirty state,
+rather than being relabeled after commit. Successful hosted accounts, genuine
+two-account isolation and native Windows/Linux remain unverified.

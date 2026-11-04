@@ -178,13 +178,24 @@ projection pure in `copilotSdkEvents.ts` and shared model/tool/config helpers in
 their focused Copilot modules. Review `test/copilotConversations.test.ts`,
 `test/copilotInputs.test.ts` and `test/chat.inputs.test.ts` for correlated input
 changes. Keep native callbacks and steering ownership in `copilotInputs.ts`.
-Pause the native queued lane only after initial prompt acknowledgement and root
-turn start; a send acknowledgement does not prove execution has started. Accept
-steering only on its native delivery event and withdraw unconsumed messages at
-idle while the lane remains paused. Never replay an input or turn a stale
+Probe queue controls only after initial prompt acknowledgement and root turn
+start; a send acknowledgement does not prove execution has started. Release
+the probe pause, then hold a pause only around a pending steering transaction.
+Native background-completion notifications also need that queued lane. Accept
+steering only on its native delivery event; poll pending items to withdraw an
+exact promoted correction before releasing the pause, including before idle.
+Never replay an input or turn a stale
 question into a new message. Stop force-closes the SDK connection before
 rejecting callbacks so native question errors cannot continue work. Run both
 native SDK and desktop/mobile browser suites for these changes.
+Keep SDK delegated ownership in the pure `copilotAgents.ts` reducer, with direct
+`test/copilotAgents.test.ts` coverage. Native envelope `agentId` identifies the
+child, `data.parentId` its parent, and `toolCallId` belongs to the parent's
+scope. Namespace tools by turn/owner/raw ID, flatten descendants to the top card,
+and retain child summaries without leaking child prose into root answers.
+Background task acknowledgement is not completion; native child lifecycle owns
+outcomes and session idle owns turn completion. Stop/error must settle pending
+cards as cancelled/interrupted. Keep session-wide usage counting children once.
 Review `test/copilotSdkEvents.test.ts` and `test/copilotSessionConfig.test.ts` before
 switching chat dispatch. Session idle drains attached background work; model
 replies, loop ends and child idle do not. Drain late startups and failed cleanup

@@ -133,21 +133,23 @@ The PWA currently covers:
   label/icon, thinking/text/tool frames, session recovery notices, and usage
   counters as desktop. `auto` is the default model; Haiku/auto do not show
   reasoning-effort choices. SDK profiles support native questions and explicit
-  steering; opaque JSONL profiles do not. Copilot goal and plan controls remain
+  steering and grouped delegated tools/summaries; opaque JSONL profiles do not. Copilot goal and plan controls remain
   unavailable. Per-turn token/credit accounting
   is performed on the server, and `costSource:'none'` keeps mobile cost `n/a`.
   No Copilot-specific PWA assets, manifest, or service-worker changes are needed.
   Gemini's unverified effort options are also hidden. Auto routing is not
   eligible for media processors; explicit verified `gpt-6.1-sol` is required.
-  Delegated prose/activity cannot contaminate the root stream. The shared
+  Delegated prose cannot contaminate the root answer; SDK child tools and
+  summaries render within Agent cards, while JSONL keeps root-only activity. The shared
   desktop/mobile browser suite verifies eight lifecycle cases on macOS and
   Ubuntu 24.04 using real Copilot with fixed local replies. That earlier evidence
   does not qualify SDK questions/steering or hosted accounts. Server-side profile
   checks now distinguish credentials from catalog access using existing result
   fields; mobile has no account-management screen to update in this step.
   Production sends now use owned SDK sessions for the normal CLI and server-visible
-  custom providers, retaining JSONL for opaque command overrides. The browser frame
-  contract, PWA metadata, service worker and assets are unchanged. Eight SDK
+  custom providers, retaining JSONL for opaque command overrides. Both paths
+  reuse the shared browser frame union; delegated outcomes add optional summary.
+  PWA metadata, service worker and static assets are unchanged. Eight SDK
   desktop/mobile browser cases pass on macOS with eight observed headless launches;
   the earlier Ubuntu browser evidence covers JSONL.
   Session reset waits for backend cleanup before replacing its session/checkout.
@@ -165,6 +167,25 @@ The PWA currently covers:
 - Workspace-level archives are respected by the shared conversation-list contract: archived workspaces are excluded from the mobile active and archived conversation lists unless a caller explicitly asks for `includeArchivedWorkspaces`, which the PWA does not do. The PWA does not expose workspace archive management, remapping, file snapshot restore, or archived-data deletion; those remain desktop filesystem-management workflows.
 - Flat latest-first conversation list with a workspace select filter. `All conversations` is the default; choosing a workspace filters the list to that `workspaceId` without introducing collapsible workspace groups. Each card renders the workspace label in the header and keeps the timestamp in the footer beside message count/live status so the date appears only once.
 - Conversation-list previews strip uploaded-file/file-delivery wire markers. Attachment-only previews render as human labels such as `Attachment: IMG_3021.PNG` rather than exposing absolute artifact paths.
+- Live tool/delegated presentation is owned by `liveToolActivities.ts` and
+  `agentTools.tsx`. `useChatStreamConnection` stores `streamTools` separately
+  from root text, forwards ordinary tool frames/outcomes through the pure
+  immutable reducer, ignores duplicate IDs and excludes question/plan frames.
+  Clear live tools on replay start, saved assistant messages, new turns and
+  terminal state. Outcome patches carry status, duration and optional summary.
+  `App` passes these tools into `ChatScreen`; a live bubble exists even before
+  root text when tools are active. Tool state participates in the scroll key.
+- `AgentToolsProvider` indexes both saved messages (ordered blocks, legacy
+  activity fallback) and live tools by Agent ID. Known child rows are suppressed
+  at top level and shown once inside the ancestor card, including cross-message
+  children and flattened nested agents. Agent headers show type and running or
+  terminal outcome (legacy duration-only activities fall back to done), with
+  error/warning styling. Ordinary child rows show tool,
+  description and outcome. Escaped plain-text Summary disclosures preserve
+  whitespace; no child content becomes a parent message. Read-only session
+  screens use the same provider/view. Files without summaries remain compatible.
+  This changes the built PWA client and CSS; `public/mobile`, manifest, service
+  worker and offline policy require no changes.
 - Active-stream summary hydration via `GET /api/chat/active-streams`.
 - Conversation-list running badges update automatically from passive WebSocket monitors and REST fallback refreshes; the manual Refresh icon button remains a recovery control for explicit user-triggered reconciliation.
 - Open conversation via `GET /api/chat/conversations/:id`.
@@ -271,3 +292,15 @@ steering consumption, and late-steering draft/file preservation. The CLI is
 1.0.105 on macOS arm64; these checks do not certify hosted access or native
 Windows/Linux SDK behavior. No public/mobile assets, manifest, service-worker,
 or offline caching behavior changes are required.
+
+
+The delegated-work checkpoint expands that suite to twenty-two Chromium cases:
+twenty real SDK/local-provider workflows and two catalog fixtures, all passing
+on CLI 1.0.105/macOS arm64. The new case per client holds a real background
+child after its tool, keeps the parent stream active through an early reply,
+reopens the active stream without duplicated cards/children, releases completion
+and verifies saved summaries after reload. A second case stops a real delegated
+worker, checks cancelled history and cold resume without replay. Desktop
+initial history hydration now preserves live/replayed rows; Stop checks expand
+the existing desktop progress disclosure. Both clients retain legacy completed
+activities without explicit outcomes. No PWA metadata/offline-policy changes.

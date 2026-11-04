@@ -91,6 +91,7 @@ export async function processStream(
     subagentType?: string;
     parentAgentId?: string;
     outcome?: string;
+    summary?: string;
     status?: string;
     startTime: number;
     batchIndex: number;
@@ -144,12 +145,13 @@ export async function processStream(
     return contentBlocks.some(b => b.type === 'artifact');
   }
 
-  function patchToolBlock(id: string | null | undefined, outcome: string | undefined, status: string | undefined): void {
+  function patchToolBlock(id: string | null | undefined, outcome: string | undefined, status: string | undefined, summary?: string): void {
     if (!id) return;
     for (const b of blocks) {
       if (b.type === 'tool' && b.activity.id === id) {
         if (outcome !== undefined) b.activity.outcome = outcome || undefined;
         if (status !== undefined) b.activity.status = status || undefined;
+        if (summary !== undefined) b.activity.summary = summary;
         return;
       }
     }
@@ -165,6 +167,7 @@ export async function processStream(
       if (t.isAgent) { toolEntry.isAgent = true; toolEntry.subagentType = t.subagentType; }
       if (t.parentAgentId) { toolEntry.parentAgentId = t.parentAgentId; }
       if (t.outcome) { toolEntry.outcome = t.outcome; }
+      if (t.summary) { toolEntry.summary = t.summary; }
       if (t.status) { toolEntry.status = t.status; }
       toolEntry.batchIndex = t.batchIndex;
       return toolEntry;
@@ -274,6 +277,14 @@ export async function processStream(
   async function persistTerminalError(message: string, source: StreamErrorSource, forceEmit = false): Promise<void> {
     if (terminalErrorPersisted) return;
     terminalErrorPersisted = true;
+    if (backend === 'copilot') {
+      const outcomes = toolActivityAccumulator.filter(tool => !tool.outcome && (tool.isAgent || tool.parentAgentId)).map(tool => {
+        tool.outcome = source === 'abort' ? 'cancelled' : 'interrupted'; tool.status = 'warning';
+        patchToolBlock(tool.id, tool.outcome, tool.status);
+        return { toolUseId: tool.id!, outcome: tool.outcome, status: tool.status, isError: false };
+      });
+      if (outcomes.length) emit({ type: 'tool_outcomes', outcomes });
+    }
     await flushAccumulatedAssistant('progress', forceEmit);
     const errorMsg = await chatService.addStreamErrorMessage(convId, backend, message, source);
     if (errorMsg && (forceEmit || !isClosed())) emit({ type: 'assistant_message', message: errorMsg });
@@ -411,8 +422,9 @@ export async function processStream(
           if (match) {
             match.outcome = outcome.outcome || undefined;
             match.status = outcome.status || undefined;
+            if (outcome.summary !== undefined) match.summary = outcome.summary;
           }
-          patchToolBlock(outcome.toolUseId, outcome.outcome || undefined, outcome.status || undefined);
+          patchToolBlock(outcome.toolUseId, outcome.outcome || undefined, outcome.status || undefined, outcome.summary);
           if (outcome.toolUseId === pendingPlanFileToolId) {
             if (!outcome.isError) emitPlanApprovalFromPlanFile();
             pendingPlanFileToolId = null;

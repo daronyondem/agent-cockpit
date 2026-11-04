@@ -24,6 +24,7 @@ export interface ToolOutcome {
   isError: boolean;
   outcome: string | null;
   status: string | null;
+  summary?: string;
 }
 
 export interface BrowserMemoryUpdateFrame {

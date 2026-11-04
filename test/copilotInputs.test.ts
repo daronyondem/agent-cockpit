@@ -15,13 +15,15 @@ describe('Copilot correlated input ownership', () => {
   let pause: jest.Mock;
   let withdraw: jest.Mock;
   let fail: jest.Mock;
+  let pendingItems: jest.Mock;
   beforeEach(() => {
     events = [];
     send = jest.fn().mockResolvedValue('correction');
     pause = jest.fn().mockResolvedValue(undefined);
     withdraw = jest.fn().mockResolvedValue({ removed: true, interrupted: false });
     fail = jest.fn();
-    inputs = new CopilotInputs({ send, rpc: { queue: { setDrainPaused: pause, withdrawMessage: withdraw } } } as never,
+    pendingItems = jest.fn().mockResolvedValue({ items: [] });
+    inputs = new CopilotInputs({ send, rpc: { queue: { setDrainPaused: pause, withdrawMessage: withdraw, pendingItems } } } as never,
       event => events.push(event), promise => promise, fail);
   });
   afterEach(() => inputs.cancel());
@@ -59,9 +61,9 @@ describe('Copilot correlated input ownership', () => {
     await expect(inputs.ask({ question: 'Late?' })).rejects.toThrow('no longer active');
   });
 
-  test('exposes readiness only after the native queued lane is paused and waits for consumed steering rather than send acknowledgement', async () => {
+  test('probes and releases the queued lane before readiness, then waits for consumed steering rather than send acknowledgement', async () => {
     await inputs.enableSteering();
-    expect(pause).toHaveBeenCalledWith({ paused: true });
+    expect(pause.mock.calls).toEqual([[{ paused: true }], [{ paused: false }]]);
     expect(events).toContainEqual({ type: 'input_ready', turnId: inputs.turnId });
     let accepted = false;
     const delivery = steer().then(result => { accepted = true; return result; });
@@ -95,12 +97,13 @@ describe('Copilot correlated input ownership', () => {
     const acknowledgement = deferred<string>();
     send.mockReturnValueOnce(acknowledgement.promise);
     const delivery = steer();
+    await Promise.resolve();
     const ending = inputs.finish();
     acknowledgement.resolve('correction');
     await ending;
     expect(withdraw).toHaveBeenCalledWith({ messageId: 'correction', expectedPrompt: 'Use the other approach' });
     expect(await delivery).toMatchObject({ accepted: false, status: 409, error: expect.stringContaining('before consuming') });
-    expect(pause).toHaveBeenCalledTimes(1);
+    expect(pause.mock.calls.map(call => call[0].paused)).toEqual([true, false, true, false]);
     expect(send).toHaveBeenCalledTimes(1);
     expect(await steer('next')).toMatchObject({ accepted: false, status: 409 });
   });
@@ -137,6 +140,7 @@ describe('Copilot correlated input ownership', () => {
     const acknowledgement = deferred<string>();
     send.mockReturnValueOnce(acknowledgement.promise);
     const delivery = steer();
+    await Promise.resolve();
     inputs.cancel();
     expect(await delivery).toMatchObject({ accepted: false, status: 409 });
     acknowledgement.reject(new Error('Connection cancelled'));
@@ -145,14 +149,44 @@ describe('Copilot correlated input ownership', () => {
     expect(withdraw).not.toHaveBeenCalled();
   });
 
+  test('withdraws promoted steering before idle and resumes native background notifications only after exact removal', async () => {
+    jest.useFakeTimers();
+    try {
+      await inputs.enableSteering();
+      pendingItems.mockResolvedValue({ items: [{ messageId: 'correction' }] });
+      const delivery = steer();
+      await jest.advanceTimersByTimeAsync(101);
+      expect(await delivery).toMatchObject({ accepted: false, status: 409 });
+      expect(withdraw).toHaveBeenCalledWith({ messageId: 'correction', expectedPrompt: 'Use the other approach' });
+      expect(pause.mock.calls.map(call => call[0].paused)).toEqual([true, false, true, false]);
+      expect(withdraw.mock.invocationCallOrder[0]).toBeLessThan(pause.mock.invocationCallOrder.at(-1)!);
+      expect(send).toHaveBeenCalledTimes(1);
+      expect(jest.getTimerCount()).toBe(0);
+    } finally { inputs.cancel(); jest.useRealTimers(); }
+  });
+
+  test('queue inspection failure stops pending input rather than unpausing uncertain work', async () => {
+    jest.useFakeTimers();
+    try {
+      await inputs.enableSteering();
+      pendingItems.mockRejectedValueOnce(new Error('Disconnected'));
+      const delivery = steer();
+      await jest.advanceTimersByTimeAsync(101);
+      expect(await delivery).toMatchObject({ accepted: false, status: 503 });
+      expect(fail).toHaveBeenCalledTimes(1);
+      expect(pause.mock.calls.map(call => call[0].paused)).toEqual([true, false, true]);
+    } finally { inputs.cancel(); jest.useRealTimers(); }
+  });
+
   test.each([{ removed: false, interrupted: false }, { removed: true, interrupted: true }, new Error('Disconnected')])(
     'fails closed when unconsumed steering cannot be safely withdrawn (%s)', async result => {
       await inputs.enableSteering();
       if (result instanceof Error) withdraw.mockRejectedValueOnce(result); else withdraw.mockResolvedValueOnce(result);
       const delivery = steer();
+      await Promise.resolve();
       await expect(inputs.finish()).rejects.toThrow();
       expect(await delivery).toMatchObject({ accepted: false, status: 503 });
-      expect(pause).toHaveBeenCalledTimes(1);
+      expect(pause.mock.calls.map(call => call[0].paused)).toEqual([true, false, true]);
       expect(send).toHaveBeenCalledTimes(1);
     });
 

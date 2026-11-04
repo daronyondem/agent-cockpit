@@ -1,14 +1,13 @@
 import type { SessionEvent } from '@github/copilot-sdk' with { 'resolution-mode': 'import' };
 import type { StreamEvent } from '../../types';
-import { copilotToolStartEvents, copilotToolCompleteEvents } from './copilotTools';
+import { createCopilotWorkState, reduceCopilotWork, finishCopilotWork, type CopilotWorkState } from './copilotAgents';
 
 export interface CopilotSdkEventState {
   textDeltas: ReadonlySet<string>;
   textFinals: ReadonlySet<string>;
   reasoningDeltas: ReadonlySet<string>;
   reasoningFinals: ReadonlySet<string>;
-  tools: ReadonlyMap<string, string>;
-  finishedTools: ReadonlySet<string>;
+  work: CopilotWorkState;
   hasOutput: boolean;
   started: boolean;
   idle: boolean;
@@ -16,9 +15,9 @@ export interface CopilotSdkEventState {
   lastEventId?: string;
 }
 
-export function createCopilotSdkEventState(): CopilotSdkEventState {
+export function createCopilotSdkEventState(namespace = 'turn'): CopilotSdkEventState {
   return { textDeltas: new Set(), textFinals: new Set(), reasoningDeltas: new Set(), reasoningFinals: new Set(),
-    tools: new Map(), finishedTools: new Set(), hasOutput: false, started: false, idle: false, error: null };
+    work: createCopilotWorkState(namespace), hasOutput: false, started: false, idle: false, error: null };
 }
 
 /** Pure projection. Session-wide idle, rather than a model-loop turn end, completes a stream. */
@@ -31,8 +30,11 @@ export function reduceCopilotSdkEvent(previous: CopilotSdkEventState, event: Ses
     || event.type === 'assistant.message_delta' || event.type === 'assistant.reasoning' || event.type === 'assistant.reasoning_delta' || event.type === 'subagent.started';
   // Child activity prevents recovery/replay, but never enters the root answer.
   if (output) state.hasOutput = true;
+  if (!event.agentId && !data.parentToolCallId && (event.type === 'user.message' || event.type === 'assistant.turn_start' || output)) state.started = true;
+  const work = reduceCopilotWork(state.work, event);
+  state.work = work.state;
+  if (work.handled) return { state, events: work.events };
   if (event.agentId || data.parentToolCallId) return { state, events };
-  if (event.type === 'user.message' || event.type === 'assistant.turn_start' || output) state.started = true;
 
   switch (event.type) {
     case 'assistant.message_delta':
@@ -59,25 +61,15 @@ export function reduceCopilotSdkEvent(previous: CopilotSdkEventState, event: Ses
         if (!state.reasoningDeltas.has(event.data.reasoningId) && event.data.content) events.push({ type: 'thinking', content: event.data.content, streaming: false });
       }
       break;
-    case 'tool.execution_start':
-      if (!state.tools.has(event.data.toolCallId) && !state.finishedTools.has(event.data.toolCallId)) {
-        state.tools = new Map([...state.tools, [event.data.toolCallId, event.data.toolName]]);
-        events.push(...copilotToolStartEvents({ ...event.data }));
-      }
-      break;
-    case 'tool.execution_complete':
-      if (!state.finishedTools.has(event.data.toolCallId)) {
-        state.finishedTools = new Set([...state.finishedTools, event.data.toolCallId]);
-        events.push(...copilotToolCompleteEvents({ ...event.data, toolName: state.tools.get(event.data.toolCallId) }));
-        const tools = new Map(state.tools); tools.delete(event.data.toolCallId); state.tools = tools;
-      }
-      break;
     case 'session.error':
+      { const ended = finishCopilotWork(state.work, 'interrupted'); state.work = ended.state; events.push(...ended.events); }
       state.error = event.data.message || 'Copilot session failed.';
       events.push({ type: 'error', error: state.error });
       break;
     case 'session.idle':
       if (state.started) {
+        const ended = finishCopilotWork(state.work, event.data.aborted ? 'cancelled' : 'interrupted');
+        state.work = ended.state; events.push(...ended.events);
         state.idle = true;
         if (event.data.aborted) {
           state.error = 'Copilot turn aborted.';

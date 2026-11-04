@@ -1123,7 +1123,7 @@ Detection is filesystem-based and read-only: `AGENTS.md` covers Codex, OpenCode,
                                 //   `contentBlocks` existed.
     tool: string,               // Tool name: 'Read', 'Write', 'Bash', 'Agent', etc.
     description: string,        // Human-readable description
-    id: string|null,            // Block ID from CLI event
+    id: string|null,            // Native block ID or adapter-scoped projection ID (Copilot scopes by turn/owner/raw ID)
     isAgent?: boolean,          // true for Agent tool invocations
     subagentType?: string,      // 'Explore', 'general-purpose', etc. (when isAgent)
     parentAgentId?: string,     // ID of parent agent (when tool runs inside a sub-agent)
@@ -1131,6 +1131,7 @@ Detection is filesystem-based and read-only: `AGENTS.md` covers Codex, OpenCode,
     duration: number|null,      // Estimated duration in milliseconds
     startTime: number,          // Unix timestamp ms when event was received
     outcome?: string,           // Short outcome summary (e.g. 'exit 0', '4 matches', 'not found')
+    summary?: string,           // Optional plain-text delegated result; Copilot caps at 4,000 chars plus ellipsis
     status?: string             // 'success' | 'error' | 'warning' (derived from tool result)
   }],
   contentBlocks?: ContentBlock[] // Assistant only. Ordered interleaving of text, thinking,
@@ -1283,7 +1284,9 @@ Ordering rules:
   prompts are **not** persisted as tool blocks (matching the existing
   `toolActivity[]` filtering behavior).
 - `tool_outcomes` patches the matching tool block in place by
-  `activity.id`, updating `outcome` and `status`.
+  `activity.id`, updating `outcome`, `status` and optional `summary`. The same
+  values persist in the legacy `toolActivity[]` projection. Missing summaries
+  leave prior values intact; existing sessions require no migration.
 
 ### Stream Error Events
 

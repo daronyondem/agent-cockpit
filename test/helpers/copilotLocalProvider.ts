@@ -64,7 +64,31 @@ console.log('Updated fixture context from listed sources.');`;
           return;
         }
         const toolMessages = request.messages.filter(message => message.role === 'tool');
+        const lastUser = String(request.messages.filter(message => message.role === 'user').at(-1)?.content || '');
+        const child = /COPILOT_UI_CHILD_(BACKGROUND|STOP)$/.exec(lastUser)?.[1];
+        if (child) {
+          if (!toolMessages.length) {
+            const quote = (value: string) => `'${value.replace(/'/g, `'\\''`)}'`;
+            const program = `const fs=require('fs');
+fs.writeFileSync(${JSON.stringify(path.join(workspace, 'ui-delegate-worker.pid.tmp'))},String(process.pid));
+fs.renameSync(${JSON.stringify(path.join(workspace, 'ui-delegate-worker.pid.tmp'))},${JSON.stringify(path.join(workspace, 'ui-delegate-worker.pid'))});
+setTimeout(()=>fs.writeFileSync(${JSON.stringify(path.join(workspace, 'ui-delegate-worker-finished'))},'unexpected'),45000);`;
+            call('bash', { command: child === 'STOP' ? `${quote(process.execPath)} -e ${quote(program)}` : 'echo COPILOT_UI_CHILD_TOOL',
+              description: 'Delegated synthetic command', initial_wait: 1000 });
+          } else if (child === 'BACKGROUND') hold('delegate', () => say('COPILOT_UI_CHILD_SUMMARY'));
+          else say('COPILOT_UI_CHILD_UNEXPECTED');
+          return;
+        }
         if (text.includes('COPILOT_UI_REPLY')) { say('COPILOT_UI_REPLY_OK'); return; }
+        if (text.includes('COPILOT_UI_DELEGATE')) {
+          if (toolMessages.length) say('COPILOT_UI_DELEGATE_PARENT_OK');
+          else {
+            const stop = text.includes('COPILOT_UI_DELEGATE_STOP');
+            call('task', { name: 'copilot-ui-child', agent_type: 'general-purpose', description: 'Run delegated browser fixture',
+              prompt: stop ? 'COPILOT_UI_CHILD_STOP' : 'COPILOT_UI_CHILD_BACKGROUND', ...(stop ? {} : { mode: 'background' }) });
+          }
+          return;
+        }
         if (text.includes('COPILOT_UI_QUESTION')) {
           const ask = () => call('ask_user', { question: 'Choose the fixture answer', choices: ['Alpha', 'Beta'] });
           if (text.includes('COPILOT_UI_QUESTION_LATE') && !toolMessages.length) hold('question', ask);

@@ -104,6 +104,65 @@ for (const mobile of [false, true]) {
     await page.screenshot({ path: test.info().outputPath(`${client}-memory.png`), fullPage: true });
   });
 
+  test(`${client} groups live background child tools, waits for completion and keeps summaries after reload`, async ({ page, request }) => {
+    for (const name of ['ready', 'release']) await fs.rm(path.join(workspace, `ui-delegate-${name}`), { force: true });
+    const conv = await create(request, `Copilot ${client} background delegation`);
+    await open(page, conv.title, mobile);
+    await send(page, 'COPILOT_UI_DELEGATE');
+    const card = page.locator(mobile ? '.agent-card' : '.subagent');
+    await expect(card).toHaveCount(1);
+    await expect(card).toContainText('Background: Run delegated browser fixture');
+    await expect(card.locator(mobile ? '.tool-block' : '.tool')).toHaveCount(1);
+    await expect.poll(() => fs.access(path.join(workspace, 'ui-delegate-ready')).then(() => true, () => false)).toBe(true);
+    await expect(card).toContainText('running');
+    await expect(page.locator(assistant).filter({ hasText: 'COPILOT_UI_DELEGATE_PARENT_OK' }).first()).toBeVisible();
+    await expect(page.getByRole('button', { name: mobile ? 'Stop' : 'Stop agent', exact: true })).toBeVisible();
+    // Replay must reconstruct the same running card and its child, once.
+    await open(page, conv.title, mobile);
+    await expect(card).toHaveCount(1);
+    await expect(card.locator(mobile ? '.tool-block' : '.tool')).toHaveCount(1);
+    await expect(card).toContainText('running');
+    await fs.writeFile(path.join(workspace, 'ui-delegate-release'), 'finish');
+    await expect(page.getByLabel('Send', { exact: true })).toBeVisible();
+    await expect(card).toContainText('done');
+    await card.getByText('Summary', { exact: true }).click();
+    await expect(card.getByText('COPILOT_UI_CHILD_SUMMARY', { exact: true })).toBeVisible();
+    const saved = await (await request.get(`/api/chat/conversations/${conv.id}`)).json();
+    expect(saved.messages.some((message: { content: string }) => message.content.includes('COPILOT_UI_CHILD_SUMMARY'))).toBe(false);
+    expect(saved.messages.flatMap((message: { toolActivity?: Array<{ isAgent?: boolean; summary?: string }> }) => message.toolActivity || []).find((tool: { isAgent?: boolean }) => tool.isAgent))
+      .toMatchObject({ summary: 'COPILOT_UI_CHILD_SUMMARY', outcome: 'done' });
+    await open(page, saved.title, mobile);
+    await expect(card).toHaveCount(1);
+    await card.getByText('Summary', { exact: true }).click();
+    await expect(card.getByText('COPILOT_UI_CHILD_SUMMARY', { exact: true })).toBeVisible();
+    await page.screenshot({ path: test.info().outputPath(`${client}-delegation.png`), fullPage: true });
+  });
+
+  test(`${client} stops delegated workers, persists cancellation and resumes without replay`, async ({ page, request }) => {
+    for (const name of ['ui-delegate-worker.pid', 'ui-delegate-worker-finished']) await fs.rm(path.join(workspace, name), { force: true });
+    const conv = await create(request, `Copilot ${client} delegated Stop`);
+    await open(page, conv.title, mobile);
+    await send(page, 'COPILOT_UI_DELEGATE_STOP');
+    await expect.poll(() => fs.access(path.join(workspace, 'ui-delegate-worker.pid')).then(() => true, () => false)).toBe(true);
+    const pid = Number(await fs.readFile(path.join(workspace, 'ui-delegate-worker.pid'), 'utf8'));
+    const card = page.locator(mobile ? '.agent-card' : '.subagent');
+    await expect(card).toContainText('running');
+    await page.getByRole('button', { name: mobile ? 'Stop' : 'Stop agent', exact: true }).click();
+    await expect(page.getByLabel('Send', { exact: true })).toBeVisible();
+    if (!mobile) await page.getByRole('button', { name: '1 segment', exact: true }).click();
+    await expect(card).toContainText('cancelled');
+    await expect.poll(() => { try { process.kill(pid, 0); return true; } catch { return false; } }).toBe(false);
+    await send(page, 'COPILOT_UI_REPLY');
+    await expect(page.locator(assistant).filter({ hasText: 'COPILOT_UI_REPLY_OK' })).toBeVisible();
+    expect(Number(await fs.readFile(path.join(workspace, 'ui-delegate-worker.pid'), 'utf8'))).toBe(pid);
+    expect(await fs.access(path.join(workspace, 'ui-delegate-worker-finished')).then(() => true, () => false)).toBe(false);
+    const saved = await (await request.get(`/api/chat/conversations/${conv.id}`)).json();
+    await open(page, saved.title, mobile);
+    if (!mobile) await page.getByRole('button', { name: '1 segment', exact: true }).click();
+    await expect(card).toHaveCount(1);
+    await expect(card).toContainText('cancelled');
+  });
+
   test(`${client} stops native tool work and immediately resumes without replay`, async ({ page, request }) => {
     await fs.rm(path.join(workspace, 'ui-worker.pid'), { force: true });
     await fs.rm(path.join(workspace, 'ui-worker-finished'), { force: true });

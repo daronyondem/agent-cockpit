@@ -16,11 +16,19 @@ affects:
   - src/services/backends/copilotSdkEvents.ts
   - src/services/backends/copilotSessionConfig.ts
   - src/services/backends/copilotInputs.ts
+  - src/services/backends/copilotAgents.ts
   - src/services/backends/copilotModels.ts
   - src/services/backends/copilotCatalog.ts
   - src/contracts/responses.ts
   - src/contracts/streams.ts
   - src/contracts/streamFrames.ts
+  - src/types/tools.ts
+  - src/routes/chat.ts
+  - web/AgentCockpitWeb/src/chat/toolRuns.jsx
+  - web/AgentCockpitWeb/src/stream/streamFrameReducer.ts
+  - web/AgentCockpitWeb/src/streamStore.js
+  - mobile/AgentCockpitPWA/src/agentTools.tsx
+  - mobile/AgentCockpitPWA/src/liveToolActivities.ts
   - src/services/backends/copilotTools.ts
   - src/services/backends/copilotProcess.ts
   - src/services/cliProfileAuthService.ts
@@ -32,6 +40,8 @@ affects:
   - test/copilotConversations.test.ts
   - test/copilotAdapterRuntime.test.ts
   - test/copilotSdkEvents.test.ts
+  - test/copilotAgents.test.ts
+  - test/agentTools.test.ts
   - test/copilotSessionConfig.test.ts
   - docs/research/copilot-sdk-parity-evaluation.md
   - docs/spec-backend-services.md
@@ -127,17 +137,30 @@ claiming successful hosted account or media certification.
 Keep questions and steering in a focused input owner. Give each question a
 unique request ID, resolve it once through its native callback, and never turn
 a stale answer into a new message. Expose steering as an explicit action while
-retaining Enter's existing Cockpit queue behavior. Pause native follow-up drain
-only after initial send acknowledgement and root turn start; pausing earlier
-can stall that first prompt. Accept steering only when its native message ID
-is delivered as steering. At idle, withdraw any unconsumed immediate message
-while the native queued lane stays paused, then retain the user's draft/files.
+retaining Enter's existing Cockpit queue behavior. Probe queue control only
+after initial send acknowledgement and root turn start; pausing earlier can
+stall that first prompt. Release the probe pause and hold a pause only around
+pending steering. Native background-completion notifications use the same lane,
+so pausing the whole turn prevents delegation from finishing. Accept steering
+only when its native message ID is delivered as steering. Poll pending items
+and withdraw the exact unconsumed correction before releasing the pause,
+including promotion before idle, then retain the user's draft/files.
 Reject uncertain delivery and stop without replay. Close the SDK input channel
 before rejecting question callbacks during Stop to prevent a native error
 response from releasing another iteration. Reconstruct exact pending questions
 from stream replay on desktop/mobile, preserving newer questions/answers during
 late HTTP acknowledgements. These semantics are verified against the selected
 CLI, rather than inferred from SDK send acceptance.
+
+Keep delegated ownership in a separate pure reducer. Scope tool identity by a
+fresh turn namespace, native owner agent ID and raw tool ID. Use native
+parent ancestry to flatten nested work into the top-level Agent card, without
+allowing unknown children to become root output. Lifecycle notifications own
+card completion; background task acknowledgement does not. Persist bounded
+plain-text final summaries on tool outcomes and render them in desktop/mobile
+cards, preserving the parent answer and restricted one-shot output. Stop and
+terminal errors settle unfinished work before persistence. Native session-wide
+metrics already include children and must not add their overlapping counters.
 
 ## Alternatives Considered
 
@@ -159,6 +182,9 @@ CLI, rather than inferred from SDK send acceptance.
   unconsumed messages can start an unexpected second execution and compete with
   Cockpit's persisted queue. Explicit steering plus paused withdrawal preserves
   the existing queue semantics and leaves rejected input reviewable.
+- **Pause the native queue for the entire turn:** prevents an accidental
+  correction from executing, but also stalls native background completions.
+  Transaction-scoped pause and exact withdrawal preserve both behaviors.
 
 ## Consequences
 

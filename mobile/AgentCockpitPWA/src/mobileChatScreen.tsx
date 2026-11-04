@@ -39,6 +39,7 @@ import {
 import { Button, ErrorBanner, ProgressBar } from './mobilePrimitives';
 import { GrokBilling } from './grokBilling';
 import { InteractionCard } from './interactionCard';
+import { AgentToolsProvider, ToolActivityView } from './agentTools';
 import type {
   BackendMetadata,
   ContentBlock,
@@ -51,6 +52,7 @@ import type {
   ServiceTier,
   ThreadGoal,
   Usage,
+  ToolActivity,
 } from './types';
 
 export function ChatScreen(props: {
@@ -61,6 +63,7 @@ export function ChatScreen(props: {
   draft: string;
   setDraft: (value: string) => void;
   streamText: string;
+  streamTools?: ToolActivity[];
   showStreamPlaceholder: boolean;
   isStreaming: boolean;
   isSending: boolean;
@@ -124,6 +127,7 @@ export function ChatScreen(props: {
     [conversation?.messages],
   );
   const scrollKey = [
+    props.streamTools?.map(tool => `${tool.id}:${tool.outcome}:${tool.summary?.length}`).join('|'),
     conversation?.id || '',
     conversation?.messages.length || 0,
     lastMessage?.id || '',
@@ -279,43 +283,46 @@ export function ChatScreen(props: {
       />
       <div className="transcript-wrap">
         <div className="transcript" ref={transcriptRef} onScroll={handleTranscriptScroll}>
-          {conversation.messages.map((message) => (
-            <MessageBubble
-              key={message.id}
-              message={message}
-              conversation={conversation}
-              client={props.client}
-              backends={props.backends}
-              cliProfiles={props.cliProfiles}
-              focused={focusedPinID === message.id}
-              messageRef={(node) => setMessageRef(message.id, node)}
-              onTogglePin={(pinned) => props.onTogglePin(message.id, pinned)}
-              onOpenFile={props.onOpenFile}
-              onShareFile={props.onShareFile}
-            />
-          ))}
-          {props.isStreaming && (props.streamText || props.showStreamPlaceholder) ? (
-            <div className={`message assistant${props.streamText ? '' : ' stream-placeholder'}`}>
-              <div className="message-heading">
-                <AssistantIdentity
-                  backend={conversation.backend}
-                  backends={props.backends}
-                  cliProfiles={props.cliProfiles}
-                  cliProfileId={conversation.cliProfileId || props.selectedCliProfileId}
-                />
+          <AgentToolsProvider messages={conversation.messages} liveTools={props.streamTools || []}>
+            {conversation.messages.map((message) => (
+              <MessageBubble
+                key={message.id}
+                message={message}
+                conversation={conversation}
+                client={props.client}
+                backends={props.backends}
+                cliProfiles={props.cliProfiles}
+                focused={focusedPinID === message.id}
+                messageRef={(node) => setMessageRef(message.id, node)}
+                onTogglePin={(pinned) => props.onTogglePin(message.id, pinned)}
+                onOpenFile={props.onOpenFile}
+                onShareFile={props.onShareFile}
+              />
+            ))}
+            {props.isStreaming && (props.streamText || props.showStreamPlaceholder || props.streamTools?.length) ? (
+              <div className={`message assistant${props.streamText ? '' : ' stream-placeholder'}`}>
+                <div className="message-heading">
+                  <AssistantIdentity
+                    backend={conversation.backend}
+                    backends={props.backends}
+                    cliProfiles={props.cliProfiles}
+                    cliProfileId={conversation.cliProfileId || props.selectedCliProfileId}
+                  />
+                </div>
+                {props.streamText ? (
+                  <MarkdownContent content={props.streamText} />
+                ) : !props.streamTools?.length ? (
+                  <span className="streaming-dots" aria-label="Assistant is writing">
+                    <span />
+                    <span />
+                    <span />
+                  </span>
+                ) : null}
+                {props.streamTools?.map((activity, index) => <ToolActivityView key={activity.id || index} activity={activity}/>)}
+                <span className="meta">Streaming...</span>
               </div>
-              {props.streamText ? (
-                <MarkdownContent content={props.streamText} />
-              ) : (
-                <span className="streaming-dots" aria-label="Assistant is writing">
-                  <span />
-                  <span />
-                  <span />
-                </span>
-              )}
-              <span className="meta">Streaming...</span>
-            </div>
-          ) : null}
+            ) : null}
+          </AgentToolsProvider>
           {props.loading ? <div className="mini-spinner" /> : null}
         </div>
         {showTranscriptBackToEnd ? (
@@ -692,12 +699,7 @@ export function ContentBlockView(props: {
   onShareFile: (reference: FileReference) => void;
 }) {
   if (props.block.type === 'tool') {
-    return (
-      <div className="tool-block">
-        <strong>{props.block.activity.tool}</strong>
-        <span>{props.block.activity.description || props.block.activity.status || 'Tool activity'}</span>
-      </div>
-    );
+    return <ToolActivityView activity={props.block.activity}/>;
   }
   if (props.block.type === 'artifact') {
     const reference = makeConversationArtifactReference(props.client, props.conversation, props.block.artifact);

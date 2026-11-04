@@ -65,6 +65,7 @@ export interface ToolActivity {
   subagentType?: string;
   parentAgentId?: string;
   outcome?: string;
+  summary?: string;
   status?: string;
   batchIndex?: number;
 }

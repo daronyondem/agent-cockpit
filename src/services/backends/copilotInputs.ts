@@ -15,7 +15,9 @@ interface Question {
 interface Steering {
   text: string;
   messageId?: string;
-  acknowledgement?: Promise<string>;
+  acknowledgement?: Promise<string | null>;
+  completion?: Promise<void>;
+  pollTimer?: ReturnType<typeof setTimeout>;
   resolve: (result: BackendInputResult) => void;
 }
 const rejected = (error: string, status: 400 | 409 | 503 = 409): BackendInputResult => ({ accepted: false, status, error });
@@ -37,8 +39,17 @@ export class CopilotInputs {
 
   async enableSteering(): Promise<void> {
     if (this.ended) return;
-    try { await this.request(this.session.rpc.queue.setDrainPaused({ paused: true })); }
-    catch { return; } // Older runtimes retain chat/questions without exposing unsafe steering.
+    let acquired = false;
+    try {
+      await this.request(this.session.rpc.queue.pendingItems());
+      if (this.ended) return;
+      await this.request(this.session.rpc.queue.setDrainPaused({ paused: true })); acquired = true;
+      if (this.ended) return;
+      await this.request(this.session.rpc.queue.setDrainPaused({ paused: false }));
+    } catch {
+      if (acquired && !this.cancelled) this.fail('Copilot could not release its native queue pause; the turn was stopped.');
+      return; // Older runtimes retain chat/questions without exposing unsafe steering.
+    }
     if (!this.ended) { this.ready = true; this.emit({ type: 'input_ready', turnId: this.turnId }); }
   }
 
@@ -75,10 +86,16 @@ export class CopilotInputs {
       this.steering = steering;
       // The paused queued lane prevents a late immediate message becoming an
       // automatic second execution. Only a native steering-delivery event accepts it.
-      steering.acknowledgement = this.request(this.session.send({ prompt: text, mode: 'immediate' }));
+      steering.acknowledgement = (async () => {
+        await this.request(this.session.rpc.queue.setDrainPaused({ paused: true }));
+        if (this.ended) { this.settleSteering(steering, rejected('The turn finished before consuming your steering. Your draft was preserved.')); return null; }
+        return this.request(this.session.send({ prompt: text, mode: 'immediate' }));
+      })();
       void steering.acknowledgement.then(id => {
+        if (!id || this.cancelled) return;
         steering.messageId = id;
-        if (this.consumed.has(id)) this.acceptSteering(steering);
+        if (this.consumed.has(id)) void this.completeSteering(steering, true).catch(() => {});
+        else this.pollSteering(steering);
       }, () => {
         if (!this.cancelled) this.fail('Copilot steering delivery failed. Delivery is uncertain; the turn was stopped.');
         this.settleSteering(steering, rejected('Copilot steering delivery failed. Do not automatically resend this input.', 503));
@@ -91,7 +108,7 @@ export class CopilotInputs {
     const id = event.data.messageId;
     if (!id) return;
     this.consumed.add(id);
-    if (this.steering?.messageId === id) this.acceptSteering(this.steering);
+    if (this.steering?.messageId === id) void this.completeSteering(this.steering, true).catch(() => {});
   }
 
   finish(): Promise<void> {
@@ -101,11 +118,8 @@ export class CopilotInputs {
       const steering = this.steering;
       if (!steering || this.cancelled) return;
       const messageId = await steering.acknowledgement;
-      if (this.cancelled) return;
-      if (this.consumed.has(messageId!)) { this.acceptSteering(steering); return; }
-      const removed = await this.request(this.session.rpc.queue.withdrawMessage({ messageId: messageId!, expectedPrompt: steering.text }));
-      if (!removed.removed || removed.interrupted) throw new Error('Copilot could not safely withdraw unconsumed steering.');
-      this.settleSteering(steering, rejected('The turn finished before consuming your steering. Your draft was preserved; send or queue it when ready.'));
+      if (!messageId || this.cancelled) return;
+      await this.completeSteering(steering, this.consumed.has(messageId));
     })().catch(error => {
       if (this.cancelled) return;
       if (this.steering) this.settleSteering(this.steering, rejected('Copilot could not safely discard late steering. The turn was stopped; do not automatically resend.', 503));
@@ -125,6 +139,7 @@ export class CopilotInputs {
     this.ended = true;
     if (this.ready) this.emit({ type: 'input_ready', turnId: null });
     this.ready = false;
+    if (this.steering) clearTimeout(this.steering.pollTimer);
     for (const question of this.questions) {
       this.resolved(question.id, 'cancelled');
       question.reject(new Error('Copilot input request was cancelled.'));
@@ -132,12 +147,50 @@ export class CopilotInputs {
     this.questions = [];
   }
 
-  private acceptSteering(steering: Steering): void {
-    this.settleSteering(steering, { accepted: true });
+  private completeSteering(steering: Steering, accepted: boolean): Promise<void> {
+    if (steering.completion) return steering.completion;
+    clearTimeout(steering.pollTimer);
+    steering.completion = (async () => {
+      if (!accepted) {
+        const removed = await this.request(this.session.rpc.queue.withdrawMessage({ messageId: steering.messageId!, expectedPrompt: steering.text }));
+        if (!removed.removed || removed.interrupted) throw new Error('Copilot could not safely withdraw unconsumed steering.');
+      }
+      if (this.cancelled) return;
+      // Native background-completion notifications also use this queued lane.
+      // Resume them only after consumption or exact removal of our message.
+      await this.request(this.session.rpc.queue.setDrainPaused({ paused: false }));
+      this.settleSteering(steering, accepted ? { accepted: true }
+        : rejected('The current work finished before consuming your steering. Your draft was preserved; send or queue it when ready.'));
+    })().catch(error => {
+      if (this.cancelled) return;
+      this.fail('Copilot input cleanup failed; the turn was stopped without retry.');
+      this.settleSteering(steering, rejected('Copilot input delivery could not be safely completed. The turn was stopped; do not automatically resend.', 503));
+      throw error;
+    });
+    return steering.completion;
+  }
+
+  private pollSteering(steering: Steering): void {
+    if (this.ended || this.steering !== steering || steering.completion) return;
+    steering.pollTimer = setTimeout(() => {
+      void (async () => {
+        const pending = await this.request(this.session.rpc.queue.pendingItems());
+        if (this.cancelled || this.steering !== steering) return;
+        // Promotion is observable even before session idle when native
+        // background notifications are waiting behind the paused correction.
+        if (pending.items.some(item => item.messageId === steering.messageId)) await this.completeSteering(steering, false);
+        else this.pollSteering(steering);
+      })().catch(() => {
+        if (this.cancelled || this.steering !== steering) return;
+        this.fail('Copilot steering queue inspection failed; the turn was stopped without retry.');
+        this.settleSteering(steering, rejected('Copilot steering status is uncertain. The turn was stopped; do not automatically resend.', 503));
+      });
+    }, 100);
   }
 
   private settleSteering(steering: Steering, result: BackendInputResult): void {
     if (this.steering !== steering) return;
+    clearTimeout(steering.pollTimer);
     this.steering = null;
     steering.resolve(result);
   }

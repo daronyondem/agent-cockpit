@@ -18,10 +18,12 @@ describe('mobile chat stream event projections', () => {
       { type: 'upsert-message', message },
       { type: 'set-stream-text', value: '' },
       { type: 'set-stream-placeholder', value: false },
+      { type: 'clear-stream-tools' },
     ]);
     expect(events.chatStreamEventActions({ type: 'assistant_message' })).toEqual([
       { type: 'set-stream-text', value: '' },
       { type: 'set-stream-placeholder', value: false },
+      { type: 'clear-stream-tools' },
     ]);
   });
 
@@ -92,6 +94,7 @@ describe('mobile chat stream event projections', () => {
     ]);
     expect(events.chatStreamEventActions({ type: 'replay_start' })).toEqual([
       { type: 'set-input-turn', turnId: null },
+      { type: 'clear-stream-tools' },
       { type: 'set-stream-text', value: '' },
       { type: 'set-stream-placeholder', value: true },
     ]);
@@ -102,8 +105,8 @@ describe('mobile chat stream event projections', () => {
       questions: [{ question: 'Choose', options: [{ label: 'Beta' }], allowFreeform: false }] })[0])
       .toEqual({ type: 'set-pending-interaction', interaction: { kind: 'question', prompt: 'Choose', options: [{ label: 'Beta' }], requestId: 'question', allowFreeform: false } });
     expect(events.chatStreamEventActions({ type: 'input_ready', turnId: 'turn' })).toEqual([{ type: 'set-input-turn', turnId: 'turn' }]);
-    expect(events.chatStreamEventActions({ type: 'tool_outcomes', outcomes: [{ toolUseId: 'question' }] }))
-      .toEqual([{ type: 'resolve-input-requests', requestIds: ['question'] }]);
+    const outcome = { type: 'tool_outcomes', outcomes: [{ toolUseId: 'question' }] };
+    expect(events.chatStreamEventActions(outcome)).toEqual([{ type: 'resolve-input-requests', requestIds: ['question'] }, { type: 'update-stream-tools', frame: outcome }]);
   });
 
   test('projects list stream monitor events without open-chat side effects', () => {

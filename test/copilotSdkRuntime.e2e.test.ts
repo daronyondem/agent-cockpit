@@ -19,7 +19,9 @@ native('real Copilot owned SDK runtime with fixed local model responses', () => 
   let runtime: CopilotSdkRuntime | undefined;
   let provider: http.Server;
   let baseUrl: string;
-  let scenario: 'text' | 'question' | 'questions' | 'steer' | 'delegate' | 'wait';
+  let scenario: 'text' | 'question' | 'questions' | 'steer' | 'delegate' | 'delegation' | 'wait';
+  let delegationMode: 'parallel' | 'nested' | 'background' | 'error' | 'cancel';
+  let releaseDelegate: (() => void) | undefined;
   let finalBeforeSteer: boolean;
   let requests: Array<Record<string, unknown>>;
   let events: Array<Record<string, unknown>>;
@@ -32,6 +34,7 @@ native('real Copilot owned SDK runtime with fixed local model responses', () => 
     dir = fs.mkdtempSync(path.join(os.tmpdir(), 'copilot-sdk-native-'));
     fs.writeFileSync(path.join(dir, 'AGENTS.md'), '# Synthetic instructions\nSDK_MANAGED_INSTRUCTIONS_MARKER\n');
     scenario = 'text'; requests = []; events = []; releaseSteer = undefined; question = undefined; finalBeforeSteer = false;
+    delegationMode = 'parallel'; releaseDelegate = undefined;
     provider = http.createServer((req, res) => {
       let body = '';
       req.on('data', chunk => { body += chunk.toString(); });
@@ -52,6 +55,34 @@ native('real Copilot owned SDK runtime with fixed local model responses', () => 
           reply({ role: 'assistant', tool_calls: [{ index: 0, id: `fixture-${name}-${requests.length}`, type: 'function', function: { name, arguments: JSON.stringify(args) } }] }, 'tool_calls');
         };
         const hasTool = messages.some(message => message.role === 'tool');
+        if (scenario === 'delegation') {
+          const lastUser = String(messages.filter(message => message.role === 'user').at(-1)?.content || '');
+          const child = /SDK_PHASE6_CHILD_(LEFT|RIGHT|OUTER|INNER)$/.exec(lastUser)?.[1];
+          const task = (name: string) => ({ name: 'task', args: { name, agent_type: 'general-purpose', description: `Check ${name}`, prompt: name,
+            ...(delegationMode === 'background' ? { mode: 'background' } : {}) } });
+          const tasks = (names: string[]) => reply({ role: 'assistant', tool_calls: names.map((name, index) => {
+            const tool = task(name); return { index, id: `phase6-${requests.length}-${index}`, type: 'function', function: { name: tool.name, arguments: JSON.stringify(tool.args) } };
+          }) }, 'tool_calls');
+          if (child) {
+            if (delegationMode === 'error') { res.writeHead(400, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ error: { message: 'Synthetic child model failure', type: 'invalid_request_error' } })); return; }
+            if (!hasTool && delegationMode === 'nested' && child === 'OUTER') { tasks(['SDK_PHASE6_CHILD_INNER']); return; }
+            if (!hasTool) {
+              const send = () => {
+                releaseDelegate = undefined;
+                const powershell = process.platform === 'win32' && tools.some((tool: { name: string }) => tool.name === 'powershell');
+                const quote = (value: string) => powershell ? `'${value.replace(/'/g, "''")}'` : `'${value.replace(/'/g, "'\\''")}'`;
+                const program = `const fs=require('fs');fs.writeFileSync(${JSON.stringify(path.join(dir, 'worker.pid'))},String(process.pid));process.on('SIGTERM',()=>{});setTimeout(()=>fs.writeFileSync(${JSON.stringify(path.join(dir, 'worker-finished'))},'unexpected'),45000);`;
+                call(powershell ? 'powershell' : 'bash', { command: delegationMode === 'cancel' ? `${powershell ? '& ' : ''}${quote(process.execPath)} -e ${quote(program)}` : 'echo SDK_PHASE6_TOOL', description: `Child ${child} tool`, initial_wait: 1000 });
+              };
+              if (delegationMode === 'background') releaseDelegate = send; else send();
+              return;
+            }
+            say(`SDK_PHASE6_SUMMARY_${child}`); return;
+          }
+          if (!hasTool) tasks(delegationMode === 'parallel' ? ['SDK_PHASE6_CHILD_LEFT', 'SDK_PHASE6_CHILD_RIGHT'] : [delegationMode === 'nested' ? 'SDK_PHASE6_CHILD_OUTER' : 'SDK_PHASE6_CHILD_LEFT']);
+          else say('SDK_PHASE6_PARENT_OK');
+          return;
+        }
         if (scenario === 'questions' && messages.filter(message => message.role === 'tool').length < 2) {
           call('ask_user', { question: 'Choose a fixture answer', choices: ['Alpha', 'Beta'] });
         } else if (scenario === 'question' && !hasTool) call('ask_user', { question: 'Choose a fixture answer', choices: ['Alpha', 'Beta'] });
@@ -98,6 +129,7 @@ native('real Copilot owned SDK runtime with fixed local model responses', () => 
 
   afterEach(async () => {
     releaseSteer?.();
+    releaseDelegate?.();
     await runtime?.stop();
     runtime = undefined;
     provider.closeAllConnections();
@@ -261,6 +293,86 @@ native('real Copilot owned SDK runtime with fixed local model responses', () => 
       } }]);
       expect(delegated.filter(frame => frame.type === 'text').map(frame => frame.content).join('')).toBe('SDK_PARENT_OK');
     } finally { await adapter.shutdown(); }
+  }, 60000);
+
+  test.each(['parallel', 'nested', 'background', 'background-steering', 'error'] as const)('production %s delegation keeps tools/summaries separate and counts all inference once', async mode => {
+    await runtime!.stop(); runtime = undefined;
+    const adapter = new CopilotAdapter({ workingDir: dir });
+    const frames: StreamEvent[] = [];
+    try {
+      scenario = 'delegation'; delegationMode = mode === 'background-steering' ? 'background' : mode;
+      const active = adapter.sendMessage('SDK_PHASE6_PARENT', conversationOptions());
+      let finished = false;
+      const pending = (async () => { for await (const frame of active.stream) { frames.push(frame); events.push({ source: 'cockpit', ...frame }); } finished = true; })();
+      if (delegationMode === 'background') {
+        await waitForCopilotPeer(() => !!releaseDelegate && frames.some(frame => frame.type === 'text'));
+        expect(finished).toBe(false);
+        expect(frames.some(frame => frame.type === 'done')).toBe(false);
+        expect(frames.filter(frame => frame.type === 'tool_outcomes').flatMap(frame => frame.outcomes).some(outcome => outcome.outcome === 'done')).toBe(false);
+        if (mode === 'background-steering') await waitForCopilotPeer(() => frames.some(frame => frame.type === 'input_ready' && frame.turnId));
+        const turn = frames.find(frame => frame.type === 'input_ready' && frame.turnId);
+        const delivery = mode === 'background-steering' && turn?.type === 'input_ready'
+          ? active.deliverInput!({ text: 'SDK_PHASE6_CORRECTION', turnId: turn.turnId!, inputId: 'background-correction' }) : undefined;
+        if (delivery) await new Promise(resolve => setTimeout(resolve, 150));
+        releaseDelegate!();
+        if (delivery) { const result = await delivery; events.push({ source: 'input', result }); expect(result.accepted || result.status === 409).toBe(true); }
+      }
+      await pending;
+      const agents = frames.filter((frame): frame is Extract<StreamEvent, { type: 'tool_activity' }> => frame.type === 'tool_activity' && frame.isAgent === true);
+      const outcomes = frames.filter(frame => frame.type === 'tool_outcomes').flatMap(frame => frame.outcomes);
+      expect(agents).toHaveLength(mode === 'parallel' || mode === 'nested' ? 2 : 1);
+      expect(new Set(agents.map(agent => agent.id)).size).toBe(agents.length);
+      expect(frames.some(frame => frame.type === 'error')).toBe(false);
+      expect(frames.filter(frame => frame.type === 'text').map(frame => frame.content).join('').replaceAll('SDK_PHASE6_PARENT_OK', '')).toBe('');
+      for (const agent of agents) {
+        expect(outcomes.filter(outcome => outcome.toolUseId === agent.id)).toHaveLength(1);
+        expect(outcomes.find(outcome => outcome.toolUseId === agent.id)).toMatchObject(mode === 'error'
+          ? { status: 'error', summary: expect.stringContaining('Synthetic child model failure') }
+          : { status: 'success', summary: expect.stringContaining('SDK_PHASE6_SUMMARY_') });
+      }
+      if (mode === 'nested') {
+        const root = agents.find(agent => !agent.parentAgentId)!;
+        expect(agents.find(agent => agent.parentAgentId)?.parentAgentId).toBe(root.id);
+        expect(frames.some(frame => frame.type === 'tool_activity' && !frame.isAgent && frame.parentAgentId === root.id)).toBe(true);
+      }
+      const measuredCalls = requests.length - (mode === 'error' ? 1 : 0);
+      expect(frames.filter(frame => frame.type === 'usage')).toEqual([{ type: 'usage', usage: {
+        inputTokens: measuredCalls * 80, outputTokens: measuredCalls * 30, cacheReadTokens: measuredCalls * 40, cacheWriteTokens: 0, credits: 0, costUsd: 0, costSource: 'none',
+      } }]);
+      const session = frames.find(frame => frame.type === 'external_session');
+      if (session?.type !== 'external_session') throw new Error('Missing native session ID');
+      scenario = 'text';
+      const resumed = await collectConversation(adapter.sendMessage('SDK_PHASE6_COLD_RESUME', conversationOptions({ isNewSession: false, externalSessionId: session.sessionId })).stream);
+      expect(resumed.some(frame => frame.type === 'error' || (frame.type === 'tool_activity' && frame.isAgent))).toBe(false);
+      expect(resumed.filter(frame => frame.type === 'usage')).toMatchObject([{ usage: { inputTokens: 80, outputTokens: 30, cacheReadTokens: 40 } }]);
+    } finally { await adapter.shutdown(); }
+  }, 60000);
+
+  test('Stop terminates a delegated tool worker and cold resume does not replay its interrupted work', async () => {
+    await runtime!.stop(); runtime = undefined;
+    const adapter = new CopilotAdapter({ workingDir: dir });
+    let worker = 0;
+    const alive = () => { try { process.kill(worker, 0); return true; } catch { return false; } };
+    try {
+      scenario = 'delegation'; delegationMode = 'cancel';
+      const active = adapter.sendMessage('SDK_PHASE6_CANCEL_PARENT', conversationOptions());
+      const pending = collectConversation(active.stream);
+      await waitForCopilotPeer(() => fs.existsSync(path.join(dir, 'worker.pid')));
+      worker = Number(fs.readFileSync(path.join(dir, 'worker.pid'), 'utf8'));
+      active.abort();
+      const frames = await pending;
+      const agent = frames.find(frame => frame.type === 'tool_activity' && frame.isAgent);
+      expect(agent).toBeDefined();
+      expect(frames.filter(frame => frame.type === 'tool_outcomes').flatMap(frame => frame.outcomes)).toContainEqual(expect.objectContaining({ toolUseId: agent?.type === 'tool_activity' ? agent.id : '', outcome: 'cancelled' }));
+      await waitForCopilotPeer(() => !alive());
+      const session = frames.find(frame => frame.type === 'external_session');
+      if (session?.type !== 'external_session') throw new Error('Missing native session ID');
+      scenario = 'text';
+      const resumed = await collectConversation(adapter.sendMessage('SDK_AFTER_DELEGATE_STOP', conversationOptions({ isNewSession: false, externalSessionId: session.sessionId })).stream);
+      expect(resumed.some(frame => frame.type === 'text' && frame.content === 'SDK_TEXT_OK')).toBe(true);
+      expect(Number(fs.readFileSync(path.join(dir, 'worker.pid'), 'utf8'))).toBe(worker);
+      expect(fs.existsSync(path.join(dir, 'worker-finished'))).toBe(false);
+    } finally { await adapter.shutdown(); if (worker && alive()) process.kill(worker, 'SIGKILL'); }
   }, 60000);
 
   test('production questions retain distinct identities, reject duplicate answers, and accept freeform', async () => {

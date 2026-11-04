@@ -34,8 +34,8 @@ describe('Copilot catalog gates through the official SDK and executable RPC peer
     profile.env!.COPILOT_FIXTURE_MODELS = JSON.stringify([{ id: 'account-model', name: 'Account model',
       capabilities: { supports: { reasoningEffort: true, vision: true } }, supportedReasoningEfforts: ['low', 'max'] }]);
     const metadata = await adapter.getMetadata({ cliProfile: profile });
-    expect(adapter.metadata.capabilities).toMatchObject({ userQuestions: false, stdinInput: false });
-    expect(metadata.capabilities).toMatchObject({ userQuestions: true, stdinInput: true });
+    expect(adapter.metadata.capabilities).toMatchObject({ userQuestions: false, stdinInput: false, agents: false });
+    expect(metadata.capabilities).toMatchObject({ userQuestions: true, stdinInput: true, agents: true });
     expect(metadata.modelCatalog?.source).toBe('runtime');
     expect(metadata.models?.find(model => model.id === 'account-model')).toMatchObject({ supportedEffortLevels: ['low', 'max'], capabilities: { input: { image: false, pdf: false } } });
     const frames = await collect(adapter.sendMessage('hello', options({ model: 'account-model', effort: 'max' })).stream);
@@ -48,7 +48,7 @@ describe('Copilot catalog gates through the official SDK and executable RPC peer
     await adapter.getMetadata({ cliProfile: profile, refreshModels: true });
     expect(peer.calls().filter(call => call.method === 'models.list')).toHaveLength(2);
     expect((await adapter.getMetadata({ cliProfile: { ...profile, command: peer.command } })).capabilities)
-      .toMatchObject({ userQuestions: false, stdinInput: false });
+      .toMatchObject({ userQuestions: false, stdinInput: false, agents: false });
   }, 15000);
 
   test.each([

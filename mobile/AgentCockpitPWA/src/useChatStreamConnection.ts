@@ -11,7 +11,8 @@ import {
 } from './appModel';
 import { useVisibleStreamResume } from './useMobileLifecycle';
 import type { AgentCockpitAPI } from './api';
-import type { Conversation, ConversationListItem, PendingInteraction, StreamEvent, ThreadGoal } from './types';
+import type { Conversation, ConversationListItem, PendingInteraction, StreamEvent, ThreadGoal, ToolActivity } from './types';
+import { applyLiveToolFrame } from './liveToolActivities';
 
 type UseChatStreamConnectionOptions = {
   activeConversationRef: RefObject<Conversation | null>;
@@ -36,6 +37,7 @@ export function useChatStreamConnection(options: UseChatStreamConnectionOptions)
   const [showStreamPlaceholder, setShowStreamPlaceholder] = useState(false);
   const [isStreaming, setIsStreamingState] = useState(false);
   const [inputTurnId, setInputTurnId] = useState<string | null>(null);
+  const [streamTools, setStreamTools] = useState<ToolActivity[]>([]);
 
   resumeStreamConnectionRef.current = resumeStreamConnection;
 
@@ -47,7 +49,7 @@ export function useChatStreamConnection(options: UseChatStreamConnectionOptions)
   });
 
   function setIsStreaming(value: boolean) {
-    if (!value) setInputTurnId(null);
+    if (!value) { setInputTurnId(null); setStreamTools([]); }
     setIsStreamingState(value);
     isStreamingRef.current = value;
   }
@@ -61,6 +63,7 @@ export function useChatStreamConnection(options: UseChatStreamConnectionOptions)
 
   function startStream(conversationID: string) {
     closeStreamSocket();
+    setStreamTools([]);
     setShowStreamPlaceholder(true);
     setIsStreaming(true);
     options.setActiveStreamIDs((current) => new Set(current).add(conversationID));
@@ -199,6 +202,12 @@ export function useChatStreamConnection(options: UseChatStreamConnectionOptions)
       case 'set-pending-interaction':
         options.setPendingInteraction(action.interaction);
         break;
+      case 'clear-stream-tools':
+        setStreamTools([]);
+        break;
+      case 'update-stream-tools':
+        setStreamTools(current => applyLiveToolFrame(current, action.frame, Date.now()));
+        break;
       case 'set-input-turn':
         setInputTurnId(action.turnId);
         break;
@@ -255,6 +264,7 @@ export function useChatStreamConnection(options: UseChatStreamConnectionOptions)
 
   return {
     streamText,
+    streamTools,
     setStreamText,
     showStreamPlaceholder,
     setShowStreamPlaceholder,

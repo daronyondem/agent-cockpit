@@ -20,6 +20,15 @@
   font-size: 11px;
   line-height: 1.45;
 }
+.agent-card { border: 1px solid var(--status-subagent); border-radius: 7px; padding: 9px; margin: 8px 0; overflow-wrap: anywhere; }
+.agent-card > header { display: flex; justify-content: space-between; gap: 8px; font-size: 12px; }
+.agent-card > p { margin: 6px 0; font-size: 12px; }
+.agent-card .tool-block { margin-top: 6px; }
+.agent-card.error, .tool-block.error { border-color: var(--status-error); }
+.agent-card.warning, .tool-block.warning { border-color: var(--status-awaiting); }
+.agent-summary { margin: 6px 0; font-size: 12px; overflow-wrap: anywhere; }
+.agent-summary summary { cursor: pointer; }
+.agent-summary p { white-space: pre-wrap; }
 
 .file-card {
   background: var(--surface);

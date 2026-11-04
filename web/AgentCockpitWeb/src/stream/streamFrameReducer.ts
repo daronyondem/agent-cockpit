@@ -32,6 +32,13 @@ export interface StreamMemoryUpdateMessage {
 
 export type StreamStoreMessage = Message | StreamMemoryUpdateMessage;
 
+/** Initial HTTP history can arrive after WebSocket replay has built live rows. */
+export function mergeInitialStreamMessages(saved: StreamStoreMessage[], current: StreamStoreMessage[]): StreamStoreMessage[] {
+  const live = new Map(current.map(message => [message.id, message]));
+  const ids = new Set(saved.map(message => message.id));
+  return [...saved.map(message => live.get(message.id) || message), ...current.filter(message => !ids.has(message.id))];
+}
+
 export type StreamConversationStatus = Record<string, unknown>;
 
 export type StreamConversationKbStatus = StreamConversationStatus & {
@@ -424,6 +431,7 @@ function patchToolOutcomes(
           ...block.activity,
           outcome: outcome.outcome || undefined,
           status: outcome.status || undefined,
+          ...(outcome.summary !== undefined ? { summary: outcome.summary } : {}),
           duration,
         },
       };

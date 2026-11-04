@@ -110,7 +110,7 @@ export class CopilotAdapter extends BaseBackendAdapter {
     if (options.refreshModels) await this.catalog.shutdown();
     if (this.closed || this.closing) return this.metadata;
     const interactive = copilotChatTransport(options.cliProfile) === 'sdk';
-    return { ...this.metadata, capabilities: { ...this.metadata.capabilities, userQuestions: interactive, stdinInput: interactive },
+    return { ...this.metadata, capabilities: { ...this.metadata.capabilities, userQuestions: interactive, stdinInput: interactive, agents: interactive },
       ...await this.catalog.get(options.cliProfile) };
   }
 

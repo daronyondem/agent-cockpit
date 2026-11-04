@@ -8,6 +8,8 @@ import { createCopilotSdkEventState, reduceCopilotSdkEvent } from './copilotSdkE
 import { copilotTurnUsage, copilotUsageMetrics } from './copilotUsage';
 import { CopilotModelCatalog, assertCopilotSelection } from './copilotCatalog';
 import { CopilotInputs } from './copilotInputs';
+import { finishCopilotWork } from './copilotAgents';
+import crypto from 'crypto';
 import { buildNativeSessionRecovery, buildSessionRecoveryEvent, createRecoverySnapshot, isMissingNativeSessionError } from './sessionRecovery';
 
 const log = logger.child({ module: 'copilot-conversations' });
@@ -120,6 +122,8 @@ export class CopilotConversations {
 
   private async *stream(message: string, options: SendMessageOptions, turn: ConversationTurn): AsyncGenerator<StreamEvent> {
     let accepting = false;
+    const namespace = crypto.randomUUID();
+    let state = createCopilotSdkEventState(namespace);
     try {
       await this.wait(turn.predecessor || Promise.resolve(), turn);
       const workingDir = resolveCopilotWorkingDir(options.workingDir || this.options.workingDir);
@@ -133,7 +137,6 @@ export class CopilotConversations {
       turn.controller.signal.throwIfAborted();
       assertCopilotSelection(catalog, options, runtime.env);
       const queued: StreamEvent[] = [];
-      let state = createCopilotSdkEventState();
       let complete = false;
       let admitted = false;
       let started = false;
@@ -142,6 +145,7 @@ export class CopilotConversations {
       const finish = (error?: string, source?: 'transport') => {
         if (complete || !accepting || turn.controller.signal.aborted) return;
         if (error) {
+          const ended = finishCopilotWork(state.work, 'interrupted'); state.work = ended.state; queued.push(...ended.events);
           state = { ...state, error };
           queued.push({ type: 'error', error, ...(source ? { source } : {}) });
         }
@@ -185,7 +189,7 @@ export class CopilotConversations {
             reason: String(error), snapshot, currentPrompt: message });
           yield buildSessionRecoveryEvent(recovery.metadata);
           turn.controller.signal.throwIfAborted();
-          state = createCopilotSdkEventState(); queued.length = 0; complete = false;
+          state = createCopilotSdkEventState(namespace); queued.length = 0; complete = false;
           session = await this.wait(turn.runtime.client.createSession({ ...config, trustWorkingDirectory: 'session' }), turn);
           prompt = composePrompt(recovery.prompt, options.systemPrompt, true);
         }
@@ -230,6 +234,8 @@ export class CopilotConversations {
       await this.stop(turn);
       yield { type: 'done' };
     } catch (error) {
+      const ended = finishCopilotWork(state.work, turn.aborted ? 'cancelled' : 'interrupted');
+      for (const event of ended.events) yield event;
       yield { type: 'error', error: turn.aborted ? 'Copilot turn aborted.' : error instanceof Error ? error.message : String(error),
         ...(turn.aborted ? { source: 'abort' as const } : {}) };
       yield { type: 'done' };

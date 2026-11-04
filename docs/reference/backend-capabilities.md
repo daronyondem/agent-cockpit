@@ -91,7 +91,7 @@ Native compatibility is verified on Grok Build 1.0.52, macOS arm64. See the
   `~/.copilot` (sign in with `copilot login`); the profile check verifies
   installation, native credential status and enabled-model catalog access
   separately, while login remains a terminal operation;
-- static curated Claude/GPT/Gemini catalog, not live account-specific discovery;
+- profile/runtime-scoped model discovery with a clearly labeled curated fallback;
 - default `auto` routing plus explicit account-dependent model selections;
 - reasoning effort through `copilot --reasoning-effort <low|medium|high|xhigh>`
   for explicit reasoning models, not automatic routing or Haiku;
@@ -111,9 +111,10 @@ Native compatibility is verified on Grok Build 1.0.52, macOS arm64. See the
   and separating cache-inclusive input; no nano-AIU conversion or USD estimate;
 - restricted text-only one-shots explicitly expose zero tools using
   `--available-tools none`;
-- native delegation output isolated from the root answer; grouped child UI,
-  plan/goal controls, mid-turn input, and interactive questions are deferred
-  integrations, not missing native CLI capabilities;
+- grouped SDK child tools and final summaries, including nested/background work,
+  isolated from the root answer; opaque JSONL profiles retain root-only activity;
+- exact native question callbacks and explicit active-turn steering on SDK
+  profiles; plan/goal controls remain deferred integrations;
 - no confirmed native durable-memory directory for Agent Cockpit to import or
   watch. Copilot memory integration uses Agent Cockpit's Memory MCP tools.
 

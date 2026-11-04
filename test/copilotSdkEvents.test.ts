@@ -1,4 +1,5 @@
 import type { SessionEvent } from '@github/copilot-sdk' with { 'resolution-mode': 'import' };
+import { copilotToolId } from '../src/services/backends/copilotAgents';
 import { createCopilotSdkEventState, reduceCopilotSdkEvent } from '../src/services/backends/copilotSdkEvents';
 
 let serial = 0;
@@ -34,15 +35,15 @@ test('deduplicates reasoning deltas/finals independently from text and supplies 
 test('keeps root and child tools separate, remembers names, and deduplicates outcomes', () => {
   const initial = createCopilotSdkEventState();
   let state = reduceCopilotSdkEvent(initial, event('tool.execution_start', { toolCallId: 't', toolName: 'view', arguments: { path: '/tmp/example' } })).state;
-  expect(initial.tools.size).toBe(0);
-  expect(state.tools.get('t')).toBe('view');
+  expect(initial.work.tools.size).toBe(0);
+  expect(state.work.tools.get(copilotToolId(state.work, null, 't'))?.name).toBe('view');
   expect(reduceCopilotSdkEvent(state, event('tool.execution_start', { toolCallId: 't', toolName: 'view' })).events).toEqual([]);
   expect(reduceCopilotSdkEvent(state, event('tool.execution_complete', { toolCallId: 't', success: false }, 'child')).events).toEqual([]);
   const completed = reduceCopilotSdkEvent(state, event('tool.execution_complete', { toolCallId: 't', success: true, result: { content: '1→hello' } }));
-  expect(completed.events).toMatchObject([{ type: 'tool_outcomes', outcomes: [{ toolUseId: 't', isError: false, status: 'success' }] }]);
-  expect(state.tools.has('t')).toBe(true);
+  expect(completed.events).toMatchObject([{ type: 'tool_outcomes', outcomes: [{ toolUseId: copilotToolId(state.work, null, 't'), isError: false, status: 'success' }] }]);
+  expect(state.work.tools.has(copilotToolId(state.work, null, 't'))).toBe(true);
   state = completed.state;
-  expect(state.tools.size).toBe(0);
+  expect(state.work.tools.size).toBe(0);
   expect(reduceCopilotSdkEvent(state, event('tool.execution_complete', { toolCallId: 't', success: true })).events).toEqual([]);
   expect(reduceCopilotSdkEvent(state, event('tool.execution_start', { toolCallId: 't', toolName: 'view' })).events).toEqual([]);
 });
