@@ -23,7 +23,7 @@ native('real Copilot owned SDK runtime with fixed local model responses', () => 
   let runtime: CopilotSdkRuntime | undefined;
   let provider: http.Server;
   let baseUrl: string;
-  let scenario: 'text' | 'question' | 'questions' | 'steer' | 'delegate' | 'delegation' | 'wait' | 'goal' | 'media';
+  let scenario: 'text' | 'question' | 'questions' | 'steer' | 'steer-tool' | 'delegate' | 'delegation' | 'wait' | 'goal' | 'media';
   let goalDelegation: boolean;
   let delegationMode: 'parallel' | 'nested' | 'background' | 'error' | 'cancel';
   let releaseDelegate: (() => void) | undefined;
@@ -72,6 +72,27 @@ native('real Copilot owned SDK runtime with fixed local model responses', () => 
         const hasTool = messages.some(message => message.role === 'tool');
         const currentUserIndex = messages.reduce((last, message, index) => message.role === 'user' ? index : last, -1);
         const currentHasTool = messages.slice(currentUserIndex).some(message => message.role === 'tool');
+        if (scenario === 'steer-tool') {
+          // A resumed turn already contains tools. Find this turn's original
+          // prompt even after the native runtime inserts the steering message.
+          const start = messages.reduce((last, message, index) => message.role === 'user' && /SDK_TOOL_(WARMUP|INITIAL)/.test(JSON.stringify(message.content)) ? index : last, -1);
+          const warmup = JSON.stringify(messages[start]?.content).includes('SDK_TOOL_WARMUP');
+          if (messages.slice(start).some(message => message.role === 'tool')) {
+            const respond = () => say(warmup ? 'SDK_WARMUP_OK' : JSON.stringify(messages).includes('SDK_RUNNING_CORRECTION') ? 'SDK_RUNNING_STEER_OK' : 'SDK_RUNNING_STEER_MISSING');
+            if (warmup || fs.existsSync(path.join(dir, 'steer-worker-finished'))) respond();
+            else {
+              const timer = setInterval(() => { if (fs.existsSync(path.join(dir, 'steer-worker-finished'))) { clearInterval(timer); respond(); } }, 20);
+              res.on('close', () => clearInterval(timer));
+            }
+          } else {
+            const powershell = process.platform === 'win32' && tools.some((tool: { name: string }) => tool.name === 'powershell');
+            const quote = (value: string) => powershell ? `'${value.replace(/'/g, "''")}'` : `'${value.replace(/'/g, "'\\''")}'`;
+            const program = `const fs=require('fs');fs.writeFileSync(${JSON.stringify(path.join(dir, 'steer-worker.pid'))},String(process.pid));const timer=setInterval(()=>{if(fs.existsSync(${JSON.stringify(path.join(dir, 'steer-worker-release'))})){clearInterval(timer);fs.writeFileSync(${JSON.stringify(path.join(dir, 'steer-worker-finished'))},'done');console.log('WAIT_DONE');}},20);setTimeout(()=>process.exit(1),45000).unref();`;
+            call(powershell ? 'powershell' : 'bash', { command: warmup ? 'echo SDK_WARMUP_TOOL' : `${powershell ? '& ' : ''}${quote(process.execPath)} -e ${quote(program)}`,
+              description: warmup ? 'Warm the existing conversation with a tool' : 'Wait for release while steering a running tool', mode: 'sync', initial_wait: 120 });
+          }
+          return;
+        }
         if (scenario === 'media') {
           const mediaTool = tools.find((tool: { name?: string }) => tool.name?.endsWith('media_output'));
           if (!hasTool && mediaTool) call(mediaTool.name, {}); else say('SDK_MEDIA_OK');
@@ -733,6 +754,54 @@ native('real Copilot owned SDK runtime with fixed local model responses', () => 
         expect(requests).toHaveLength(2);
         expect(JSON.stringify(requests.at(-1)?.messages)).not.toContain('SDK_CORRECTION');
       }
+    } finally { await adapter.shutdown(); }
+  }, 60000);
+
+  test('production steering during a running foreground tool survives a warmed session and cold resume', async () => {
+    await runtime!.stop(); runtime = undefined;
+    const adapter = new CopilotAdapter({ workingDir: dir });
+    try {
+      scenario = 'steer-tool';
+      const warmup = await collectConversation(adapter.sendMessage('SDK_TOOL_WARMUP', conversationOptions()).stream);
+      expect(warmup.some(frame => frame.type === 'error')).toBe(false);
+      expect(warmup.some(frame => frame.type === 'text' && frame.content === 'SDK_WARMUP_OK')).toBe(true);
+      const session = warmup.find(frame => frame.type === 'external_session');
+      if (session?.type !== 'external_session') throw new Error('Missing warmed session ID');
+      const options = conversationOptions({ isNewSession: false, externalSessionId: session.sessionId });
+      const frames: StreamEvent[] = [];
+      const active = adapter.sendMessage('SDK_TOOL_INITIAL: after the current command finishes reply ORIGINAL, without another command.', options);
+      const pending = (async () => { for await (const frame of active.stream) { frames.push(frame); events.push({ source: 'cockpit', ...frame }); } })();
+      const turn = () => frames.find(frame => frame.type === 'input_ready');
+      await waitForCopilotPeer(() => fs.existsSync(path.join(dir, 'steer-worker.pid')) && !!turn());
+      expect(frames.some(frame => frame.type === 'done')).toBe(false);
+      const ready = turn();
+      if (ready?.type !== 'input_ready') throw new Error('Missing running turn ID');
+      const delivery = active.deliverInput!({ text: 'Correction: after the current command finishes reply SDK_RUNNING_CORRECTION instead. Do not start another command.', turnId: ready.turnId!, inputId: 'running-tool-correction' });
+      // The worker is really running while the immediate RPC is admitted; it
+      // cannot finish or produce another model response before this release.
+      await new Promise(resolve => setTimeout(resolve, 300));
+      await fs.promises.writeFile(path.join(dir, 'steer-worker-release'), 'finish');
+      expect(await delivery).toMatchObject({ accepted: true });
+      await pending;
+      expect(frames.some(frame => frame.type === 'error')).toBe(false);
+      const replies = frames.filter(frame => frame.type === 'text');
+      expect(replies.length).toBeGreaterThan(0);
+      expect(replies.every(frame => frame.content === 'SDK_RUNNING_STEER_OK')).toBe(true);
+      const history = () => fs.readFileSync(path.join(dir, 'home', 'session-state', session.sessionId, 'events.jsonl'), 'utf8')
+        .trim().split('\n').map(line => JSON.parse(line));
+      const beforeResume = history();
+      const commands = (history: Array<{ type: string; data: { toolName?: string } }>) => history.filter(event => event.type === 'tool.execution_start' && ['bash', 'powershell'].includes(event.data.toolName || ''));
+      // Immediate steering can background a native foreground command; its
+      // automatic read/completion may add a reply, but must not start a command.
+      expect(commands(beforeResume)).toHaveLength(2);
+      expect(beforeResume.filter(event => event.type === 'user.message' && event.data?.delivery === 'steering' && event.data?.content.includes('SDK_RUNNING_CORRECTION'))).toHaveLength(1);
+      scenario = 'text';
+      const resumed = await collectConversation(adapter.sendMessage('SDK_AFTER_RUNNING_STEER', options).stream);
+      expect(resumed.some(frame => frame.type === 'error')).toBe(false);
+      expect(resumed.filter(frame => frame.type === 'text').map(frame => frame.content).join('')).toBe('SDK_TEXT_OK');
+      expect(history().filter(event => event.type === 'user.message' && event.data?.delivery === 'steering')).toHaveLength(1);
+      expect(commands(history())).toHaveLength(2);
+      events.push({ source: 'native-history', history: history() });
     } finally { await adapter.shutdown(); }
   }, 60000);
 

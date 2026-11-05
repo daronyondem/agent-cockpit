@@ -518,6 +518,48 @@ for (const mobile of [false, true]) {
     });
   }
 
+  test(`${client} steers a running foreground command in an existing conversation without replay`, async ({ page, request }) => {
+    for (const name of ['ui-running-commands', 'ui-running-worker.pid', 'ui-running-release', 'ui-running-finished']) await fs.rm(path.join(workspace, name), { force: true });
+    const conv = await create(request, `Copilot ${client} running tool steering`);
+    expect((await request.put(`/api/chat/conversations/${conv.id}`, { headers: await headers(request), data: { title: conv.title } })).ok()).toBeTruthy();
+    await open(page, conv.title, mobile);
+    await send(page, 'COPILOT_UI_TOOL_STEER_WARMUP');
+    await expect(page.locator(assistant).filter({ hasText: 'COPILOT_UI_WARMUP_OK' })).toBeVisible();
+    await expect(page.getByLabel('Send', { exact: true })).toBeVisible();
+    await open(page, conv.title, mobile);
+    await send(page, 'COPILOT_UI_TOOL_STEER_INITIAL: after the command finishes reply ORIGINAL. Do not start another command.');
+    await expect.poll(() => fs.access(path.join(workspace, 'ui-running-worker.pid')).then(() => true, () => false)).toBe(true);
+    const composer = page.getByPlaceholder(/Message.*(?:Agent Cockpit|queued)|Agent is running/);
+    await composer.fill('Correction: after the current command finishes reply COPILOT_UI_RUNNING_CORRECTION instead. Do not start another command.');
+    const steer = page.getByRole('button', { name: 'Steer', exact: true });
+    await expect(steer).toBeEnabled();
+    const submitted = page.waitForRequest(req => req.url().endsWith(`/conversations/${conv.id}/input`) && req.method() === 'POST');
+    const delivered = page.waitForResponse(response => response.url().endsWith(`/conversations/${conv.id}/input`));
+    await steer.click();
+    const input = (await submitted).postDataJSON();
+    expect(input).toMatchObject({ turnId: expect.any(String), inputId: expect.any(String), text: expect.stringContaining('COPILOT_UI_RUNNING_CORRECTION') });
+    await new Promise(resolve => setTimeout(resolve, 300));
+    await fs.writeFile(path.join(workspace, 'ui-running-release'), 'finish');
+    const response = await delivered;
+    expect(response.status()).toBe(200);
+    expect(await response.json()).toEqual({ mode: 'stdin' });
+    await expect.poll(() => fs.access(path.join(workspace, 'ui-running-finished')).then(() => true, () => false)).toBe(true);
+    await expect(page.locator(assistant).filter({ hasText: 'COPILOT_UI_RUNNING_STEER_OK' })).toBeVisible();
+    await expect(page.getByLabel('Send', { exact: true })).toBeVisible();
+    await expect(composer).toHaveValue('');
+    const saved = await (await request.get(`/api/chat/conversations/${conv.id}`)).json();
+    await test.info().attach('running-tool-steering.json', { body: Buffer.from(JSON.stringify({ input, status: response.status(), conversation: saved }, null, 2)), contentType: 'application/json' });
+    expect(saved.messageQueue || []).toEqual([]);
+    expect(saved.messages.filter((message: { role: string }) => message.role === 'user')).toHaveLength(2);
+    expect(JSON.stringify(saved.messages)).not.toContain('No response was returned');
+    await open(page, conv.title, mobile);
+    await send(page, 'COPILOT_UI_REPLY');
+    await expect(page.locator(assistant).filter({ hasText: 'COPILOT_UI_REPLY_OK' })).toBeVisible();
+    await expect(page.getByLabel('Send', { exact: true })).toBeVisible();
+    expect(await fs.readFile(path.join(workspace, 'ui-running-commands'), 'utf8')).toBe('warmup\ninitial\n');
+    await page.screenshot({ path: test.info().outputPath(`${client}-running-tool-steering.png`), fullPage: true });
+  });
+
   test(`${client} retains its draft and attachment after temporary reset admission rejection`, async ({ page, request }) => {
     const conv = await create(request, `Copilot ${client} retry draft`);
     await open(page, conv.title, mobile);

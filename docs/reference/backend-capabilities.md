@@ -158,7 +158,7 @@ isolated temporary auth/data. It proves protocol, native tools, persistence and
 cleanup; it does not prove hosted entitlement, model judgment or embedding
 search quality. Retained qualification covers:
 
-- 34 native SDK cases on Node 22.23.4: session/ownership/resume, questions,
+- 35 native SDK cases on Node 22.23.4: session/ownership/resume, questions,
   steering, foreground/background/nested delegation, goals, usage/context,
   provider-specific media, artifacts and cleanup;
 - 12 application cases on Node 26.0.0: six Memory/Context and six KB/Routine
@@ -166,14 +166,36 @@ search quality. Retained qualification covers:
   recall and cancellation draining workers plus detached children before retry;
 - two native auth cases: logged-out status and device-code cancellation/retry,
   without completing browser authorization;
-- 40 desktop/PWA/narrow-settings Chromium cases, including four injected
+- 42 desktop/PWA/narrow-settings Chromium cases, including four injected
   catalog/quota and two injected auth-state cases; those six cases do not prove
   hosted account access.
 
-Successful hosted OAuth/entitlement, real expired credentials, genuine
-independent accounts and hosted billing remain unqualified. The latest shared
-account probe recognizes credentials but receives catalog HTTP 403. Hosted SDK
-PDF remains gated independently of older CLI PDF evidence.
+The [owner's hosted report from 2026-11-05](https://github.com/daronyondem/agent-cockpit/pull/571#issuecomment-6658673116)
+adds scoped evidence at clean head `9cb25d6`: one existing shared terminal login,
+20 enabled models, actual hosted replies and access after restart. On macOS
+26.7.1 arm64 / Node 25.9.0 / CLI 1.0.105 / SDK 1.0.28, the report passes web
+and narrow-browser PWA chat, native questions, tools/files/reload, Stop followed
+by a new send, model/effort persistence, Memory-to-Context recall, KB keyword
+retrieval, a manual Routine, and explicit `gpt-6.1-sol` image input. Web steering
+passed a retest; delegated summaries and native goal completion also passed.
+These are owner-reported manual observations, separate from fixed-model CI.
+The earlier HTTP 403 belongs to a different shared-account probe and does not
+describe this successful hosted run.
+
+**Open correctness finding:** steering during a running command in an existing
+hosted conversation ended with `No response was returned` in the narrow PWA.
+The input HTTP status and native delivery trace were not captured; the origin is
+unclassified, and the successful web retest does not establish a PWA-only bug.
+Local steering coverage must not be presented as resolution of this finding.
+
+Full browser/device OAuth authorization completion, hosted goal Pause → reload
+→ fresh-limit Resume, physical-device PWA behavior, live PWA delegation, expired
+or denied real credentials, and genuine independent accounts remain unconfirmed
+or not run. Reported usage deltas/unknown quota units/no USD are observation
+consistency, not a hosted billing audit; KB keyword retrieval does not qualify
+embedding quality, and manual Routines do not qualify scheduled notifications.
+Account plan/organization policy and Chrome version were not supplied. Hosted
+SDK PDF remains gated independently of older CLI PDF evidence.
 
 The [published-head CI run](https://github.com/daronyondem/agent-cockpit/actions/runs/41954476405)
 for PR head `9fb54f7` additionally passes **34 real-CLI SDK cases on Ubuntu 24.04

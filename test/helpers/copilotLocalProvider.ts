@@ -136,6 +136,24 @@ setTimeout(()=>fs.writeFileSync(${JSON.stringify(path.join(workspace, 'ui-delega
           else say('COPILOT_UI_QUESTION_OK ' + JSON.stringify(toolMessages.at(-1)?.content));
           return;
         }
+        if (text.includes('COPILOT_UI_TOOL_STEER')) {
+          const start = request.messages.reduce((last, message, index) => message.role === 'user' && /COPILOT_UI_TOOL_STEER_(WARMUP|INITIAL)/.test(JSON.stringify(message.content)) ? index : last, -1);
+          const warmup = JSON.stringify(request.messages[start]?.content).includes('COPILOT_UI_TOOL_STEER_WARMUP');
+          if (request.messages.slice(start).some(message => message.role === 'tool')) {
+            const respond = () => say(warmup ? 'COPILOT_UI_WARMUP_OK' : text.includes('COPILOT_UI_RUNNING_CORRECTION') ? 'COPILOT_UI_RUNNING_STEER_OK' : 'COPILOT_UI_RUNNING_STEER_MISSING');
+            if (warmup || fs.existsSync(path.join(workspace, 'ui-running-finished'))) respond();
+            else {
+              const timer = setInterval(() => { if (fs.existsSync(path.join(workspace, 'ui-running-finished'))) { clearInterval(timer); respond(); } }, 20);
+              res.on('close', () => clearInterval(timer));
+            }
+          } else {
+            const quote = (value: string) => `'${value.replace(/'/g, `'\\''`)}'`;
+            const receipt = `const fs=require('fs');fs.appendFileSync(${JSON.stringify(path.join(workspace, 'ui-running-commands'))},${JSON.stringify(warmup ? 'warmup\n' : 'initial\n')});`;
+            const program = warmup ? receipt : `${receipt}fs.writeFileSync(${JSON.stringify(path.join(workspace, 'ui-running-worker.pid'))},String(process.pid));const timer=setInterval(()=>{if(fs.existsSync(${JSON.stringify(path.join(workspace, 'ui-running-release'))})){clearInterval(timer);fs.writeFileSync(${JSON.stringify(path.join(workspace, 'ui-running-finished'))},'done');console.log('WAIT_DONE');}},20);setTimeout(()=>process.exit(1),45000).unref();`;
+            call('bash', { command: `${quote(process.execPath)} -e ${quote(program)}`, description: warmup ? 'Warm the existing conversation with a tool' : 'Wait for release while steering a running tool', mode: 'sync', initial_wait: 120 });
+          }
+          return;
+        }
         if (text.includes('COPILOT_UI_STEER')) {
           if (toolMessages.length) { say(text.includes('COPILOT_UI_CORRECTION') ? 'COPILOT_UI_STEER_OK' : 'COPILOT_UI_STEER_MISSING'); return; }
           hold('input', () => {

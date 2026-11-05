@@ -1233,9 +1233,14 @@ credential/catalog result and completed cache cleanup marks the job succeeded.
 
 Native credential storage remains the CLI's system-keychain/config behavior.
 All named profiles use the same terminal account selection; this implements
-guided shared auth, not independent accounts. Genuine two-account isolation,
-successful hosted OAuth completion/entitlement, expired real credentials and
-native Windows/Linux keychain behavior remain qualification requirements.
+guided shared auth, not independent accounts. The owner's manual report on
+`9cb25d6` verifies an existing shared login, 20 enabled models, hosted replies and
+fresh-process access on one macOS account. Full browser/device OAuth challenge
+completion was not confirmed. Genuine two-account isolation, expired/denied
+real credentials and native Windows/Linux keychain behavior remain unqualified.
+See the [hosted evidence and open steering finding](reference/backend-capabilities.md#copilot-qualification-scope)
+for the report's environment and limits; the earlier account's HTTP 403 is not
+the status of that successful hosted run.
 
 User chat now uses the owned SDK conversation path described below. Custom
 command compatibility and processor one-shots retain JSONL. Settings distinguishes authenticated
@@ -1482,6 +1487,17 @@ inspection, uncertain withdrawal or failed release returns 503 and stops
 without retry. Stop force-closes the runtime and never unpauses cancelled work.
 Readiness clears with `input_ready`/null on completion/cancellation. Inputs are
 recorded by native session history, not added as new Cockpit user messages.
+
+On CLI 1.0.105 an immediate correction can move a running foreground shell
+command into the background before its original wait expires. Its automatic
+read/completion notification may then produce another root response. Keep that
+completion lane available after confirmed consumption; do not count those
+notifications as duplicate correction deliveries or start another command.
+Native and desktop/PWA regression cases warm a session with a real tool, resume
+it, steer while a second tool is running, release that worker, and cold-resume
+again. They assert one steering delivery, no additional shell execution or
+queued replay, and a working follow-up. This uses fixed local responses and
+does not resolve the owner's hosted no-response finding.
 
 Both clients retain composer text/files while delivery is pending, disable
 duplicate queue/send/steer actions, and leave Stop available. Clear only the

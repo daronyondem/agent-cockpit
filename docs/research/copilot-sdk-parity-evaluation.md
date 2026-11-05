@@ -564,3 +564,60 @@ account entitlement/billing, two-account/keychain isolation or the full
 application workflows on Windows/Linux. Historical paragraphs above retain the
 evidence available at their earlier checkpoints; this published snapshot
 updates their platform boundary without changing capability claims.
+
+## Owner-reported hosted validation — 2026-11-05
+
+[The PR owner's report](https://github.com/daronyondem/agent-cockpit/pull/571#issuecomment-6658673116)
+tests clean `9cb25d6933038a10c24de76cb267bc411723459b`, Agent Cockpit 0.4.166,
+CLI 1.0.105 / SDK 1.0.28 / Node 25.9.0 / macOS 26.7.1 arm64. This used the
+normal hosted provider, existing shared terminal credentials, and an isolated
+app without custom-provider/injected-token overrides. Chrome's version and the
+account plan/organization policy were not recorded. The PWA was a narrow macOS
+browser, not a physical phone. No repository changes were made during that run.
+
+These manual observations extend the earlier local-provider evidence; they do
+not turn older failed account probes into successful OAuth tests.
+
+| Scenario | Reported result and precise scope |
+| --- | --- |
+| Shared login/access | PASS: 20 enabled models, hosted replies, access after app restart, and normal terminal `TERMINAL-OK`. Browser/device OAuth challenge completion is unconfirmed. |
+| Models/admission | PASS: `gpt-6.1-sol` / Low and repaired `gpt-6-sol` / Low selections persist. Invalid saved selection returns API/UI 400 before any saved user message, active stream or native session, without substitution. |
+| Chat, tools, files, Stop | PASS on web and narrow PWA: hosted replies, real source reads/output writes, reload/context recall, retained files, confirmed heartbeat cancellation and immediate follow-up without replay. |
+| Native questions | PASS on both clients: choosing a native answer card resumes the same work. |
+| Steering | Web PASS on explicit retest; narrow PWA FAIL during a running command. The earlier interrupted web attempt is unclassified. Neither idle delivery nor the passing retest resolves the failure. |
+| Delegation | PASS: two hosted read-only tasks, grouped child tools/results and summaries after reload. Narrow PWA retained-card viewing passes; live PWA delegation was not run. |
+| Goals | PASS for native set/status/natural completion on `auto`. Pause → reload → fresh-limit Resume was not run. |
+| Usage/context/quota | Two controlled turns including reload/resume add two premium requests and about 1.94447 explicit AI credits; input/output/cache-read/cache-write deltas +6/+16/+26752/+6639. Context stays separate at 17523/272000, USD unavailable, and fresh native quota with unknown units remains unknown. Observation consistency, not a billing audit. |
+| Memory/Context | PASS: actual Memory MCP save/search/persistence; maintenance folds a synthetic fact into Context, removes the consumed inbox entry, retains other entries, and a fresh chat recalls it through Context. |
+| KB | PASS: markdown ingestion/digestion, retained entries and actual KB MCP exact/keyword recall with a source citation. Embedding quality is unqualified. |
+| Routine | PASS: explicitly enabled workspace, proposal, manual-only run with notifications off, correct inputs/output and retained history/files. Scheduling/notification delivery is unqualified. |
+| Media | PASS: explicit hosted `gpt-6.1-sol` describes three yellow circles on blue; image thumbnail/preview and ordinary delivered files survive reload. No general PDF/image-generation qualification. |
+
+The hosted steering reproduction uses an existing conversation with earlier
+chat/tool work, `gpt-6.1-sol` / Low, and a foreground
+`node -e "setTimeout(()=>console.log('WAIT_DONE'),60000)"`. While it runs, the
+user explicitly selects Steer with: `Correction: after the current command
+finishes, reply exactly PWA-STEERED instead. Do not start another command.`
+Instead of the corrected reply, the persisted terminal error is
+`{message:"No response was returned. Send your message again to retry.",source:"backend"}`.
+No active stream or queued messages remain, and no automatic resend was made.
+The `/input` status/native delivery trace was not captured. `backend` is the
+application's default source for an error without a more specific source; it
+does not identify the defect's origin. Authentication/catalog access succeeded.
+The finding remains open and is not established as PWA-only.
+
+The local follow-up adds native and desktop/PWA cases that warm a conversation
+with a real shell tool, resume it, steer during a running second tool, then
+cold-resume without replay. CLI 1.0.105 moves the foreground command into the
+background on immediate steering; an automatic read/completion can add another
+root response. These cases check actual correction consumption and shell
+execution counts instead of assuming one model response. Fixed replies and a
+release-file worker control the timing; they do not reproduce hosted model
+reasoning or establish a fix for the reported no-response error.
+
+Unconfirmed/not-run cases remain full OAuth authorization, hosted goal
+pause/reload/fresh-limit resume, physical-device PWA, live PWA delegation,
+expired/revoked/denied real credentials, and a second account. Profiles still
+share native authentication. Plan mode, Goal Clear, hosted SDK PDF and native
+image-generation gates are unchanged. The isolated hosted app/PM2 manager was
+stopped, its port closed, and its test data/shared login preserved.

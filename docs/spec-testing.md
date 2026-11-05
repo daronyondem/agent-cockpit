@@ -613,3 +613,54 @@ expired credentials, two independent accounts, platform keychain behavior or
 the full native application suite on Linux/Windows. The accepted documentation
 scope keeps those limits explicit alongside the
 [known capability gaps](reference/backend-capabilities.md#copilot-known-capability-gaps).
+
+### Copilot hosted manual evidence and steering follow-up
+
+The [owner's 2026-11-05 report](https://github.com/daronyondem/agent-cockpit/pull/571#issuecomment-6658673116)
+uses clean `9cb25d6`, Agent Cockpit 0.4.166, CLI 1.0.105 / SDK 1.0.28 /
+Node 25.9.0 / macOS 26.7.1 arm64, normal hosted inference and existing shared
+terminal login. It reports 20 enabled models and successful hosted access after
+restart, terminal continuity, web/narrow-PWA core chat/native questions/tools/
+files/resume/Stop, model selection and invalid admission, web steering on retest,
+delegated summaries, native goal completion, separate usage/quota units,
+Memory-to-Context recall, KB keyword retrieval, a manual Routine and explicit
+`gpt-6.1-sol` image input. These are manual owner observations, not reproduced CI
+results. Chrome version/account policy are absent; no physical phone was used.
+The [research record](research/copilot-sdk-parity-evaluation.md#owner-reported-hosted-validation--2026-11-05)
+retains the scenario results and measured usage, including their limits.
+
+One hosted failure remains open: Steer during a 60-second foreground command in
+a conversation with prior chat/tools ended with `No response was returned` in
+the narrow PWA. The error persisted with source `backend`; that fallback label
+does not identify its origin. No active stream/queue remained, no resend was
+performed, and `/input` status/native delivery evidence was not captured. Web
+retest success does not establish PWA-only scope. Full OAuth challenge
+completion, hosted goal pause/reload/fresh-limit resume, live PWA delegation,
+physical-device behavior, real expired/denied credentials and two accounts stay
+unconfirmed/not run. Usage observation consistency is not a billing audit.
+
+`test/copilotSdkRuntime.e2e.test.ts` now adds a production-adapter case that warms
+a native session with an actual shell tool, resumes it, starts a real
+release-file worker, delivers a correlated correction while that worker is
+running, and cold-resumes afterward. It checks one native steering delivery,
+the corrected response, exactly two shell executions across all turns, no
+errors and no replay. Native automatic background read/completion may add a
+root response without another correction or shell execution.
+`test/e2e/copilot.ui.pw.ts` adds the same sequence on desktop and PWA: reload the
+warmed conversation, submit Steer with current turn/input IDs, require HTTP 200,
+check worker completion and corrected output, an empty queue/cleared draft, and
+a successful follow-up after reload with unchanged execution receipts. These
+fixed-model regressions improve timing/lifecycle coverage; they do not qualify
+hosted model behavior or close the manual finding.
+
+The local follow-up passes **35 native SDK cases** (CLI 1.0.105 / SDK 1.0.28 /
+protocol 3 / Node 22.23.4) in `copilot-sdk-compat-LJyf0S`, **42 Chromium cases**
+on Node 26.0.0 in `cockpit-copilot-ui-TJqljW`, and 65 focused input/conversation/
+HTTP/mobile-pipeline tests. Both native and browser reports identify macOS arm64,
+source `9cb25d6` with uncommitted follow-up changes; they are not clean-head CI
+evidence. Browser evidence records 83 SDK launches. The fixture's final response
+waits for the running worker to finish, matching the correction's requested
+ordering; the targeted native case also passes after that timing refinement.
+Backend/web/mobile typechecks, zero-warning lint, maintainability, spec drift,
+ADR lint and the unchanged client bundle budget pass. No production behavior,
+coverage floor or platform authentication claim changes in this follow-up.
