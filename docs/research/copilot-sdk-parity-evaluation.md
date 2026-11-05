@@ -7,6 +7,15 @@ commit 557ad8a. Probes isolate HOME/COPILOT_HOME and use fixed local
 OpenAI-compatible model replies; they establish transport/runtime behavior,
 not hosted model quality or Copilot account access.
 
+The implemented integration is documented with its current limitations rather
+than a promise to close every parity gap in this PR. The consolidated
+[known capability gaps and qualification scope](../reference/backend-capabilities.md#copilot-known-capability-gaps)
+cover shared-only accounts, plan mode/goal Clear, gated media, image generation,
+USD pricing, interrupted turns, native memory, JSONL-only profiles/processors,
+updates and mobile administration. Historical checkpoints below preserve what
+was tested at each revision; remaining hosted/platform evidence is a validation
+limit, not evidence that those unsupported features are implemented.
+
 ## Native results
 
 | Surface | Evidence | Remaining qualification |
@@ -512,3 +521,38 @@ Final normal CI remains 3,052 passing cases (172 suites, 70 opt-in skips), with
 floors. Types, lint, maintainability/spec/ADR checks and post-Jest client
 production builds/budgets pass. No product, API or PWA behavior changes were
 needed for this qualification.
+
+## Published platform evidence and documented scope — 2026-11-04
+
+The integration's remaining capability gaps are documented as current scope
+limits; full Codex parity is not claimed. See the consolidated
+[capability/evidence reference](../reference/backend-capabilities.md#copilot-known-capability-gaps)
+for independent accounts, plan approval/Clear, media/image generation, pricing,
+interrupted turns, memory import, compatibility profiles, updates and mobile
+administration. No additional feature implementation is included in this
+documentation pass.
+
+Published [CI run 41954476405](https://github.com/daronyondem/agent-cockpit/actions/runs/41954476405)
+for head `9fb54f7` records clean PR merge revision `88fd464`, Node 22.23.4 and
+SDK 1.0.28. Both Ubuntu 24.04 x64 (`copilot-sdk-compat-t2gCB7`) and macOS 15
+arm64 (`copilot-sdk-compat-T3gQum`) pass all 34 SDK cases with native CLI 1.0.105
+and protocol 3. Ubuntu Chromium passes 40 cases (`cockpit-copilot-ui-VzWe3e`,
+68 SDK launches), extending Ubuntu evidence beyond the earlier JSONL suite.
+
+Windows Node containment fixtures pass. The actual Windows SDK job fails
+33 cases with one skipped at headless startup: `Copilot runtime did not announce
+a port`. Report `copilot-sdk-compat-ir6kD8` records exit 1 and `cli:null`; it
+provides no successful native session/protocol result. This is an observed
+compatibility failure with no root cause established here, not merely an absent
+CI configuration. Main tests/builds and ADR checks pass. The completed coverage
+job passes all 3,052 tests but fails its gate: statements/lines are 88.81% against
+the unchanged 88.85% floor (branches 77.38%, functions 94.00%). The published
+workflow fails Windows startup and coverage; those are actual CI failures,
+separate from accepted capability limits. No threshold is reduced or test
+hidden in this documentation pass.
+
+Passing fixed-model SDK/browser results do not establish successful hosted auth,
+account entitlement/billing, two-account/keychain isolation or the full
+application workflows on Windows/Linux. Historical paragraphs above retain the
+evidence available at their earlier checkpoints; this published snapshot
+updates their platform boundary without changing capability claims.

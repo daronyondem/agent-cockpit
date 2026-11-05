@@ -34,6 +34,18 @@ integrated in desktop/mobile. Native goals support set/status/pause/resume with 
 are verified with fixed local replies; hosted billing remains separate. See the
 [versioned evaluation](docs/research/copilot-sdk-parity-evaluation.md).
 
+Copilot's supported scope includes SDK questions/steering, grouped delegated
+work, native goal set/status/pause/resume, context/quota visibility, verified
+media/artifacts and production Memory/Context/KB/Routine integration. It does
+not imply full Codex parity. Independent accounts, plan approval, goal Clear,
+native image generation, hosted SDK PDFs, USD pricing, native-memory import and
+active-turn reattachment remain unavailable or gated. Opaque JSONL commands
+retain a smaller control surface. Mobile CLI-auth/Memory administration and
+non-npm background update discovery are also limited. See the
+[known capability gaps and qualification scope](docs/reference/backend-capabilities.md#copilot-known-capability-gaps)
+for the exact boundaries; hosted account and platform evidence is separate from
+local fixed-model integration.
+
 ## Codex: feature-flag and deferred-work tracker
 
 `codex features list` exposes feature flags that gate certain capabilities. Some of those flags affect cockpit features; this table records the cockpit's stance on each so we can revisit when Codex's defaults change.

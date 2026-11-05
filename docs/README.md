@@ -45,6 +45,7 @@ Technical reference for advanced users and contributors.
 - [Environment variables](reference/environment-variables.md)
 - [Data layout](reference/data-layout.md)
 - [Backend capabilities](reference/backend-capabilities.md)
+- [GitHub Copilot capabilities and known gaps](reference/backend-capabilities.md#github-copilot)
 - [Development](reference/development.md)
 - [Testing](reference/testing.md)
 

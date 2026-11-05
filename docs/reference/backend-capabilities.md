@@ -62,7 +62,7 @@ page summarizes the user-facing shape.
   as JSON `tool_use` parts;
 - Memory and Knowledge Base MCP injection through per-process
   `OPENCODE_CONFIG_CONTENT`;
-- native SDK goal set/status/pause/resume, with an explicit fresh AI-credit limit on resume and persisted lifecycle cards; Clear is unavailable in CLI 1.0.105;
+- no goal mode, plan approval, grouped subagents, native questions or mid-turn input;
 - no confirmed native durable-memory directory for Agent Cockpit to import or
   watch. OpenCode memory integration uses Agent Cockpit's Memory MCP tools
   instead of backend-native memory capture.
@@ -127,33 +127,80 @@ Native compatibility is verified on Grok Build 1.0.52, macOS arm64. See the
 - no confirmed native durable-memory directory for Agent Cockpit to import or
   watch. Copilot memory integration uses Agent Cockpit's Memory MCP tools.
 
-The earlier JSONL integration has native image/PDF/MCP/text/stream/resume/usage
-evidence with CLI 1.0.103-0 and 1.0.105 on macOS arm64 through
-`npm run e2e:copilot`. The updated hosted SDK stream check has not been rerun
-with entitled credentials; local SDK evidence is recorded separately below.
-Six production Memory/Context workflows pass through SDK chat on macOS with
-fixed local replies. Eight SDK desktop/mobile Chromium cases pass on macOS
-with eight observed headless launches; the earlier Ubuntu 24.04 browser evidence
-covers JSONL.
-KB/Routine workflow coverage uses executable fixtures. Windows Job ownership has
-native process-fixture evidence, not real Windows Copilot certification.
-Hosted account/model behavior remains separate from local-model integration.
+### Copilot known capability gaps
 
-SDK chat uses pinned SDK 1.0.28 and an authenticated
-Cockpit-owned headless runtime. Nine opt-in native cases through
-`npm run e2e:copilot-sdk` cover session resume/context, JSONL-session migration,
-questions, steering, child identity, conversation ownership/cold resume, and real tool-worker Stop-to-send on macOS arm64 with CLI 1.0.105 and fixed
-local replies, including Node 22.23.4. They also verify cache-disjoint accounting
-after cold resume, aggregate delegated usage once, managed instructions and opaque
-wrapper compatibility. These probes do not expose question/steering/child controls. Native goal clear is removed
-in that CLI, and switching autopilot on does not resume a paused objective.
-See the [SDK evaluation](../research/copilot-sdk-parity-evaluation.md).
-Named profiles share terminal authentication and do not isolate accounts.
-Anthropic `max` effort is not advertised until selection-specific verification.
-Native installations have a manual updater but no background update discovery.
+The supported scope below applies to CLI **1.0.105** and SDK **1.0.28**. These
+limitations define the current integration; complete Codex parity is not claimed.
 
-Copilot also displays measured context snapshots and profile-scoped account
-quota on desktop/mobile. Live/final usage reconciliation preserves complete,
-partial and unavailable coverage. Unknown balances/units remain unknown; stale
-readings retain their original timestamps. Quota reads create no session or
-inference. Hosted billing/account qualification remains separate.
+| Area | Current boundary | Available behavior |
+| --- | --- | --- |
+| Independent accounts | Copilot profiles share the native terminal credential store. A different name or config folder does not establish isolated accounts. | Guided shared device login, Cancel/timeout, fresh credential/catalog checks and cache invalidation. |
+| Plan approval | No native plan-mode/approval integration. | Normal chat, questions and explicit steering remain available through SDK profiles. |
+| Goal Clear | Removed in the tested CLI; pausing or deleting private objective files is not an equivalent Clear action. | Native set/status/pause/resume, with a fresh positive AI-credit limit on resume. |
+| Media input | Hosted SDK PDFs, custom OpenAI PDFs, Azure/unknown providers and unverified model/media combinations are not enabled. Auto routing does not inherit media support. | Exact verified custom OpenAI `gpt-6.1-sol` images and Anthropic `claude-sonnet-4.6` images/PDFs; independently verified CLI one-shots. |
+| Native image generation | Not exposed as a Copilot generation capability. | Successful native image/file bytes and ordinary requested file delivery produce persistent artifact cards. |
+| USD pricing | No authoritative conversion from Copilot premium requests/AI credits to per-turn USD; no guessed estimate. | Disjoint tokens, context snapshots, distinct premium requests/AI credits, and available/partial/unavailable quota with freshness. |
+| Active-turn reattachment | A lost stream after server restart is not reattached or automatically replayed. | Later prompts cold-resume persisted native history; interrupted work is not retried automatically. |
+| Native memory import | No confirmed native durable-memory directory to import/watch. | Cockpit Memory MCP, Workspace Context, KB MCP and explicitly enabled Routines. |
+| Opaque command overrides | JSONL compatibility does not expose SDK questions, steering, grouped delegated cards or goals. | Root text/thinking/tools, later-session resume, one-shots and MCP continue through JSONL. |
+| Sequential processors | No native persistent `runSessionShot()` implementation. | Base transcript replay supports KB gleaning through JSONL one-shots; native application coverage verifies carryover. |
+| Non-npm updates | Native installs have no background latest-version discovery. | Settings offers **Run updater**; npm installs retain managed discovery. |
+| Mobile administration | The PWA has no CLI-profile auth/account-management screen or Memory panels/live Memory bubbles. | PWA chat/questions/steering, grouped tools, goals, usage/quota and artifacts; use full web Settings for CLI authentication and full web Memory administration. |
+
+Model effort and media options follow the effective runtime catalog and verified
+selection. Unverified effort options, including unverified Anthropic `max`, are
+not advertised merely because a model name suggests support.
+
+### Copilot qualification scope
+
+Local macOS arm64 evidence uses the real CLI and fixed local model replies with
+isolated temporary auth/data. It proves protocol, native tools, persistence and
+cleanup; it does not prove hosted entitlement, model judgment or embedding
+search quality. Retained qualification covers:
+
+- 34 native SDK cases on Node 22.23.4: session/ownership/resume, questions,
+  steering, foreground/background/nested delegation, goals, usage/context,
+  provider-specific media, artifacts and cleanup;
+- 12 application cases on Node 26.0.0: six Memory/Context and six KB/Routine
+  workflows, including native source reads/output writes, actual SDK KB MCP
+  recall and cancellation draining workers plus detached children before retry;
+- two native auth cases: logged-out status and device-code cancellation/retry,
+  without completing browser authorization;
+- 40 desktop/PWA/narrow-settings Chromium cases, including four injected
+  catalog/quota and two injected auth-state cases; those six cases do not prove
+  hosted account access.
+
+Successful hosted OAuth/entitlement, real expired credentials, genuine
+independent accounts and hosted billing remain unqualified. The latest shared
+account probe recognizes credentials but receives catalog HTTP 403. Hosted SDK
+PDF remains gated independently of older CLI PDF evidence.
+
+The [published-head CI run](https://github.com/daronyondem/agent-cockpit/actions/runs/41954476405)
+for PR head `9fb54f7` additionally passes **34 real-CLI SDK cases on Ubuntu 24.04
+x64**, **34 on macOS 15 arm64**, and **40 Ubuntu desktop/PWA browser cases**.
+The retained reports identify clean GitHub PR merge revision `88fd464`, CLI
+1.0.105 / SDK 1.0.28 / Node 22.23.4. Ubuntu browser evidence records 68 SDK
+runtime launches; this supersedes the earlier Ubuntu JSONL-only browser scope.
+Windows Job Object/stdio process fixtures also pass. The
+[real Windows SDK job](https://github.com/daronyondem/agent-cockpit/actions/runs/41954476405/job/127006416363)
+fails **33 cases with one skipped** at headless startup with
+`Copilot runtime did not announce a port`. Its report is
+`copilot-sdk-compat-ir6kD8`; it records exit code 1 and no native CLI status
+result (`cli:null`). The failure does not establish a root cause or working
+Windows sessions.
+
+Passing SDK/browser cases use fixed local model responses, not hosted accounts.
+They do not certify platform keychain/auth, successful OAuth/entitlement or the
+full Memory/Context/KB/Routine application suite on Windows/Linux. Configured or
+running jobs alone are not certification. See the testing spec for report names
+and precise job links; Windows Node fixtures remain separate from native CLI
+results.
+
+The same published run passes all 3,052 normal tests but fails the Ubuntu
+coverage gate at 88.81% statements/lines against the unchanged 88.85% floor.
+That quality-gate failure and Windows startup are CI failures, separate from the
+capability scope above; the workflow must not be described as all green.
+
+The versioned [SDK evaluation](../research/copilot-sdk-parity-evaluation.md) and
+[testing specification](../spec-testing.md#copilot-native-kb-and-routine-qualification)
+retain the actual report versions, revisions/dirty flags and evidence limits.

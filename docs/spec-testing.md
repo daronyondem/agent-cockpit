@@ -8,7 +8,18 @@
 
 **Framework:** Jest 30.x — run with `npm test`. The script is `node --experimental-vm-modules node_modules/.bin/jest` because the KB handler tests import `unpdf` (ESM-only, wraps `pdfjs-dist`) and Jest's VM needs the flag to allow runtime `import()` calls. `jest.config.js` uses `ts-jest` for TypeScript and also transforms JS/JSX with `allowJs: true`, `module: CommonJS`, and `jsx: react-jsx` so tests can import the V2 frontend ES modules directly instead of evaluating browser globals. Default Jest execution is capped at `maxWorkers: '50%'` so process-spawning suites still run in parallel without stampeding local or CI machines, and the global per-test timeout is 30 seconds so widened harness-specific timeouts can surface their route/process-specific errors before Jest's generic timeout.
 
-**Coverage gate:** Run `npm run test:coverage` for backend coverage. The script keeps plain `npm test` unchanged for fast local iteration and runs Jest with `--coverage --runInBand`; serial execution keeps the full-suite coverage gate stable on local machines where parallel workers can exceed short route-test timeouts. `jest.config.js` collects coverage from `src/**/*.ts` and `server.ts`, excludes declaration-only `src/types/**` and `*.d.ts` files, writes reports under `coverage/`, and uses V8 coverage with `text-summary` plus `lcov` reporters. Global floors are statements/lines 88.7%, branches 76.6%, and functions 93.6%. The November 2, 2026 macOS cleanup coverage baseline at `84de7f4` measured statements/lines 88.28%, branches 74.99%, and functions 93.63% (139 passing suites, 2,720 passing tests; four opt-in suites and 24 tests skipped). The native orphan-cleanup fixture also passed separately with Copilot 1.0.105 on macOS arm64. New process/ownership/platform regressions provide coverage headroom without lowering the CI floor. When meaningful tests land, raise thresholds toward a stable cross-platform baseline; do not lower them merely to merge a regression.
+**Coverage gate:** Run `npm run test:coverage` for backend coverage. The script keeps plain `npm test` unchanged for fast local iteration and runs Jest with `--coverage --runInBand`; serial execution keeps the full-suite coverage gate stable on local machines where parallel workers can exceed short route-test timeouts. `jest.config.js` collects coverage from `src/**/*.ts` and `server.ts`, excludes declaration-only `src/types/**` and `*.d.ts` files, writes reports under `coverage/`, and uses V8 coverage with `text-summary` plus `lcov` reporters. Global floors are statements/lines 88.85%, branches 77.10%, and functions 93.75%. The November 2, 2026 macOS cleanup coverage baseline at `84de7f4` measured statements/lines 88.28%, branches 74.99%, and functions 93.63% (139 passing suites, 2,720 passing tests; four opt-in suites and 24 tests skipped). The native orphan-cleanup fixture also passed separately with Copilot 1.0.105 on macOS arm64. New process/ownership/platform regressions provide coverage headroom without lowering the CI floor. When meaningful tests land, raise thresholds toward a stable cross-platform baseline; do not lower them merely to merge a regression.
+
+Current local Copilot qualification uses CLI 1.0.105 / SDK 1.0.28. The latest
+full run passes 172 suites / 3,052 tests (70 opt-in/platform skips), with 88.96%
+statements/lines, 77.31% branches and 93.83% functions. Separate retained native
+runs pass 34 SDK cases, 12 Memory/Context/KB/Routine application cases, two
+device-code/status cases without browser authorization and 40 desktop/PWA/narrow-settings
+browser cases. These runs use isolated local fixtures; successful hosted
+accounts are not established. See the detailed qualification sections below and
+[known capability/evidence limits](reference/backend-capabilities.md#copilot-known-capability-gaps).
+The chronological checkpoints below retain earlier measurements and superseded
+coverage floors; they do not override `jest.config.js` or this current baseline.
 
 The November 3 Copilot Memory/Context integration run passed 140 suites and 2,737 tests (five opt-in suites/28 tests skipped), measuring statements/lines 88.31%, branches 75.25%, and functions 93.64%. Memory MCP branch coverage increased from 61.34% to 63.65%, and Workspace Context from 73.63% to 74.23% in the same local V8 environment; the branch floor rises from 74.5% to 74.6%. The four real-Copilot application workflow cases passed separately on 1.0.105/macOS arm64 with isolated auth and fixed local model responses. No desktop/mobile bundle or API contract changes are involved; API/WebSocket assertions cover shared server behavior rather than browser interaction.
 
@@ -551,3 +562,35 @@ pass. After the full Jest asset fixtures exited, both clients were rebuilt;
 unchanged budgets pass at 906.4/907 KiB JS and 201.8/230 KiB CSS. Retained logs
 are `phase10-coverage.log`, `phase10-final-native-workflows.log` and
 `phase10-post-coverage-*` under the temporary parity-plan folder.
+
+### Copilot published CI evidence
+
+[Run 41954476405](https://github.com/daronyondem/agent-cockpit/actions/runs/41954476405)
+builds PR head `9fb54f7` using clean GitHub PR merge revision
+`88fd464eea529f45ef426e3bd440a21fa4c6a050`. The retained artifacts and completed
+job logs establish the following results on Node 22.23.4 / SDK 1.0.28:
+
+| Job | Result | Retained evidence and boundary |
+| --- | --- | --- |
+| SDK / Ubuntu 24.04 x64 | 34 passed | `copilot-sdk-compat-t2gCB7`, native CLI 1.0.105 / protocol 3, clean revision, exit 0. |
+| SDK / macOS 15 arm64 | 34 passed | `copilot-sdk-compat-T3gQum`, native CLI 1.0.105 / protocol 3, clean revision, exit 0. |
+| Ubuntu desktop/PWA Chromium | 40 passed | `cockpit-copilot-ui-VzWe3e`, native CLI 1.0.105, 68 SDK launches, clean revision, exit 0. Includes injected account/catalog states as in local browser qualification. |
+| Windows Job Object/stdio | Passed | Node process fixtures; no native Copilot session claim. |
+| Ubuntu coverage | Tests pass; gate fails | 172 suites / 3,052 tests pass (70 skips). Statements/lines 88.81%, branches 77.38%, functions 94.00%; statements/lines miss the unchanged 88.85% floor. Exit 1. |
+| SDK / Windows x64 | 33 failed, one skipped | `copilot-sdk-compat-ir6kD8`, exit 1, `cli:null`. Every executed case times out waiting for headless port announcement; the error is `Copilot runtime did not announce a port`. This is an observed startup failure, not successful Windows qualification. |
+
+The main tests/builds/quality job and separate ADR workflow pass on this source
+head. The completed workflow fails both Windows SDK startup and the Ubuntu
+coverage gate. All coverage-run tests pass, but its 88.81% statements/lines miss
+the 88.85% floor by 0.04 percentage points; the local Node 26 result remains
+88.96%. This is an outstanding CI quality-gate failure, separate from accepted
+capability limits. Thresholds are not lowered to hide it. Native Windows startup
+also needs separate investigation; no root cause is inferred from a timeout
+alone, and no test is disabled or relabeled to hide that failure.
+
+These results extend the earlier Ubuntu JSONL-only evidence to SDK sessions and
+SDK browser workflows. They do not establish hosted OAuth/entitlement/billing,
+expired credentials, two independent accounts, platform keychain behavior or
+the full native application suite on Linux/Windows. The accepted documentation
+scope keeps those limits explicit alongside the
+[known capability gaps](reference/backend-capabilities.md#copilot-known-capability-gaps).

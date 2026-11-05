@@ -15,7 +15,7 @@ and the focused `docs/spec-*.md` files.
 your machine, and switch vendors without starting over.
 
 **Short description:** Agent Cockpit is an open source, local-first web UI for
-Claude Code, OpenAI Codex, Kiro, OpenCode, Grok Build, and future command-line AI agents. It wraps the
+Claude Code, OpenAI Codex, Kiro, OpenCode, Grok Build, GitHub Copilot, and future command-line AI agents. It wraps the
 CLIs users already install, streams their work into a browser interface, and
 stores conversations, memory, knowledge-base material, and workspace context
 locally.

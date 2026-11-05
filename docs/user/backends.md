@@ -10,7 +10,7 @@ authenticated on the same machine that runs the Agent Cockpit server.
 | Grok Build | `grok` | Coding, native goals, plan approval and subagents | Uses ACP plus native extensions; reuses terminal login, reports model usage/cost and optional account billing. |
 | Kiro | `kiro-cli` | ACP-based workflows and Kiro-specific projects | Uses ACP over stdin/stdout and reports credits/context percentage rather than token cost. |
 | OpenCode | `opencode` | Multi-provider coding through DeepSeek, Groq, Gemini, OpenRouter, and similar providers | Self-configured provider credentials and model routing. Supports thinking, tool activity, and session resume. |
-| GitHub Copilot | `copilot` | Coding with Copilot subscription models (Claude and GPT) | Self-configured CLI login. Supports thinking, tool activity, attachments, and session resume. Reports premium-request credits rather than USD cost. |
+| GitHub Copilot | `copilot` | Coding with account-dependent Copilot models | SDK chat, guided shared login, questions/steering, grouped subagents, native goals, usage/quota and verified attachments. [Known gaps](../reference/backend-capabilities.md#copilot-known-capability-gaps) apply. |
 
 For the full feature matrix, see [BACKENDS.md](../../BACKENDS.md).
 
@@ -143,6 +143,12 @@ credentials instead of this GitHub login. Environment tokens take precedence.
 Multiple named profiles share the same terminal login; they are not independent
 accounts.
 
+For a custom OpenAI-compatible, Anthropic or Azure endpoint, configure the
+provider in the server's environment; Copilot profile cards do not offer
+per-profile environment overrides. See the
+[Copilot server variables](../reference/environment-variables.md#github-copilot-server-configuration).
+Provider availability and media support are separate checks.
+
 Agent Cockpit uses owned SDK chat sessions with visible thinking, tools,
 questions, steering, grouped delegated work and later-session resume. Opaque
 custom command overrides retain JSONL compatibility. The picker discovers models
@@ -184,11 +190,44 @@ Text-only one-shot jobs, such as title generation, run with no tools exposed.
 CLI updates stay under Agent Cockpit's update controls rather than being
 downloaded implicitly during a chat turn.
 Non-npm installations offer **Run updater**, but do not receive background
-update-available notifications. Native local-model checks cover adapter
-transport and Memory/Context workflows on macOS. Desktop/mobile lifecycle
-browser cases pass on macOS and Ubuntu. KB/Routine coverage uses executable
-fixtures; hosted account/model behavior and native Windows CLI qualification
-remain separate work.
+update-available notifications.
+
+Copilot also runs Cockpit Memory, Workspace Context, Knowledge Base and enabled
+Workspace Routines. Native application checks cover governed note save/search,
+Context maintenance and reset finalization, KB digestion/gleaning/dreaming,
+fresh-chat KB recall, Routine artifacts/history, cancellation and retry. These
+use the real CLI with fixed local model replies and temporary auth/data; they
+verify integration rather than hosted-model judgment.
+
+### Known Copilot limitations
+
+- All profiles share terminal authentication; separate accounts per profile are
+  unavailable. Guided login exists, but successful hosted OAuth, expired-login
+  and two-account behavior have not been qualified with real accounts.
+- Native plan approval and goal Clear are unavailable. Goal pause/resume works;
+  resume starts a fresh AI-credit window rather than a Codex token budget.
+- Native image generation is unavailable. Hosted SDK PDFs, custom OpenAI PDFs
+  and unverified provider/model media combinations stay disabled. Returned image
+  artifacts do not imply image-generation support.
+- Interrupted active turns are not reattached or automatically replayed after a
+  server restart. A later prompt can resume saved session history.
+- USD costs are unavailable; native tokens, premium requests, AI credits and
+  available account quota keep their own units. Native-memory import is also
+  unavailable; use Cockpit Memory MCP and Workspace Context.
+- Mobile PWA users select shared profiles and have chat, goal, usage and artifact
+  controls. Guided authentication and Memory administration use the full web
+  app; the PWA has no dedicated CLI-profile auth/account-management screen or
+  Memory panels/live Memory bubbles.
+- Windows native SDK qualification currently fails during headless startup
+  (`Copilot runtime did not announce a port`). The Windows process-fixture job
+  passes, but that does not establish working native Copilot sessions. macOS and
+  Ubuntu SDK/browser checks pass with fixed local model replies; full platform
+  authentication/application qualification remains separate.
+
+These are the documented scope of this integration, not promises of complete
+Codex parity. See [the capability and qualification reference](../reference/backend-capabilities.md#copilot-known-capability-gaps)
+for the SDK/JSONL differences, tested versions and remaining hosted/platform
+evidence limits.
 
 ## Backend Switching
 

@@ -269,8 +269,11 @@ This extends the proposed transport decision without changing accepted ADRs.
 - - A local authenticated TCP connection replaces direct stdio for SDK access.
 - - The SDK adds native optional packages even though Cockpit does not select
   their bundled runtime; dependency size and Node requirements increase.
-- ~ Windows process fixtures are not real Windows CLI evidence. Hosted account,
-  live catalog access, and all goal actions require separate verification.
+- ~ Windows process fixtures are not real Windows CLI evidence. Local fixed-model
+  runs verify supported goal actions; successful hosted auth/catalog/billing,
+  genuine separate accounts and platform auth/application paths remain outside
+  that evidence. The current [known capability gaps](../reference/backend-capabilities.md#copilot-known-capability-gaps)
+  are documented scope limits, not promises of full Codex parity in this PR.
 
 ## References
 

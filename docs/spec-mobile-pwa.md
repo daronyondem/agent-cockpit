@@ -137,20 +137,23 @@ The PWA currently covers:
   is performed on the server, and `costSource:'none'` keeps mobile cost `n/a`.
   No Copilot-specific PWA assets, manifest, or service-worker changes are needed.
   Gemini's unverified effort options are also hidden. Auto routing is not
-  eligible for media processors; explicit verified `gpt-6.1-sol` is required.
+  eligible for media processors. Exact verified provider/model capabilities
+  govern images/PDFs; custom OpenAI `gpt-6.1-sol` images and Anthropic
+  `claude-sonnet-4.6` images/PDFs are verified. Hosted SDK PDFs stay gated.
   Delegated prose cannot contaminate the root answer; SDK child tools and
-  summaries render within Agent cards, while JSONL keeps root-only activity. The shared
-  desktop/mobile browser suite verifies eight lifecycle cases on macOS and
-  Ubuntu 24.04 using real Copilot with fixed local replies. That earlier evidence
-  does not qualify SDK questions/steering or hosted accounts. Server-side profile
-  checks now distinguish credentials from catalog access using existing result
-  fields; mobile has no account-management screen to update in this step.
-  Production sends now use owned SDK sessions for the normal CLI and server-visible
-  custom providers, retaining JSONL for opaque command overrides. Both paths
-  reuse the shared browser frame union; delegated outcomes add optional summary.
-  PWA metadata, service worker and static assets are unchanged. Eight SDK
-  desktop/mobile browser cases pass on macOS with eight observed headless launches;
-  the earlier Ubuntu browser evidence covers JSONL.
+  summaries render within Agent cards, while JSONL keeps root-only activity.
+  Production sends use owned SDK sessions for the normal CLI and server-visible
+  custom providers, retaining JSONL for opaque overrides. Both paths reuse the
+  shared frame union; delegated outcomes add optional summary. Server-side
+  profile checks distinguish credentials from catalog access, while CLI-profile
+  authentication/account administration stays in full web Settings. PWA metadata,
+  service worker and static assets are unchanged. The current browser suite
+  covers PWA lifecycle/questions/steering/delegation/goals/usage/artifacts and full
+  web auth at narrow widths; injected auth/catalog cases are not hosted-account
+  proof. The [testing spec](spec-testing.md#copilot-published-ci-evidence)
+  records 40 passing macOS and Ubuntu SDK browser cases separately from earlier
+  JSONL evidence and platform auth/application limits. See the
+  [known gaps](reference/backend-capabilities.md#copilot-known-capability-gaps).
   Session reset waits for backend cleanup before replacing its session/checkout.
   During that interval, sends and goal starts/resume return temporary `503` with
   `Retry-After: 1`; repeat resets and worktree changes retain busy `409`. The
@@ -268,13 +271,21 @@ The generated app is served from:
 
 When `WEB_BUILD_MODE=auto`, `MobileBuildService` verifies `public/mobile-built/.agent-cockpit-build.json` at server startup and rebuilds from `mobile/AgentCockpitPWA/` when the source or lockfiles are stale. The service uses `npm.cmd` through the shared `.cmd` wrapper on Windows and `npm` elsewhere. Dev self-update installs mobile dependencies and forces this build before restarting PM2; production self-update installs mobile dependencies in the staged release and runs the same build preflight only when the packaged mobile marker/assets are missing or stale.
 
+Current Copilot browser qualification passes 40 combined desktop/PWA and narrow
+Settings Chromium cases on macOS and Ubuntu with the real SDK runtime, fixed
+local replies and isolated auth/data. The Windows SDK startup failure and
+remaining hosted/platform auth limits are recorded in the
+[testing spec](spec-testing.md#copilot-published-ci-evidence). The catalog,
+structured-input and delegation checkpoint counts below are implementation
+history, not the current total or a claim of hosted authentication.
+
 Copilot browser regression coverage in `test/e2e/copilot.ui.pw.ts` uses the real
 CLI with fixed local replies and an isolated PM2 fixture server. Mobile cases
 exercise profile selection, streamed Memory tool/result presentation, native
 Stop followed by immediate send and reload, draft/attachment preservation on a
 temporary reset rejection, and reset/archive/restore/delete navigation. Memory
-management panels and live Memory bubbles remain deferred; this coverage does
-not add those surfaces. See `npm run e2e:copilot-ui` and the testing spec.
+management panels and live Memory bubbles are outside the current PWA scope;
+this coverage does not add those surfaces. See `npm run e2e:copilot-ui` and the testing spec.
 
 The runtime model-catalog checkpoint adds a browser case per client using an
 injected account/fallback catalog, including exact effort choices, missing saved

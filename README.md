@@ -21,7 +21,7 @@
     <img alt="License" src="https://img.shields.io/github/license/daronyondem/agent-cockpit?label=license" />
   </a>
   <a href="#prerequisites">
-    <img alt="Node >=22" src="https://img.shields.io/badge/node-%3E%3D22-339933?logo=nodedotjs&logoColor=white" />
+    <img alt="Node >=22.12.0" src="https://img.shields.io/badge/node-%3E%3D22.12.0-339933?logo=nodedotjs&logoColor=white" />
   </a>
   <a href="https://github.com/daronyondem/agent-cockpit/releases">
     <img alt="Release downloads" src="https://img.shields.io/github/downloads/daronyondem/agent-cockpit/total?label=release%20downloads&logo=github" />
@@ -148,7 +148,7 @@ passkeys, recovery codes, and optional legacy OAuth compatibility.
 | **Kiro** | `kiro-cli` | Fully supported |
 | **OpenCode** | `opencode` | Fully supported, self-configured provider credentials |
 | **Grok Build** | `grok` | Supported; verified on macOS, Windows/Linux validation pending |
-| **GitHub Copilot** | `copilot` | Fully supported, self-configured CLI login |
+| **GitHub Copilot** | `copilot` | SDK chat and shared login; [known gaps, including Windows SDK startup](docs/reference/backend-capabilities.md#copilot-known-capability-gaps) |
 
 See [BACKENDS.md](BACKENDS.md) and [docs/user/backends.md](docs/user/backends.md)
 for feature differences, auth notes, and setup guidance.
