@@ -252,12 +252,15 @@ both package roots, and follow-redirects 1.16.2. Root npm overrides retain
 | `qs` | 6.16.1 | Request/query serialization denial-of-service fix. |
 | `body-parser` | 1.20.9 | Compressed request-body teardown fix; Express's exact dependency otherwise retains an older parser. |
 | `zod` | 4.6.6 | Oversized constrained-collection validation fix, including the dependency of pinned Copilot SDK 1.0.28. |
-| `glob@>=9.0.0 <14.0.2` | 14.0.2 | Filesystem traversal cancellation fix in test tooling; retain unaffected older glob branches. |
-| `minimatch@>=7.0.0 <11.0.1` | 11.0.1 | Pattern amplification fix in lint/test tooling; retain unaffected older minimatch branches. |
+| `glob@>=9.0.0 <15.0.0` | 14.0.2 | Filesystem traversal cancellation fix in test tooling; retain unaffected older glob branches. |
+| `minimatch@>=7.0.0 <12.0.0` | 11.0.1 | Pattern amplification fix in lint/test tooling; retain unaffected older minimatch branches. |
 
 The glob/minimatch replacements retain CommonJS and ESM entrypoints and support
 the application's Node floor. Validate the full test suite, lint, coverage,
 client builds and native Copilot SDK cases after changing these overrides.
+The selector ranges include the replacement versions so npm 10 and npm 11
+accept the same deduplicated lockfile. Check clean-install compatibility with
+both npm versions when changing these ranges.
 The remaining low-severity `deepmerge` advisory
 [GHSA-gcqx-w48m-w2h4](https://github.com/advisories/GHSA-gcqx-w48m-w2h4) has no
 patched release. It is reached through Jest configuration processing, not the
