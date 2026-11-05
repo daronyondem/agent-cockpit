@@ -149,6 +149,14 @@ not authentication evidence. Handle native login timeouts and retain the active
 job's callback ownership. See `docs/research/cortex-code-acp-evaluation.md` for
 the 1.2.35 protocol findings and implementation gates.
 
+Phase 0 evidence is retained under `test/fixtures/cortex/1.2.35`. Run the
+opt-in `scripts/probe-cortex-phase0.ts` as documented in the research report
+for native startup/cancel/root-exit/restriction checks. This is research
+scaffolding, not a registered adapter or full compatibility suite. Keep strict
+tool-free processors gated until zero-tool execution is demonstrated; an
+allowlist or denied approval alone does not establish that boundary. See
+Proposed ADR-0093 and `docs/design/cortex-code-implementation-plan.md`.
+
 # Server Management
 
 NEVER run `node server.js` directly. This causes orphan processes and port conflicts.

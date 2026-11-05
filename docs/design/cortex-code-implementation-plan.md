@@ -1,6 +1,6 @@
 # Cortex Code (CoCo) harness implementation plan
 
-**Status:** Proposed; implementation has not started.
+**Status:** Phase 0 complete; production harness implementation pending.
 **Created:** 2026-11-05.
 **Planning baseline:** Agent Cockpit `0.4.166`, revision `11d14825e955f6c83364c3917558b4d3068a4bac`, plus the uncommitted CoCo research/guidance documents.
 **Native compatibility baseline:** Cortex Code `1.2.35`, distribution `1.2.35+191333.f82de3d91715`, macOS arm64.
@@ -287,10 +287,10 @@ Image one-shot transport is added only after the actual one-shot path passes;
 model `input.image:true` is independently required. Do not mark every returned
 model image-capable because the ACP server advertises image content support.
 
-Propose narrowly extending shared backend metadata with optional one-shot role
-support (`restrictedText`, `toolEnabled`, `sequential`) and interaction detail
-(`planRevision`, with steering distinguished from pending replies). Final names
-belong in the implementation ADR/contracts. Existing adapters retain existing
+Proposed ADR-0093 records optional `BackendCapabilities.oneShot` role support
+(`restrictedText`, `toolEnabled`, `sequential`) and `planRevision`, with steering
+distinguished from pending replies. Add these fields in P1 with shared contracts.
+Existing adapters retain existing
 behavior when optional metadata is absent; CoCo explicitly advertises false
 until each execution path passes. A shared eligibility helper must enforce
 CoCo's explicit limits at every processor selector and server call boundary.
@@ -311,12 +311,15 @@ Baseline command shape:
 cortex acp serve -c <connection> -w <effective-cwd> --plugin-dir <private-plugin>
 ```
 
-Use the proven `--only-explicit-plugins`, `--only-explicit-skills`, and
-`--only-explicit-mcp-servers` switches for isolated compatibility fixtures.
-Before choosing production defaults, verify their effect on bundled skills,
-project/user plugins, hooks, and ordinary coding tools. Preserve existing user
-configuration unless a documented managed-runtime policy requires otherwise;
-restricted processors require stronger isolation than ordinary chat.
+Phase 0 selected `--only-explicit-plugins`, `--only-explicit-skills`, and
+`--only-explicit-mcp-servers` for initial managed startup as well as compatibility
+fixtures. This intentionally skips ambient plugins/global skills/user MCP and
+plugin auto-update without modifying user config. Project/bundled skills remain;
+ordinary tools and selected Snowflake auth are retained. Verify effective hooks,
+delegation and discovery behavior in adapter acceptance; these switches do not
+establish restricted processor isolation. See Proposed ADR-0093 and the research
+follow-up for installed-source evidence that direct ACP dispatch bypasses the
+main binary updater. Do not prepend unsupported global update flags.
 
 Set verified native memory suppression in managed children. Keep manual OAuth
 UI in an auth job; ordinary ACP runtime launch should surface auth-required
@@ -550,8 +553,9 @@ Existing file/Git/KB/Memory/workspace screens remain Cockpit-owned features.
 
 ## 9. Implementation phases and task tracker
 
-All implementation tasks start unchecked. Suggested PR boundaries follow the
-phases; combine small adjacent phases when that reduces temporary broken paths.
+Phase 0 preparation tasks are complete. Production implementation tasks remain
+unchecked. Suggested PR boundaries follow the phases; combine small adjacent
+phases when that reduces temporary broken paths.
 Do not publish a half-registered harness as usable before core gates pass.
 
 | Phase | Dependencies | Exit evidence |
@@ -569,16 +573,23 @@ Do not publish a half-registered harness as usable before core gates pass.
 
 ### P0 — Baseline and decisions
 
-- [ ] C01 — Capture sanitized 1.2.35 initialize/new/load/config/update/result and
+- [x] C01 — Capture sanitized 1.2.35 initialize/new/load/config/update/result and
   reverse-RPC fixtures from the retained research; exclude account IDs/secrets.
   Verify fixtures include error-as-text, request ID 0 and replay ordering.
-- [ ] C02 — Run focused experiments for G1/G2/G9 before promising processor or
+- [x] C02 — Run focused experiments for G1/G2/G9 before promising processor or
   platform parity; record exact argv, version, evidence and unresolved gaps.
-- [ ] C03 — Scaffold a Proposed ADR with `npm run adr:new -- "Integrate Cortex
+- [x] C03 — Scaffold a Proposed ADR with `npm run adr:new -- "Integrate Cortex
   Code through its native ACP interface"` when implementation begins. Cover
   dedicated adapter, native auth/plugin ownership, execution gating and rejected
   retry/goal emulation/generic-ACP alternatives. Populate only existing affects
   paths as they land; do not edit Accepted ADR text or generated ADR index.
+
+Phase 0 evidence: seven versioned excerpts in `test/fixtures/cortex/1.2.35`,
+the real `scripts/probe-cortex-phase0.ts` run on 2026-11-05, and
+[Proposed ADR-0093](../adr/0093-integrate-cortex-code-through-its-native-acp-interface.md).
+Read the [research follow-up](../research/cortex-code-acp-evaluation.md#phase-0-follow-up--2026-11-05)
+for results and limitations. C02 completion records experiments and scope
+decisions; it does not close the production release gates below.
 
 ### P1 — Contracts and profiles
 
@@ -852,22 +863,22 @@ or release is required to validate this planning document.
 
 | Gate | Current status | Required experiment / resolution | Release effect |
 |---|---|---|---|
-| G1 — Strict tool-free execution | Open; wildcard disallow failed and allowlist was incomplete | Demonstrate native zero-tool boundary across every invocation path, including default/deferred/MCP tools, hooks, skills, slash commands and sequential calls | Blocks CoCo Memory processor and restricted titles/summaries; deterministic fallbacks permit core chat |
-| G2 — Root-exit/descendant cleanup | Open; native root-only kill left shell work | Track identities and verify cancel/timeout/root death with detached children on each OS | Blocks core release on that OS until bounded cleanup policy is tested |
+| G1 — Strict tool-free execution | Gated after Phase 0: three native calls still emitted with unmatched allowlist; source confirms allowlist does not remove declarations | Demonstrate native zero-tool boundary across every invocation path, including default/deferred/MCP tools, hooks, skills, slash commands and sequential calls | Blocks CoCo Memory processor and restricted titles/summaries; deterministic fallbacks permit core chat |
+| G2 — Root-exit/descendant cleanup | Phase 0 macOS pattern passed with real native sleeper and unrelated process; dedicated adapter acceptance pending | Implement identity tracking and verify cancel/timeout/root death with detached children on each OS | Blocks core release on that OS until adapter cleanup policy is tested |
 | G3 — Recovery and terminal errors | Native evidence partial; no adapter | Test saved-session load/replay, missing-session-only fallback, error-as-text classification, abort and durable job recovery through Cockpit | Blocks reliable core chat/restart claims |
 | G4 — Media and artifacts | PNG input verified on one model; broader formats/output unverified | Model-specific image/OCR/KB pipeline evidence first; separate native PDF/audio/video/generation experiments | Only verified modality/model/transport combinations enabled |
 | G5 — Account isolation and refresh | Shared auth works across days; expiry/two accounts unverified | Real two-account auth home/cache/Keychain tests and expiry refresh under the actual server user | Blocks isolation claim/automatic isolated profile setup; shared-auth core remains possible |
 | G6 — Native goals | Unverified | Discover actual API/notifications and test set/status/clear/pause/resume, budgets and autonomous completion/cancel; decide support explicitly | Goals false until certified; no synthesized control loop |
 | G7 — Subagents/late work | Unverified | Verify child identity/demux, foreground/background completion, cancellation and usage attribution/draining | Agents false; if native delegation occurs by default, finalization/cleanup must still be proven or delegation disabled for core |
 | G8 — Install/update/platform support | macOS install known; managed paths/other OS not certified | Review official packaging/update commands, native OS launch/auth/install/update/cleanup and existing platform compatibility regressions | Doctor/update action and OS support limited to tested paths |
-| G9 — Managed runtime policy | Global flag ordering broke ACP; production skill/plugin/update defaults unresolved | Confirm clean argv/update control, no invisible auth UI, native-memory disablement, safe plugin/skill/hook policy and system instruction delivery | Resolve before claiming supervised core runtime support |
+| G9 — Managed runtime policy | Phase 0 selected direct ACP plus explicit-discovery flags/native memory off; clean startup/instructions/empty-home error passed; source shows separate update dispatch | Verify actual adapter system-prompt delivery, expired-token behavior, hooks/skills/delegation, and version-specific update/discovery policy | Remaining acceptance required before supervised core runtime support |
 | G10 — Snowflake billing | Tokens known; account cost/quota not reconciled | Obtain a documented/native Snowflake usage source and reconcile unit/cache/Auto model semantics; use focused pricing calculator if added | No cost estimate/account panel until evidence; tokens/context still supported |
 
-Decisions to record during implementation: final shared capability field names;
-ordinary native approval policy; production discovery/isolation flags; auth
-transport and connection TOML strategy; runtime update suppression; model-media
-evidence source; platform release scope. These are proposed work items, not
-previously accepted architecture decisions.
+Proposed ADR-0093 now records profile/capability names, managed discovery/update
+policy and pending-interaction behavior. Remaining implementation decisions:
+ordinary native approval details; auth transport and connection TOML strategy;
+model-media evidence source; platform release scope. Proposed choices require
+their adapter acceptance checks before being advertised as implemented behavior.
 
 ## 12. Documentation and change inventory
 
@@ -897,7 +908,8 @@ At implementation time update only the relevant current specifications:
 
 | Date | Tasks / scope | Commit or PR | CLI / platform | Verification / remaining gates |
 |---|---|---|---|---|
-| 2026-11-05 | Planning baseline; implementation tasks remain unchecked | Uncommitted planning document | CoCo 1.2.35 / macOS arm64 | Prior research plus fresh saved-auth real inference; G1–G10 tracked above |
+| 2026-11-05 | Planning baseline; all tasks initially unchecked | Checkpoint `083d4e3` | CoCo 1.2.35 / macOS arm64 | Prior research plus fresh saved-auth real inference; G1–G10 tracked above |
+| 2026-11-05 | P0 C01–C03 complete; 56 production tasks remain unchecked | Planning checkpoint `083d4e3`; preflight work in this change | CoCo 1.2.35 / macOS arm64 / Node 26.0.0 | Seven sanitized excerpts; real startup/inference/cancel/root-exit/restriction/missing-auth probe; production gates retained |
 
 ## 13. References
 

@@ -294,6 +294,66 @@ results above do not settle this processor boundary.
   tool-free processors gated until their behavior is actually verified. Revisit
   ADR and `AGENTS.md` requirements before a cross-subsystem implementation PR.
 
+## Phase 0 follow-up — 2026-11-05
+
+The implementation preparation is now recorded in
+[Proposed ADR-0093](../adr/0093-integrate-cortex-code-through-its-native-acp-interface.md).
+Seven [sanitized native protocol excerpts](../../test/fixtures/cortex/1.2.35/README.md)
+preserve initialization/configuration, tools/usage, questions/free text,
+revised plans, load replay and terminal error-as-text shapes. These excerpts
+are selected evidence, not a complete mock agent or integrated adapter suite.
+
+An opt-in reproducible probe now lives at
+[`scripts/probe-cortex-phase0.ts`](../../scripts/probe-cortex-phase0.ts):
+
+```sh
+CORTEX_PHASE0=1 CORTEX_TEST_CONNECTION='<existing named connection>' \
+  ./node_modules/.bin/tsx scripts/probe-cortex-phase0.ts
+```
+
+Optional `CORTEX_TEST_COMMAND` and `CORTEX_TEST_MODEL` select the executable and
+model. The probe requires real 1.2.35 on macOS, makes real inference requests,
+uses the selected connection's saved credentials, writes only synthetic fixture
+workspaces, and emits a private summary report under the OS temporary directory.
+It uses the existing Grok RPC/process helpers only as research scaffolding;
+there is no production CoCo-to-Grok dependency or registered CoCo adapter.
+
+The successful run at `2026-11-05T23:28:51Z`–`23:30:10Z` used Node 26.0.0,
+macOS arm64, CoCo 1.2.35, revision
+`083d4e360b13a96bc912aa076d9778141aa0645e` with the preflight files uncommitted.
+Private summary: `cockpit-cortex-phase0-tW3jZ3/report.json` under the OS temporary
+directory. The runner prints the complete local evidence path.
+
+| Check | Result | Consequence |
+|---|---|---|
+| Direct ACP startup and workspace instructions | Clean JSON-RPC, no stderr/login prompt, exact instruction marker and successful real inference | Native launch is suitable for the dedicated adapter. |
+| Native cancel and next turn | `cancelled`, sleeper exited, subsequent exact response succeeded, delayed file absent past its intended write time | Healthy cancellation/session reuse reconfirmed. The recorded 5136 ms includes the follow-up request, not cancellation latency alone. |
+| Forced root exit with descendant ownership | Existing process-scope pattern stopped the native sleeper after root `SIGKILL`; unrelated process survived; delayed file remained absent past its write time | Research validates the macOS cleanup pattern; implementation still needs dedicated lifecycle acceptance. |
+| Explicit unmatched tool allowlist | Tested read/write blocked, but three native tool calls emitted | Strict tool-free CoCo processors remain unavailable. |
+| Empty Snowflake home | Session/configuration creation succeeded; inference returned a connection error with `end_turn`, no usage, no waiting login wizard; prompt completed in 2 ms | Verification must make a real request; classify this error instead of treating `end_turn` as success. This fixture does not simulate every expired-token path. |
+
+Installed-source inspection corroborated the runtime policy:
+
+- The ACP subcommand dispatcher returns before the main terminal launch/update
+  path. Its handler does not accept the global auto-update option. Use the
+  direct `acp serve` invocation; do not prepend `--no-auto-update`.
+- `--only-explicit-plugins` skips ambient plugin discovery and the handler's
+  managed-plugin auto-update call. The selected initial managed policy combines
+  it with `--only-explicit-skills` and `--only-explicit-mcp-servers`, plus the
+  generated Cockpit plugin when available. This intentionally limits ambient
+  extensions while preserving normal Snowflake credentials; project/bundled
+  skills still remain. No global user configuration was changed.
+- `getToolDefinitionsForApiWithOptions` consults native `toolsEnabled`, but the
+  ACP command builder does not expose that switch. Declaration policy filtering
+  examines disallowed patterns, not the allowlist. Therefore an unmatched
+  allowlist is not evidence that the model received zero tool definitions.
+
+The code-path inspection is version-specific evidence, not a guarantee of future
+CLI update behavior or complete hook/skill isolation. Default delegation/late
+work, system-prompt envelopes, expired-token flows, other OSes, and actual
+Cockpit adapter execution remain gates in the implementation plan. Phase 0
+changes no desktop/mobile UI or assets.
+
 ## Official references
 
 - [ACP support](https://docs.snowflake.com/en/user-guide/cortex-code/cortex-code-acp)

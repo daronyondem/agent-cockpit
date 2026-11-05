@@ -171,6 +171,10 @@ tool is unavailable.
   connection `browserActionTimeout = 600000` provided ten minutes). ACP
   initialization/session creation alone does not prove authentication. CoCo
   remains pre-integration; see `docs/research/cortex-code-acp-evaluation.md`.
+  Phase 0 fixtures live under `test/fixtures/cortex/1.2.35`; the opt-in
+  `scripts/probe-cortex-phase0.ts` is research scaffolding, not an adapter suite.
+  Keep strict processors gated: an allowlist/denied approval does not establish
+  zero-tool execution. Track implementation in the CoCo plan and Proposed ADR-0093.
 - Fresh installs should be provider-neutral. Do not imply Claude Code is
   configured when the user has not installed or authenticated it.
 - CLI profiles are scoped per conversation where applicable and can support

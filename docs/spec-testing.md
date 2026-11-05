@@ -205,6 +205,35 @@ Current stream recovery coverage includes:
 - `test/streamFrameReducer.test.ts`: pure reducer traces cover desktop browser state transitions and declarative effects for replay, placeholders, interactions, assistant replacement, goals, live-only workspace updates, unread marking, and queue draining without timers, sockets, browser APIs, or `AgentApi`.
 - `test/streamStore.test.ts`: active stream hydration sets `streaming: true`, active goals keep the sidebar row in the streaming/blue state after the current backend turn's `done`, paused goals remove that goal-derived streaming state, stale replayed `goal_updated` frames cannot overwrite newer goal state, final assistant messages clear stale replayed plan approval state, `setGoal` shows an immediate optimistic goal strip and upserts the returned server goal-event message, `refreshGoal` preserves the local active runtime goal when backend status temporarily returns `null`, goal-event messages do not replace assistant streaming placeholders, goal-only streams remove empty placeholders on done, `load()` and stale-stream refetch rehydrate active `streamError` from the final persisted assistant `streamError` message, older historical `streamError` messages followed by normal conversation activity stay historical, durable stream-error refetch pauses queue draining, non-terminal warnings do not flip `uiState` to `error`, failed WS opens clear stale socket state for retry, unexpected active WS close reconnects, `stopStream` uses REST abort even with a closed WS and refetches durable abort messages so optimistic placeholders are removed, normal-send `409` rolls back optimistic placeholders into active-stream state, and queued-send `409` restores the original queued item with attachments intact while preserving edits made to later queued items during the in-flight send.
 
+## CoCo Phase 0 Native Research
+
+CoCo is not yet a registered harness. `scripts/probe-cortex-phase0.ts` is an
+opt-in research runner, separate from normal Jest/CI and from the planned
+production adapter compatibility suites. It requires macOS, Cortex Code 1.2.35,
+`CORTEX_PHASE0=1`, and `CORTEX_TEST_CONNECTION` naming an authenticated shared
+Snowflake connection. Run it through `./node_modules/.bin/tsx`; optional
+`CORTEX_TEST_COMMAND` and `CORTEX_TEST_MODEL` select command/model. Native
+`CORTEX_ACP_TEST_MODE=1` is rejected because it cannot establish real inference.
+
+The runner uses real inference and synthetic temporary workspaces to verify
+clean ACP startup/instruction delivery, cancel/session reuse, cleanup after root
+death without killing an unrelated process, denied read/write with an unmatched
+allowlist, and inference failure from an empty Snowflake home. Expected lack of
+strict zero-tool support is reported as a capability gate, not a successful
+restricted processor. A private temporary summary records CLI/OS/Node/revision/
+dirty state without connection names, raw stderr, OAuth data or credentials.
+Existing Grok transport/process helpers are research scaffolding only and are
+not production CoCo dependencies. This probe does not test Cockpit routes/UI,
+actual Memory/KB/Context/Routine services or native Windows/Linux behavior.
+
+Seven sanitized ordered native wire excerpts live in
+`test/fixtures/cortex/1.2.35/`, with provenance and scope in their README. They
+preserve protocol shapes for future adapter tests; they are not runnable mocks
+or current application acceptance. Results and the exact invocation are in
+[the research report](research/cortex-code-acp-evaluation.md#phase-0-follow-up--2026-11-05).
+See [Proposed ADR-0093](adr/0093-integrate-cortex-code-through-its-native-acp-interface.md)
+and [the implementation tracker](design/cortex-code-implementation-plan.md).
+
 ## CI/CD
 
 **Lint gate** (`npm run lint`): Runs `eslint . --max-warnings=0` from the repository root using the flat config in `eslint.config.mjs`. The config uses root-installed `eslint`, `@eslint/js`, `typescript-eslint`, and `eslint-plugin-react-hooks`; no Prettier or formatting rules are part of the gate. Type-aware linting covers the root server compile unit (`src/**/*.ts`, `server.ts`), desktop web TypeScript/TSX, mobile PWA TypeScript/TSX, and Jest tests. Root TypeScript tooling files outside `tsconfig.json` (`scripts/*.ts`, `playwright.config.ts`) use non-type-aware TypeScript recommended parsing. Plain JS/CJS/MJS tooling and desktop web JS/JSX use `eslint:recommended` as warnings, with cheap mechanical JS correctness rules promoted to errors: `no-undef`, `no-unused-vars`, `no-empty` with `allowEmptyCatch: true`, and `no-useless-assignment`. `react-hooks/rules-of-hooks` is an error for web/mobile sources and `react-hooks/exhaustive-deps` remains a warning, but the committed baseline is zero warnings; intentional dependency exceptions must use targeted inline disables with written reasons. The type-aware correctness rules `@typescript-eslint/no-floating-promises`, `@typescript-eslint/no-misused-promises`, `@typescript-eslint/await-thenable`, and `@typescript-eslint/no-unnecessary-type-assertion` are errors. Other TypeScript recommended rules are disabled for the initial gate because the existing dynamic JSON and CLI protocol surfaces produce high-volume legacy findings outside the promise-correctness scope. `npm run lint` fails on lint errors or warnings.

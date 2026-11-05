@@ -26,7 +26,7 @@ Design and planning documents that preserve product intent, implementation plans
 
 | Document | Status | Description |
 |----------|--------|-------------|
-| [design/cortex-code-implementation-plan.md](design/cortex-code-implementation-plan.md) | Proposed | CoCo harness feature mapping, remote OAuth setup, ACP/runtime/MCP design, phased implementation checklist, and native/client/platform acceptance gates |
+| [design/cortex-code-implementation-plan.md](design/cortex-code-implementation-plan.md) | Phase 0 complete; implementation pending | CoCo harness feature mapping, remote OAuth setup, ACP/runtime/MCP design, phased implementation checklist, and native/client/platform acceptance gates |
 | [design/claude-code-interactive/implementation-plan.md](design/claude-code-interactive/implementation-plan.md) | Implemented | End-to-end implementation plan for a separate Claude Code Interactive backend using hidden PTY control, transcript-derived events, shared Claude profiles, and provider-specific CLI compatibility warnings |
 | [design/claude-code-interactive/hardening-plan.md](design/claude-code-interactive/hardening-plan.md) | Implemented | Follow-up hardening plan for Claude Code Interactive terminal query responses, hook-driven lifecycle signals, transcript finalization, and real-CLI drift coverage |
 | [design/knowledge-base/ingestion-hybrid.md](design/knowledge-base/ingestion-hybrid.md) | Implemented | Hybrid AI-assisted KB ingestion (PDF/DOCX/PPTX/image conversion at ingest time) — shipped across PRs #213–#228 |

@@ -1,0 +1,381 @@
+{
+  "source": {
+    "cliVersion": "1.2.35",
+    "distribution": "1.2.35+191333.f82de3d91715",
+    "platform": "darwin-arm64",
+    "capturedAt": "2026-11-02",
+    "probe": "interactions",
+    "selection": "ordered excerpt; identities, paths, endpoints sanitized; model catalog sampled"
+  },
+  "frames": [
+    {
+      "direction": "out",
+      "frame": {
+        "jsonrpc": "2.0",
+        "id": 5,
+        "method": "session/prompt",
+        "params": {
+          "sessionId": "fixture-id-5",
+          "prompt": [
+            {
+              "type": "text",
+              "text": "Use ask_user_question with TWO questions in a SINGLE invocation. First ask \"Which fixture color?\" with Blue, Green, and an explicit free-form option. Second ask \"Which backup fixture color?\" with Blue and Green. Wait for both answers, then repeat both answers in order. Do not use file or shell tools."
+            }
+          ]
+        }
+      }
+    },
+    {
+      "direction": "in",
+      "frame": {
+        "jsonrpc": "2.0",
+        "method": "session/update",
+        "params": {
+          "sessionId": "fixture-id-5",
+          "update": {
+            "sessionUpdate": "usage_update",
+            "size": 1000000,
+            "used": 55171
+          }
+        }
+      }
+    },
+    {
+      "direction": "in",
+      "frame": {
+        "jsonrpc": "2.0",
+        "method": "session/update",
+        "params": {
+          "sessionId": "fixture-id-5",
+          "update": {
+            "sessionUpdate": "tool_call",
+            "toolCallId": "fixture-tool-14",
+            "title": "ask_user_question",
+            "kind": "other",
+            "status": "pending",
+            "rawInput": {
+              "questions": [
+                {
+                  "header": "Fixture color",
+                  "multiSelect": false,
+                  "options": [
+                    {
+                      "description": "Use blue as the fixture color",
+                      "label": "Blue"
+                    },
+                    {
+                      "description": "Use green as the fixture color",
+                      "label": "Green"
+                    },
+                    {
+                      "description": "Type your own color",
+                      "label": "Enter custom color"
+                    }
+                  ],
+                  "question": "Which fixture color?"
+                },
+                {
+                  "header": "Backup color",
+                  "multiSelect": false,
+                  "options": [
+                    {
+                      "description": "Use blue as the backup fixture color",
+                      "label": "Blue"
+                    },
+                    {
+                      "description": "Use green as the backup fixture color",
+                      "label": "Green"
+                    }
+                  ],
+                  "question": "Which backup fixture color?"
+                }
+              ]
+            }
+          }
+        }
+      }
+    },
+    {
+      "direction": "in",
+      "frame": {
+        "jsonrpc": "2.0",
+        "id": 0,
+        "method": "session/request_permission",
+        "params": {
+          "sessionId": "fixture-id-5",
+          "_meta": {
+            "questionIndex": 0,
+            "totalQuestions": 2
+          },
+          "toolCall": {
+            "toolCallId": "fixture-tool-15",
+            "title": "Which fixture color?",
+            "status": "pending",
+            "kind": "other"
+          },
+          "options": [
+            {
+              "kind": "allow_once",
+              "name": "Blue",
+              "description": "Use blue as the fixture color",
+              "optionId": "opt_0"
+            },
+            {
+              "kind": "allow_once",
+              "name": "Green",
+              "description": "Use green as the fixture color",
+              "optionId": "opt_1"
+            },
+            {
+              "kind": "allow_once",
+              "name": "Enter custom color",
+              "description": "Type your own color",
+              "optionId": "opt_2"
+            },
+            {
+              "kind": "allow_once",
+              "name": "Something else",
+              "description": "Type your own feedback",
+              "optionId": "opt_3",
+              "_meta": {
+                "freeForm": true
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "direction": "out",
+      "frame": {
+        "jsonrpc": "2.0",
+        "id": 0,
+        "result": {
+          "outcome": {
+            "outcome": "selected",
+            "optionId": "opt_3",
+            "_meta": {
+              "freeFormText": "Violet fixture"
+            }
+          }
+        }
+      }
+    },
+    {
+      "direction": "in",
+      "frame": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "session/request_permission",
+        "params": {
+          "sessionId": "fixture-id-5",
+          "_meta": {
+            "questionIndex": 1,
+            "totalQuestions": 2
+          },
+          "toolCall": {
+            "toolCallId": "fixture-tool-16",
+            "title": "Which backup fixture color?",
+            "status": "pending",
+            "kind": "other"
+          },
+          "options": [
+            {
+              "kind": "allow_once",
+              "name": "Blue",
+              "description": "Use blue as the backup fixture color",
+              "optionId": "opt_0"
+            },
+            {
+              "kind": "allow_once",
+              "name": "Green",
+              "description": "Use green as the backup fixture color",
+              "optionId": "opt_1"
+            },
+            {
+              "kind": "allow_once",
+              "name": "Something else",
+              "description": "Type your own feedback",
+              "optionId": "opt_2",
+              "_meta": {
+                "freeForm": true
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "direction": "out",
+      "frame": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "result": {
+          "outcome": {
+            "outcome": "selected",
+            "optionId": "opt_1"
+          }
+        }
+      }
+    },
+    {
+      "direction": "in",
+      "frame": {
+        "jsonrpc": "2.0",
+        "method": "session/update",
+        "params": {
+          "sessionId": "fixture-id-5",
+          "update": {
+            "sessionUpdate": "tool_call_update",
+            "toolCallId": "fixture-tool-14",
+            "status": "completed",
+            "content": [
+              {
+                "type": "content",
+                "content": {
+                  "type": "text",
+                  "text": "User has answered your questions:\n\"Which fixture color?\" = \"Violet fixture\"\n\"Which backup fixture color?\" = \"Green\""
+                }
+              }
+            ],
+            "rawOutput": "User has answered your questions:\n\"Which fixture color?\" = \"Violet fixture\"\n\"Which backup fixture color?\" = \"Green\""
+          }
+        }
+      }
+    },
+    {
+      "direction": "in",
+      "frame": {
+        "jsonrpc": "2.0",
+        "method": "session/update",
+        "params": {
+          "sessionId": "fixture-id-5",
+          "update": {
+            "sessionUpdate": "agent_message_chunk",
+            "content": {
+              "type": "text",
+              "text": "1"
+            }
+          }
+        }
+      }
+    },
+    {
+      "direction": "in",
+      "frame": {
+        "jsonrpc": "2.0",
+        "method": "session/update",
+        "params": {
+          "sessionId": "fixture-id-5",
+          "update": {
+            "sessionUpdate": "agent_message_chunk",
+            "content": {
+              "type": "text",
+              "text": "."
+            }
+          }
+        }
+      }
+    },
+    {
+      "direction": "in",
+      "frame": {
+        "jsonrpc": "2.0",
+        "method": "session/update",
+        "params": {
+          "sessionId": "fixture-id-5",
+          "update": {
+            "sessionUpdate": "agent_message_chunk",
+            "content": {
+              "type": "text",
+              "text": " Fixture"
+            }
+          }
+        }
+      }
+    },
+    {
+      "direction": "in",
+      "frame": {
+        "jsonrpc": "2.0",
+        "method": "session/update",
+        "params": {
+          "sessionId": "fixture-id-5",
+          "update": {
+            "sessionUpdate": "agent_message_chunk",
+            "content": {
+              "type": "text",
+              "text": " color: **Violet fixture"
+            }
+          }
+        }
+      }
+    },
+    {
+      "direction": "in",
+      "frame": {
+        "jsonrpc": "2.0",
+        "method": "session/update",
+        "params": {
+          "sessionId": "fixture-id-5",
+          "update": {
+            "sessionUpdate": "agent_message_chunk",
+            "content": {
+              "type": "text",
+              "text": "**\n2. Backup fixture color"
+            }
+          }
+        }
+      }
+    },
+    {
+      "direction": "in",
+      "frame": {
+        "jsonrpc": "2.0",
+        "method": "session/update",
+        "params": {
+          "sessionId": "fixture-id-5",
+          "update": {
+            "sessionUpdate": "agent_message_chunk",
+            "content": {
+              "type": "text",
+              "text": ": **Green**"
+            }
+          }
+        }
+      }
+    },
+    {
+      "direction": "in",
+      "frame": {
+        "jsonrpc": "2.0",
+        "method": "session/update",
+        "params": {
+          "sessionId": "fixture-id-5",
+          "update": {
+            "sessionUpdate": "usage_update",
+            "size": 1000000,
+            "used": 55416
+          }
+        }
+      }
+    },
+    {
+      "direction": "in",
+      "frame": {
+        "jsonrpc": "2.0",
+        "id": 5,
+        "result": {
+          "stopReason": "end_turn",
+          "usage": {
+            "inputTokens": 4,
+            "outputTokens": 229,
+            "cachedReadTokens": 55168,
+            "cachedWriteTokens": 55415,
+            "totalTokens": 110816
+          }
+        }
+      }
+    }
+  ]
+}
