@@ -164,7 +164,7 @@ The PWA currently covers:
   return `409`, and concurrent sends retain their draft through the existing
   temporary `503` handling. A send immediately following Copilot Stop waits for
   the old workers before a new CLI process can start.
-  These shared server guarantees require no PWA bundle, metadata, or asset change.
+  The PWA retains streaming state through abort completion and refreshes before exposing Send; the native browser suite holds the abort request to verify that boundary.
 - Active/archived conversation list via `GET /api/chat/conversations`.
 - Workspace-level archives are respected by the shared conversation-list contract: archived workspaces are excluded from the mobile active and archived conversation lists unless a caller explicitly asks for `includeArchivedWorkspaces`, which the PWA does not do. The PWA does not expose workspace archive management, remapping, file snapshot restore, or archived-data deletion; those remain desktop filesystem-management workflows.
 - Flat latest-first conversation list with a workspace select filter. `All conversations` is the default; choosing a workspace filters the list to that `workspaceId` without introducing collapsible workspace groups. Each card renders the workspace label in the header and keeps the timestamp in the footer beside message count/live status so the date appears only once.

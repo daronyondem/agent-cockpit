@@ -148,7 +148,7 @@ passkeys, recovery codes, and optional legacy OAuth compatibility.
 | **Kiro** | `kiro-cli` | Fully supported |
 | **OpenCode** | `opencode` | Fully supported, self-configured provider credentials |
 | **Grok Build** | `grok` | Supported; verified on macOS, Windows/Linux validation pending |
-| **GitHub Copilot** | `copilot` | SDK chat and shared login; [known gaps, including Windows SDK startup](docs/reference/backend-capabilities.md#copilot-known-capability-gaps) |
+| **GitHub Copilot** | `copilot` | SDK chat and shared login; [known capability gaps](docs/reference/backend-capabilities.md#copilot-known-capability-gaps) |
 
 See [BACKENDS.md](BACKENDS.md) and [docs/user/backends.md](docs/user/backends.md)
 for feature differences, auth notes, and setup guidance.

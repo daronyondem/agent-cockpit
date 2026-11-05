@@ -539,17 +539,25 @@ arm64 (`copilot-sdk-compat-T3gQum`) pass all 34 SDK cases with native CLI 1.0.10
 and protocol 3. Ubuntu Chromium passes 40 cases (`cockpit-copilot-ui-VzWe3e`,
 68 SDK launches), extending Ubuntu evidence beyond the earlier JSONL suite.
 
-Windows Node containment fixtures pass. The actual Windows SDK job fails
-33 cases with one skipped at headless startup: `Copilot runtime did not announce
-a port`. Report `copilot-sdk-compat-ir6kD8` records exit 1 and `cli:null`; it
-provides no successful native session/protocol result. This is an observed
-compatibility failure with no root cause established here, not merely an absent
-CI configuration. Main tests/builds and ADR checks pass. The completed coverage
-job passes all 3,052 tests but fails its gate: statements/lines are 88.81% against
-the unchanged 88.85% floor (branches 77.38%, functions 94.00%). The published
-workflow fails Windows startup and coverage; those are actual CI failures,
-separate from accepted capability limits. No threshold is reduced or test
-hidden in this documentation pass.
+The initial Windows SDK job failed 33 cases at headless startup. The native
+fixture had stripped OS initialization variables along with credentials;
+preserving the OS environment while isolating auth restored startup. A second
+failure exposed Windows cleanup returning before wrapper close. After awaiting
+that close, [run 41959562270](https://github.com/daronyondem/agent-cockpit/actions/runs/41959562270/job/127022547483)
+passes all **33 applicable Windows SDK cases**, with one POSIX wrapper case
+skipped. Report `copilot-sdk-compat-UBnntO` records CLI 1.0.105 / protocol 3 /
+SDK 1.0.28 / Node 22.23.4 / clean merge revision `a722ecc7` / exit 0 (source
+head `f5dbe5e`). Ubuntu and macOS SDK jobs each pass 34 cases on that run.
+
+The initial coverage job passed 3,052 tests but missed the statement/line gate
+at 88.81% against 88.85%. Additional HTTP and Windows completion regressions
+retain the same floors. Browser follow-ups retain streaming state through mobile
+abort completion, await persisted summaries and wait for discovered goal controls
+before submitting native goals. These CI fixes preserve the documented feature
+limits; they do not add independent accounts or hosted qualification. The
+[testing specification](../spec-testing.md#copilot-published-ci-evidence) and
+[PR checks](https://github.com/daronyondem/agent-cockpit/pull/571/checks) retain
+qualification details and current quality-gate status.
 
 Passing fixed-model SDK/browser results do not establish successful hosted auth,
 account entitlement/billing, two-account/keychain isolation or the full

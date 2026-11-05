@@ -228,8 +228,11 @@ describe('Copilot process containment edges', () => {
 
   test.each([false, true])('Windows uses bounded taskkill tree cleanup (failure=%s)', async fail => {
     Object.defineProperty(process, 'platform', { value: 'win32' });
-    const child = Object.assign(new EventEmitter(), { pid: 77, exitCode: null, kill: jest.fn(), stdout: { destroy: jest.fn() } });
-    const execFile = jest.fn((_command, _args, _options, callback) => callback(fail ? new Error('taskkill failed') : null, ''));
+    const child = Object.assign(new EventEmitter(), { pid: 77, exitCode: null as number | null, kill: jest.fn(), stdout: { destroy: jest.fn() } });
+    const execFile = jest.fn((_command, _args, _options, callback) => {
+      callback(fail ? new Error('taskkill failed') : null, '');
+      setImmediate(() => { child.exitCode = 1; child.emit('close'); });
+    });
     let Scope!: typeof CopilotProcessScope;
     jest.isolateModules(() => {
       jest.doMock('child_process', () => ({ execFile }));

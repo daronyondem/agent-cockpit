@@ -181,13 +181,14 @@ x64**, **34 on macOS 15 arm64**, and **40 Ubuntu desktop/PWA browser cases**.
 The retained reports identify clean GitHub PR merge revision `88fd464`, CLI
 1.0.105 / SDK 1.0.28 / Node 22.23.4. Ubuntu browser evidence records 68 SDK
 runtime launches; this supersedes the earlier Ubuntu JSONL-only browser scope.
-Windows Job Object/stdio process fixtures also pass. The
-[real Windows SDK job](https://github.com/daronyondem/agent-cockpit/actions/runs/41954476405/job/127006416363)
-fails **33 cases with one skipped** at headless startup with
-`Copilot runtime did not announce a port`. Its report is
-`copilot-sdk-compat-ir6kD8`; it records exit code 1 and no native CLI status
-result (`cli:null`). The failure does not establish a root cause or working
-Windows sessions.
+Windows Job Object/stdio process fixtures also pass. The initial Windows SDK
+job failed at startup because the fixture removed OS initialization environment
+variables along with authentication settings. Preserving those variables while
+isolating credentials restores startup. After cleanup was also changed to await
+wrapper closure, [run 41959562270](https://github.com/daronyondem/agent-cockpit/actions/runs/41959562270/job/127022547483)
+passes **33 Windows x64 SDK cases**, with the POSIX command-wrapper case skipped.
+Report `copilot-sdk-compat-UBnntO` identifies CLI 1.0.105 / protocol 3 / SDK
+1.0.28 / Node 22.23.4 at clean PR merge `a722ecc7` (source head `f5dbe5e`).
 
 Passing SDK/browser cases use fixed local model responses, not hosted accounts.
 They do not certify platform keychain/auth, successful OAuth/entitlement or the
@@ -196,10 +197,13 @@ running jobs alone are not certification. See the testing spec for report names
 and precise job links; Windows Node fixtures remain separate from native CLI
 results.
 
-The same published run passes all 3,052 normal tests but fails the Ubuntu
-coverage gate at 88.81% statements/lines against the unchanged 88.85% floor.
-That quality-gate failure and Windows startup are CI failures, separate from the
-capability scope above; the workflow must not be described as all green.
+The initial published run passed all 3,052 normal tests but missed the Ubuntu
+coverage floor at 88.81% statements/lines against 88.85%. Additional regression
+cases cover goal/profile admission and repair, native-history recovery,
+quota/catalog errors, and Windows cleanup completion. Coverage floors remain
+unchanged. Current quality-gate status is tracked by the
+[PR checks](https://github.com/daronyondem/agent-cockpit/pull/571/checks), separately
+from the capability limits above.
 
 The versioned [SDK evaluation](../research/copilot-sdk-parity-evaluation.md) and
 [testing specification](../spec-testing.md#copilot-native-kb-and-routine-qualification)

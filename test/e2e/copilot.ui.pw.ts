@@ -210,6 +210,7 @@ for (const mobile of [false, true]) {
   test(`${client} completes and reloads native goals without offering Clear`, async ({ page, request }) => {
     const conv = await create(request, `Copilot ${client} goal completion`);
     await open(page, conv.title, mobile);
+    await expect(page.getByRole(mobile ? 'button' : 'checkbox', { name: 'Goal', exact: true })).toBeVisible();
     await send(page, '/goal COPILOT_UI_GOAL_COMPLETE');
     const strip = page.locator('.goal-strip');
     await expect(strip).toContainText('Goal achieved');
@@ -226,6 +227,7 @@ for (const mobile of [false, true]) {
     for (const name of ['ui-goal-worker.pid', 'ui-goal-worker-finished', 'ui-goal-release']) await fs.rm(path.join(workspace, name), { force: true });
     const conv = await create(request, `Copilot ${client} goal pause`);
     await open(page, conv.title, mobile);
+    await expect(page.getByRole(mobile ? 'button' : 'checkbox', { name: 'Goal', exact: true })).toBeVisible();
     await send(page, '/goal COPILOT_UI_GOAL_PAUSE');
     await expect.poll(async () => fs.readFile(path.join(workspace, 'ui-goal-worker.pid'), 'utf8').catch(() => '')).not.toBe('');
     const worker = Number(await fs.readFile(path.join(workspace, 'ui-goal-worker.pid'), 'utf8'));
