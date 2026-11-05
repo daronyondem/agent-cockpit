@@ -71,8 +71,12 @@ After review, trigger `.github/workflows/release.yml` with:
 The workflow always runs Windows and Linux smoke jobs before publishing. For
 real releases, it also validates that `docs/releases/v<version>.md` exists in
 the selected source ref, renders `dist/release/github-release-notes.md`, and
-passes that file to `gh release create --notes-file`. The Windows smoke job
-parses `install-windows.ps1`, runs Windows-focused installer/doctor/install-state
+passes that file to `gh release create --notes-file`. The publish job rebuilds
+desktop and mobile production assets after the full test suite, then rechecks
+the desktop bundle budget before packaging. Test
+fixtures must not become the assets copied into production archives.
+
+The Windows smoke job parses `install-windows.ps1`, runs Windows-focused installer/doctor/install-state
 tests plus the Windows-named update-service tests, builds the web and mobile
 assets required by release packaging, and packages the release on
 `windows-latest` to verify macOS, Linux, and Windows manifest entries before

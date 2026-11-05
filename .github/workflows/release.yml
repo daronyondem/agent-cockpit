@@ -240,6 +240,12 @@ jobs:
       - run: npm test
       - run: npm run adr:lint
 
+      - name: Rebuild release assets after tests
+        run: |
+          npm run web:build
+          npm run web:budget
+          npm run mobile:build
+
       - name: Package release
         run: |
           npm run release:package -- \

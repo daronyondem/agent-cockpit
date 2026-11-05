@@ -14,13 +14,14 @@ const DEFAULT_BUDGETS = {
   maxJsAsset: 230 * KIB,
   maxCssAsset: 230 * KIB,
   assets: {
-    // The measured entry with Copilot usage visibility is 266.9 KiB.
-    'index.js': 267 * KIB,
+    // Patched Vite 8.1.6 adds 41 bytes to the measured 267.0 KiB entry.
+    'index.js': 267.1 * KIB,
     'react-vendor.js': 230 * KIB,
     'markdown-vendor.js': 160 * KIB,
     'kbBrowser.js': 115 * KIB,
     'workspaceSettings.js': 95 * KIB,
-    'settingsScreen.js': 80 * KIB,
+    // The same compiler update adds 21 bytes to this 80.0 KiB chunk.
+    'settingsScreen.js': 80.1 * KIB,
     'settingsMigrationTab.js': 20 * KIB,
     'dialog.js': 60 * KIB,
     'filesBrowser.js': 45 * KIB,

@@ -10,7 +10,7 @@ function indexOfOrThrow(source: string, needle: string): number {
 }
 
 describe('release workflow', () => {
-  const source = fs.readFileSync(workflowPath, 'utf8');
+  const source = fs.readFileSync(workflowPath, 'utf8').replace(/\r\n/g, '\n');
 
   test('runs platform smoke jobs before publishing release assets', () => {
     expect(source).toContain('windows-smoke:');
@@ -73,5 +73,17 @@ describe('release workflow', () => {
     expect(packageStep).toBeLessThan(installerStep);
     expect(source).toContain("['app-tarball','linux','tar.gz']");
     expect(source).toContain("['linux-installer','linux',undefined]");
+  });
+
+  test('rebuilds production clients and checks the budget after tests before packaging', () => {
+    const releaseJob = source.slice(indexOfOrThrow(source, '\n  release:\n'));
+    const tests = indexOfOrThrow(releaseJob, '- run: npm test\n');
+    const rebuild = indexOfOrThrow(releaseJob, '- name: Rebuild release assets after tests');
+    const packageStep = indexOfOrThrow(releaseJob, '- name: Package release\n');
+    expect(tests).toBeLessThan(rebuild);
+    expect(rebuild).toBeLessThan(packageStep);
+    const finalBuild = releaseJob.slice(rebuild, packageStep);
+    expect(indexOfOrThrow(finalBuild, 'npm run web:build')).toBeLessThan(indexOfOrThrow(finalBuild, 'npm run web:budget'));
+    expect(finalBuild).toContain('npm run mobile:build');
   });
 });
