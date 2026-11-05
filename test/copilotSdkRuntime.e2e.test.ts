@@ -2,6 +2,7 @@ import fs from 'fs';
 import os from 'os';
 import path from 'path';
 import http from 'http';
+import { randomUUID } from 'crypto';
 import { startCopilotSdkRuntime, type CopilotSdkRuntime } from '../src/services/backends/copilotSdkRuntime';
 import { resolveCopilotCliRuntime } from '../src/services/backends/copilotRuntime';
 import { CopilotAdapter, __copilotTestUtils } from '../src/services/backends/copilot';
@@ -33,6 +34,7 @@ native('real Copilot owned SDK runtime with fixed local model responses', () => 
   let question: unknown;
   let cliVersion: string;
   let nativeEnv: NodeJS.ProcessEnv;
+  let startupFailure: unknown;
 
   beforeEach(async () => {
     dir = fs.mkdtempSync(path.join(os.tmpdir(), 'copilot-sdk-native-'));
@@ -139,12 +141,43 @@ native('real Copilot owned SDK runtime with fixed local model responses', () => 
     baseUrl = `http://127.0.0.1:${(provider.address() as { port: number }).port}/v1`;
     const resolved = resolveCopilotCliRuntime({ id: 'native-sdk', name: 'Native SDK fixture', harness: 'copilot', authMode: 'server-configured', command: process.env.COPILOT_SDK_CLI_PATH || 'copilot', createdAt: '', updatedAt: '' });
     nativeEnv = {
-      PATH: process.env.PATH, SystemRoot: process.env.SystemRoot, ComSpec: process.env.ComSpec,
-      SHELL: process.env.SHELL, TMPDIR: os.tmpdir(), TEMP: os.tmpdir(), TMP: os.tmpdir(),
+      // Keep OS/PowerShell initialization variables on Windows. Isolate auth and
+      // provider configuration instead of replacing the entire OS environment.
+      ...Object.fromEntries(Object.entries(process.env).filter(([key]) =>
+        !/^(COPILOT_|GH_|GITHUB_|OPENAI_|ANTHROPIC_|AZURE_|AWS_|NODE_OPTIONS$)/i.test(key))),
+      TMPDIR: os.tmpdir(), TEMP: os.tmpdir(), TMP: os.tmpdir(),
       HOME: dir, USERPROFILE: dir, APPDATA: path.join(dir, 'AppData', 'Roaming'), LOCALAPPDATA: path.join(dir, 'AppData', 'Local'),
       COPILOT_HOME: path.join(dir, 'home'), GH_CONFIG_DIR: path.join(dir, 'gh'), COPILOT_DISABLE_KEYTAR: '1',
+      COPILOT_GITHUB_TOKEN: '', GH_TOKEN: '', GITHUB_TOKEN: '',
     };
-    runtime = await startCopilotSdkRuntime({ ...resolved, env: nativeEnv }, dir);
+    if (startupFailure) throw startupFailure;
+    try {
+      runtime = await startCopilotSdkRuntime({ ...resolved, env: nativeEnv }, dir);
+    } catch (error) {
+      // A broken native startup cannot qualify subsequent scenarios. Retain one
+      // isolated diagnostic rather than spending every case's startup deadline.
+      startupFailure = error;
+      if (process.platform === 'win32' && process.env.COPILOT_SDK_REPORT_DIR) {
+        const invocation = buildCliCommandInvocation(resolved, ['--headless', '--no-auto-update', '--log-level', 'none']);
+        const { proc, scope } = spawnCopilotProcess(invocation.command, invocation.args, {
+          cwd: dir, env: { ...nativeEnv, COPILOT_CONNECTION_TOKEN: randomUUID() }, stdio: ['ignore', 'pipe', 'pipe'],
+        });
+        let stdout = ''; let stderr = '';
+        proc.stdout!.on('data', chunk => { stdout = (stdout + chunk.toString()).slice(-16_384); });
+        proc.stderr!.on('data', chunk => { stderr = (stderr + chunk.toString()).slice(-16_384); });
+        try {
+          await new Promise<void>(resolve => {
+            const timer = setTimeout(resolve, 5000);
+            proc.once('error', () => { clearTimeout(timer); resolve(); });
+            proc.once('close', () => { clearTimeout(timer); resolve(); });
+          });
+        } finally {
+          await scope.stop();
+          fs.writeFileSync(path.join(process.env.COPILOT_SDK_REPORT_DIR, 'startup-failure.json'), JSON.stringify({ stdout, stderr, exitCode: proc.exitCode }, null, 2));
+        }
+      }
+      throw error;
+    }
     const status = await runtime.client.getStatus();
     cliVersion = status.version;
     if (process.env.COPILOT_SDK_REPORT_DIR) {
