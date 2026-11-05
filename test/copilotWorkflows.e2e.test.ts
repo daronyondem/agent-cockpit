@@ -10,7 +10,7 @@ native('real Copilot Memory and Workspace Context workflows with a local model f
   let env: CopilotWorkflowEnv;
   beforeAll(() => {
     console.info('Copilot workflow compatibility evidence', {
-      cli: execFileSync('copilot', ['--no-auto-update', '--version'], { encoding: 'utf8' }).split('\n')[0],
+      cli: execFileSync(process.env.COPILOT_WORKFLOW_CLI || 'copilot', ['--no-auto-update', '--version'], { encoding: 'utf8' }).split('\n')[0],
       platform: process.platform, arch: process.arch,
       revision: execFileSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' }).trim(),
       dirty: execFileSync('git', ['status', '--porcelain'], { encoding: 'utf8' }).trim().length > 0,

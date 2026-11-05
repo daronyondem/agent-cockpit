@@ -3,6 +3,7 @@ import fs from 'fs';
 import { copilotPng } from './copilotMediaFixtures';
 import path from 'path';
 import type { CopilotWorkflowPlan } from './copilotWorkflowEnv';
+import { replyToCopilotProcessor } from './copilotProcessorProvider';
 
 interface FixtureMessage { role: string; content?: unknown; tool_calls?: Array<{ function: { name: string } }> }
 interface FixtureRequest { messages: FixtureMessage[]; tools?: Array<{ function?: { name: string } }> }
@@ -45,6 +46,7 @@ export async function createCopilotLocalProvider(getPlan: () => CopilotWorkflowP
           }, 20);
           res.on('close', () => clearInterval(timer));
         };
+        if (plan.processors && replyToCopilotProcessor(request.messages, plan.processors, workspace, say, call)) return;
         if ((memory && plan.memoryError) || (context && plan.contextError)) {
           res.writeHead(400, { 'Content-Type': 'application/json' });
           res.end(JSON.stringify({ error: { message: 'Fixture processor failed', type: 'invalid_request_error' } }));
@@ -68,6 +70,11 @@ console.log('Updated fixture context from listed sources.');`;
         }
         const toolMessages = request.messages.filter(message => message.role === 'tool');
         const lastUser = String(request.messages.filter(message => message.role === 'user').at(-1)?.content || '');
+        if (text.includes('WORKFLOW_KB_RECALL_ONLY')) {
+          if (!toolMessages.length) call('get_topic', { topic_id: 'checksum-fixture' });
+          else say(JSON.stringify(toolMessages.at(-1)?.content));
+          return;
+        }
         if (text.includes('COPILOT_UI_MEDIA_INPUT')) {
           const content = JSON.stringify(request.messages.filter(message => message.role === 'user').at(-1)?.content);
           const hasImage = content?.includes(`data:image/png;base64,${copilotPng.toString('base64')}`);

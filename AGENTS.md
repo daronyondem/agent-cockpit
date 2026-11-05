@@ -146,12 +146,18 @@ must await aborted scopes for its conversation before resuming native work.
 Send/goal admission blocked by a reset uses temporary `503` with `Retry-After`,
 while active-stream conflicts retain `409`; clients interpret `409` as an
 existing stream and must not attach to a reset reservation.
-For Copilot Memory/Workspace Context changes, run the normal-CI application
-integration suite in `test/copilotMemoryContext.test.ts` and native
-`npm run e2e:copilot-workflows`. The native suite uses isolated temporary auth
-and fixed local model responses to test production MCP, governance, persistence,
-and managed Context file paths. Record the actual CLI/OS/revision and keep this
-evidence separate from hosted-model reasoning, account auth, and browser UX.
+For Copilot Memory/Workspace Context/KB/Routine changes, run the normal-CI
+application suites in `test/copilotMemoryContext.test.ts` and
+`test/copilotKbRoutines.test.ts`, then native `npm run e2e:copilot-workflows`.
+Optionally select the CLI with `COPILOT_WORKFLOW_CLI`. The POSIX native suite
+uses isolated temporary auth and fixed local model replies to test production
+MCP, governance, persistence, managed Context files, JSONL KB processors and
+Routine output/history. Native tools must read the actual processor sources;
+cancelled workers and detached children must exit before retry. The runner saves
+CLI/SDK/OS/revision, test results, file-access receipts and recorded PID cleanup
+under a temporary `copilot-workflows-compat-*` report directory. Keep this
+evidence separate from hosted-model reasoning, account auth, embedding quality,
+browser UX and native Windows/Linux certification.
 Windows Copilot spawns use `copilotWindowsProcess.ts` to assign a hidden wrapper
 to an unnamed kill-on-close Job Object before launching native work. Preserve
 its sole non-inheritable job handle, fail startup if containment cannot be

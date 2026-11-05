@@ -8,29 +8,40 @@ import { WorkspaceTaskQueueRegistry } from '../src/services/knowledgeBase/worksp
 import { createKbSearchMcpServer } from '../src/services/kbSearchMcp';
 import { RoutinesService } from '../src/services/routines/service';
 import { createCopilotWorkflowEnv, type CopilotWorkflowEnv } from './helpers/copilotWorkflowEnv';
+import type { CopilotProcessorPlan } from './helpers/copilotProcessorProvider';
 
 const integration = process.platform === 'win32' ? describe.skip : describe;
+const native = process.env.COPILOT_WORKFLOWS_E2E === '1';
+if (native) jest.setTimeout(120_000);
 const entry = (slug: string) => `---\ntitle: ${slug}\nslug: ${slug}\nsummary: Synthetic checksum rule.\ntags: [fixture]\n---\nCOPILOT_KB_571 requires a checksum manifest.\n`;
 
-integration('Copilot KB and Routine application workflows', () => {
+integration(`${native ? 'real native ' : ''}Copilot KB and Routine application workflows`, () => {
   let env: CopilotWorkflowEnv;
   let ingestion: KbIngestionService;
   let digestion: KbDigestionService;
   let routines: RoutinesService;
-  let plan: { digest: string; glean: string; dream: string; routine: string; wait?: boolean; error?: boolean };
+  let plan: CopilotProcessorPlan;
   let planFile: string;
   let callsFile: string;
   const writePlan = () => fs.writeFileSync(planFile, JSON.stringify(plan));
-  const calls = () => fs.existsSync(callsFile) ? fs.readFileSync(callsFile, 'utf8').trim().split('\n').map(line => JSON.parse(line) as { prompt: string; args: string[]; cwd: string }) : [];
+  const calls = () => fs.existsSync(callsFile) ? fs.readFileSync(callsFile, 'utf8').trim().split('\n')
+    .map(line => JSON.parse(line) as { prompt: string; args: string[]; cwd: string }).filter(call => call.args.includes('-p')) : [];
+  const proof = () => fs.readFileSync(path.join(env.workspace, 'processor-proof.jsonl'), 'utf8').trim().split('\n')
+    .map(line => JSON.parse(line) as { phase: string; sources: string[]; cwd: string; destination?: string });
 
   beforeEach(async () => {
-    env = await createCopilotWorkflowEnv();
+    env = await createCopilotWorkflowEnv(native);
     planFile = path.join(env.tmpDir, 'processor-plan.json');
     callsFile = path.join(env.tmpDir, 'processor-calls.jsonl');
     plan = { digest: entry('checksum'), glean: entry('ownership'), dream: '{"operations":[]}', routine: 'COPILOT_ROUTINE_571' };
+    if (native) {
+      env.plan.processors = plan;
+      callsFile = env.callsPath;
+    }
     writePlan();
     const launcher = path.join(env.tmpDir, 'copilot-processors');
-    fs.writeFileSync(launcher, String.raw`#!${process.execPath}
+    if (!native) {
+      fs.writeFileSync(launcher, String.raw`#!${process.execPath}
 const fs=require('fs');
 const args=process.argv.slice(2);
 const prompt=args[args.indexOf('-p')+1];
@@ -62,10 +73,11 @@ if (prompt.includes('## Routine Markdown')) {
 console.log(JSON.stringify({type:'assistant.message',data:{messageId:'final',content:output}}));
 console.log(JSON.stringify({type:'result',exitCode:0,usage:{}}));
 `);
-    fs.chmodSync(launcher, 0o755);
+      fs.chmodSync(launcher, 0o755);
+    }
     const settings = await env.chatService.getSettings();
     await env.chatService.saveSettings({ ...settings,
-      cliProfiles: settings.cliProfiles!.map(profile => ({ ...profile, command: launcher })),
+      cliProfiles: native ? settings.cliProfiles : settings.cliProfiles!.map(profile => ({ ...profile, command: launcher })),
       knowledgeBase: { digestionCliProfileId: env.profileId, digestionCliModel: env.model, dreamingCliProfileId: env.profileId, dreamingCliModel: env.model, kbGleaningEnabled: true, cliConcurrency: 1 },
     });
     await env.chatService.setWorkspaceKbEnabled(env.conv.workspaceId, true);
@@ -89,9 +101,20 @@ console.log(JSON.stringify({type:'result',exitCode:0,usage:{}}));
     return uploaded.entry.rawId;
   }
   async function waitForCall(count: number) {
-    const deadline = Date.now() + 5000;
+    const deadline = Date.now() + (native ? 45_000 : 5000);
     while (calls().length < count && Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, 10));
     expect(calls()).toHaveLength(count);
+    if (native && plan.wait) {
+      const file = path.join(env.workspace, 'processor-worker.json');
+      while (!fs.existsSync(file) && Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, 20));
+      expect(fs.existsSync(file)).toBe(true);
+    }
+  }
+  function expectWorkerStopped() {
+    if (!native) return;
+    const worker = JSON.parse(fs.readFileSync(path.join(env.workspace, 'processor-worker.json'), 'utf8')) as { pid: number; childPid: number };
+    for (const pid of [worker.pid, worker.childPid]) expect(() => process.kill(pid, 0)).toThrow();
+    expect(fs.existsSync(path.join(env.workspace, 'processor-worker-finished'))).toBe(false);
   }
   async function seedRoutine() {
     await env.chatService.setWorkspaceRoutinesEnabled(env.conv.workspaceId, true);
@@ -113,7 +136,9 @@ console.log(JSON.stringify({type:'result',exitCode:0,usage:{}}));
     for (const id of result.entryIds) expect(fs.readFileSync(path.join(env.chatService.getKbEntriesDir(env.conv.workspaceId), id, 'entry.md'), 'utf8')).toContain('COPILOT_KB_571');
     expect(calls()).toHaveLength(2);
     expect(calls().every(call => call.cwd === fs.realpathSync(env.chatService.getKbKnowledgeDir(env.conv.workspaceId)))).toBe(true);
-    expect(calls()[1].prompt).toContain('## Response 1');
+    expect(calls().every(call => call.args.includes('--allow-all'))).toBe(true);
+    expect(native ? calls()[1].args[calls()[1].args.indexOf('-p') + 1] : calls()[1].prompt).toContain('## Response 1');
+    if (native) expect(proof()).toEqual([expect.objectContaining({ phase: 'digest', sources: [`converted/${rawId}/text.md`], cwd: fs.realpathSync(env.chatService.getKbKnowledgeDir(env.conv.workspaceId)) })]);
   });
 
   test('rejects malformed digestion without partial entries and succeeds after a corrected retry', async () => {
@@ -139,12 +164,13 @@ console.log(JSON.stringify({type:'result',exitCode:0,usage:{}}));
     const db = env.chatService.getKbDb(env.conv.workspaceId)!;
     expect(db.listEntries({ rawId })).toHaveLength(0);
     expect(db.getRawById(rawId)).not.toBeNull();
+    expectWorkerStopped();
     plan.wait = false;
     writePlan();
     expect((await digestion.enqueueDigest(env.conv.workspaceId, rawId)).error).toBeUndefined();
   });
 
-  test('dreaming rejects malformed Copilot operations, retains pending entries, then persists valid topics and markdown', async () => {
+  test('dreaming rejects malformed operations, retries, then persists topics and markdown for native chat recall', async () => {
     const rawId = await seedRaw();
     await digestion.enqueueDigest(env.conv.workspaceId, rawId);
     const db = env.chatService.getKbDb(env.conv.workspaceId)!;
@@ -169,6 +195,25 @@ console.log(JSON.stringify({type:'result',exitCode:0,usage:{}}));
     const markdown = fs.readdirSync(dir, { recursive: true }).filter(file => String(file).endsWith('.md')).map(file => fs.readFileSync(path.join(dir, String(file)), 'utf8')).join('\n');
     expect(markdown).toContain('COPILOT_KB_571');
     expect(db.listSynthesisRuns()[0].status).toBe('completed');
+    if (native) {
+      // Two malformed parse attempts, followed by the corrected run.
+      expect(proof().filter(item => item.phase === 'dream')).toEqual(Array.from({ length: 3 }, () =>
+        expect.objectContaining({ sources: expect.arrayContaining(ids.map(id => `entries/${id}/entry.md`)) })));
+      const ws = await env.connectWs(env.conv.id);
+      const reading = env.readWsEvents(ws, 45_000);
+      try {
+        expect((await env.request('POST', `/api/chat/conversations/${env.conv.id}/message`, { content: 'WORKFLOW_KB_RECALL_ONLY: retrieve checksum-fixture through the Knowledge Base get_topic MCP tool.' })).status).toBe(200);
+        const events = await reading;
+        expect(events.filter(event => event.type === 'error')).toEqual([]);
+        expect(events.some(event => event.type === 'done')).toBe(true);
+        expect(events.some(event => event.type === 'tool_activity' && /get_topic/.test(event.tool))).toBe(true);
+        const saved = (await env.chatService.getConversation(env.conv.id))!;
+        const text = saved.messages.filter(message => message.role === 'assistant').map(message => message.content).join('\n');
+        expect(text).toContain('COPILOT_KB_571 requires a checksum manifest');
+        for (const id of ids) expect(text).toContain(id);
+        expect(fs.readFileSync(env.callsPath, 'utf8').split('\n').some(line => line && JSON.parse(line).args.includes('--headless'))).toBe(true);
+      } finally { ws.close(); }
+    }
   });
 
   test('disabled Routines stay passive; enabled Copilot runs validate proposals and persist authorized artifacts and history', async () => {
@@ -186,6 +231,7 @@ console.log(JSON.stringify({type:'result',exitCode:0,usage:{}}));
     expect(run!.notificationSentAt).toBeFalsy();
     expect((await routines.getRoutine(env.conv.workspaceId, 'fixture'))!.runs[0].runId).toBe(run!.runId);
     expect(calls()[0].cwd).toBe(fs.realpathSync(env.workspace));
+    if (native) expect(proof()).toEqual([expect.objectContaining({ phase: 'routine', sources: [path.join(dir, 'routine.md')], destination: run!.outputDir, cwd: fs.realpathSync(env.workspace) })]);
   });
 
   test('Routine overlap is rejected, cancellation records failure, and Copilot can run a later retry', async () => {
@@ -198,6 +244,7 @@ console.log(JSON.stringify({type:'result',exitCode:0,usage:{}}));
     await expect(routines.runRoutine(env.conv.workspaceId, 'fixture', { source: 'manual' })).rejects.toThrow('already running');
     await env.adapter.shutdown();
     expect((await settled)?.message).toContain('aborted');
+    expectWorkerStopped();
     expect((await routines.getRoutine(env.conv.workspaceId, 'fixture'))!.runs[0]).toMatchObject({ status: 'failed' });
     plan.wait = false;
     writePlan();

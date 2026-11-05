@@ -5,6 +5,7 @@ import { CopilotAdapter } from '../../src/services/backends/copilot';
 import type { McpServerConfig } from '../../src/types';
 import { createChatRouterEnv, destroyChatRouterEnv } from './chatEnv';
 import { createCopilotLocalProvider } from './copilotLocalProvider';
+import type { CopilotProcessorPlan } from './copilotProcessorProvider';
 
 export const MEMORY_MARKER = 'COPILOT_MEMORY_571';
 export const REFERENCE_MARKER = 'COPILOT_CONTEXT_571';
@@ -19,6 +20,7 @@ export interface CopilotWorkflowPlan {
   sources: string[];
   destination?: string;
   instructions?: string;
+  processors?: CopilotProcessorPlan;
 }
 
 export async function createCopilotWorkflowEnv(native = false) {
@@ -42,9 +44,30 @@ export async function createCopilotWorkflowEnv(native = false) {
   const writePlan = () => { fs.writeFileSync(planPath, JSON.stringify(plan)); };
   let provider: Awaited<ReturnType<typeof createCopilotLocalProvider>> | undefined;
   const close = async () => {
+    const launches: Array<{ pid: number; cliPid?: number; args: string[] }> = native && fs.existsSync(callsPath)
+      ? fs.readFileSync(callsPath, 'utf8').trim().split('\n').filter(Boolean).map(line => JSON.parse(line)) : [];
+    const workerFile = path.join(workspace, 'processor-worker.json');
+    const worker = native && fs.existsSync(workerFile) ? JSON.parse(fs.readFileSync(workerFile, 'utf8')) as { pid: number; childPid: number } : undefined;
+    const proofFile = path.join(workspace, 'processor-proof.jsonl');
+    const fileProofs = native && fs.existsSync(proofFile) ? fs.readFileSync(proofFile, 'utf8').trim().split('\n').filter(Boolean).map(line => JSON.parse(line)) : [];
+    const pids = [...new Set([...launches.flatMap(launch => [launch.pid, launch.cliPid]), worker?.pid, worker?.childPid].filter((pid): pid is number => typeof pid === 'number'))];
     try {
       await env.backendRegistry.shutdownAll();
       await destroyChatRouterEnv(env);
+      if (native) {
+        const alive = (pid: number) => { try { process.kill(pid, 0); return true; } catch { return false; } };
+        const deadline = Date.now() + 3000;
+        while (pids.some(alive) && Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, 20));
+        const survivingPids = pids.filter(alive);
+        if (process.env.COPILOT_WORKFLOW_REPORT_DIR) fs.appendFileSync(path.join(process.env.COPILOT_WORKFLOW_REPORT_DIR, 'workflows.jsonl'), JSON.stringify({
+          test: expect.getState().currentTestName, pids, survivingPids,
+          processorCalls: launches.filter(launch => launch.args.includes('-p')).length,
+          sdkLaunches: launches.filter(launch => launch.args.includes('--headless')).length,
+          detachedWorker: !!worker,
+          fileProofs,
+        }) + '\n');
+        if (survivingPids.length) throw new Error(`Copilot workflow processes survived cleanup: ${survivingPids.join(', ')}`);
+      }
     } finally {
       await provider?.close();
       if (native) for (const key of nativeKeys) {
@@ -65,13 +88,13 @@ export async function createCopilotWorkflowEnv(native = false) {
       Object.assign(process.env, { COPILOT_PROVIDER_TYPE: 'openai', COPILOT_PROVIDER_BASE_URL: provider.baseUrl, COPILOT_PROVIDER_API_KEY: '', COPILOT_MODEL: 'gpt-4',
         COPILOT_GITHUB_TOKEN: '', GH_TOKEN: '', GITHUB_TOKEN: '', GH_CONFIG_DIR: path.join(env.tmpDir, 'gh'), COPILOT_DISABLE_KEYTAR: '1' });
       fs.writeFileSync(launcher, `#!${process.execPath}
-${record}
-const result = require('child_process').spawnSync('copilot', [...process.argv.slice(2), '--disable-client-telemetry', '--disable-builtin-mcps'], {
+const child = require('child_process').spawn(${JSON.stringify(process.env.COPILOT_WORKFLOW_CLI || 'copilot')}, [...process.argv.slice(2), '--disable-client-telemetry', '--disable-builtin-mcps'], {
   stdio: 'inherit', env: { ...process.env, HOME: ${JSON.stringify(env.tmpDir)}, COPILOT_HOME: ${JSON.stringify(path.join(env.tmpDir, 'copilot-home'))},
     COPILOT_PROVIDER_TYPE: 'openai', COPILOT_PROVIDER_BASE_URL: ${JSON.stringify(provider.baseUrl)}, COPILOT_MODEL: 'gpt-4' }
 });
-if (result.error) throw result.error;
-process.exit(result.status ?? 1);
+require('fs').appendFileSync(${JSON.stringify(callsPath)},JSON.stringify({args:process.argv.slice(2),cwd:process.cwd(),pid:process.pid,cliPid:child.pid})+'\\n');
+child.once('error',error=>{throw error;});
+child.once('close',code=>process.exit(code ?? 1));
 `);
     } else {
       fs.writeFileSync(launcher, `#!${process.execPath}

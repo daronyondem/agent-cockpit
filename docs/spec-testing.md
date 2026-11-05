@@ -145,9 +145,9 @@ Test HTTP servers that are contacted through `127.0.0.1` bind explicitly to `127
 | `test/copilotWindowsProcess.test.ts` | Normal-CI invocation/quoting and startup-pipe regression plus native Windows Job Object process fixtures: detached grandchildren after launcher normal exit or abort, unrelated-process survival, idempotent stop after close, raw UTF-8 stdout/stderr, quotes/backslashes/newlines/Unicode in argv, cwd/env and nonzero exit preservation, and missing-executable failure. A dedicated `copilot-windows` job runs this suite on `windows-latest` with Node 22; no installed Copilot or account is needed. This validates the Windows containment boundary, not real Copilot Windows compatibility. |
 | `test/copilotMemoryContext.test.ts` | Nine normal-CI integration cases use production ChatService/Memory MCP shim+HTTP/CopilotAdapter/WorkspaceContextService with a spawned JSONL fixture: governed save/metadata/search/reload/duplicate handling; workspace isolation, disabled writes and reset-token revocation; bad output/runtime failure without fallback files; tool-enabled Context ingestion of references and accepted Memory only; persisted markdown/run reports/instructions; invalid actions/process failure/cancellation preserving the inbox and allowing retry. |
 | `test/copilotContextTriggers.test.ts` | Five normal-CI cases exercise the production scheduler, HTTP enable/disable/reset routes, finalizer queue, and Copilot process fixture: initial enable scan; due maintenance and overlapping tick exclusion; failed maintenance preserving the inbox until the next scheduled retry; disabling active work without late note consumption or scheduled restart; reset finalization over the ended session rather than its replacement; and an overlapping finalizer retrying after maintenance. |
-| `test/copilotKbRoutines.test.ts` | Six normal-CI integration cases use real ingestion, converted files, SQLite entry/topic stores, CopilotAdapter with a spawned JSONL fixture, dreaming parsers, and Routine storage. Covers digest/glean transcript carryover and entries, malformed digest and corrected retry, shutdown cancellation without source loss, malformed dreaming leaving synthesis pending followed by valid topic/markdown persistence, disabled Routine passivity, proposal-path containment, authorized output/final/history, disabled notifications, overlap rejection, cancellation and later reuse. These tests require no installed CLI or embedding service. |
+| `test/copilotKbRoutines.test.ts` | Six normal-CI integration cases use real ingestion, converted files, SQLite entry/topic stores, CopilotAdapter with a spawned JSONL fixture, dreaming parsers, and Routine storage. Covers digest/glean transcript carryover and entries, malformed digest and corrected retry, shutdown cancellation without source loss, malformed dreaming leaving synthesis pending followed by valid topic/markdown persistence, disabled Routine passivity, proposal-path containment, authorized output/final/history, disabled notifications, overlap rejection, cancellation and later reuse. These tests require no installed CLI or embedding service. With `COPILOT_WORKFLOWS_E2E=1`, the same six cases use the real CLI and native tools instead of the JSONL executable fixture; the dreaming case additionally verifies SDK chat retrieval through production KB MCP. |
 | `test/e2e/copilot.ui.pw.ts` | Forty Chromium cases in an isolated PM2-managed server. Thirty-four real-CLI/local-provider SDK cases exercise desktop/mobile Memory, profile selection, cold resume, Stop/immediate replacement, rejected-send drafts/attachments, reset/archive/restore/delete, repeated/reloaded questions, steering boundaries, nested/background delegated tools and summaries, goal set/pause/resume/completion, measured context and persistent media/artifacts. Four injected catalog/quota cases cover unavailable models, exact effort choices, fallback provenance, stale/unavailable balances and unit labels. Two injected auth-job cases at desktop/narrow widths verify native URL/code display, duplicate-start disabling, Cancel, denied-access failure, success/retry and shared-account messaging. Screenshots/traces retain visual evidence. Native login, hosted accounts and Windows/Linux qualification are separate. |
-| `test/copilotWorkflows.e2e.test.ts` | Six opt-in POSIX application workflows (`npm run e2e:copilot-workflows`) run real Copilot with fixed local model responses and isolated auth: actual SDK chat Memory note/search (headless dispatch asserted), governance/persistence/live frames and fresh-chat recall; actual native Context source reads/writes, accepted-note deletion and a new chat reading the AGENTS.md pointer; failed Memory governance with no fallback files; malformed Context actions preserving the inbox until retry; scheduler-triggered maintenance consuming the real inbox; and automatic reset finalization reading only the ended Cockpit session. Records CLI/OS/arch/revision; no hosted model/account/CLI update. Verified Copilot 1.0.105/macOS arm64. Separate browser/process suites supply their own evidence; these API/WebSocket cases do not certify native Windows/Linux CLI behavior. |
+| `test/copilotWorkflows.e2e.test.ts` | Six opt-in POSIX application workflows (`npm run e2e:copilot-workflows`) run real Copilot with fixed local model responses and isolated auth: actual SDK chat Memory note/search (headless dispatch asserted), governance/persistence/live frames and fresh-chat recall; actual native Context source reads/writes, accepted-note deletion and a new chat reading the AGENTS.md pointer; failed Memory governance with no fallback files; malformed Context actions preserving the inbox until retry; scheduler-triggered maintenance consuming the real inbox; and automatic reset finalization reading only the ended Cockpit session. `scripts/run-copilot-workflows.ts` runs these six cases and the six native KB/Routine cases, optionally selecting `COPILOT_WORKFLOW_CLI`, and retains CLI/SDK/OS/arch/Node/revision/dirty metadata, Jest JSON and per-case PID cleanup in a temporary report. No hosted model/account/CLI update. Verified Copilot 1.0.105/macOS arm64. Separate browser/process suites supply their own evidence; these API/WebSocket cases do not certify native Windows/Linux CLI behavior. |
 | `test/copilotBackend.e2e.test.ts` | An opt-in POSIX local-model fixture deterministically invokes native `bash`, backgrounds a TERM-resistant worker, and verifies scope cleanup reaps the orphan; it uses an isolated auth home/environment and no hosted model or account. Run only this scenario with `COPILOT_E2E=1 npm test -- --runInBand test/copilotBackend.e2e.test.ts --testNamePattern="reaps orphaned native bash"`. Verified with Copilot 1.0.105 on macOS arm64. Three additional opt-in authenticated native checks through `npm run e2e:copilot`: explicit PNG image and PDF attachment transport without file tools; injected local Memory-shaped MCP discovery/calls verified through a fixture call log; restricted text one-shots with explicit `auto`, streamed text, preserved native session context, and reconciled native metrics equaling the sum of two per-turn usage frames. Uses temporary synthetic workspaces, a 60-second cancellation deadline per stream, bounded one-shots, no CLI update, and no normal-CI invocation. Historical JSONL evidence was recorded with Copilot 1.0.103-0 on macOS arm64. The updated hosted SDK stream/metrics check remains pending entitled credentials; native Windows/Linux runs remain separate. |
 | Copilot compatibility provenance | The opt-in suite prints the actual CLI version, OS/architecture, Git revision, and dirty state before execution. Media fixtures explicitly select verified `gpt-6.1-sol`; text routing remains `auto`. Review validation also covers Copilot 1.0.105 on macOS arm64; direct adapter fixtures alone do not establish full application parity; the production Memory/Context, KB/Routine fixture, browser, and Windows-process suites record distinct evidence boundaries. |
 | `test/cliProfileAuthService.test.ts` Copilot coverage | Injected version processes and native-probe doubles distinguish installation, missing credentials, verified catalog access, HTTP 403, and SDK failure without changing the shared login. Errors are redacted. Shutdown aborts and awaits active checks, rejects new work, and prevents a late version result from launching a runtime. Guided shared login is covered separately below. The route suite additionally proves a static Copilot fallback catalog cannot overwrite a denied native result. |
@@ -487,3 +487,67 @@ check still returns authenticated credentials with model catalog HTTP 403.
 Successful OAuth/entitlement, real expired credentials, genuine independent
 accounts and native Linux/Windows auth remain unverified. No normal server,
 shared CLI installation or terminal login was replaced by these checks.
+
+### Copilot native KB and Routine qualification
+
+`npm run e2e:copilot-workflows` runs twelve POSIX application cases: the six
+Memory/Context cases and the six shared cases in `copilotKbRoutines.test.ts`.
+Ordinary CI retains the executable JSONL fixture; the opt-in runner sets
+`COPILOT_WORKFLOWS_E2E=1` and uses the real CLI. `COPILOT_WORKFLOW_CLI` can select
+a CLI executable without replacing the installed command. The runner reads the
+installed SDK version and records CLI path/version, SDK, OS/architecture, Node,
+revision/dirty state, Jest JSON results, and per-case process/file receipts in
+a temporary `copilot-workflows-compat-*` folder. Native Windows is rejected
+explicitly rather than reporting a skipped suite as successful qualification.
+
+The KB/Routine model fixture chooses fixed tool calls and structured responses;
+production services and native tools still perform the work:
+
+- Digestion reads `knowledge/converted/<rawId>/text.md` with a real native tool,
+  then persists digest and glean entries. Gleaning requires the replayed first
+  response in its actual request. Invalid digestion creates no partial entries
+  and succeeds after a corrected retry.
+- Dreaming reads persisted entry markdown, exhausts the documented two-attempt
+  malformed-output parse path without consuming pending synthesis, then applies
+  corrected topic/assignment operations and writes synthesis markdown. A new
+  SDK chat calls production KB `get_topic` through the real stdio/HTTP MCP path
+  and retrieves both the durable marker and assigned entry IDs. This retrieval
+  does not exercise embedding search or ranking.
+- Disabled Routines create no scaffold or process. An enabled Routine validates
+  proposal-path containment, reads the actual routine markdown with a native
+  tool, writes `fixture.txt` in the authorized run output folder, persists final
+  output/history, and leaves notifications disabled. Overlapping runs fail.
+- Digestion and Routine shutdown each stop a native bash worker and its detached
+  child before the test retries. Interrupted digestion keeps raw data without
+  entries; interrupted Routines persist failed history. Both later retries
+  complete. Per-case teardown also rejects surviving recorded CLI/launcher PIDs.
+
+Final native evidence is `copilot-workflows-compat-Gll9d6`: twelve passing
+cases, CLI 1.0.105 / SDK 1.0.28 / Node 26.0.0 / macOS arm64, revision `88f3d5b`
+plus dirty state. All 72 recorded PIDs exited; the report records 29 processor
+calls, five SDK launches and two detached-worker cases. The earlier complete
+run `copilot-workflows-compat-nou39F` also passes all twelve cases (70 recorded
+PIDs exited). The first processor-only report
+`copilot-workflows-compat-2BGjDO` retains two corrected test-expectation failures
+(converted source path and documented dreaming retry count); no application
+behavior was changed to make those assertions pass.
+
+No production route, contract, runtime or client behavior changes at this
+checkpoint. Mobile PWA assets, metadata, service worker and UX require no change.
+The prior forty-case browser result remains separate evidence; this command is
+an application/native-tool qualification. No hosted account, model judgment,
+embedding quality, independent-account isolation or native Windows/Linux
+certification is implied. Existing normal server and shared CLI/auth remain
+untouched. Test/evidence changes follow the existing runtime decision; no new
+ADR is required.
+
+Final normal-CI verification for this checkpoint passes 172 suites / 3,052
+tests (70 opt-in skips), with 88.96% statements/lines, 77.31% branches and
+93.83% functions. Existing floors remain 88.85% statements/lines, 77.10%
+branches and 93.75% functions; no production coverage policy changed. Twenty
+focused application regressions pass. Backend/web/mobile typechecks,
+zero-warning lint, maintainability, 187-route spec drift and all 97 ADR checks
+pass. After the full Jest asset fixtures exited, both clients were rebuilt;
+unchanged budgets pass at 906.4/907 KiB JS and 201.8/230 KiB CSS. Retained logs
+are `phase10-coverage.log`, `phase10-final-native-workflows.log` and
+`phase10-post-coverage-*` under the temporary parity-plan folder.

@@ -484,3 +484,31 @@ shutdown regression proves auth cleanup failure cannot skip other backend
 cleanup. These results do not add native KB/Routine, Windows/Linux, real expired
 credential or successful hosted-account evidence. See the qualified checkpoint
 in [the testing spec](../spec-testing.md#copilot-shared-authentication-qualification).
+
+
+## Native KB/Routine application qualification — 2026-11-04
+
+The shared application runner now passes twelve native workflows: the six
+Memory/Workspace Context scenarios and six KB/Routine scenarios. Final report
+`copilot-workflows-compat-Gll9d6` records CLI 1.0.105, SDK 1.0.28, Node 26.0.0,
+macOS arm64 and revision `88f3d5b` plus dirty state; all 72 recorded PIDs
+exited. An earlier complete run also passes all twelve cases. Digestion, base transcript-replay gleaning, malformed-output recovery,
+dreaming and durable topic/entry markdown run through the production JSONL
+one-shot path. A fresh SDK chat retrieves that persisted topic and its entry
+IDs through production KB MCP. Routine opt-in, proposal containment, real native
+output creation, final/history persistence, overlap and interrupted-run recovery
+are covered. Both cancellation cases prove native workers and detached
+children exit before retry.
+
+Fixed local OpenAI-compatible model responses choose the tools and outputs;
+file reads/writes and persistence are real. This closes the local native
+KB/Routine integration gap without claiming hosted reasoning, embedding search
+quality, account entitlement/isolation or Windows/Linux qualification. The
+runner retains installed SDK and selected CLI evidence, JSON test results, file
+receipts and PID cleanup; see the [testing specification](../spec-testing.md#copilot-native-kb-and-routine-qualification).
+
+Final normal CI remains 3,052 passing cases (172 suites, 70 opt-in skips), with
+88.96% statements/lines, 77.31% branches and 93.83% functions against unchanged
+floors. Types, lint, maintainability/spec/ADR checks and post-Jest client
+production builds/budgets pass. No product, API or PWA behavior changes were
+needed for this qualification.

@@ -13,7 +13,7 @@
     "test": "node --experimental-vm-modules node_modules/jest/bin/jest.js",
     "test:coverage": "node --experimental-vm-modules node_modules/jest/bin/jest.js --coverage --runInBand",
     "e2e:copilot": "COPILOT_E2E=1 npm test -- test/copilotBackend.e2e.test.ts --runInBand",
-    "e2e:copilot-workflows": "COPILOT_WORKFLOWS_E2E=1 npm test -- test/copilotWorkflows.e2e.test.ts --runInBand",
+    "e2e:copilot-workflows": "tsx scripts/run-copilot-workflows.ts",
     "e2e:copilot-ui": "tsx scripts/run-copilot-ui-e2e.ts",
     "e2e:copilot-sdk": "tsx scripts/run-copilot-sdk-compat.ts",
     "e2e:copilot-auth": "tsx scripts/run-copilot-auth-compat.ts",
