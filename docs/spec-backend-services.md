@@ -1239,7 +1239,7 @@ fresh-process access on one macOS account. Full browser/device OAuth challenge
 completion was not confirmed. Genuine two-account isolation, expired/denied
 real credentials and native Windows/Linux keychain behavior remain unqualified.
 See the [hosted evidence and open steering finding](reference/backend-capabilities.md#copilot-qualification-scope)
-for the report's environment and limits; the earlier account's HTTP 403 is not
+for the report's environment and limits; the separate local probe's HTTP 403 is not
 the status of that successful hosted run.
 
 User chat now uses the owned SDK conversation path described below. Custom
@@ -1495,8 +1495,9 @@ completion lane available after confirmed consumption; do not count those
 notifications as duplicate correction deliveries or start another command.
 Native and desktop/PWA regression cases warm a session with a real tool, resume
 it, steer while a second tool is running, release that worker, and cold-resume
-again. They assert one steering delivery, no additional shell execution or
-queued replay, and a working follow-up. This uses fixed local responses and
+again. The native cases cover both a short completion delay and 61 seconds of
+tool work after steering. They assert one steering delivery, no additional shell
+execution or queued replay, and a working follow-up. This uses fixed local responses and
 does not resolve the owner's hosted no-response finding.
 
 Both clients retain composer text/files while delivery is pending, disable

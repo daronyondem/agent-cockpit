@@ -615,6 +615,15 @@ execution counts instead of assuming one model response. Fixed replies and a
 release-file worker control the timing; they do not reproduce hosted model
 reasoning or establish a fix for the reported no-response error.
 
+The extended native run `copilot-sdk-compat-c6QMWO` passes all 36 cases, including
+300 ms and 61-second completion delays after steering. It records CLI 1.0.105 /
+SDK 1.0.28 / protocol 3 / Node 22.23.4 / macOS arm64 / source `d1d4675` with
+uncommitted follow-up changes. A fresh local shared-auth/catalog probe at
+2026-11-05 16:16 UTC still reports authenticated credentials but HTTP 403 and no
+available models. It performs no inference and changes no login. The owner did
+not record an account identity/policy, so these are separate observations and
+must not be presented as the same account's contradictory results.
+
 Unconfirmed/not-run cases remain full OAuth authorization, hosted goal
 pause/reload/fresh-limit resume, physical-device PWA, live PWA delegation,
 expired/revoked/denied real credentials, and a second account. Profiles still

@@ -87,7 +87,7 @@ native('real Copilot owned SDK runtime with fixed local model responses', () => 
           } else {
             const powershell = process.platform === 'win32' && tools.some((tool: { name: string }) => tool.name === 'powershell');
             const quote = (value: string) => powershell ? `'${value.replace(/'/g, "''")}'` : `'${value.replace(/'/g, "'\\''")}'`;
-            const program = `const fs=require('fs');fs.writeFileSync(${JSON.stringify(path.join(dir, 'steer-worker.pid'))},String(process.pid));const timer=setInterval(()=>{if(fs.existsSync(${JSON.stringify(path.join(dir, 'steer-worker-release'))})){clearInterval(timer);fs.writeFileSync(${JSON.stringify(path.join(dir, 'steer-worker-finished'))},'done');console.log('WAIT_DONE');}},20);setTimeout(()=>process.exit(1),45000).unref();`;
+            const program = `const fs=require('fs');fs.writeFileSync(${JSON.stringify(path.join(dir, 'steer-worker.pid'))},String(process.pid));const timer=setInterval(()=>{if(fs.existsSync(${JSON.stringify(path.join(dir, 'steer-worker-release'))})){clearInterval(timer);fs.writeFileSync(${JSON.stringify(path.join(dir, 'steer-worker-finished'))},'done');console.log('WAIT_DONE');}},20);setTimeout(()=>process.exit(1),90000).unref();`;
             call(powershell ? 'powershell' : 'bash', { command: warmup ? 'echo SDK_WARMUP_TOOL' : `${powershell ? '& ' : ''}${quote(process.execPath)} -e ${quote(program)}`,
               description: warmup ? 'Warm the existing conversation with a tool' : 'Wait for release while steering a running tool', mode: 'sync', initial_wait: 120 });
           }
@@ -757,7 +757,7 @@ native('real Copilot owned SDK runtime with fixed local model responses', () => 
     } finally { await adapter.shutdown(); }
   }, 60000);
 
-  test('production steering during a running foreground tool survives a warmed session and cold resume', async () => {
+  test.each([300, 61000])('production steering during a running foreground tool survives a warmed session and cold resume (completion delay: %s ms)', async completionDelay => {
     await runtime!.stop(); runtime = undefined;
     const adapter = new CopilotAdapter({ workingDir: dir });
     try {
@@ -779,7 +779,7 @@ native('real Copilot owned SDK runtime with fixed local model responses', () => 
       const delivery = active.deliverInput!({ text: 'Correction: after the current command finishes reply SDK_RUNNING_CORRECTION instead. Do not start another command.', turnId: ready.turnId!, inputId: 'running-tool-correction' });
       // The worker is really running while the immediate RPC is admitted; it
       // cannot finish or produce another model response before this release.
-      await new Promise(resolve => setTimeout(resolve, 300));
+      await new Promise(resolve => setTimeout(resolve, completionDelay));
       await fs.promises.writeFile(path.join(dir, 'steer-worker-release'), 'finish');
       expect(await delivery).toMatchObject({ accepted: true });
       await pending;
@@ -803,7 +803,7 @@ native('real Copilot owned SDK runtime with fixed local model responses', () => 
       expect(commands(history())).toHaveLength(2);
       events.push({ source: 'native-history', history: history() });
     } finally { await adapter.shutdown(); }
-  }, 60000);
+  }, 120000);
 
   test.each(['question', 'steer'] as const)('Stop releases pending %s input and cold resume never replays it', async kind => {
     await runtime!.stop(); runtime = undefined;

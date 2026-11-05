@@ -639,12 +639,13 @@ completion, hosted goal pause/reload/fresh-limit resume, live PWA delegation,
 physical-device behavior, real expired/denied credentials and two accounts stay
 unconfirmed/not run. Usage observation consistency is not a billing audit.
 
-`test/copilotSdkRuntime.e2e.test.ts` now adds a production-adapter case that warms
-a native session with an actual shell tool, resumes it, starts a real
-release-file worker, delivers a correlated correction while that worker is
-running, and cold-resumes afterward. It checks one native steering delivery,
-the corrected response, exactly two shell executions across all turns, no
-errors and no replay. Native automatic background read/completion may add a
+`test/copilotSdkRuntime.e2e.test.ts` now adds production-adapter cases that warm
+a native session with an actual shell tool, resume it, start a real
+release-file worker, deliver a correlated correction while that worker is
+running, and cold-resume afterward. Completion delays of 300 ms and 61 seconds
+cover both prompt delivery and a long-running tool. They check one native
+steering delivery, the corrected response, exactly two shell executions across
+all turns, no errors and no replay. Native automatic background read/completion may add a
 root response without another correction or shell execution.
 `test/e2e/copilot.ui.pw.ts` adds the same sequence on desktop and PWA: reload the
 warmed conversation, submit Steer with current turn/input IDs, require HTTP 200,
@@ -653,14 +654,21 @@ a successful follow-up after reload with unchanged execution receipts. These
 fixed-model regressions improve timing/lifecycle coverage; they do not qualify
 hosted model behavior or close the manual finding.
 
-The local follow-up passes **35 native SDK cases** (CLI 1.0.105 / SDK 1.0.28 /
-protocol 3 / Node 22.23.4) in `copilot-sdk-compat-LJyf0S`, **42 Chromium cases**
+The local follow-up passes **36 native SDK cases** (CLI 1.0.105 / SDK 1.0.28 /
+protocol 3 / Node 22.23.4) in `copilot-sdk-compat-c6QMWO`, **42 Chromium cases**
 on Node 26.0.0 in `cockpit-copilot-ui-TJqljW`, and 65 focused input/conversation/
-HTTP/mobile-pipeline tests. Both native and browser reports identify macOS arm64,
-source `9cb25d6` with uncommitted follow-up changes; they are not clean-head CI
-evidence. Browser evidence records 83 SDK launches. The fixture's final response
-waits for the running worker to finish, matching the correction's requested
-ordering; the targeted native case also passes after that timing refinement.
+HTTP/mobile-pipeline tests. Both reports identify macOS arm64 with uncommitted
+follow-up changes: native source `d1d4675`, browser source `9cb25d6`. They are not
+clean-head CI evidence. Browser evidence records 83 SDK launches. The fixture's
+final response waits for the running worker to finish, matching the correction's
+requested ordering; both the short and 61-second native cases pass.
 Backend/web/mobile typechecks, zero-warning lint, maintainability, spec drift,
 ADR lint and the unchanged client bundle budget pass. No production behavior,
 coverage floor or platform authentication claim changes in this follow-up.
+
+A fresh local read-only shared-auth/catalog probe on 2026-11-05 at 16:16 UTC
+reports authenticated credentials but zero available models and HTTP 403. It
+creates no inference session and changes no login. This limits hosted testing
+in this environment; it does not override the owner's reported successful
+20-model catalog on the same CLI version or establish that both probes used
+the same account/policy. Account identity was not recorded in the owner report.

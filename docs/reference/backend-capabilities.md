@@ -158,7 +158,7 @@ isolated temporary auth/data. It proves protocol, native tools, persistence and
 cleanup; it does not prove hosted entitlement, model judgment or embedding
 search quality. Retained qualification covers:
 
-- 35 native SDK cases on Node 22.23.4: session/ownership/resume, questions,
+- 36 native SDK cases on Node 22.23.4: session/ownership/resume, questions,
   steering, foreground/background/nested delegation, goals, usage/context,
   provider-specific media, artifacts and cleanup;
 - 12 application cases on Node 26.0.0: six Memory/Context and six KB/Routine
@@ -179,7 +179,7 @@ by a new send, model/effort persistence, Memory-to-Context recall, KB keyword
 retrieval, a manual Routine, and explicit `gpt-6.1-sol` image input. Web steering
 passed a retest; delegated summaries and native goal completion also passed.
 These are owner-reported manual observations, separate from fixed-model CI.
-The earlier HTTP 403 belongs to a different shared-account probe and does not
+The HTTP 403 belongs to a separate local shared-account probe and does not
 describe this successful hosted run.
 
 **Open correctness finding:** steering during a running command in an existing
