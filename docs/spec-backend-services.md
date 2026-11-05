@@ -1268,6 +1268,14 @@ Focused tests cover incomplete/disposed frames, other-reader defaults and valid
 fragmented JSON, plus an actual SDK subprocess that must exit naturally within
 a bounded deadline after a truncated frame. See ADR-0098.
 
+The same boundary recognizes JSON-RPC read/write errors, rejected pending
+responses and inactive connections by their reserved error codes, plus explicit
+closed/disposed `ConnectionError` values. Conversation send rejection and outer
+stream failure preserve `source: transport` even when socket disposal precedes
+the owned process exit notification. Application RPC errors and already-listening
+state errors keep their existing classification; abort remains authoritative.
+Cleanup still drains the owned runtime and descendants without replaying work.
+
 #### SDK conversation ownership and dispatch
 
 `copilotConversations.ts` implements production SDK chat behind `CopilotAdapter`.

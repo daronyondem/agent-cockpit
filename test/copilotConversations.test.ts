@@ -292,7 +292,7 @@ describe('Copilot SDK conversation ownership through an executable RPC peer', ()
     expect(alive(peer.calls()[0].pid)).toBe(false);
   }, 15000);
 
-  test.each(['EXIT', 'ORPHAN_EXIT'])('reports %s and reaps owned work before finishing', async prompt => {
+  test.each(['EXIT', 'ORPHAN_EXIT', 'ORPHAN_DISCONNECT_ACK'])('reports %s and reaps owned work before finishing', async prompt => {
     const frames = await collect(conversations.sendMessage(prompt, options()).stream);
     expect(frames).toContainEqual(expect.objectContaining({ type: 'error', source: 'transport' }));
     expect(peer.calls().filter(call => call.method === 'session.send')).toHaveLength(1);

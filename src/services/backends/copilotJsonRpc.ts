@@ -1,5 +1,5 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
-import { StreamMessageReader } from 'vscode-jsonrpc/node';
+import { ConnectionError, ConnectionErrors, ErrorCodes, StreamMessageReader } from 'vscode-jsonrpc/node';
 import type { CopilotClient } from '@github/copilot-sdk' with { 'resolution-mode': 'import' };
 
 const connecting = new AsyncLocalStorage<boolean>();
@@ -16,4 +16,12 @@ StreamMessageReader.prototype.listen = function (callback) {
 
 export function connectCopilotClient(client: Pick<CopilotClient, 'start'>): Promise<void> {
   return connecting.run(true, () => client.start());
+}
+
+/** Pending RPC rejection can precede the owned process's exit notification. */
+export function isCopilotConnectionError(error: unknown): boolean {
+  if (!error || typeof error !== 'object' || !('code' in error)) return false;
+  return error.code === ErrorCodes.MessageWriteError || error.code === ErrorCodes.MessageReadError
+    || error.code === ErrorCodes.PendingResponseRejected || error.code === ErrorCodes.ConnectionInactive
+    || error instanceof ConnectionError && (error.code === ConnectionErrors.Closed || error.code === ConnectionErrors.Disposed);
 }

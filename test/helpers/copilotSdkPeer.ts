@@ -135,11 +135,12 @@ net.createServer(socket => {
     emit(id,'session.error',{message:'Session not found',errorType:'query'});
     return {messageId:'user-'+id};
    }
-   if(prompt.includes('EXIT')) {
+   if(prompt.includes('EXIT') || prompt.includes('DISCONNECT_ACK')) {
     if(prompt.includes('ORPHAN')) {
      const child=require('child_process').spawn(process.execPath,['-e',"process.on('SIGTERM',()=>{});setInterval(()=>{},1000)"],{detached:true,stdio:'ignore'});
      record({method:'orphan',child:child.pid});child.unref();
     }
+    if(prompt.includes('DISCONNECT_ACK')) {socket.destroy();return new Promise(()=>{});}
     setImmediate(()=>process.exit(7));return {messageId:'user-'+id};
    }
    const finish = () => {

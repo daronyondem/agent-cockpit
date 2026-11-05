@@ -3,9 +3,23 @@ import fs from 'fs';
 import os from 'os';
 import path from 'path';
 import { execFileSync } from 'child_process';
-import { StreamMessageReader } from 'vscode-jsonrpc/node';
-import { connectCopilotClient } from '../src/services/backends/copilotJsonRpc';
+import { ConnectionError, ConnectionErrors, ErrorCodes, ResponseError, StreamMessageReader } from 'vscode-jsonrpc/node';
+import { connectCopilotClient, isCopilotConnectionError } from '../src/services/backends/copilotJsonRpc';
 import { writeCopilotSdkPeer } from './helpers/copilotSdkPeer';
+
+test('recognizes transport rejection codes without treating application or local state errors as disconnects', () => {
+  for (const code of [ErrorCodes.MessageWriteError, ErrorCodes.MessageReadError, ErrorCodes.PendingResponseRejected, ErrorCodes.ConnectionInactive]) {
+    expect(isCopilotConnectionError(new ResponseError(code, 'transport failure'))).toBe(true);
+  }
+  expect(isCopilotConnectionError({ code: ErrorCodes.PendingResponseRejected })).toBe(true);
+  for (const code of [ConnectionErrors.Closed, ConnectionErrors.Disposed]) {
+    expect(isCopilotConnectionError(new ConnectionError(code, 'closed'))).toBe(true);
+  }
+  for (const error of [null, 'disposed', {}, { code: 1 }, new Error('unauthorized'),
+    new ResponseError(ErrorCodes.InternalError, 'Model not authorized'), new ConnectionError(ConnectionErrors.AlreadyListening, 'listening')]) {
+    expect(isCopilotConnectionError(error)).toBe(false);
+  }
+});
 
 test('a partial Copilot frame cannot retain a recurring timer after transport disposal', async () => {
   jest.useFakeTimers();

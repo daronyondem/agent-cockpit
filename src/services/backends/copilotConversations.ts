@@ -3,6 +3,7 @@ import type { SendMessageOptions, SendMessageResult, StreamEvent, ThreadGoal, Se
 import { logger } from '../../utils/logger';
 import { resolveCopilotCliRuntime, resolveCopilotWorkingDir } from './copilotRuntime';
 import { startCopilotSdkRuntime, type CopilotSdkRuntime } from './copilotSdkRuntime';
+import { isCopilotConnectionError } from './copilotJsonRpc';
 import { copilotSessionConfig, composePrompt } from './copilotSessionConfig';
 import { copilotMessageInput } from './copilotMedia';
 import { createCopilotSdkEventState, reduceCopilotSdkEvent } from './copilotSdkEvents';
@@ -296,7 +297,7 @@ export class CopilotConversations {
         admitted = true;
         enableSteering();
         if (state.idle) finishInputs();
-      }).catch(error => finish(String(error)));
+      }).catch(error => finish(String(error), isCopilotConnectionError(error) ? 'transport' : undefined));
       while (!complete || queued.length) {
         turn.controller.signal.throwIfAborted();
         if (queued.length) yield queued.shift()!;
@@ -324,7 +325,7 @@ export class CopilotConversations {
         await turn.cleanup;
         yield { type: 'goal_updated', goal: turn.pausedGoal };
       } else yield { type: 'error', error: turn.aborted ? 'Copilot turn aborted.' : error instanceof Error ? error.message : String(error),
-        ...(turn.aborted ? { source: 'abort' as const } : {}) };
+        ...(turn.aborted ? { source: 'abort' as const } : isCopilotConnectionError(error) ? { source: 'transport' as const } : {}) };
       yield { type: 'done' };
     } finally {
       accepting = false;
