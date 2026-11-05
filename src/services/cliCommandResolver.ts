@@ -21,12 +21,14 @@ const HARNESS_COMMANDS: Partial<Record<CliHarness, string>> = {
   codex: 'codex',
   opencode: 'opencode',
   'grok-build': 'grok',
+  copilot: 'copilot',
 };
 
 const HARNESS_PACKAGES: Partial<Record<CliHarness, string[]>> = {
   'claude-code': ['node_modules', '@anthropic-ai', 'claude-code', 'bin', 'claude.exe'],
   codex: ['node_modules', '@openai', 'codex', 'bin', 'codex.js'],
   'grok-build': ['node_modules', '@xai-official', 'grok', 'bin', 'grok'],
+  copilot: ['node_modules', '@github', 'copilot', 'npm-loader.js'],
 };
 
 const POSIX_USER_BIN_DIRS = [
@@ -199,7 +201,7 @@ function windowsPackageCandidate(harness: CliHarness, prefix: string, env: NodeJ
   const rel = HARNESS_PACKAGES[harness];
   if (!rel) return null;
   const target = joinForBase(prefix, ...rel);
-  if (harness === 'codex' || harness === 'grok-build') {
+  if (harness === 'codex' || harness === 'grok-build' || harness === 'copilot') {
     return {
       command: windowsNodeCommand(env),
       argsPrefix: [target],

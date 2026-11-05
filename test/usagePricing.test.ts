@@ -48,6 +48,16 @@ describe('usage cost estimator', () => {
     expect(providerForBackend('claude-code-interactive')).toBe('anthropic');
     expect(providerForBackend('kiro')).toBe('kiro');
     expect(providerForBackend('unknown')).toBeNull();
+    expect(providerForBackend('copilot')).toBeNull();
+  });
+
+  test('does not apply Claude or OpenAI API pricing to Copilot subscription tokens', () => {
+    for (const model of ['claude-sonnet-5.5', 'gpt-6.1-sol']) {
+      expect(estimateUsageCost({
+        backend: 'copilot', model,
+        usage: { ...baseUsage, inputTokens: 100_000, outputTokens: 10_000, credits: 2 },
+      })).toEqual({ estimatedCostUsd: 0, costSource: 'none' });
+    }
   });
 
   test('prefers provider-reported nonzero cost', () => {

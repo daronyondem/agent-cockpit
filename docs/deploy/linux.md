@@ -29,7 +29,7 @@ bash /tmp/install-agent-cockpit.sh --channel dev
 
 ## Runtime Requirements
 
-Manual development installs require Node.js 22+. The Linux release installer can
+Manual development installs require Node.js 22.12.0+. The Linux release installer can
 install a private official Node.js Linux x64 runtime automatically when Node/npm
 are missing or too old.
 

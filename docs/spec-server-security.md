@@ -112,11 +112,30 @@ restart/import retry loop.
 ### Graceful Shutdown
 
 Signal handlers for `SIGTERM`/`SIGINT`:
-1. Call and await `chatShutdown()` — marks pending/runtime-attached durable stream jobs `finalizing` with `Interrupted by server shutdown`, aborts runtime backend handles, and clears process-local stream maps without deleting those durable jobs
-2. Call `backendRegistry.shutdownAll()` — kills long-lived backend processes (e.g. Kiro ACP)
-3. Call `wsShutdown()` — closes all WebSocket connections and the WS server
-4. Call `server.close()` — stop accepting connections
-5. 10-second forced exit timeout (`.unref()` as safety net)
+1. Set the shutdown admission flag. Requests that reach Express afterward receive `503 { error: "Server is shutting down." }`. Begin `server.close()` immediately to stop accepting new connections.
+2. Call and await `chatShutdown()` — mark pending/runtime-attached durable stream jobs `finalizing` with `Interrupted by server shutdown`, abort backend handles, stop schedulers, and clear process-local stream maps without deleting durable jobs.
+3. Await `backendRegistry.shutdownAll({ permanent:true })`. Synchronous adapters remain supported; asynchronous cleanup is awaited even when another adapter fails. Copilot permanently rejects late chat/one-shot starts, including requests that had passed HTTP admission before shutdown.
+4. Close WebSocket connections/server, await HTTP closure, clear the forced-exit timer, and only then exit successfully.
+5. A 10-second forced exit timeout (`.unref()`) remains the safety net. Normal CLI updates use reusable `shutdownAll()` instead of permanent shutdown; Copilot blocks starts during that drain and permits them after completion.
+
+Copilot's focused spawn helper sets an internal, random
+`AGENT_COCKPIT_COPILOT_SCOPE` UUID only in each child's copied environment. It is
+an ownership marker, not a credential or user setting. POSIX cleanup can inspect
+untruncated current-user process environments to find marked workers whose
+parent/group leader disappeared. These snapshots are bounded (500 ms, 8 MiB),
+parsed only in memory, and never logged or stored; periodic ancestry scans do
+not inspect environments. Unavailable/removed environment markers still require
+observable PID/start/group ownership. Reset and worktree-mode routes reserve
+admission and await backend cleanup before changing any session or checkout;
+cleanup rejection leaves that state unchanged and releases the reservation.
+Archive/delete acquire the same conversation reservation before asynchronous
+work, abort/detach any active turn, then await attached/stored backend cleanup
+before changing archive state or deleting conversation files/worktrees. They
+reject conflicting conversation/workspace cleanup with `409`; new turns use
+the existing temporary `503` during their drain. A cleanup error preserves the
+conversation/checkout and releases admission. An immediate Copilot send after
+Stop waits for aborted scopes from that conversation before reading its usage
+baseline or spawning another CLI process.
 
 On the next process start, normal durable job reconciliation converts those finalizing shutdown jobs into one persisted assistant `streamError` when the accepted user message exists.
 

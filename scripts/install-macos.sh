@@ -34,7 +34,7 @@ Options:
   --install-dir <path>       Install root. Default: ~/Library/Application Support/Agent Cockpit.
   --dev-dir <path>           Dev checkout path. Default: ~/agent-cockpit.
   --port <port>              Local HTTP port. Default: 3334.
-  --install-node             Install a private Node.js runtime when Node 22+ is missing. Default.
+  --install-node             Install a private Node.js runtime when Node 22.12.0+ is missing. Default.
   --no-install-node          Fail instead of installing a private Node.js runtime.
   --no-auto-start            Do not register Agent Cockpit to start at user login.
   --skip-open                Do not open the browser after PM2 starts.
@@ -143,9 +143,10 @@ require_macos() {
 
 ensure_node() {
   if command -v node >/dev/null 2>&1; then
-    local major
+    local major minor
     major="$(node -p "process.versions.node.split('.')[0]")"
-    if [[ "$major" =~ ^[0-9]+$ && "$major" -ge 22 ]] && command -v npm >/dev/null 2>&1; then
+    minor="$(node -p "process.versions.node.split('.')[1]")"
+    if [[ "$major" =~ ^[0-9]+$ && "$minor" =~ ^[0-9]+$ && ( "$major" -gt 22 || ( "$major" -eq 22 && "$minor" -ge 12 ) ) ]] && command -v npm >/dev/null 2>&1; then
       log "Found Node.js $(node -v) and npm $(npm -v)."
       NODE_RUNTIME_SOURCE="system"
       NODE_RUNTIME_VERSION="$(node -p "process.versions.node")"
@@ -160,7 +161,7 @@ ensure_node() {
     return
   fi
 
-  fail "Node.js 22+ and npm are required. Re-run without --no-install-node to let the installer install a private Node runtime, or install Node from https://nodejs.org."
+  fail "Node.js 22.12.0+ and npm are required. Re-run without --no-install-node to let the installer install a private Node runtime, or install Node from https://nodejs.org."
 }
 
 install_private_node() {

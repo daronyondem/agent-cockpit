@@ -4,6 +4,7 @@ import path from 'path';
 import type { ChatService } from '../services/chatService';
 import type { BackendRegistry } from '../services/backends/registry';
 import type { BaseBackendAdapter } from '../services/backends/base';
+import { CopilotAdapter } from '../services/backends/copilot';
 import type { UpdateService } from '../services/updateService';
 import type { CliUpdateService } from '../services/cliUpdateService';
 import type { ClaudePlanUsageService } from '../services/claudePlanUsageService';
@@ -47,6 +48,7 @@ import { createWorkspaceArchiveRouter } from './chat/workspaceArchiveRoutes';
 import { createWorkspaceLocationRouter } from './chat/workspaceLocationRoutes';
 import { createWorktreeIsolationRouter } from './chat/worktreeIsolationRoutes';
 import { clearGoalEvent, formatGoalEventMessage, goalEventDedupeKey, goalEventFromStatus, normalizeGoalSnapshot } from '../services/chat/goalEventMessages';
+import { persistGoalEventOnce } from '../services/chat/goalEventPersistence';
 import type { DataMigrationService } from '../services/dataMigrationService';
 
 const log = logger.child({ module: 'chat-routes' });
@@ -91,6 +93,7 @@ export async function processStream(
     subagentType?: string;
     parentAgentId?: string;
     outcome?: string;
+    summary?: string;
     status?: string;
     startTime: number;
     batchIndex: number;
@@ -144,12 +147,13 @@ export async function processStream(
     return contentBlocks.some(b => b.type === 'artifact');
   }
 
-  function patchToolBlock(id: string | null | undefined, outcome: string | undefined, status: string | undefined): void {
+  function patchToolBlock(id: string | null | undefined, outcome: string | undefined, status: string | undefined, summary?: string): void {
     if (!id) return;
     for (const b of blocks) {
       if (b.type === 'tool' && b.activity.id === id) {
         if (outcome !== undefined) b.activity.outcome = outcome || undefined;
         if (status !== undefined) b.activity.status = status || undefined;
+        if (summary !== undefined) b.activity.summary = summary;
         return;
       }
     }
@@ -165,6 +169,7 @@ export async function processStream(
       if (t.isAgent) { toolEntry.isAgent = true; toolEntry.subagentType = t.subagentType; }
       if (t.parentAgentId) { toolEntry.parentAgentId = t.parentAgentId; }
       if (t.outcome) { toolEntry.outcome = t.outcome; }
+      if (t.summary) { toolEntry.summary = t.summary; }
       if (t.status) { toolEntry.status = t.status; }
       toolEntry.batchIndex = t.batchIndex;
       return toolEntry;
@@ -274,6 +279,14 @@ export async function processStream(
   async function persistTerminalError(message: string, source: StreamErrorSource, forceEmit = false): Promise<void> {
     if (terminalErrorPersisted) return;
     terminalErrorPersisted = true;
+    if (backend === 'copilot') {
+      const outcomes = toolActivityAccumulator.filter(tool => !tool.outcome && (tool.isAgent || tool.parentAgentId)).map(tool => {
+        tool.outcome = source === 'abort' ? 'cancelled' : 'interrupted'; tool.status = 'warning';
+        patchToolBlock(tool.id, tool.outcome, tool.status);
+        return { toolUseId: tool.id!, outcome: tool.outcome, status: tool.status, isError: false };
+      });
+      if (outcomes.length) emit({ type: 'tool_outcomes', outcomes });
+    }
     await flushAccumulatedAssistant('progress', forceEmit);
     const errorMsg = await chatService.addStreamErrorMessage(convId, backend, message, source);
     if (errorMsg && (forceEmit || !isClosed())) emit({ type: 'assistant_message', message: errorMsg });
@@ -290,17 +303,10 @@ export async function processStream(
     const key = goalEventDedupeKey(goalEvent);
     if (persistedGoalEventKeys.has(key)) return;
     persistedGoalEventKeys.add(key);
-    const goalMsg = await chatService.addMessage(
-      convId,
-      'system',
-      formatGoalEventMessage(goalEvent),
-      backend,
-      null,
-      undefined,
-      undefined,
-      undefined,
-      { goalEvent },
-    );
+    const goalMsg = backend === 'copilot'
+      ? await persistGoalEventOnce(chatService, convId, backend, goalEvent)
+      : await chatService.addMessage(convId, 'system', formatGoalEventMessage(goalEvent), backend, null,
+        undefined, undefined, undefined, { goalEvent });
     if (goalMsg && !isClosed()) emit({ type: 'assistant_message', message: goalMsg });
   }
 
@@ -411,8 +417,9 @@ export async function processStream(
           if (match) {
             match.outcome = outcome.outcome || undefined;
             match.status = outcome.status || undefined;
+            if (outcome.summary !== undefined) match.summary = outcome.summary;
           }
-          patchToolBlock(outcome.toolUseId, outcome.outcome || undefined, outcome.status || undefined);
+          patchToolBlock(outcome.toolUseId, outcome.outcome || undefined, outcome.status || undefined, outcome.summary);
           if (outcome.toolUseId === pendingPlanFileToolId) {
             if (!outcome.isError) emitPlanApprovalFromPlanFile();
             pendingPlanFileToolId = null;
@@ -563,8 +570,11 @@ export async function processStream(
           activeTurnId: event.activeTurnId,
           processId: event.processId,
         });
+      } else if (event.type === 'input_ready') {
+        emit(event);
       } else if (event.type === 'usage') {
-        const skipLedger = backend === 'kiro' && event.usage.credits === undefined;
+        const skipLedger = backend === 'kiro' && event.usage.credits === undefined
+          || backend === 'copilot' && event.usage.contextWindow !== undefined;
         const updated = await chatService.addUsage(convId, event.usage, backend, event.model, { skipLedger });
         if (!isClosed()) {
           emit({ type: 'usage', usage: updated?.conversationUsage || event.usage, sessionUsage: updated?.sessionUsage });
@@ -662,7 +672,12 @@ export function createChatRouter({ chatService, backendRegistry, updateService, 
   const pendingMessageSends = streamSupervisor.pendingMessageSends;
   const streamJobs = streamSupervisor.registry;
   const memoryWatcher = new MemoryWatcher();
-  const cliProfileAuth = new CliProfileAuthService(chatService.baseDir);
+  const cliProfileAuth = new CliProfileAuthService(chatService.baseDir, {
+    onCopilotAuthChanged: async () => {
+      const adapter = backendRegistry.get('copilot');
+      if (adapter instanceof CopilotAdapter) await adapter.refreshAccountState();
+    },
+  });
   // Per-conversation map of last-known memory file fingerprints (filename → sha-ish)
   // used by the watcher to compute `changedFiles` for the `memory_update` WS frame.
   // Cleared when the watcher is unwatched so a re-watched conversation starts fresh.
@@ -670,7 +685,9 @@ export function createChatRouter({ chatService, backendRegistry, updateService, 
   let wsFns: Pick<WsFunctions, 'send' | 'isConnected' | 'isStreamAlive' | 'clearBuffer' | 'forEachConnected' | 'startStreamGracePeriod'> | null = null;
 
   function hasInFlightTurn(convId: string): boolean {
-    return streamSupervisor.hasInFlightTurn(convId);
+    const workspaceId = chatService.getWorkspaceIdForConv(convId);
+    return streamSupervisor.hasInFlightTurn(convId)
+      || streamSupervisor.isResetting(convId, workspaceId);
   }
 
   function hasAnyInFlightTurn(): boolean {
@@ -678,6 +695,10 @@ export function createChatRouter({ chatService, backendRegistry, updateService, 
   }
 
   function hasInFlightTurnForWorkspace(hash: string): boolean {
+    if (streamSupervisor.resettingWorkspaces.has(hash)) return true;
+    for (const convId of streamSupervisor.resettingConversations) {
+      if (chatService.getWorkspaceIdForConv(convId) === hash) return true;
+    }
     for (const convId of activeStreams.keys()) {
       if (chatService.getWorkspaceIdForConv(convId) === hash) return true;
     }
@@ -1213,6 +1234,7 @@ export function createChatRouter({ chatService, backendRegistry, updateService, 
     isWorkspaceOperationRunning: (workspaceId) => workspaceContextService.isRunning(workspaceId),
   }));
   router.use(createWorktreeIsolationRouter(chatService, {
+    streamSupervisor,
     hasInFlightTurnForWorkspace,
     clearWsBuffer: (convId) => { if (wsFns) wsFns.clearBuffer(convId); },
     backendRegistry,
@@ -1312,12 +1334,13 @@ export function createChatRouter({ chatService, backendRegistry, updateService, 
       logUserMessageId = null,
       logUserMessageTimestamp = null,
     } = args;
-    const { stream, abort, sendInput } = sendResult;
+    const { stream, abort, sendInput, deliverInput } = sendResult;
     const startedAt = new Date().toISOString();
     streamSupervisor.attachRuntime(convId, {
       stream,
       abort,
       sendInput,
+      deliverInput,
       backend: backendId,
       needsTitleUpdate,
       titleUpdateMessage,
@@ -1541,7 +1564,12 @@ export function createChatRouter({ chatService, backendRegistry, updateService, 
     sessionFinalizers.stop();
     memoryWatcher.unwatchAll();
     memoryFingerprints.clear();
-    cliProfileAuth.shutdown();
+    try {
+      await cliProfileAuth.shutdown();
+    } catch (err: unknown) {
+      // Continue to updater and backend shutdown even when auth cleanup is unproved.
+      log.warn('Failed to clean up CLI authentication during shutdown', { error: err });
+    }
     if (updateService) updateService.stop();
     if (cliUpdateService) cliUpdateService.stop();
   }

@@ -4,6 +4,7 @@ import { formatDate, lastTwoPathComponents, type FileReference } from './appMode
 import { BackChevronIcon, CopyIcon, EyeIcon, LockIcon, MarkdownIcon, PinIcon, ShareIcon } from './mobileIcons';
 import { Modal } from './mobilePrimitives';
 import { AssistantIdentity, ContentBlockView, GoalEventView, MessageTextWithFiles } from './mobileChatScreen';
+import { AgentToolsProvider } from './agentTools';
 import type { BackendMetadata, Conversation, Message, SessionHistoryItem } from './types';
 
 export function SessionsModal(props: {
@@ -86,6 +87,7 @@ export function ReadOnlySessionScreen(props: {
             <span className="line" />
             <span>{props.session.isCurrent ? 'current' : 'finalized'}</span>
           </div>
+          <AgentToolsProvider messages={props.messages} liveTools={[]}>
           {props.messages.map((message) => (
             <ReadOnlySessionMessage
               key={message.id}
@@ -97,6 +99,7 @@ export function ReadOnlySessionScreen(props: {
               onShareFile={props.onShareFile}
             />
           ))}
+          </AgentToolsProvider>
           {!props.messages.length ? <p className="empty">No messages in this session.</p> : null}
         </div>
       </div>

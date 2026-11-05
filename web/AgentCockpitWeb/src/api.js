@@ -92,6 +92,7 @@
     _settingsPromise: null,
     _profileMetadataCache: new Map(),
     _profileMetadataPromise: new Map(),
+    _metadataRevision: 0,
   };
 
   async function fetchCsrfToken(){
@@ -417,28 +418,38 @@
   }
 
   function clearProfileMetadataCache(){
+    state._metadataRevision++;
     state._profileMetadataCache.clear();
     state._profileMetadataPromise.clear();
   }
 
+  function invalidateCompletedCopilotAuth(data){
+    if (data?.job?.harness === 'copilot' && data.job.status !== 'running') {
+      clearProfileMetadataCache();
+    }
+    return data;
+  }
+
   function getCliProfileMetadata(profileId){
     if (!profileId) return Promise.reject(new Error('profileId is required'));
-    if (state._profileMetadataCache.has(profileId)) {
-      return Promise.resolve(state._profileMetadataCache.get(profileId));
-    }
+    const cached = state._profileMetadataCache.get(profileId);
+    if (cached && cached.expires > Date.now()) return Promise.resolve(cached.backend);
     if (state._profileMetadataPromise.has(profileId)) {
       return state._profileMetadataPromise.get(profileId);
     }
+    const revision = state._metadataRevision;
     const promise = chatFetch('cli-profiles/' + encodeURIComponent(profileId) + '/metadata')
       .then(r => r.json())
       .then(data => {
         const backend = data && data.backend ? data.backend : null;
-        state._profileMetadataCache.set(profileId, backend);
-        state._profileMetadataPromise.delete(profileId);
+        if (revision === state._metadataRevision) {
+          state._profileMetadataCache.set(profileId, { backend, expires: Date.now() + 60_000 });
+          state._profileMetadataPromise.delete(profileId);
+        }
         return backend;
       })
       .catch(err => {
-        state._profileMetadataPromise.delete(profileId);
+        if (revision === state._metadataRevision) state._profileMetadataPromise.delete(profileId);
         throw err;
       });
     state._profileMetadataPromise.set(profileId, promise);
@@ -1066,9 +1077,9 @@
       'cli-profiles/' + encodeURIComponent(profileId) + '/test',
       { method: 'POST', body: {} },
     ).then(r => r.json()).then(data => {
+      clearProfileMetadataCache();
       if (data && data.settings) {
         state._settingsCache = data.settings;
-        clearProfileMetadataCache();
         window.dispatchEvent(new CustomEvent('agent-cockpit-settings-saved', { detail: state._settingsCache }));
       }
       return data;
@@ -1116,11 +1127,11 @@
     }),
     getCliProfileAuthJob: (jobId) => chatFetch(
       'cli-profiles/auth-jobs/' + encodeURIComponent(jobId),
-    ).then(r => r.json()),
+    ).then(r => r.json()).then(invalidateCompletedCopilotAuth),
     cancelCliProfileAuth: (jobId) => chatFetch(
       'cli-profiles/auth-jobs/' + encodeURIComponent(jobId) + '/cancel',
       { method: 'POST', body: {} },
-    ).then(r => r.json()),
+    ).then(r => r.json()).then(invalidateCompletedCopilotAuth),
   };
 
   const AuthApi = {
@@ -1246,9 +1257,9 @@
       'conversations/' + encodeURIComponent(convId) + '/goal',
       { method: 'POST', body: body || {} },
     ).then(r => r.json()),
-    resumeGoal: (convId) => chatFetch(
+    resumeGoal: (convId, body) => chatFetch(
       'conversations/' + encodeURIComponent(convId) + '/goal/resume',
-      { method: 'POST', body: {} },
+      { method: 'POST', body: body || {} },
     ).then(r => r.json()),
     pauseGoal: (convId) => chatFetch(
       'conversations/' + encodeURIComponent(convId) + '/goal/pause',

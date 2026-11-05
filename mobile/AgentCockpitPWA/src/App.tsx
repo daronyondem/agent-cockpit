@@ -128,10 +128,13 @@ export default function App() {
   });
   const {
     streamText,
+    streamTools,
+    streamArtifacts,
     setStreamText,
     showStreamPlaceholder,
     setShowStreamPlaceholder,
     isStreaming,
+    inputTurnId,
     setIsStreaming,
     closeStreamSocket,
     startStream,
@@ -203,6 +206,9 @@ export default function App() {
   });
   const {
     isSending,
+    steeringPending,
+    interactionPending,
+    steerDraft,
     sendDraft,
     drainNextQueuedMessage,
     submitInteraction,
@@ -234,6 +240,7 @@ export default function App() {
     selectedServiceTier,
     serviceTierEnabled,
     isStreaming,
+    inputTurnId,
     startStream,
     markStreamFinished,
     recoverActiveStream,
@@ -509,7 +516,6 @@ export default function App() {
     try {
       clearStreamReconnectTimer();
       closeStreamSocket();
-      setIsStreaming(false);
       setShowStreamPlaceholder(false);
       setPendingInteraction(null);
       await clientRef.current.abortConversation(conversation.id);
@@ -518,6 +524,7 @@ export default function App() {
       setActiveConversation(reloaded);
       await refreshGoalState(conversation.id);
       await refreshConversationList();
+      setIsStreaming(false);
     } catch (error) {
       handleError(error);
     }
@@ -742,9 +749,14 @@ export default function App() {
           draft={draft}
           setDraft={setDraft}
           streamText={streamText}
+          streamTools={streamTools}
+          streamArtifacts={streamArtifacts}
           showStreamPlaceholder={showStreamPlaceholder}
           isStreaming={isStreaming}
           isSending={isSending}
+          steeringAvailable={!!inputTurnId}
+          steeringPending={steeringPending}
+          interactionPending={interactionPending}
           loading={loading}
           errorMessage={errorMessage}
           goal={goal}
@@ -770,11 +782,12 @@ export default function App() {
             void refreshConversationList();
           }}
           onSend={() => void sendDraft()}
+          onSteer={() => void steerDraft()}
           onStop={() => void stopStream()}
           onGoalModeChange={setGoalMode}
           onRefreshGoal={() => void refreshGoalState()}
           onPauseGoal={() => void pauseGoalNow()}
-          onResumeGoal={() => void resumeGoalNow()}
+          onResumeGoal={(aiCreditLimit) => void resumeGoalNow(aiCreditLimit)}
           onClearGoal={() => void clearGoalNow()}
           onAttach={() => attachInputRef.current?.click()}
           onRemoveAttachment={(id) => void removePendingAttachment(id)}

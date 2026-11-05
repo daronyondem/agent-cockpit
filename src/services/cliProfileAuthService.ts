@@ -7,6 +7,9 @@ import { resolveClaudeCliRuntime } from './backends/claudeCode';
 import { resolveCodexCliRuntime } from './backends/codex';
 import { resolveOpenCodeCliRuntime } from './backends/opencode';
 import { grokAuthenticationStatus, resolveGrokCliRuntime } from './backends/grokRuntime';
+import { resolveCopilotCliRuntime } from './backends/copilot';
+import { probeCopilotProfile } from './backends/copilotProfileStatus';
+import { CopilotDeviceAuthJob } from './backends/copilotDeviceAuth';
 import { buildCliCommandInvocation, type CliCommandResolution } from './cliCommandResolver';
 import { isSetupAccountCliProfile } from './cliProfiles';
 
@@ -72,18 +75,24 @@ export class CliProfileAuthService {
   private readonly _statusPollTimeoutMs: number;
   private readonly _statusPollIntervalMs: number;
   private readonly _jobs = new Map<string, { snapshot: CliAuthJobSnapshot; child?: ChildProcess; timeout?: NodeJS.Timeout }>();
+  private readonly _copilotChecks = new Map<AbortController, Promise<void>>();
+  private _copilotLogin?: CopilotDeviceAuthJob;
+  private readonly _onCopilotAuthChanged?: () => Promise<void>;
+  private _closed = false;
 
   constructor(baseDir: string, opts: {
     spawn?: SpawnLike;
     authTimeoutMs?: number;
     statusPollTimeoutMs?: number;
     statusPollIntervalMs?: number;
+    onCopilotAuthChanged?: () => Promise<void>;
   } = {}) {
     this._baseDir = baseDir;
     this._spawn = opts.spawn || spawn;
     this._authTimeoutMs = opts.authTimeoutMs ?? DEFAULT_AUTH_TIMEOUT_MS;
     this._statusPollTimeoutMs = opts.statusPollTimeoutMs ?? DEFAULT_STATUS_POLL_TIMEOUT_MS;
     this._statusPollIntervalMs = opts.statusPollIntervalMs ?? DEFAULT_STATUS_POLL_INTERVAL_MS;
+    this._onCopilotAuthChanged = opts.onCopilotAuthChanged;
   }
 
   defaultConfigDir(profile: Pick<CliProfile, 'id'>): string {
@@ -100,6 +109,8 @@ export class CliProfileAuthService {
     const profile = profiles.find(candidate => candidate.id === profileId);
     if (!profile) throw new Error(`CLI profile not found: ${profileId}`);
     this._assertCanAuth(profile);
+
+    if (profile.harness === 'copilot') return { settings, profile, changed: false };
 
     if (isSetupAccountCliProfile(profile)) {
       const nextProfile = withoutSetupAuthHome(profile);
@@ -131,6 +142,7 @@ export class CliProfileAuthService {
 
   async checkProfile(profile: CliProfile): Promise<CliAuthCheckResult> {
     try {
+      if (this._closed) throw new Error('CLI authentication service is shutting down.');
       this._assertSupported(profile);
       const runtime = await this._runtimeFor(profile);
       if (profile.harness === 'grok-build') {
@@ -148,6 +160,11 @@ export class CliProfileAuthService {
       const result = await this._runCommand(invocation.command, invocation.args, runtime.env, 15_000);
       const rawOutput = [result.stdout, result.stderr].filter(Boolean).join('\n');
       const output = redactCliAuthText(rawOutput);
+      if (profile.harness === 'copilot' && result.code === 0) {
+        return this._checkCopilotAccess(profile, { profileId: profile.id, harness: profile.harness,
+          command: runtime.displayCommand || runtime.command, available: result.spawned,
+          authenticated: null, status: 'ok', output, exitCode: result.code });
+      }
       const status = interpretCliAuthStatus(profile, result.code, rawOutput);
       let onboardingOutput = '';
       if (status.authenticated === true) {
@@ -198,7 +215,15 @@ export class CliProfileAuthService {
   }
 
   async startAuth(profile: CliProfile): Promise<CliAuthJobSnapshot> {
+    if (this._closed) throw new Error('CLI authentication service is shutting down.');
     this._assertCanAuth(profile);
+    if (profile.harness === 'copilot') {
+      if (this._copilotLogin && this._copilotLogin.snapshot.status !== 'running') {
+        await this._copilotLogin.completion;
+        if (this._closed) throw new Error('CLI authentication service is shutting down.');
+      }
+      return this._startCopilotAuth(profile);
+    }
     for (const { snapshot } of this._jobs.values()) {
       if (snapshot.profileId === profile.id && snapshot.status === 'running') {
         throw new Error(`Authentication is already running for ${profile.name}`);
@@ -273,11 +298,15 @@ export class CliProfileAuthService {
     entry.snapshot.updatedAt = new Date().toISOString();
     entry.snapshot.error = 'Authentication cancelled.';
     this._addEvent(entry.snapshot, 'info', 'Authentication cancelled.');
+    if (this._copilotLogin?.snapshot === entry.snapshot) this._copilotLogin.controller.abort();
     entry.child?.kill('SIGTERM');
     return this._cloneSnapshot(entry.snapshot);
   }
 
-  shutdown(): void {
+  shutdown(): Promise<void> {
+    this._closed = true;
+    const login = this._copilotLogin;
+    login?.controller.abort();
     for (const [jobId, entry] of this._jobs) {
       if (entry.snapshot.status !== 'running') continue;
       if (entry.timeout) clearTimeout(entry.timeout);
@@ -287,16 +316,56 @@ export class CliProfileAuthService {
       entry.child?.kill('SIGTERM');
       this._jobs.set(jobId, { snapshot: entry.snapshot });
     }
+    const checks = [...this._copilotChecks.values()];
+    for (const controller of this._copilotChecks.keys()) controller.abort();
+    return Promise.all([...checks, ...(login ? [login.completion] : [])]).then(() => {});
+  }
+
+  private _startCopilotAuth(profile: CliProfile): CliAuthJobSnapshot {
+    if (this._copilotLogin) throw new Error('Copilot authentication is already running or cleaning up. All Copilot profiles share the terminal login.');
+    const job = new CopilotDeviceAuthJob(profile, this._authTimeoutMs,
+      (snapshot, type, text) => this._addEvent(snapshot, type, text), redactCliAuthText, this._onCopilotAuthChanged);
+    this._copilotLogin = job;
+    this._jobs.set(job.snapshot.id, { snapshot: job.snapshot });
+    this._trimJobs();
+    // Failed cleanup keeps the shared-login admission barrier until server restart.
+    void job.completion.then(() => { this._copilotLogin = undefined; }, () => {});
+    return this._cloneSnapshot(job.snapshot);
+  }
+
+  private async _checkCopilotAccess(profile: CliProfile, base: CliAuthCheckResult): Promise<CliAuthCheckResult> {
+    if (this._closed) return { ...base, status: 'error', modelsAvailable: false, modelCount: 0, error: 'CLI authentication service is shutting down.' };
+    const controller = new AbortController();
+    let settled!: () => void;
+    this._copilotChecks.set(controller, new Promise<void>(resolve => { settled = resolve; }));
+    const timer = setTimeout(() => controller.abort(), 15_000);
+    try {
+      const status = await probeCopilotProfile(profile, controller.signal);
+      const modelListError = status.modelListError ? redactCliAuthText(status.modelListError) : undefined;
+      const output = !status.authenticated ? 'Copilot account authentication is required. Sign in with copilot login.'
+        : status.modelsAvailable ? `Copilot credentials and model catalog access verified (${status.modelCount} models).`
+          : 'Copilot credentials were found, but model catalog access could not be verified.';
+      return { ...base, ...status, status: !status.authenticated ? 'not-authenticated' : status.modelsAvailable ? 'ok' : 'error',
+        output: [base.output, output].filter(Boolean).join('\n'),
+        ...(modelListError ? { modelListError, error: modelListError } : {}) };
+    } catch (error) {
+      const message = redactCliAuthText(error instanceof Error ? error.message : String(error));
+      return { ...base, status: 'error', modelsAvailable: false, modelCount: 0, modelListError: message, error: message };
+    } finally {
+      clearTimeout(timer);
+      this._copilotChecks.delete(controller);
+      settled();
+    }
   }
 
   private _assertSupported(profile: CliProfile): void {
-    if (profile.harness !== 'codex' && profile.harness !== 'claude-code' && profile.harness !== 'opencode' && profile.harness !== 'grok-build') {
+    if (profile.harness !== 'codex' && profile.harness !== 'claude-code' && profile.harness !== 'opencode' && profile.harness !== 'grok-build' && profile.harness !== 'copilot') {
       throw new Error('CLI status checks are not supported for Kiro profiles yet.');
     }
   }
 
   private _assertCanAuth(profile: CliProfile): void {
-    if (profile.harness !== 'codex' && profile.harness !== 'claude-code' && profile.harness !== 'grok-build') {
+    if (profile.harness !== 'codex' && profile.harness !== 'claude-code' && profile.harness !== 'grok-build' && profile.harness !== 'copilot') {
       throw new Error(profile.harness === 'opencode'
         ? 'Remote authentication is not supported for OpenCode profiles yet. Configure OpenCode with opencode auth login.'
         : 'Remote authentication is not supported for Kiro profiles yet.');
@@ -304,7 +373,11 @@ export class CliProfileAuthService {
     if (profile.disabled) {
       throw new Error(`CLI profile is disabled: ${profile.name}`);
     }
-    if (profile.authMode !== 'account') {
+    if (profile.harness === 'copilot') {
+      if (profile.authMode !== 'server-configured' || profile.configDir || profile.env) {
+        throw new Error('Copilot guided authentication requires a self-configured profile using shared terminal credentials. Account isolation is not supported.');
+      }
+    } else if (profile.authMode !== 'account') {
       throw new Error('Remote authentication is only available for account profiles.');
     }
   }
@@ -316,7 +389,9 @@ export class CliProfileAuthService {
         ? resolveOpenCodeCliRuntime(profile)
         : profile.harness === 'grok-build'
           ? resolveGrokCliRuntime(profile)
-          : resolveClaudeCliRuntime(profile);
+          : profile.harness === 'copilot'
+            ? resolveCopilotCliRuntime(profile)
+            : resolveClaudeCliRuntime(profile);
     if (runtime.configDir) {
       await fsp.mkdir(runtime.configDir, { recursive: true });
     }
@@ -333,6 +408,7 @@ export class CliProfileAuthService {
     if (profile.harness === 'codex') return { args: ['login', 'status'] };
     if (profile.harness === 'opencode') return { args: ['--version'] };
     if (profile.harness === 'grok-build') return { args: [] }; // ACP verifies auth; there is no CLI auth-status command.
+    if (profile.harness === 'copilot') return { args: ['--version'] };
     return { args: ['auth', 'status', '--json'] };
   }
 
@@ -341,11 +417,12 @@ export class CliProfileAuthService {
     if (profile.harness === 'claude-code') return 'claude';
     if (profile.harness === 'opencode') return 'opencode';
     if (profile.harness === 'grok-build') return 'grok';
+    if (profile.harness === 'copilot') return 'copilot';
     return 'kiro-cli';
   }
 
   private _harnessLabel(profile: CliProfile): string {
-    return profile.harness === 'codex' ? 'Codex' : profile.harness === 'claude-code' ? 'Claude Code' : profile.harness === 'opencode' ? 'OpenCode' : profile.harness === 'grok-build' ? 'Grok Build' : 'Kiro';
+    return profile.harness === 'codex' ? 'Codex' : profile.harness === 'claude-code' ? 'Claude Code' : profile.harness === 'opencode' ? 'OpenCode' : profile.harness === 'grok-build' ? 'Grok Build' : profile.harness === 'copilot' ? 'GitHub Copilot' : 'Kiro';
   }
 
   private _addEvent(snapshot: CliAuthJobSnapshot, type: CliAuthEventType, text: string): void {
@@ -565,6 +642,7 @@ export function redactCliAuthText(input: string): string {
     .replace(/(access[_-]?token["']?\s*[:=]\s*["']?)[A-Za-z0-9._~+/-]+=*/gi, '$1[REDACTED]')
     .replace(/(refresh[_-]?token["']?\s*[:=]\s*["']?)[A-Za-z0-9._~+/-]+=*/gi, '$1[REDACTED]')
     .replace(/(api[_-]?key["']?\s*[:=]\s*["']?)[A-Za-z0-9._~+/-]+=*/gi, '$1[REDACTED]')
+    .replace(/\b(?:gh[pousr]_|github_pat_)[A-Za-z0-9_]+/g, '[REDACTED]')
     .replace(/(sk-[A-Za-z0-9]{8})[A-Za-z0-9_-]+/g, '$1[REDACTED]')
     .replace(/\bxai-[A-Za-z0-9_-]{20,}/g, 'xai-[REDACTED]');
 }
@@ -578,6 +656,11 @@ function interpretCliAuthStatus(
     return exitCode === 0
       ? { authenticated: null }
       : { authenticated: null, error: `OpenCode version check exited with code ${exitCode ?? 'unknown'}.` };
+  }
+  if (profile.harness === 'copilot') {
+    return exitCode === 0
+      ? { authenticated: null }
+      : { authenticated: null, error: `GitHub Copilot version check exited with code ${exitCode ?? 'unknown'}.` };
   }
   if (profile.harness !== 'claude-code') {
     return exitCode === 0

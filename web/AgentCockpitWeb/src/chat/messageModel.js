@@ -32,6 +32,7 @@ function blockScrollSignature(block){
       (activity.description || '').length,
       activity.status || '',
       (activity.outcome || '').length,
+      (activity.summary || '').length,
       activity.duration == null ? '' : String(activity.duration),
     ].join(':');
   }

@@ -17,7 +17,9 @@ jobs:
     steps:
       - uses: actions/checkout@v6
         with:
-          ref: ${{ github.head_ref }}
+          repository: ${{ github.event.pull_request.head.repo.full_name }}
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: ${{ github.event.pull_request.head.repo.full_name == github.repository }}
           token: ${{ secrets.GITHUB_TOKEN }}
 
       - uses: actions/setup-node@v6
@@ -25,14 +27,23 @@ jobs:
           node-version: 22
 
       - name: Regenerate ADR index
+        run: node scripts/adr-index.js
+
+      - name: Check fork ADR index
+        if: github.event.pull_request.head.repo.full_name != github.repository
+        run: git diff --exit-code -- docs/adr/README.md
+
+      - name: Commit ADR index
+        if: github.event.pull_request.head.repo.full_name == github.repository
+        env:
+          PR_BRANCH: ${{ github.head_ref }}
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          node scripts/adr-index.js
           if [[ -n "$(git status --porcelain docs/adr/README.md)" ]]; then
             git add docs/adr/README.md
             git commit -m "chore(adr): regenerate index"
-            git push origin HEAD:${{ github.head_ref }}
+            git push origin "HEAD:$PR_BRANCH"
           fi
 
       - name: Lint ADRs

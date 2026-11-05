@@ -1,3 +1,4 @@
+import type { ResumeGoalRequest } from '../../../src/contracts/goals';
 import type {
   AttachmentMeta,
   BackendMetadata,
@@ -32,6 +33,7 @@ import type { ConversationInputRequest, SendMessageRequest } from '../../../src/
 import type { AttachmentOcrRequest, AttachmentOcrResponse } from '../../../src/contracts/uploads';
 import type { WorkspaceLocationResponse } from '../../../src/contracts/workspaces';
 import type { GrokBillingResponse } from '../../../src/contracts/grokBilling';
+import type { CopilotQuotaResponse } from '../../../src/contracts/copilotUsage';
 
 type RequestOptions = {
   query?: Record<string, string | undefined>;
@@ -46,6 +48,7 @@ type UploadOptions = {
 
 export type SetGoalRequest = {
   objective: string;
+  aiCreditLimit?: ResumeGoalRequest['aiCreditLimit'];
   backend?: string;
   cliProfileId?: string;
   model?: string;
@@ -88,6 +91,10 @@ export class AgentCockpitAPI {
 
   async getGrokBilling(profileID: string): Promise<GrokBillingResponse> {
     return this.request<GrokBillingResponse>('GET', `/api/chat/cli-profiles/${encodeURIComponent(profileID)}/grok-billing`, { csrf: true });
+  }
+
+  async getCopilotQuota(profileID: string): Promise<CopilotQuotaResponse> {
+    return this.request<CopilotQuotaResponse>('GET', `/api/chat/cli-profiles/${encodeURIComponent(profileID)}/copilot-quota`);
   }
 
   async getBackends(): Promise<BackendMetadata[]> {
@@ -185,10 +192,10 @@ export class AgentCockpitAPI {
     });
   }
 
-  async resumeGoal(conversationID: string): Promise<{ streamReady?: boolean; goal?: ThreadGoal | null; message?: Message | null }> {
+  async resumeGoal(conversationID: string, input: ResumeGoalRequest = {}): Promise<{ streamReady?: boolean; goal?: ThreadGoal | null; message?: Message | null }> {
     return this.request<{ streamReady?: boolean; goal?: ThreadGoal | null; message?: Message | null }>('POST', `/api/chat/conversations/${encodeURIComponent(conversationID)}/goal/resume`, {
       csrf: true,
-      body: {},
+      body: input,
     });
   }
 
@@ -207,8 +214,9 @@ export class AgentCockpitAPI {
     );
   }
 
-  async sendInput(conversationID: string, text: string, streamActive: boolean): Promise<InputResponse> {
-    const body: ConversationInputRequest = { text, streamActive };
+  async sendInput(conversationID: string, text: string, streamActive: boolean,
+    identity: Pick<ConversationInputRequest, 'requestId' | 'turnId' | 'inputId'> = {}): Promise<InputResponse> {
+    const body: ConversationInputRequest = { text, streamActive, ...identity };
     return this.request<InputResponse>('POST', `/api/chat/conversations/${encodeURIComponent(conversationID)}/input`, {
       csrf: true,
       body,

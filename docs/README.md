@@ -1,7 +1,7 @@
 # Agent Cockpit Documentation
 
 Agent Cockpit is a local browser cockpit for CLI-based AI agents. It gives you a
-browser interface for Claude Code, OpenAI Codex, Kiro, OpenCode, and Grok Build
+browser interface for Claude Code, OpenAI Codex, Kiro, OpenCode, Grok Build, and GitHub Copilot
 while keeping conversations, memory, knowledge-base material, workspace context,
 and routines on your machine.
 
@@ -45,6 +45,7 @@ Technical reference for advanced users and contributors.
 - [Environment variables](reference/environment-variables.md)
 - [Data layout](reference/data-layout.md)
 - [Backend capabilities](reference/backend-capabilities.md)
+- [GitHub Copilot capabilities and known gaps](reference/backend-capabilities.md#github-copilot)
 - [Development](reference/development.md)
 - [Testing](reference/testing.md)
 

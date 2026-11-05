@@ -675,6 +675,9 @@ export class ChatService {
    * available, then the first supported level, or clears if nothing matches.
    */
   private _effectiveEffort(backend: string, model: string | undefined, requested: EffortLevel | undefined): EffortLevel | undefined {
+    // Copilot's account-scoped catalog validates effort at send time. The
+    // server-wide fallback cannot normalize a newly discovered model.
+    if (backend === 'copilot') return requested;
     const adapter = this._backendRegistry?.get(backend);
     const modelOption = adapter?.metadata.models?.find(m => m.id === model);
     return effectiveEffort(model, requested, modelOption);
@@ -841,9 +844,9 @@ export class ChatService {
       // today), not a cumulative value. Clear it on backend switch so a stale
       // Kiro percentage doesn't bleed into a Claude Code chip (or vice versa).
       if (prevBackend !== backend) {
-        if (convEntry.usage) convEntry.usage.contextUsagePercentage = undefined;
+        if (convEntry.usage) { convEntry.usage.contextUsagePercentage = undefined; convEntry.usage.contextWindow = undefined; }
         const activeSession = convEntry.sessions.find(s => s.active);
-        if (activeSession?.usage) activeSession.usage.contextUsagePercentage = undefined;
+        if (activeSession?.usage) { activeSession.usage.contextUsagePercentage = undefined; activeSession.usage.contextWindow = undefined; }
       }
       if (backend !== 'codex') {
         delete convEntry.serviceTier;
@@ -867,9 +870,9 @@ export class ChatService {
       convEntry.backend = runtime.backendId;
       convEntry.cliProfileId = runtime.cliProfileId;
       if (prevBackend !== runtime.backendId) {
-        if (convEntry.usage) convEntry.usage.contextUsagePercentage = undefined;
+        if (convEntry.usage) { convEntry.usage.contextUsagePercentage = undefined; convEntry.usage.contextWindow = undefined; }
         const activeSession = convEntry.sessions.find(s => s.active);
-        if (activeSession?.usage) activeSession.usage.contextUsagePercentage = undefined;
+        if (activeSession?.usage) { activeSession.usage.contextUsagePercentage = undefined; activeSession.usage.contextWindow = undefined; }
       }
       if (runtime.backendId !== 'codex') {
         delete convEntry.serviceTier;
@@ -1142,8 +1145,8 @@ export class ChatService {
         delete convEntry.cliProfileId;
       }
       if (previousBackend !== runtime.backendId) {
-        if (convEntry.usage) convEntry.usage.contextUsagePercentage = undefined;
-        if (activeSession.usage) activeSession.usage.contextUsagePercentage = undefined;
+        if (convEntry.usage) { convEntry.usage.contextUsagePercentage = undefined; convEntry.usage.contextWindow = undefined; }
+        if (activeSession.usage) { activeSession.usage.contextUsagePercentage = undefined; activeSession.usage.contextWindow = undefined; }
       }
       if (runtime.backendId !== 'codex') {
         delete convEntry.serviceTier;

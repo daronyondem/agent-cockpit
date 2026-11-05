@@ -466,7 +466,7 @@ describe('frontend routes', () => {
     expect(composerSrc).toContain('const [profileBackendLoadedFor, setProfileBackendLoadedFor] = React.useState(null);');
     expect(composerSrc).toContain('const profileMetadataPending = !!selectedProfileId && profileBackendLoadedFor !== selectedProfileId;');
     expect(composerSrc).toContain('const fallbackModel = profileMetadataPending');
-    expect(composerSrc).toContain('const pendingModel = profileMetadataPending && composerModel');
+    expect(composerSrc).toContain('const pendingModel = (profileMetadataPending || unavailableModel) && composerModel');
     expect(composerSrc).toContain('const modelOptions = profileMetadataPending && !modelFromCatalog');
     expect(composerSrc).toContain("disabled={disabled || (profileMetadataPending && !modelFromCatalog)}");
     expect(composerSrc).toMatch(/React\.useEffect\(\(\) => \{\s+if \(profileMetadataPending\) return;\s+if \(backendId && modelId && composerModel !== modelId\)/);

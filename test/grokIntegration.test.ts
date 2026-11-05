@@ -22,7 +22,7 @@ posix('Grok profiles, auth, and billing integration', () => {
     const settings = await env.chatService.getSettings();
     await env.chatService.saveSettings({ ...settings, cliProfiles: [...(settings.cliProfiles || []), profile] });
   });
-  afterEach(async () => { env.backendRegistry.shutdownAll(); await destroyChatRouterEnv(env); });
+  afterEach(async () => { await env.backendRegistry.shutdownAll(); await destroyChatRouterEnv(env); });
 
   test('profile selection exposes native models and checks account access without exposing identity', async () => {
     const metadata = await env.request('GET', '/api/chat/cli-profiles/grok-fixture/metadata');
@@ -140,7 +140,7 @@ posix('Grok profiles, auth, and billing integration', () => {
     for (let i = 0; i < 100 && status.status === 'running'; i++) { await new Promise(resolve => setTimeout(resolve, 30)); status = service.getJob(job.id)!; }
     expect(status.status).toBe('succeeded');
     expect(status.events.some(event => event.text.includes('FIXTURE-CODE'))).toBe(true);
-    service.shutdown();
+    await service.shutdown();
   });
 
   test('Welcome setup accepts Grok and retains the system auth home', async () => {

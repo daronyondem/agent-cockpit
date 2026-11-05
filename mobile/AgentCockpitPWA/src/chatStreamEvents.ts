@@ -1,5 +1,6 @@
 import type {
   ConversationListItem,
+  ConversationArtifact,
   Message,
   PendingInteraction,
   StreamEvent,
@@ -16,8 +17,14 @@ export type ChatStreamEventAction =
   | { type: 'set-stream-placeholder'; value: boolean }
   | { type: 'append-stream-text'; content: string }
   | { type: 'set-stream-text'; value: string }
+  | { type: 'clear-stream-tools' }
+  | { type: 'clear-stream-artifacts' }
+  | { type: 'append-stream-artifact'; artifact: ConversationArtifact }
+  | { type: 'update-stream-tools'; frame: Extract<StreamEvent, { type: 'tool_activity' | 'tool_outcomes' }> }
   | { type: 'upsert-message'; message: Message }
   | { type: 'set-pending-interaction'; interaction: PendingInteraction }
+  | { type: 'set-input-turn'; turnId: string | null }
+  | { type: 'resolve-input-requests'; requestIds: string[] }
   | { type: 'update-title'; title: string }
   | { type: 'update-usage'; usage: Usage | undefined; sessionUsage: Usage | undefined }
   | { type: 'apply-goal-snapshot'; goal: ThreadGoal | null }
@@ -89,6 +96,14 @@ export function chatStreamEventActions(event: StreamEvent): ChatStreamEventActio
       }
       actions.push({ type: 'set-stream-text', value: '' });
       actions.push({ type: 'set-stream-placeholder', value: false });
+      actions.push({ type: 'clear-stream-tools' });
+      actions.push({ type: 'clear-stream-artifacts' });
+      break;
+    case 'artifact':
+      if (event.artifact?.filename) {
+        actions.push({ type: 'set-stream-placeholder', value: false });
+        actions.push({ type: 'append-stream-artifact', artifact: event.artifact });
+      }
       break;
     case 'tool_activity': {
       if (event.isPlanMode && (event.planContent || event.planAction === 'exit')) {
@@ -97,13 +112,23 @@ export function chatStreamEventActions(event: StreamEvent): ChatStreamEventActio
         const question = event.questions[0];
         actions.push({
           type: 'set-pending-interaction',
-          interaction: { kind: 'question', prompt: question.question, options: question.options || [] },
+          interaction: { kind: 'question', prompt: question.question, options: question.options || [],
+            ...(event.inputRequestId ? { requestId: event.inputRequestId } : {}),
+            ...(question.allowFreeform !== undefined ? { allowFreeform: question.allowFreeform } : {}) },
         });
       }
       const notification = streamEventNotification(event);
       if (notification) actions.push({ type: 'notify', notification });
+      if (!event.isQuestion && !event.isPlanMode && event.tool) actions.push({ type: 'update-stream-tools', frame: event });
       break;
     }
+    case 'input_ready':
+      actions.push({ type: 'set-input-turn', turnId: event.turnId });
+      break;
+    case 'tool_outcomes':
+      actions.push({ type: 'resolve-input-requests', requestIds: (event.outcomes || []).map(outcome => outcome.toolUseId) });
+      actions.push({ type: 'update-stream-tools', frame: event });
+      break;
     case 'title_updated':
       if (event.title) {
         actions.push({ type: 'update-title', title: event.title });
@@ -137,6 +162,9 @@ export function chatStreamEventActions(event: StreamEvent): ChatStreamEventActio
       break;
     }
     case 'replay_start':
+      actions.push({ type: 'set-input-turn', turnId: null });
+      actions.push({ type: 'clear-stream-tools' });
+      actions.push({ type: 'clear-stream-artifacts' });
       actions.push({ type: 'set-stream-text', value: '' });
       actions.push({ type: 'set-stream-placeholder', value: true });
       break;

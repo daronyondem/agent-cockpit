@@ -22,7 +22,7 @@ GET /api/chat/install/doctor
 
 Required checks include:
 
-- Node.js 22+ or an installer-managed private runtime;
+- Node.js 22.12.0+ or an installer-managed private runtime;
 - npm;
 - local PM2;
 - writable data directory;

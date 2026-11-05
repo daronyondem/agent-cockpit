@@ -4,7 +4,7 @@
   "private": true,
   "license": "Apache-2.0",
   "engines": {
-    "node": ">=22"
+    "node": ">=22.12.0"
   },
   "scripts": {
     "start": "tsx server.ts",
@@ -12,6 +12,11 @@
     "lint": "eslint . --max-warnings=0",
     "test": "node --experimental-vm-modules node_modules/jest/bin/jest.js",
     "test:coverage": "node --experimental-vm-modules node_modules/jest/bin/jest.js --coverage --runInBand",
+    "e2e:copilot": "COPILOT_E2E=1 npm test -- test/copilotBackend.e2e.test.ts --runInBand",
+    "e2e:copilot-workflows": "tsx scripts/run-copilot-workflows.ts",
+    "e2e:copilot-ui": "tsx scripts/run-copilot-ui-e2e.ts",
+    "e2e:copilot-sdk": "tsx scripts/run-copilot-sdk-compat.ts",
+    "e2e:copilot-auth": "tsx scripts/run-copilot-auth-compat.ts",
     "e2e:claude-interactive": "CLAUDE_INTERACTIVE_E2E=1 npm test -- test/claudeCodeInteractive.e2e.test.ts --runInBand --forceExit",
     "e2e:claude-interactive:report": "tsx scripts/run-claude-interactive-compat.ts",
     "e2e:claude-interactive-ui": "CLAUDE_INTERACTIVE_UI_E2E=1 playwright test test/e2e/claudeCodeInteractive.ui.pw.ts --config playwright.config.ts --project chromium",
@@ -37,6 +42,7 @@
   },
   "dependencies": {
     "@electric-sql/pglite": "^0.4.4",
+    "@github/copilot-sdk": "1.0.28",
     "@napi-rs/canvas": "^0.1.97",
     "@simplewebauthn/server": "^13.3.0",
     "adm-zip": "^0.6.0",
@@ -61,6 +67,7 @@
     "react-dom": "^19.2.6",
     "session-file-store": "^1.5.0",
     "unpdf": "^1.4.0",
+    "vscode-jsonrpc": "8.2.1",
     "ws": "^8.20.1",
     "yauzl": "^3.3.1",
     "yazl": "^3.3.1"

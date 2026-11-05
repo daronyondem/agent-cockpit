@@ -162,7 +162,7 @@ export type DirectoryBrowseResponse = {
 
 export type PendingInteraction =
   | { kind: 'plan'; prompt: string }
-  | { kind: 'question'; prompt: string; options: Array<{ label: string; description?: string }> };
+  | { kind: 'question'; prompt: string; options: Array<{ label: string; description?: string }>; requestId?: string; allowFreeform?: boolean };
 
 export type UserQuestion = {
   question: string;

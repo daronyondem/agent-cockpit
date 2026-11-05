@@ -100,11 +100,26 @@ export function useRunSelection(options: UseRunSelectionOptions) {
   }, [claudeCodeModeEnabled, selectedClaudeCodeMode]);
 
   useEffect(() => {
-    if (selectedCliProfileId) {
-      void loadProfileMetadata(selectedCliProfileId);
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- Profile metadata loads are keyed only by selected profile id; the loader reads current settings refs internally.
-  }, [selectedCliProfileId]);
+    if (!selectedCliProfileId) return;
+    let cancelled = false;
+    const load = async () => {
+      try {
+        const metadata = await options.clientRef.current.getCliProfileMetadata(selectedCliProfileId);
+        if (!cancelled) setProfileMetadata(current => ({ ...current, [selectedCliProfileId]: metadata }));
+      } catch (error) { if (!cancelled) options.onError(error); }
+    };
+    void load();
+    const refresh = selectedProfile?.harness === 'copilot';
+    const refreshCatalog = () => { void load(); };
+    const timer = refresh ? setInterval(refreshCatalog, 60_000) : null;
+    if (refresh) window.addEventListener('focus', refreshCatalog);
+    return () => {
+      cancelled = true;
+      if (timer) clearInterval(timer);
+      if (refresh) window.removeEventListener('focus', refreshCatalog);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- Load on profile selection and refresh Copilot's expiring account catalog; exclude changing render callbacks to avoid repeated requests.
+  }, [selectedCliProfileId, selectedProfile?.harness]);
 
   useEffect(() => {
     setSelectedEffort((current) => reconcileEffort(current, supportedEfforts));
@@ -136,9 +151,6 @@ export function useRunSelection(options: UseRunSelectionOptions) {
   }
 
   async function loadProfileMetadata(profileID: string) {
-    if (profileMetadata[profileID]) {
-      return;
-    }
     try {
       const metadata = await options.clientRef.current.getCliProfileMetadata(profileID);
       setProfileMetadata((current) => ({ ...current, [profileID]: metadata }));

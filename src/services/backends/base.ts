@@ -15,6 +15,8 @@ import type {
 export interface BackendCallOptions {
   /** Full CLI profile for adapters that support profile-isolated runtimes. */
   cliProfile?: CliProfile;
+  /** Invalidate a model catalog after an explicit account/access check. */
+  refreshModels?: boolean;
 }
 
 export interface RunOneShotOptions {
@@ -93,6 +95,11 @@ export class BaseBackendAdapter {
     throw new Error(`${this.constructor.name}.getGoal is not implemented`);
   }
 
+  /** Profile-scoped controls without starting a runtime or discovering models. */
+  getGoalCapability(_options: BackendCallOptions = {}): BackendMetadata['capabilities']['goals'] {
+    return this.metadata.capabilities.goals;
+  }
+
   setGoalObjective(_objective: string, _options?: SendMessageOptions): SendMessageResult {
     throw new Error(`${this.constructor.name}.setGoalObjective is not implemented`);
   }
@@ -162,7 +169,7 @@ export class BaseBackendAdapter {
    * Called during server shutdown.  Subclasses that spawn long-lived
    * processes should override this to kill them.
    */
-  shutdown(): void {
+  shutdown(_options?: { permanent?: boolean }): void | Promise<void> {
     // no-op by default
   }
 
@@ -171,7 +178,7 @@ export class BaseBackendAdapter {
    * that cache per-conversation state (e.g. process handles, session
    * mappings) should override this to clean up.
    */
-  onSessionReset(_conversationId: string): void {
+  onSessionReset(_conversationId: string): void | Promise<void> {
     // no-op by default
   }
 

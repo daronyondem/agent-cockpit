@@ -2,6 +2,7 @@ import express from 'express';
 import { csrfGuard } from '../../middleware/csrf';
 import { parseClaudeCodeModeInput } from '../../contracts/claudeCodeMode';
 import { parseServiceTierInput } from '../../contracts/chat';
+import { parseGoalAiCreditLimit } from '../../contracts/goals';
 import type { ChatService } from '../../services/chatService';
 import type { BackendRegistry } from '../../services/backends/registry';
 import type { BaseBackendAdapter } from '../../services/backends/base';
@@ -13,12 +14,12 @@ import {
   clearGoalEvent,
   createRuntimeGoalSnapshot,
   formatGoalEventMessage,
-  goalEventDedupeKey,
   goalEventFromGoal,
   goalEventFromStatus,
   normalizeGoalSnapshot,
   supportedActionsFromGoalCapability,
 } from '../../services/chat/goalEventMessages';
+import { persistGoalEventOnce } from '../../services/chat/goalEventPersistence';
 import { conversationHasMissingCliProfile, isCliProfileResolutionError, param } from './routeUtils';
 
 const log = logger.child({ module: 'goal-routes' });
@@ -93,7 +94,7 @@ export function createGoalRouter(opts: GoalRoutesOptions): express.Router {
     if (!adapter) {
       throw new Error(`Unknown backend: ${runtime.backendId}`);
     }
-    const goals = normalizeGoalCapability(adapter.metadata.capabilities.goals);
+    const goals = normalizeGoalCapability(adapter.getGoalCapability({ cliProfile: runtime.profile }));
     if (!goals.set && goals.status === 'none' && !goals.clear) {
       throw new Error(`Goals are not supported by ${adapter.metadata.label || runtime.backendId}`);
     }
@@ -136,15 +137,10 @@ export function createGoalRouter(opts: GoalRoutesOptions): express.Router {
     return goalMessage;
   }
 
-  function conversationHasGoalEvent(conv: Conversation, goalEvent: GoalEvent): boolean {
-    const key = goalEventDedupeKey(goalEvent);
-    return conv.messages.some((message) => message.goalEvent && goalEventDedupeKey(message.goalEvent) === key);
-  }
-
   async function persistGoalEventMessageOnce(convId: string, backendId: string, goalEvent: GoalEvent) {
-    const latestConv = await chatService.getConversation(convId);
-    if (latestConv && conversationHasGoalEvent(latestConv, goalEvent)) return null;
-    return persistGoalEventMessage(convId, backendId, goalEvent);
+    const message = await persistGoalEventOnce(chatService, convId, backendId, goalEvent);
+    if (message) sendIdleGoalFrame(convId, { type: 'assistant_message', message });
+    return message;
   }
 
   router.get('/conversations/:id/goal', async (req: Request, res: Response) => {
@@ -193,9 +189,11 @@ export function createGoalRouter(opts: GoalRoutesOptions): express.Router {
     };
     let claudeCodeMode: ClaudeCodeMode | null | undefined;
     let serviceTier: ServiceTier | null | undefined;
+    let goalAiCreditLimit: number | undefined;
     try {
       claudeCodeMode = parseClaudeCodeModeInput(req.body?.claudeCodeMode);
       serviceTier = parseServiceTierInput(req.body.serviceTier);
+      goalAiCreditLimit = parseGoalAiCreditLimit(req.body?.aiCreditLimit);
     } catch (err: unknown) {
       return res.status(400).json({ error: (err as Error).message });
     }
@@ -210,6 +208,9 @@ export function createGoalRouter(opts: GoalRoutesOptions): express.Router {
     let conv = await chatService.getConversation(convId);
     if (!conv) return res.status(404).json({ error: 'Conversation not found' });
     let executionDir = conversationExecutionDir(conv);
+    if (streamSupervisor.isResetting(convId, chatService.getWorkspaceIdForConv(convId))) {
+      return res.set('Retry-After', '1').status(503).json({ error: 'Session is resetting. Try again shortly.' });
+    }
     if (hasInFlightTurn(convId)) {
       return res.status(409).json({ error: 'Conversation is already streaming' });
     }
@@ -283,7 +284,7 @@ export function createGoalRouter(opts: GoalRoutesOptions): express.Router {
       if (!adapter) {
         return res.status(400).json({ error: `Unknown backend: ${backendId}` });
       }
-      const goals = normalizeGoalCapability(adapter.metadata.capabilities.goals);
+      const goals = normalizeGoalCapability(adapter.getGoalCapability({ cliProfile: runtime.profile }));
       if (!goals.set) {
         return res.status(400).json({ error: unsupportedGoalAction(backendId, 'set').message });
       }
@@ -316,6 +317,7 @@ export function createGoalRouter(opts: GoalRoutesOptions): express.Router {
         ? (refreshedConv?.serviceTier || undefined)
         : (conv.serviceTier || undefined);
       const sendResult = adapter.setGoalObjective(cleanObjective, {
+        goalAiCreditLimit,
         sessionId: conv.currentSessionId,
         conversationId: convId,
         cliProfileId: runtime.cliProfileId || refreshedConv?.cliProfileId || conv.cliProfileId || undefined,
@@ -376,6 +378,9 @@ export function createGoalRouter(opts: GoalRoutesOptions): express.Router {
     let conv = await chatService.getConversation(convId);
     if (!conv) return res.status(404).json({ error: 'Conversation not found' });
     let executionDir = conversationExecutionDir(conv);
+    if (streamSupervisor.isResetting(convId, chatService.getWorkspaceIdForConv(convId))) {
+      return res.set('Retry-After', '1').status(503).json({ error: 'Session is resetting. Try again shortly.' });
+    }
     if (hasInFlightTurn(convId)) {
       return res.status(409).json({ error: 'Conversation is already streaming' });
     }
@@ -385,6 +390,7 @@ export function createGoalRouter(opts: GoalRoutesOptions): express.Router {
     try {
       const { runtime, adapter, backendId, goals } = await resolveGoalAdapter(conv);
       if (!goals.resume) throw unsupportedGoalAction(backendId, 'resume');
+      const goalAiCreditLimit = parseGoalAiCreditLimit(req.body?.aiCreditLimit, backendId === 'copilot');
       pendingMessageSend = await streamSupervisor.beginAcceptedTurn({
         conversationId: convId,
         sessionId: conv.currentSessionId,
@@ -431,12 +437,14 @@ export function createGoalRouter(opts: GoalRoutesOptions): express.Router {
           serviceTier: conv.serviceTier || undefined,
         });
         resumedGoal = currentGoal
-          ? normalizeGoalSnapshot({ ...currentGoal, status: 'active', updatedAt: Date.now() })
+          ? normalizeGoalSnapshot({ ...currentGoal, status: 'active', updatedAt: Date.now(),
+            ...(goalAiCreditLimit === undefined ? {} : { aiCreditLimit: goalAiCreditLimit, aiCreditsUsed: 0 }) })
           : null;
       } catch (err: unknown) {
         log.debug('Goal resume could not read current goal snapshot', { conversationId: convId, error: err });
       }
       const sendResult = adapter.resumeGoal({
+        goalAiCreditLimit,
         sessionId: conv.currentSessionId,
         conversationId: convId,
         cliProfileId: runtime.cliProfileId || conv.cliProfileId || undefined,
@@ -515,7 +523,9 @@ export function createGoalRouter(opts: GoalRoutesOptions): express.Router {
       });
       const goal = rawGoal ? normalizeGoalSnapshot(rawGoal) : null;
       const goalMessage = goal
-        ? await persistGoalEventMessage(convId, backendId, goalEventFromGoal('paused', goal))
+        ? backendId === 'copilot'
+          ? await persistGoalEventMessageOnce(convId, backendId, goalEventFromStatus(goal) || goalEventFromGoal('updated', goal))
+          : await persistGoalEventMessage(convId, backendId, goalEventFromGoal('paused', goal))
         : null;
       if (goal) sendIdleGoalFrame(convId, { type: 'goal_updated', goal });
       res.json({ goal, message: goalMessage });

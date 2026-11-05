@@ -8,7 +8,7 @@ installed and the first owner account exists.
 - [Quickstart](quickstart.md) explains the first run from install to first
   conversation.
 - [Supported backends](backends.md) explains Claude Code, OpenAI Codex, Kiro,
-  OpenCode, and Grok Build setup differences.
+  OpenCode, Grok Build, and GitHub Copilot setup differences and known capability gaps.
 - [Open source models with Ollama and OpenCode](ollama-opencode.md) explains
   how to run local models through a persistent OpenCode provider profile.
 

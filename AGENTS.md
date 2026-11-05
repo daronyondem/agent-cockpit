@@ -107,6 +107,174 @@ Codex App Server behavior is split across `src/services/backends/codex.ts`, `cod
 - When changing hand-typed Codex app-server protocol shapes, run or document the `codex app-server --enable goals generate-ts --out <DIR>` drift-diff procedure from `docs/spec-backend-services.md` and inspect `codexProtocol.ts`, `codexEvents.ts`, `codexModels.ts`, and `codexStreamDispatch.ts`.
 - No real-CLI Codex e2e suite exists today. Do not imply one is part of normal drift validation; creating one is separate scope unless a future issue or ADR adds that requirement.
 
+# GitHub Copilot Protocol Compatibility
+
+Review `test/copilotBackend.test.ts` and `test/copilotUsage.test.ts` when changing
+Copilot JSONL parsing, tool restrictions, native session recovery, runtime
+resolution, or usage. Run `npm run e2e:copilot` with an authenticated real
+`copilot` for native text/stream/resume/usage validation; the opt-in suite uses
+temporary synthetic workspaces and does not update the CLI. Keep restricted
+one-shots on `--available-tools none` (an empty value exposes tools), preserve
+UTF-8 stream decoding, and subtract the saved native usage checkpoint before
+charging resumed-session totals. Keep usage parsing under
+`src/services/backends/copilotUsage.ts`. See ADR-0094.
+Keep process-tree containment in `copilotProcess.ts`, test real npm launcher
+topologies in `test/copilotProcess.test.ts`, and preserve root/child ownership
+in both streaming and one-shot responses. Hidden child tools must still block
+prompt replay; usage remains session-wide. Auto/unverified media must fail
+closed. See ADR-0095 for the smaller initial scope and evidence boundaries.
+Adapter shutdown/reset may return promises. Await `BackendRegistry.shutdownAll()`
+before server exit or post-update reuse, and await reset cleanup before replacing
+a native session. Keep descendant discovery rooted in every live tracked
+PID/start identity, including after its launcher exits.
+Preserve the owned detached group after leader exit to catch between-scan
+children. Server exit uses permanent shutdown and blocks request admission;
+CLI updates use reusable shutdown, which blocks starts only while draining.
+Retain verified child-led groups after leader exit as well, and cancel one-shot
+controllers before termination so a clean launcher close cannot accept partial
+output as success.
+Keep a fresh inherited `AGENT_COCKPIT_COPILOT_SCOPE` marker per chat/one-shot
+spawn so cleanup can recover orphans whose detached leader was never observed.
+Environment snapshots are bounded, current-user-only, used only during cleanup,
+and must never be logged. Keep PID/start and verified-group checks as well.
+Reserve the conversation/workspace before asynchronous reset cleanup, drain all
+ending backends before changing any session or Git checkout, and release the
+reservation on every exit path. See ADR-0096.
+Archive/delete share that reservation and await backend cleanup before changing
+archive state or deleting a checkout. A Copilot turn sent immediately after Stop
+must await aborted scopes for its conversation before resuming native work.
+Send/goal admission blocked by a reset uses temporary `503` with `Retry-After`,
+while active-stream conflicts retain `409`; clients interpret `409` as an
+existing stream and must not attach to a reset reservation.
+For Copilot Memory/Workspace Context/KB/Routine changes, run the normal-CI
+application suites in `test/copilotMemoryContext.test.ts` and
+`test/copilotKbRoutines.test.ts`, then native `npm run e2e:copilot-workflows`.
+Optionally select the CLI with `COPILOT_WORKFLOW_CLI`. The POSIX native suite
+uses isolated temporary auth and fixed local model replies to test production
+MCP, governance, persistence, managed Context files, JSONL KB processors and
+Routine output/history. Native tools must read the actual processor sources;
+cancelled workers and detached children must exit before retry. The runner saves
+CLI/SDK/OS/revision, test results, file-access receipts and recorded PID cleanup
+under a temporary `copilot-workflows-compat-*` report directory. Keep this
+evidence separate from hosted-model reasoning, account auth, embedding quality,
+browser UX and native Windows/Linux certification.
+Windows Copilot spawns use `copilotWindowsProcess.ts` to assign a hidden wrapper
+to an unnamed kill-on-close Job Object before launching native work. Preserve
+its sole non-inheritable job handle, fail startup if containment cannot be
+established, and pass raw standard handles with `CreateProcessW`; no-console
+`ProcessStartInfo` launches lose the inherited JSONL pipes. Keep
+`test/copilotWindowsProcess.test.ts` passing on native Windows CI. Those Node
+process fixtures do not certify the real Windows Copilot CLI. See ADR-0097.
+Run `test/copilotContextTriggers.test.ts` and `test/copilotKbRoutines.test.ts`
+for automatic Context and processor workflow changes. Run
+`npm run e2e:copilot-ui` for desktop/mobile lifecycle changes; it uses real
+Copilot with fixed local model replies, isolated auth/data, and its own PM2
+home. Keep full Jest asset-build fixtures separate from browser runs and rebuild
+production assets after the full suite before checking the bundle budget.
+
+For the SDK runtime foundation, review `test/copilotSdkRuntime.test.ts` and run
+`npm run e2e:copilot-sdk` with the selected real CLI (optionally set
+`COPILOT_SDK_CLI_PATH`). Keep SDK connections attached to a Cockpit-owned
+headless process with a fresh loopback connection token; never select the SDK's
+bundled/in-process runtime or bypass the existing process/Windows Job boundary.
+The native suite isolates auth and uses fixed local replies, so it is not
+hosted-account or model-judgment evidence. Record actual CLI/SDK/OS/revision.
+Keep the pinned `vscode-jsonrpc` compatibility shim in `copilotJsonRpc.ts`:
+disable recurring partial-message diagnostics through the public reader option
+only within our SDK connection's async scope. Preserve other readers' defaults
+and Cockpit's actual request/startup deadlines. Review `test/copilotJsonRpc.test.ts`
+and the partial-frame exit case before removing this workaround after upgrades.
+SDK conversation ownership lives in `copilotConversations.ts`; keep native event
+projection pure in `copilotSdkEvents.ts` and shared model/tool/config helpers in
+their focused Copilot modules. Review `test/copilotConversations.test.ts`,
+`test/copilotInputs.test.ts` and `test/chat.inputs.test.ts` for correlated input
+changes. Keep native callbacks and steering ownership in `copilotInputs.ts`.
+Probe queue controls only after initial prompt acknowledgement and root turn
+start; a send acknowledgement does not prove execution has started. Release
+the probe pause, then hold a pause only around a pending steering transaction.
+Native background-completion notifications also need that queued lane. Accept
+steering only on its native delivery event; poll pending items to withdraw an
+exact promoted correction before releasing the pause, including before idle.
+Never replay an input or turn a stale
+question into a new message. Stop force-closes the SDK connection before
+rejecting callbacks so native question errors cannot continue work. Run both
+native SDK and desktop/mobile browser suites for these changes.
+Keep SDK delegated ownership in the pure `copilotAgents.ts` reducer, with direct
+`test/copilotAgents.test.ts` coverage. Native envelope `agentId` identifies the
+child, `data.parentId` its parent, and `toolCallId` belongs to the parent's
+scope. Namespace tools by turn/owner/raw ID, flatten descendants to the top card,
+and retain child summaries without leaking child prose into root answers.
+Background task acknowledgement is not completion; native child lifecycle owns
+outcomes and session idle owns turn completion. Stop/error must settle pending
+cards as cancelled/interrupted. Keep session-wide usage counting children once.
+Review `test/copilotSdkEvents.test.ts` and `test/copilotSessionConfig.test.ts` before
+switching chat dispatch. Session idle drains attached background work; model
+replies, loop ends and child idle do not. Drain late startups and failed cleanup
+before admitting replacements. Resume must not continue interrupted tool work;
+recovery is permitted only before sending a prompt and before observable work.
+Normal chat dispatch uses the SDK owner; opaque explicit command overrides stay
+on JSONL unless their provider configuration is visible in the merged runtime
+environment. Never retry an SDK failure through JSONL. Review
+`test/copilotAdapterRuntime.test.ts` for shared admission and Stop/reset/shutdown
+across transports. SDK usage reads native metrics before submission and after
+root idle; model input includes both cache buckets, and provider/model/agent
+maps overlap. Keep parsing in `copilotUsage.ts`, subtract the native baseline,
+and never convert nano-AIU to premium-request credits or USD. Keep live checkpoint
+reconciliation in `copilotLiveUsage.ts` and profile/runtime/auth-scoped quota reads
+in `copilotQuota.ts`; review their focused tests plus `copilotUsageRoutes.test.ts`
+and `copilotUsageUi.test.ts`. Preserve native complete/partial/unavailable billing
+coverage, separate Copilot premium requests from other harness credits, and skip
+the ledger for replaceable context-only snapshots. Unknown quota units/balances
+must stay unknown; quota reads create no session or model work and adapter
+shutdown/profile refresh must drain their owned processes. Native workflow
+and browser fixtures must configure the server environment and assert SDK
+dispatch: Settings intentionally strips Copilot profile-local env values.
+Keep profile/runtime model discovery and its bounded cache in `copilotCatalog.ts`;
+map native model capabilities in `copilotModels.ts`. Review
+`test/copilotCatalog.test.ts`, `test/copilotCatalog.integration.test.ts`, and
+`test/chat.copilotCatalog.test.ts` when changing catalog scope or validation.
+Preserve missing saved model IDs in both clients, expose fallback provenance,
+and never infer new media support from a native vision flag alone.
+Keep upload parsing and transport gates in `copilotMedia.ts` and explicit native
+tool-byte projection in `copilotArtifacts.ts`. SDK PDF transport needs its own
+provider/model evidence; a CLI attachment flag or vision capability is insufficient.
+Deduplicate overlapping native output views per owned tool, preserve scoped
+`sourceToolId`, and send bytes through the shared artifact store. Never scrape
+tool text or fetch resource links to invent an artifact. Review
+`test/copilotMedia.test.ts`, `test/copilotArtifacts.test.ts`,
+`test/chat.copilotArtifacts.test.ts`, and native SDK/browser media cases.
+Review `test/copilotProfileStatus.test.ts`, `test/cliProfileAuthService.test.ts`
+and the profile-auth route tests for credential/catalog checks. Preserve the
+distinction between installed CLI, authenticated credentials and enabled-model
+access; static fallback metadata must not overwrite native access failures.
+Await auth-service shutdown so pending SDK probes cannot outlive server cleanup.
+Keep guided shared-terminal device login in `copilotDeviceAuth.ts`. Serialize
+login across all Copilot profiles and drain cancelled login/probe trees before
+replacement or shutdown; unproved cleanup must retain its admission barrier.
+Invalidate owned catalog/quota caches after every auth outcome. Auth cleanup
+failures must not prevent the chat router/server from draining other owners. Never claim
+account isolation from a config home or automatically approve native plaintext
+credential storage. Review `test/copilotDeviceAuth.test.ts` and
+`test/chat.copilotAuth.test.ts`; run `npm run e2e:copilot-auth` for native
+logged-out/device-code/cancellation checks. That opt-in suite uses temporary
+auth and never authorizes the code, so it does not certify hosted entitlement,
+successful OAuth completion or two-account isolation.
+Goal routing uses pure `getGoalCapability({cliProfile})`, not model discovery on
+polls. Keep Copilot native projection/commands in `copilotGoals.ts` and controls
+inside the conversation owner. Polling and streams must share the atomic
+terminal-card boundary in `src/services/chat/goalEventPersistence.ts`; review its
+focused regressions when changing goal persistence. Review `test/copilotGoals.test.ts`,
+`test/copilotGoalRoutes.test.ts`, native SDK goal cases and desktop/mobile goal
+browser cases when changing them. Native autopilot mode alone is not goal-action
+parity: 1.0.105 removes Clear, and switching autopilot on does not resume a paused
+objective. Resume requires an explicit fresh AI-credit window; never translate
+credits to token budgets, invent elapsed time, edit objective storage to fake
+Clear, or create/recover history on status/pause/resume. See ADR-0098.
+SDK dependency upgrades must keep the app Node engine, all platform installer
+eligibility checks, Install Doctor and self-update engine-floor validation
+aligned. Preserve major-only legacy manifests and test macOS activation when
+changing runtime requirements.
+
 # Grok Build Protocol Compatibility
 
 Grok Build uses ACP plus native extensions through the focused

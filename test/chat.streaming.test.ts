@@ -5,7 +5,7 @@ import { createChatRouterEnv, destroyChatRouterEnv, type ChatRouterEnv } from '.
 import { MockBackendAdapter } from './helpers/mockBackendAdapter';
 import { processStream } from '../src/routes/chat';
 import { SESSION_RECOVERY_USER_MESSAGE } from '../src/services/backends/sessionRecovery';
-import type { BackendMetadata, StreamEvent } from '../src/types';
+import type { ActiveStreamEntry, BackendMetadata, StreamEvent } from '../src/types';
 
 class KiroMockBackend extends MockBackendAdapter {
   get metadata(): BackendMetadata {
@@ -31,6 +31,39 @@ let env: ChatRouterEnv;
 
 beforeEach(async () => { env = await createChatRouterEnv(); });
 afterEach(async () => { await destroyChatRouterEnv(env); });
+
+describe('Copilot delegated work persistence', () => {
+  const agent: StreamEvent = { type: 'tool_activity', tool: 'Agent', id: 'scoped-parent', description: 'Background fixture', isAgent: true, subagentType: 'general-purpose' };
+  const child: StreamEvent = { type: 'tool_activity', tool: 'Bash', id: 'scoped-child', description: 'Child command', parentAgentId: 'scoped-parent' };
+  const completed: StreamEvent = { type: 'tool_outcomes', outcomes: [
+    { toolUseId: 'scoped-parent', isError: false, outcome: 'done', status: 'success', summary: 'Private child summary' },
+  ] };
+
+  test.each(['complete', 'abort', 'error'])('saves grouped tools and summary through %s without promoting unfinished children to success', async mode => {
+    const conv = await env.chatService.createConversation('Delegated fixture');
+    const frames: any[] = [];
+    async function* stream(): AsyncGenerator<StreamEvent> {
+      yield agent; yield child; yield completed;
+      yield { type: 'text', content: 'Root answer only' };
+      if (mode === 'abort') entry.abortRequested = { message: 'Aborted by user', source: 'abort', at: new Date().toISOString() };
+      yield mode === 'error' ? { type: 'error', error: 'Runtime disconnected' } : mode === 'complete'
+        ? { type: 'tool_outcomes', outcomes: [{ toolUseId: 'scoped-child', isError: false, outcome: 'exit 0', status: 'success' }] } : { type: 'done' };
+      yield { type: 'done' };
+    }
+    const entry: ActiveStreamEntry = { stream: stream(), abort: () => {}, sendInput: () => {}, backend: 'copilot', needsTitleUpdate: false, titleUpdateMessage: null };
+    await processStream(conv.id, entry, frame => frames.push(frame), () => false, () => {}, { chatService: env.chatService });
+    const saved = (await env.request('GET', `/api/chat/conversations/${conv.id}`)).body;
+    const reply = saved.messages.find((message: any) => message.toolActivity?.length);
+    expect(reply.content).toBe('Root answer only');
+    const tools = reply.contentBlocks.filter((block: any) => block.type === 'tool').map((block: any) => block.activity);
+    expect(tools).toEqual(reply.toolActivity);
+    expect(tools[0]).toMatchObject({ id: 'scoped-parent', isAgent: true, outcome: 'done', summary: 'Private child summary' });
+    expect(tools[1]).toMatchObject({ id: 'scoped-child', parentAgentId: 'scoped-parent',
+      outcome: mode === 'complete' ? 'exit 0' : mode === 'abort' ? 'cancelled' : 'interrupted', status: mode === 'complete' ? 'success' : 'warning' });
+    expect(frames.filter(frame => frame.type === 'done')).toHaveLength(1);
+    expect(frames.filter(frame => frame.type === 'tool_outcomes').flatMap(frame => frame.outcomes).filter((outcome: any) => outcome.toolUseId === 'scoped-child')).toHaveLength(1);
+  });
+});
 
 describe('Terminal stream errors', () => {
   test('runs stream cleanup before emitting done', async () => {
@@ -1708,6 +1741,7 @@ describe('sendMessage options passthrough', () => {
       return { stream: stream(), abort: () => {}, sendInput: () => {} };
     };
 
+    env.wsFns.clearBuffer(conv.id);
     const ws2 = await env.connectWs(conv.id);
     const eventsPromise2 = env.readWsEvents(ws2);
     await env.request('POST', `/api/chat/conversations/${conv.id}/message`, {

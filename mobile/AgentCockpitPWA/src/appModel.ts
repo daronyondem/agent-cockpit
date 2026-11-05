@@ -133,6 +133,7 @@ function contentBlockScrollSignature(block: ContentBlock): string {
       (activity.description || '').length,
       activity.status || '',
       (activity.outcome || '').length,
+      (activity.summary || '').length,
       activity.duration == null ? '' : String(activity.duration),
     ].join(':');
   }

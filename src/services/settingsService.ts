@@ -428,7 +428,7 @@ export class SettingsService {
       ...(harness === 'claude-code'
         ? { claudeCode: normalizeClaudeCodeProfileConfig(profile.claudeCode) }
         : {}),
-      authMode: harness === 'kiro' || harness === 'opencode'
+      authMode: harness === 'kiro' || harness === 'opencode' || harness === 'copilot'
         ? 'server-configured'
         : profile.authMode === 'account' ? 'account' : 'server-configured',
       createdAt: typeof profile.createdAt === 'string' && profile.createdAt ? profile.createdAt : now,
@@ -447,9 +447,9 @@ export class SettingsService {
 
     const isSetupAccount = isSetupAccountCliProfile(normalized);
     const configDir = profile.configDir?.trim();
-    if (configDir && harness !== 'kiro' && harness !== 'opencode' && !isSetupAccount) normalized.configDir = configDir;
+    if (configDir && harness !== 'kiro' && harness !== 'opencode' && harness !== 'copilot' && !isSetupAccount) normalized.configDir = configDir;
 
-    if (profile.env && harness !== 'kiro' && harness !== 'opencode') {
+    if (profile.env && harness !== 'kiro' && harness !== 'opencode' && harness !== 'copilot') {
       const env: Record<string, string> = {};
       for (const [key, value] of Object.entries(profile.env)) {
         if (!key || typeof value !== 'string') continue;

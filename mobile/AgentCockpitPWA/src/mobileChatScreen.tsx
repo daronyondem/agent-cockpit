@@ -38,11 +38,14 @@ import {
 } from './mobileIcons';
 import { Button, ErrorBanner, ProgressBar } from './mobilePrimitives';
 import { GrokBilling } from './grokBilling';
+import { CopilotQuota, CopilotUsage } from './copilotUsage';
 import { InteractionCard } from './interactionCard';
+import { AgentToolsProvider, ToolActivityView } from './agentTools';
 import type {
   BackendMetadata,
   ContentBlock,
   Conversation,
+  ConversationArtifact,
   EffortLevel,
   Message,
   PendingAttachment,
@@ -51,6 +54,7 @@ import type {
   ServiceTier,
   ThreadGoal,
   Usage,
+  ToolActivity,
 } from './types';
 
 export function ChatScreen(props: {
@@ -61,9 +65,14 @@ export function ChatScreen(props: {
   draft: string;
   setDraft: (value: string) => void;
   streamText: string;
+  streamTools?: ToolActivity[];
+  streamArtifacts?: ConversationArtifact[];
   showStreamPlaceholder: boolean;
   isStreaming: boolean;
   isSending: boolean;
+  steeringAvailable?: boolean;
+  steeringPending?: boolean;
+  interactionPending?: boolean;
   loading: boolean;
   errorMessage: string | null;
   goal: ThreadGoal | null;
@@ -83,11 +92,12 @@ export function ChatScreen(props: {
   client: AgentCockpitAPI;
   onBack: () => void;
   onSend: () => void;
+  onSteer?: () => void;
   onStop: () => void;
   onGoalModeChange: (enabled: boolean) => void;
   onRefreshGoal: () => void;
   onPauseGoal: () => void;
-  onResumeGoal: () => void;
+  onResumeGoal: (aiCreditLimit?: number) => void;
   onClearGoal: () => void;
   onAttach: () => void;
   onRemoveAttachment: (id: string) => void;
@@ -120,6 +130,8 @@ export function ChatScreen(props: {
     [conversation?.messages],
   );
   const scrollKey = [
+    props.streamTools?.map(tool => `${tool.id}:${tool.outcome}:${tool.summary?.length}`).join('|'),
+    props.streamArtifacts?.map(artifact => artifact.filename).join('|'),
     conversation?.id || '',
     conversation?.messages.length || 0,
     lastMessage?.id || '',
@@ -240,6 +252,7 @@ export function ChatScreen(props: {
     (!props.draft.trim() && !completedAttachmentMetas(props.pendingAttachments).length) ||
     props.hasUploadingAttachments ||
     props.isSending ||
+    props.steeringPending ||
     !!props.pendingInteraction ||
     (props.goalMode && props.isStreaming);
   const composerPlaceholder = props.goalMode
@@ -274,43 +287,50 @@ export function ChatScreen(props: {
       />
       <div className="transcript-wrap">
         <div className="transcript" ref={transcriptRef} onScroll={handleTranscriptScroll}>
-          {conversation.messages.map((message) => (
-            <MessageBubble
-              key={message.id}
-              message={message}
-              conversation={conversation}
-              client={props.client}
-              backends={props.backends}
-              cliProfiles={props.cliProfiles}
-              focused={focusedPinID === message.id}
-              messageRef={(node) => setMessageRef(message.id, node)}
-              onTogglePin={(pinned) => props.onTogglePin(message.id, pinned)}
-              onOpenFile={props.onOpenFile}
-              onShareFile={props.onShareFile}
-            />
-          ))}
-          {props.isStreaming && (props.streamText || props.showStreamPlaceholder) ? (
-            <div className={`message assistant${props.streamText ? '' : ' stream-placeholder'}`}>
-              <div className="message-heading">
-                <AssistantIdentity
-                  backend={conversation.backend}
-                  backends={props.backends}
-                  cliProfiles={props.cliProfiles}
-                  cliProfileId={conversation.cliProfileId || props.selectedCliProfileId}
-                />
+          <AgentToolsProvider messages={conversation.messages} liveTools={props.streamTools || []}>
+            {conversation.messages.map((message) => (
+              <MessageBubble
+                key={message.id}
+                message={message}
+                conversation={conversation}
+                client={props.client}
+                backends={props.backends}
+                cliProfiles={props.cliProfiles}
+                focused={focusedPinID === message.id}
+                messageRef={(node) => setMessageRef(message.id, node)}
+                onTogglePin={(pinned) => props.onTogglePin(message.id, pinned)}
+                onOpenFile={props.onOpenFile}
+                onShareFile={props.onShareFile}
+              />
+            ))}
+            {props.isStreaming && (props.streamText || props.showStreamPlaceholder || props.streamTools?.length || props.streamArtifacts?.length) ? (
+              <div className={`message assistant${props.streamText ? '' : ' stream-placeholder'}`}>
+                <div className="message-heading">
+                  <AssistantIdentity
+                    backend={conversation.backend}
+                    backends={props.backends}
+                    cliProfiles={props.cliProfiles}
+                    cliProfileId={conversation.cliProfileId || props.selectedCliProfileId}
+                  />
+                </div>
+                {props.streamText ? (
+                  <MarkdownContent content={props.streamText} />
+                ) : !props.streamTools?.length && !props.streamArtifacts?.length ? (
+                  <span className="streaming-dots" aria-label="Assistant is writing">
+                    <span />
+                    <span />
+                    <span />
+                  </span>
+                ) : null}
+                {props.streamTools?.map((activity, index) => <ToolActivityView key={activity.id || index} activity={activity}/>)}
+                {props.streamArtifacts?.map(artifact => {
+                  const reference = makeConversationArtifactReference(props.client, conversation, artifact);
+                  return <FileCard key={reference.id} reference={reference} onOpen={props.onOpenFile} onShare={props.onShareFile}/>;
+                })}
+                <span className="meta">Streaming...</span>
               </div>
-              {props.streamText ? (
-                <MarkdownContent content={props.streamText} />
-              ) : (
-                <span className="streaming-dots" aria-label="Assistant is writing">
-                  <span />
-                  <span />
-                  <span />
-                </span>
-              )}
-              <span className="meta">Streaming...</span>
-            </div>
-          ) : null}
+            ) : null}
+          </AgentToolsProvider>
           {props.loading ? <div className="mini-spinner" /> : null}
         </div>
         {showTranscriptBackToEnd ? (
@@ -335,11 +355,13 @@ export function ChatScreen(props: {
         />
       ) : null}
       <UsageBar usage={conversation.sessionUsage || conversation.usage} backend={conversation.backend} />
+      {conversation.backend === 'copilot' ? <CopilotQuota client={props.client} profileId={conversation.cliProfileId} refreshKey={conversation.messages.length} /> : null}
       {conversation.backend === 'grok-build' ? <GrokBilling client={props.client} profileId={conversation.cliProfileId} refreshKey={conversation.messages.length} /> : null}
       {props.pendingInteraction ? (
         <InteractionCard
           interaction={props.pendingInteraction}
           answer={props.interactionAnswer}
+          pending={props.interactionPending}
           allowPlanFeedback={conversation.backend === 'grok-build'}
           setAnswer={props.setInteractionAnswer}
           onSubmit={props.onSubmitInteraction}
@@ -364,6 +386,9 @@ export function ChatScreen(props: {
             {props.selectedEffort ? <span>/ {props.selectedEffort}</span> : null}
             {props.selectedServiceTier === 'fast' ? <span>/ Fast</span> : null}
           </button>
+          {props.isStreaming && props.steeringAvailable && !props.pendingInteraction ? (
+            <Button label={props.steeringPending ? 'Steering…' : 'Steer'} disabled={!!sendDisabled} onClick={() => props.onSteer?.()} />
+          ) : null}
           {props.goalCapable ? (
             <button
               className={`goal-toggle ${props.goalMode ? 'enabled' : ''}`}
@@ -400,10 +425,11 @@ function GoalStrip(props: {
   isStreaming: boolean;
   onRefresh: () => void;
   onPause: () => void;
-  onResume: () => void;
+  onResume: (aiCreditLimit?: number) => void;
   onClear: () => void;
 }) {
   const [nowMs, setNowMs] = useState(Date.now());
+  const [creditLimit, setCreditLimit] = useState('');
   const goalKey = `${props.goal?.threadId || 'none'}:${props.goal?.status || 'none'}:${props.goalUpdatedAtMs || ''}`;
   useEffect(() => {
     if (!props.goal) {
@@ -424,6 +450,8 @@ function GoalStrip(props: {
   if (!props.goal) {
     return null;
   }
+  const copilotGoal = props.goal.backend === 'copilot';
+  const validCreditLimit = !copilotGoal || (Number.isFinite(Number(creditLimit)) && Number(creditLimit) > 0);
   const elapsed = formatGoalElapsed(goalElapsedSeconds(props.goal, nowMs));
   const canPause = props.goal.status === 'active' && goalSupportsAction(props.goal, 'pause');
   const canResume = props.goal.status === 'paused' && !props.isStreaming && goalSupportsAction(props.goal, 'resume');
@@ -434,14 +462,16 @@ function GoalStrip(props: {
       <div className="goal-strip-main">
         <span className="goal-dot" aria-hidden="true" />
         <strong>{goalStatusLabel(props.goal)}</strong>
-        <span className="goal-elapsed">{elapsed}</span>
+        {!copilotGoal ? <span className="goal-elapsed">{elapsed}</span> : null}
         <span className="goal-objective">{props.goal.objective || 'No objective'}</span>
         {props.goal.backend === 'grok-build' && typeof props.goal.tokenBudget === 'number' ? <span className="goal-elapsed" title="Grok checks budgets between work steps and can exceed them.">Soft budget: {props.goal.tokenBudget.toLocaleString()}</span> : null}
       </div>
       <div className="goal-actions">
+        {copilotGoal && typeof props.goal.aiCreditLimit === 'number' ? <span>AI credits: {props.goal.aiCreditsUsed ?? '—'} / {props.goal.aiCreditLimit}</span> : null}
+        {copilotGoal && props.goal.status === 'paused' ? <label>Fresh AI credit limit <input aria-label="Fresh AI credit limit" type="number" min="0" step="any" inputMode="decimal" value={creditLimit} onChange={event => setCreditLimit(event.target.value)} style={{width:80}} /></label> : null}
         {canPause ? <button type="button" onClick={props.onPause}>Pause</button> : null}
         {props.goal.status === 'paused' && goalSupportsAction(props.goal, 'resume') ? (
-          <button type="button" disabled={!canResume} onClick={props.onResume}>Resume</button>
+          <button type="button" disabled={!canResume || !validCreditLimit} onClick={() => props.onResume(copilotGoal ? Number(creditLimit) : undefined)}>Resume</button>
         ) : null}
         {canClear ? <button type="button" disabled={clearDisabled} onClick={props.onClear}>Clear</button> : null}
       </div>
@@ -683,12 +713,7 @@ export function ContentBlockView(props: {
   onShareFile: (reference: FileReference) => void;
 }) {
   if (props.block.type === 'tool') {
-    return (
-      <div className="tool-block">
-        <strong>{props.block.activity.tool}</strong>
-        <span>{props.block.activity.description || props.block.activity.status || 'Tool activity'}</span>
-      </div>
-    );
+    return <ToolActivityView activity={props.block.activity}/>;
   }
   if (props.block.type === 'artifact') {
     const reference = makeConversationArtifactReference(props.client, props.conversation, props.block.artifact);
@@ -879,6 +904,7 @@ function UsageBar({ usage, backend }: { usage?: Usage; backend?: string }) {
   if (!usage) {
     return null;
   }
+  if (backend === 'copilot') return <CopilotUsage usage={usage} />;
   const tokens = usage.inputTokens + usage.outputTokens + usage.cacheReadTokens + usage.cacheWriteTokens;
   const context = usage.contextUsagePercentage ?? 0;
   const reportedCost = Number(usage.costUsd) || 0;

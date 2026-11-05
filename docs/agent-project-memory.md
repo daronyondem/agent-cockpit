@@ -172,6 +172,40 @@ tool is unavailable.
 - Usage pricing should stay provider-specific. Codex/OpenAI service tiers,
   Claude token/cache pricing, Kiro credits, and future CLIs should use focused
   calculators or provider context rather than one growing generic formula.
+- Copilot restricted one-shots require the literal `--available-tools none`;
+  an empty value does not remove tools. Copilot usage checkpoints and premium
+  requests are native-session cumulative; subtract the saved checkpoint before
+  recording a resumed turn. Keep this logic in `backends/copilotUsage.ts` and
+  validate native text/stream/resume/usage with `npm run e2e:copilot`.
+- Copilot owns npm/native process trees through `copilotProcess.ts`; stop/reset/
+  shutdown must terminate descendants, not only the launcher. Child prose/tools
+  are excluded from root presentation, but child work still blocks replay and
+  contributes to native usage. Auto/unverified models fail media gates closed.
+  Registry/server/reset callers await cleanup promises before exit or reuse.
+  Live tracked children remain discovery roots after their launcher exits.
+  The owned group also survives leader exit. Permanent server shutdown blocks
+  late starts; reusable update shutdown blocks starts only during its drain.
+  Give every spawn its own inherited ownership marker to recover between-scan
+  orphans; do not log inspected process environments. Reserve reset admission
+  and await all ending backend cleanup before changing sessions or worktrees.
+  See ADR-0096.
+  Archive/delete share that reservation and await backend cleanup before
+  changing archive state or deleting checkouts. Immediate post-Stop Copilot
+  turns await aborted scopes from the same conversation before native reuse.
+  Reset admission returns temporary `503` for sends/goal starts/resume, while
+  active-stream conflicts retain `409` so clients do not enter phantom streaming.
+  Memory/Context application integration is covered in normal CI; run
+  `npm run e2e:copilot-workflows` for real-CLI checks with isolated temporary auth
+  and fixed local model responses. That evidence covers production MCP,
+  governance, persistence, and managed Context files, not hosted-model judgment
+  or account certification. Browser evidence is a separate local-model suite.
+- Windows Copilot starts inside an unnamed kill-on-close Job Object before
+  launching native work. The hidden wrapper holds the sole non-inheritable job
+  handle and passes raw Win32 standard handles through `CreateProcessW`;
+  no-console `ProcessStartInfo` launches lose JSONL pipes. Fail startup if job
+  setup fails. `test/copilotWindowsProcess.test.ts` passed native Windows CI on
+  `d02ffe2`; this certifies process fixtures, not the actual Windows Copilot CLI.
+  POSIX marker/identity cleanup stays separate. See ADR-0097.
 - Claude Code Interactive is a separate protocol/backend path requiring real CLI
   compatibility checks when protocol behavior changes.
 - Do not auto-update Claude Code CLI as part of Claude Code Interactive

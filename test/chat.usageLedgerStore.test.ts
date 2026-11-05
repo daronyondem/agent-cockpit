@@ -50,6 +50,16 @@ describe('UsageLedgerStore', () => {
     });
   });
 
+  test('legacy Copilot rows retain premium requests and partial AI-credit coverage on new usage', async () => {
+    const store = new UsageLedgerStore(path.join(dir, 'legacy-copilot.json'));
+    await store.write({ days: [{ date: '2026-11-04', records: [{ backend: 'copilot', model: 'fixture', usage: { ...emptyUsage(), inputTokens: 10, credits: 2 } }] }] });
+    await store.recordForDate('2026-11-04', 'copilot', 'fixture', { ...emptyUsage(), credits: 1,
+      copilot: { tokensStatus: 'complete', aiCreditsStatus: 'complete', aiCredits: 3, premiumRequests: 1 } });
+    const record = (await store.read()).days[0].records[0];
+    expect(record.usage.inputTokens).toBe(10);
+    expect(record.usage.copilot).toEqual({ tokensStatus: 'partial', aiCreditsStatus: 'partial', aiCredits: 3, premiumRequests: 3 });
+  });
+
   test('records estimated cost snapshots for zero-cost subscription CLI usage', async () => {
     const ledgerPath = path.join(dir, 'usage-ledger.json');
     const store = new UsageLedgerStore(ledgerPath, (backend, model, usage, context) => (

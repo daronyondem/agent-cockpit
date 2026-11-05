@@ -43,6 +43,7 @@ export function partitionToolRun(tools, agentIndex){
   };
   for (const t of tools) {
     if (!t) continue;
+    if (t.parentAgentId && agentIds.has(t.parentAgentId)) continue;
     if (t.isAgent) {
       flushPlain();
       segments.push({
@@ -50,8 +51,6 @@ export function partitionToolRun(tools, agentIndex){
         activity: t,
         children: partitionParallel(childrenByAgent.get(t.id) || []),
       });
-    } else if (t.parentAgentId && agentIds.has(t.parentAgentId)) {
-      // Rendered inside its parent's card wherever that card appears.
     } else {
       plainBuf.push(t);
     }
@@ -155,6 +154,7 @@ function SubagentCard({ activity, childGroups }){
       <div className="subagent-head">
         <span className="chip">{activity.subagentType || 'agent'}</span>
         <span className="title">{label}</span>
+        <span className={activity.status === 'error' ? 'u-err' : activity.status === 'warning' ? 'u-warn' : 'u-dim'}>{activity.outcome || (activity.duration != null ? 'done' : 'running')}</span>
         <span className="elapsed">
           {activity.outcome
             ? ''
@@ -168,6 +168,7 @@ function SubagentCard({ activity, childGroups }){
       {childGroups && childGroups.length
         ? childGroups.map((g, i) => <ToolGroup key={i} group={g}/>)
         : null}
+      <ToolSummary summary={activity.summary}/>
     </div>
   );
 }
@@ -191,7 +192,7 @@ function ToolRow({ activity }){
         ? 'done'
         : 'run';
   return (
-    <div className={`tool ${state}`}>
+    <><div className={`tool ${state}`}>
       <span className="marker"/>
       <span>
         <span className="name">{activity.tool}</span>
@@ -208,5 +209,10 @@ function ToolRow({ activity }){
       </span>
       <span/>
     </div>
+    <ToolSummary summary={activity.summary}/></>
   );
+}
+
+function ToolSummary({ summary }){
+  return summary ? <details className="agent-summary"><summary>Summary</summary><div>{summary}</div></details> : null;
 }

@@ -397,7 +397,7 @@ describe('Grok Build adapter', () => {
     await collect('before update');
     const registry = new BackendRegistry();
     registry.register(adapter);
-    registry.shutdownAll();
+    await registry.shutdownAll();
     await Promise.resolve();
     expect(peers[0].isClosed).toBe(true);
     const events = await collect('after update');

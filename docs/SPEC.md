@@ -67,6 +67,7 @@ Engineering notes that capture empirical findings — not proposals or specs, bu
 | [research/claude-code-interactive-report.md](research/claude-code-interactive-report.md) | Findings from the Claude Code Interactive spike: hidden PTY plus transcript watching is viable but private-shape/version-sensitive. |
 | [research/kiro-bedrock-parity.md](research/kiro-bedrock-parity.md) | Differences observed between Kiro (AWS Bedrock-routed) and Claude Code (direct Anthropic API) for Opus 4.7 — image format/dimension caps, ACP stream termination, JSON-RPC error extraction, etc. |
 | [research/grok-build-acp-evaluation.md](research/grok-build-acp-evaluation.md) | Grok Build ACP capability matrix, authenticated protocol findings, integration scope, and verification gates underlying the Grok Build implementation. |
+| [research/copilot-sdk-parity-evaluation.md](research/copilot-sdk-parity-evaluation.md) | Copilot 1.0.105 / SDK 1.0.28 runtime/auth/catalog/input/delegation/goal/usage/media evidence, native Memory/Context/KB/Routine qualification, and documented capability/evidence limits. |
 | [research/frontend-surface-split-review-report.md](research/frontend-surface-split-review-report.md) | Review-cycle report for splitting large desktop and mobile frontend surfaces into focused modules without behavior or visual redesign. |
 | [research/linux-release-implementation-review-report.md](research/linux-release-implementation-review-report.md) | Review-cycle report for Linux production release support, including phase findings, implemented items, verification commands, and residual test notes. |
 | [research/usage-cost-estimation-review-report.md](research/usage-cost-estimation-review-report.md) | Review-cycle report for Usage Cost / Estimated Cost implementation, pricing-source verification, fixes, verification commands, and residual risks. |
@@ -92,7 +93,7 @@ See [docs/adr/README.md](adr/README.md) for the index and [ADR-0001](adr/0001-re
 
 ## 1. Overview
 
-**Agent Cockpit** is a web-based chat interface for interacting with local CLI-based AI agents such as Claude Code, Kiro, OpenAI Codex, OpenCode, and Grok Build. It runs on the same machine as the CLI tools. The server spawns or connects to local CLI processes, streams responses back to the browser via WebSocket, and stores conversations in workspace-scoped files on disk.
+**Agent Cockpit** is a web-based chat interface for interacting with local CLI-based AI agents such as Claude Code, Kiro, OpenAI Codex, OpenCode, Grok Build, and GitHub Copilot. It runs on the same machine as the CLI tools. The server spawns or connects to local CLI processes, streams responses back to the browser via WebSocket, and stores conversations in workspace-scoped files on disk.
 
 ### Core Use Case
 

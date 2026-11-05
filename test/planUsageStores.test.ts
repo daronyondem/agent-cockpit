@@ -83,4 +83,18 @@ describe('profile-aware plan usage stores', () => {
     expect(store.get('profile-b')).not.toBeNull();
     unsubscribe();
   });
+
+  test('Copilot coalesces by profile and never retains another profile’s quota on failure', async () => {
+    const fetch = jest.fn(async (url: string) => ({ ok: true, json: async () => ({ quota: { profile: url } }) }));
+    (window as any).AgentApi.fetch = fetch;
+    const store = loadStore<any>('../web/AgentCockpitWeb/src/copilotPlanUsageStore.js', 'CopilotPlanUsageStore');
+    const first = store.refresh('a'); expect(store.refresh('a')).toBe(first); await first;
+    await store.refresh('b');
+    expect(fetch).toHaveBeenCalledTimes(2);
+    expect(store.get('a')).toEqual({ profile: 'cli-profiles/a/copilot-quota' });
+    fetch.mockRejectedValueOnce(new Error('offline'));
+    await store.refresh('a');
+    expect(store.get('a')).toMatchObject({ status: 'unavailable', rows: [] });
+    expect(store.get('b')).toEqual({ profile: 'cli-profiles/b/copilot-quota' });
+  });
 });
