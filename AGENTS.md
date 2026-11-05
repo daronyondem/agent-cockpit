@@ -139,6 +139,16 @@ automatically retry interrupted tool work. Keep auth isolation separate from
 the shared CLI executable/update location. See `docs/spec-grok-build.md` and
 ADR-0092.
 
+# Cortex Code (CoCo) Evaluation
+
+CoCo is not yet an implemented harness. Future setup work should preserve the
+verified `CORTEX_OAUTH_MANUAL=1` flow: show the native login URL, accept the full
+loopback redirect from another machine, retain shared terminal auth, and verify
+the result from a fresh process. ACP initialization/session creation alone is
+not authentication evidence. Handle native login timeouts and retain the active
+job's callback ownership. See `docs/research/cortex-code-acp-evaluation.md` for
+the 1.2.35 protocol findings and implementation gates.
+
 # Server Management
 
 NEVER run `node server.js` directly. This causes orphan processes and port conflicts.

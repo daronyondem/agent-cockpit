@@ -163,6 +163,14 @@ tool is unavailable.
 
 ## CLI Profiles And Backends
 
+- CoCo CLI 1.2.35 remote OAuth was verified using `CORTEX_OAUTH_MANUAL=1`:
+  display the authorization URL, accept the complete loopback redirect from
+  another machine, and verify saved credentials from a fresh process. The user
+  wants this mechanism in future Cockpit setup. Preserve shared terminal auth,
+  keep the login job alive, and handle the native two-minute timeout (a
+  connection `browserActionTimeout = 600000` provided ten minutes). ACP
+  initialization/session creation alone does not prove authentication. CoCo
+  remains pre-integration; see `docs/research/cortex-code-acp-evaluation.md`.
 - Fresh installs should be provider-neutral. Do not imply Claude Code is
   configured when the user has not installed or authenticated it.
 - CLI profiles are scoped per conversation where applicable and can support
