@@ -80,4 +80,80 @@ describe('Copilot goals through production routes', () => {
     expect((await env.request('GET', `/api/chat/conversations/${conv.id}/goal`)).status).toBe(400);
     expect(peer.calls()).toEqual([]);
   });
+
+  test('rejects invalid controls and empty objectives before native work or job admission', async () => {
+    const conv = await create();
+    for (const body of [
+      { objective: 'work', claudeCodeMode: 'invalid' },
+      { objective: 'work', serviceTier: 'invalid' },
+      { objective: 'work', aiCreditLimit: '2' },
+      { objective: '  ' },
+      { objective: 'Goal set: ' },
+    ]) {
+      expect((await env.request('POST', `/api/chat/conversations/${conv.id}/goal`, body)).status).toBe(400);
+    }
+    expect(peer.calls()).toEqual([]);
+    expect(await env.streamJobs.listActive()).toEqual([]);
+    expect((await env.chatService.getConversation(conv.id))?.messages).toEqual([]);
+  });
+
+  test('a rejected profile change releases admission and preserves a locked session', async () => {
+    const conv = await create();
+    await env.chatService.addMessage(conv.id, 'user', 'Keep this discussion', 'copilot');
+    const rejected = await env.request('POST', `/api/chat/conversations/${conv.id}/goal`, { objective: 'work', cliProfileId: 'opaque' });
+    expect(rejected.status).toBe(409);
+    expect(rejected.body.error).toContain('Cannot switch CLI profile');
+    expect((await env.chatService.getConversation(conv.id))?.cliProfileId).toBe('sdk-peer');
+    expect(peer.calls()).toEqual([]);
+    expect(await env.streamJobs.listActive()).toEqual([]);
+
+    const socket = await env.connectWs(conv.id); const reading = env.readWsEvents(socket);
+    expect((await env.request('POST', `/api/chat/conversations/${conv.id}/goal`, { objective: 'Continue the discussion' })).status).toBe(200);
+    await reading;
+    expect((await env.chatService.getConversation(conv.id))?.messages.some(message => message.content === 'Keep this discussion')).toBe(true);
+  }, 20000);
+
+  test('repairs a deleted profile with history and forwards selected model and effort to the goal', async () => {
+    const conv = await env.chatService.createConversation('Repair goal', env.tmpDir, 'copilot', undefined, undefined, 'opaque');
+    await env.chatService.addMessage(conv.id, 'user', 'Retain the earlier discussion', 'copilot');
+    const settings = await env.chatService.getSettings();
+    await env.chatService.saveSettings({ ...settings, cliProfiles: settings.cliProfiles!.filter(profile => profile.id !== 'opaque') });
+    for (const [method, suffix] of [['GET', ''], ['POST', '/pause'], ['POST', '/resume'], ['DELETE', '']]) {
+      const rejected = await env.request(method, `/api/chat/conversations/${conv.id}/goal${suffix}`, method === 'POST' ? {} : undefined);
+      expect(rejected.status).toBe(400);
+      expect(rejected.body.error).toContain('CLI profile');
+    }
+    expect((await env.request('POST', `/api/chat/conversations/${conv.id}/goal`, { objective: 'Repair', cliProfileId: 'missing' })).status).toBe(400);
+    expect(await env.streamJobs.listActive()).toEqual([]);
+    expect(peer.calls()).toEqual([]);
+
+    const socket = await env.connectWs(conv.id); const reading = env.readWsEvents(socket);
+    const response = await env.request('POST', `/api/chat/conversations/${conv.id}/goal`, {
+      objective: 'Continue after repair', cliProfileId: 'sdk-peer', backend: 'copilot', model: 'gpt-6.1-sol', effort: 'high',
+    });
+    expect(response.status).toBe(200);
+    await reading;
+    expect(await env.chatService.getConversation(conv.id)).toMatchObject({ cliProfileId: 'sdk-peer', model: 'gpt-6.1-sol', effort: 'high' });
+    expect(peer.calls().find(call => call.method === 'session.create')?.params).toMatchObject({ model: 'gpt-6.1-sol', reasoningEffort: 'high' });
+    expect((await env.chatService.getConversation(conv.id))?.messages.some(message => message.content === 'Retain the earlier discussion')).toBe(true);
+  }, 20000);
+
+  test('starting a replacement goal recovers missing native history from the saved discussion once', async () => {
+    const conv = await create();
+    await env.chatService.addMessage(conv.id, 'user', 'Remember the earlier acceptance criteria', 'copilot');
+    await env.chatService.setExternalSessionId(conv.id, 'missing-goal-session');
+    const socket = await env.connectWs(conv.id); const reading = env.readWsEvents(socket);
+    expect((await env.request('POST', `/api/chat/conversations/${conv.id}/goal`, { objective: 'Finish the replacement goal' })).status).toBe(200);
+    const frames = await reading;
+    expect(frames.filter(frame => frame.type === 'assistant_message' && frame.message.sessionRecovery)).toHaveLength(1);
+    expect(peer.calls().filter(call => call.method === 'session.resume')).toHaveLength(1);
+    expect(peer.calls().filter(call => call.method === 'session.create')).toHaveLength(1);
+    const snapshot = (await env.chatService.getConversation(conv.id))?.messages.find(message => message.sessionRecovery)?.sessionRecovery;
+    expect(snapshot).toMatchObject({ previousNativeSessionId: 'missing-goal-session', backend: 'copilot' });
+    const saved = JSON.parse(fs.readFileSync(snapshot!.snapshotPath!, 'utf8'));
+    expect(saved.messages.some((message: { content: string }) => message.content === 'Remember the earlier acceptance criteria')).toBe(true);
+    const submissions = peer.calls().filter(call => call.method === 'session.send');
+    expect(submissions).toHaveLength(1);
+    expect(submissions[0].params?.prompt).toContain(snapshot!.snapshotPath);
+  }, 20000);
 });

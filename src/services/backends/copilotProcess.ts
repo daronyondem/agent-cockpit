@@ -67,6 +67,17 @@ export class CopilotProcessScope {
           resolve();
         });
       });
+      // taskkill can finish before Node observes the wrapper closing, especially
+      // after the fallback kill. Keep admission closed until its Job handle and
+      // inherited pipes have actually closed.
+      if (!this.closed) await new Promise<void>((resolve, reject) => {
+        const closed = () => { clearTimeout(timer); resolve(); };
+        const timer = setTimeout(() => {
+          this.child.removeListener('close', closed);
+          reject(new Error('Copilot Windows wrapper did not close after termination.'));
+        }, 2_000);
+        this.child.once('close', closed);
+      });
       return;
     }
     const table = await this.cleanupSnapshot();

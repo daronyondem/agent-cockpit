@@ -88,4 +88,18 @@ describe('Copilot catalog HTTP admission', () => {
     expect(response.body.error).toContain('does not support effort');
     expect(adapter._lastMessage).toBeNull();
   });
+
+  test('metadata failures retain the selected profile and a later refresh can recover', async () => {
+    const before = await env.chatService.getSettings();
+    jest.spyOn(adapter, 'getMetadata').mockRejectedValueOnce(new Error('Native catalog is unavailable'));
+    const failed = await env.request('GET', '/api/chat/cli-profiles/catalog-profile/metadata');
+    expect(failed.status).toBe(500);
+    expect(failed.body.error).toBe('Native catalog is unavailable');
+    const recovered = await env.request('GET', '/api/chat/cli-profiles/catalog-profile/metadata');
+    expect(recovered.status).toBe(200);
+    expect(recovered.body.backend.modelCatalog.source).toBe('runtime');
+    expect((await env.chatService.getSettings()).cliProfiles).toEqual(before.cliProfiles!.map(profile => ({ ...profile, updatedAt: expect.any(String) })));
+    expect((await env.request('GET', '/api/chat/cli-profiles/missing/metadata')).status).toBe(400);
+    expect(adapter._lastMessage).toBeNull();
+  });
 });

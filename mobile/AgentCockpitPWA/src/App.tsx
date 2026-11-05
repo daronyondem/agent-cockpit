@@ -516,7 +516,6 @@ export default function App() {
     try {
       clearStreamReconnectTimer();
       closeStreamSocket();
-      setIsStreaming(false);
       setShowStreamPlaceholder(false);
       setPendingInteraction(null);
       await clientRef.current.abortConversation(conversation.id);
@@ -525,6 +524,7 @@ export default function App() {
       setActiveConversation(reloaded);
       await refreshGoalState(conversation.id);
       await refreshConversationList();
+      setIsStreaming(false);
     } catch (error) {
       handleError(error);
     }

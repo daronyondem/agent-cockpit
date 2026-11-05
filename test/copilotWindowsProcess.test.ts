@@ -4,7 +4,7 @@ import os from 'os';
 import path from 'path';
 import { EventEmitter } from 'events';
 import { spawnWindowsCopilotProcess } from '../src/services/backends/copilotWindowsProcess';
-import { spawnCopilotProcess } from '../src/services/backends/copilotProcess';
+import { spawnCopilotProcess, CopilotProcessScope } from '../src/services/backends/copilotProcess';
 
 const windows = process.platform === 'win32' ? describe : describe.skip;
 const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
@@ -24,6 +24,44 @@ test('passes Windows invocation data through stdin with native argument quoting 
     expect(JSON.parse(stdin.end.mock.calls[0][0])).toEqual({ command: 'C:\\Copilot tools\\copilot.exe', arguments: '-p "a \\"quote\\"\n日本語" "" "C:\\space path\\\\"' });
     expect(() => stdin.emit('error', new Error('pipe closed on abort'))).not.toThrow();
   } finally { jest.dontMock('child_process'); }
+});
+
+test.each(['taskkill', 'fallback', 'timeout'])('Windows cleanup waits for wrapper close after %s', async mode => {
+  const platform = Object.getOwnPropertyDescriptor(process, 'platform')!;
+  Object.defineProperty(process, 'platform', { value: 'win32', configurable: true });
+  const root = Object.assign(new EventEmitter(), {
+    pid: 123, exitCode: null as number | null, kill: jest.fn(),
+    stdout: { destroy: jest.fn() }, stderr: { destroy: jest.fn() },
+  });
+  const execFile = jest.fn((_command, _args, _options, callback) => callback(mode === 'fallback' ? new Error('taskkill failed') : null));
+  let Scope!: typeof CopilotProcessScope;
+  try {
+    jest.isolateModules(() => {
+      jest.doMock('child_process', () => ({ execFile }));
+      Scope = require('../src/services/backends/copilotProcess').CopilotProcessScope;
+    });
+    const scope = new Scope(root as unknown as import('child_process').ChildProcess);
+    let finished = false;
+    const stopping = scope.stop().then(() => { finished = true; });
+    await sleep(0);
+    expect(finished).toBe(false);
+    expect(root.stdout.destroy).not.toHaveBeenCalled();
+    if (mode === 'fallback') expect(root.kill).toHaveBeenCalledWith('SIGKILL');
+    if (mode === 'timeout') {
+      await expect(stopping).rejects.toThrow('wrapper did not close');
+      expect(finished).toBe(false);
+      await expect(scope.stop()).rejects.toThrow('wrapper did not close');
+      expect(execFile).toHaveBeenCalledTimes(1);
+      return;
+    }
+    root.exitCode = 1;
+    root.emit('close');
+    await stopping;
+    expect(finished).toBe(true);
+    expect(root.stdout.destroy).toHaveBeenCalled();
+    await scope.stop();
+    expect(execFile).toHaveBeenCalledTimes(1);
+  } finally { Object.defineProperty(process, 'platform', platform); jest.dontMock('child_process'); }
 });
 
 windows('native Windows Copilot job ownership', () => {

@@ -351,10 +351,13 @@ for (const mobile of [false, true]) {
     await expect(card).toContainText('done');
     await card.getByText('Summary', { exact: true }).click();
     await expect(card.getByText('COPILOT_UI_CHILD_SUMMARY', { exact: true })).toBeVisible();
-    const saved = await (await request.get(`/api/chat/conversations/${conv.id}`)).json();
+    // Child completion arrives before the root's final usage and transcript write.
+    let saved = await (await request.get(`/api/chat/conversations/${conv.id}`)).json();
+    await expect.poll(async () => {
+      saved = await (await request.get(`/api/chat/conversations/${conv.id}`)).json();
+      return saved.messages.flatMap((message: { toolActivity?: Array<{ isAgent?: boolean; summary?: string }> }) => message.toolActivity || []).find((tool: { isAgent?: boolean }) => tool.isAgent);
+    }).toMatchObject({ summary: 'COPILOT_UI_CHILD_SUMMARY', outcome: 'done' });
     expect(saved.messages.some((message: { content: string }) => message.content.includes('COPILOT_UI_CHILD_SUMMARY'))).toBe(false);
-    expect(saved.messages.flatMap((message: { toolActivity?: Array<{ isAgent?: boolean; summary?: string }> }) => message.toolActivity || []).find((tool: { isAgent?: boolean }) => tool.isAgent))
-      .toMatchObject({ summary: 'COPILOT_UI_CHILD_SUMMARY', outcome: 'done' });
     await open(page, saved.title, mobile);
     await expect(card).toHaveCount(1);
     await card.getByText('Summary', { exact: true }).click();
@@ -395,7 +398,17 @@ for (const mobile of [false, true]) {
     await send(page, 'COPILOT_UI_WAIT');
     await expect.poll(() => fs.access(path.join(workspace, 'ui-worker.pid')).then(() => true, () => false)).toBe(true);
     const pid = Number(await fs.readFile(path.join(workspace, 'ui-worker.pid'), 'utf8'));
-    await page.getByRole('button', { name: mobile ? 'Stop' : 'Stop agent', exact: true }).click();
+    let releaseAbort!: () => void; let abortRequested!: () => void;
+    const abortGate = new Promise<void>(resolve => { releaseAbort = resolve; });
+    const requested = new Promise<void>(resolve => { abortRequested = resolve; });
+    await page.route(`**/api/chat/conversations/${conv.id}/abort`, async route => {
+      abortRequested(); await abortGate; await route.continue();
+    });
+    try {
+      await page.getByRole('button', { name: mobile ? 'Stop' : 'Stop agent', exact: true }).click();
+      await requested;
+      await expect(page.getByLabel('Send', { exact: true })).toBeHidden();
+    } finally { releaseAbort(); }
     await expect(page.getByLabel('Send', { exact: true })).toBeVisible();
     await send(page, 'COPILOT_UI_REPLY');
     await expect(page.locator(assistant).filter({ hasText: 'COPILOT_UI_REPLY_OK' })).toBeVisible();

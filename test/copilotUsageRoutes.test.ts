@@ -53,4 +53,15 @@ describe('Copilot usage and quota through production routes', () => {
     expect(read).toHaveBeenCalledTimes(1);
     expect((await env.request('GET', '/api/chat/cli-profiles/missing/copilot-quota')).status).toBe(400);
   });
+
+  test('a native quota failure is a retryable service error without changing the saved profile', async () => {
+    const before = await env.chatService.getSettings();
+    const read = jest.spyOn(adapter, 'getQuota').mockRejectedValueOnce(new Error('Quota temporarily unavailable'));
+    const failed = await env.request('GET', '/api/chat/cli-profiles/sdk-peer/copilot-quota');
+    expect(failed.status).toBe(503);
+    expect(failed.body.error).toBe('Quota temporarily unavailable');
+    read.mockResolvedValueOnce({ status: 'unavailable', fetchedAt: null, stale: false, rows: [] });
+    expect((await env.request('GET', '/api/chat/cli-profiles/sdk-peer/copilot-quota')).status).toBe(200);
+    expect((await env.chatService.getSettings()).cliProfiles).toEqual(before.cliProfiles!.map(profile => ({ ...profile, updatedAt: expect.any(String) })));
+  });
 });
