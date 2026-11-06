@@ -18,6 +18,12 @@ affects:
   - src/services/cliProfiles.ts
   - src/services/settingsService.ts
   - src/services/backends/mediaCapabilities.ts
+  - src/types/cortex.ts
+  - src/services/backends/cortexProtocol.ts
+  - src/services/backends/cortexRuntime.ts
+  - src/services/backends/cortexSessions.ts
+  - src/services/backends/cortexProcess.ts
+  - scripts/probe-cortex-runtime.ts
   - src/services/chat/workspaceInstructionStore.ts
   - docs/spec-cortex-code.md
 ---
@@ -90,6 +96,15 @@ PID/start identity, including after root exit. The Phase 0 probe evaluates the
 existing Grok ownership pattern without introducing a production CoCo-to-Grok
 dependency. Finalization must also resolve default native delegation/background
 work before release, even when Agent cards are not advertised.
+
+P2 implements those boundaries in dedicated CoCo modules, with conversation
+leases and generation invalidation, strict transport failure cleanup and
+profile-scoped uncached discovery. Keep runtime foundations internal until the
+adapter implements its advertised event/interaction surface. A timeout kills
+the runtime rather than leaving possibly side-effectful requests executing.
+Shutdown remains reusable after registry-driven CLI updates. POSIX ownership
+sampling is best-effort userspace cleanup, not a sandbox or atomic containment;
+retain that limitation even after the native smoke passes.
 
 Preserve native token/cache categories and context snapshots separately. Use
 `costSource:'none'` until Snowflake billing evidence exists; never infer direct

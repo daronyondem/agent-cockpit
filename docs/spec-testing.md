@@ -8,7 +8,7 @@
 
 **Framework:** Jest 30.x — run with `npm test`. The script is `node --experimental-vm-modules node_modules/.bin/jest` because the KB handler tests import `unpdf` (ESM-only, wraps `pdfjs-dist`) and Jest's VM needs the flag to allow runtime `import()` calls. `jest.config.js` uses `ts-jest` for TypeScript and also transforms JS/JSX with `allowJs: true`, `module: CommonJS`, and `jsx: react-jsx` so tests can import the V2 frontend ES modules directly instead of evaluating browser globals. Default Jest execution is capped at `maxWorkers: '50%'` so process-spawning suites still run in parallel without stampeding local or CI machines, and the global per-test timeout is 30 seconds so widened harness-specific timeouts can surface their route/process-specific errors before Jest's generic timeout.
 
-**Coverage gate:** Run `npm run test:coverage` for backend coverage. The script keeps plain `npm test` unchanged for fast local iteration and runs Jest with `--coverage --runInBand`; serial execution keeps the full-suite coverage gate stable on local machines where parallel workers can exceed short route-test timeouts. `jest.config.js` collects coverage from `src/**/*.ts` and `server.ts`, excludes declaration-only `src/types/**` and `*.d.ts` files, writes reports under `coverage/`, and uses V8 coverage with `text-summary` plus `lcov` reporters. The global threshold floor is statements/lines 87.5%, branches 74.1%, and functions 93%, raised with CoCo profile/contract coverage against the November 6, 2026 V8 baseline of statements/lines 88.00%, branches 74.31%, and functions 93.44% (135 passing suites, 2,604 passing tests; three opt-in suites and 20 tests skipped), measured on macOS. When meaningful tests land, raise the thresholds toward the new baseline in the same PR. Do not lower thresholds to merge a regression; either add behavior coverage, make a narrow intentional exclusion in `jest.config.js`, or document the explicit exception in the PR.
+**Coverage gate:** Run `npm run test:coverage` for backend coverage. The script keeps plain `npm test` unchanged for fast local iteration and runs Jest with `--coverage --runInBand`; serial execution keeps the full-suite coverage gate stable on local machines where parallel workers can exceed short route-test timeouts. `jest.config.js` collects coverage from `src/**/*.ts` and `server.ts`, excludes declaration-only `src/types/**` and `*.d.ts` files, writes reports under `coverage/`, and uses V8 coverage with `text-summary` plus `lcov` reporters. The global threshold floor is statements/lines 88%, branches 74.4%, and functions 93%, raised with CoCo runtime coverage against the November 6, 2026 V8 baseline of statements/lines 88.10%, branches 74.54%, and functions 93.42% (138 passing suites, 2,651 passing tests; three opt-in suites and 20 tests skipped), measured on macOS. When meaningful tests land, raise the thresholds toward the new baseline in the same PR. Do not lower thresholds to merge a regression; either add behavior coverage, make a narrow intentional exclusion in `jest.config.js`, or document the explicit exception in the PR.
 
 Shared chat route tests use `test/helpers/chatEnv.ts` for isolated Express/WebSocket servers and scratch data directories. Teardown waits for active streams, the session finalizer queue, and any in-flight durable stream-job registry mutation to become idle before closing the server and removing the scratch directory, so background finalizer/job writes cannot race temp-directory cleanup.
 
@@ -17,6 +17,9 @@ Test HTTP servers that are contacted through `127.0.0.1` bind explicitly to `127
 | File | Focus |
 |------|-------|
 | `test/cortexProfiles.test.ts` | CoCo config validation, literal names, credential-field rejection, identity/resolution/default completeness, settings round-trip/edit/atomic rejection and setup-home migration. No native execution. |
+| `test/cortexProtocol.test.ts` | Dedicated strict CoCo JSONL framing/IDs/reverse ownership, limits, failures, deadlines and private diagnostics. |
+| `test/cortexRuntime.test.ts` | Deterministic executable fixture: exact argv/env/version, profile fingerprints, session replay, cancellation, catalog scope, startup/reset/idle/reusable registry lifecycle. |
+| `test/cortexProcess.test.ts` | POSIX detached-child cleanup after root exit, unrelated process preservation, identity reuse, bounded stop and enumeration failure. |
 | `test/backendCapabilities.test.ts` | Browser-safe role/interaction policy, CoCo fail-closed one-shot metadata, legacy compatibility, sequential and model/media eligibility. Existing `test/mediaCapabilities.test.ts` covers the backend facade. |
 | `test/grokProtocol.test.ts` | ACP framing across split UTF-8/large chunks, bounds, reverse ID zero, malformed frames, error metadata, EOF/exit and pending request timeout cleanup. |
 | `test/grokEvents.test.ts` | Root/child ownership, tools/artifacts/narration, native goals and effort/media catalog, disjoint token buckets, complete/partial costs, per-model rows, resident usage deltas. |
@@ -235,6 +238,42 @@ or current application acceptance. Results and the exact invocation are in
 [the research report](research/cortex-code-acp-evaluation.md#phase-0-follow-up--2026-11-05).
 See [Proposed ADR-0093](adr/0093-integrate-cortex-code-through-its-native-acp-interface.md)
 and [the implementation tracker](design/cortex-code-implementation-plan.md).
+
+## CoCo P2 Native Runtime Smoke
+
+`scripts/probe-cortex-runtime.ts` uses CoCo's dedicated runtime/session/transport/
+process modules. It is opt-in and separate from normal Jest/CI, browser checks
+and the future complete adapter compatibility suite. Run:
+
+```sh
+CORTEX_RUNTIME_PROBE=1 CORTEX_TEST_CONNECTION='<existing authenticated connection>' \
+  ./node_modules/.bin/tsx scripts/probe-cortex-runtime.ts
+```
+
+Requires macOS, Cortex Code 1.2.35 and real saved authentication. Optional
+`CORTEX_TEST_COMMAND` and `CORTEX_TEST_MODEL` override the native command/model;
+default model is `claude-sonnet-4-6`. Reject pre-enabled ACP fake-agent test mode.
+Production runtime resolution also forces fake mode off. All file/shell work
+uses private temporary fixture workspaces; the tested profile deliberately
+reuses the intended shared terminal authentication. No application server is
+started and no production Memory/KB/outreach is exercised.
+
+The smoke asserts exact inference markers plus usage, native cancellation and
+subsequent turn, saved session load in a fresh process, child cleanup after root
+SIGKILL while unrelated work survives, no delayed sleeper write, empty-home
+inference failure despite successful session creation, no waiting browser wizard,
+and a fresh runtime after reusable shutdown. Reverse tool permissions are
+explicitly approved only inside this opt-in fixture runner. Normal foundations
+deny unowned reverse requests.
+
+The private 0700 temporary root retains a 0600 report with CLI/OS/Node/revision/
+dirty evidence and assertion booleans, without raw protocol, connection/account,
+stderr or OAuth values. Failures print only error type. On November 6, 2026,
+CoCo 1.2.35 / macOS arm64 / Node 26.0.0 passed every scenario against revision
+869ee8a plus the P2 working tree. A compact result is also recorded in the
+implementation tracker. This certifies the tested runtime paths, not adapter
+event correctness, durable Cockpit chats, browser/mobile behavior, native Linux/
+Windows, full isolation, strict zero-tool execution or delegation finalization.
 
 ## CI/CD
 

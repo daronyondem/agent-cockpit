@@ -1307,7 +1307,18 @@ facade, preserving upload/KB media behavior. CoCo profile resolution validates
 a named connection but does not establish auth or register an adapter. See
 [CoCo foundations](spec-cortex-code.md) and
 [Proposed ADR-0093](adr/0093-integrate-cortex-code-through-its-native-acp-interface.md)
-for exact contracts and remaining runtime/client enforcement boundaries.
+for exact contracts and remaining adapter/client enforcement boundaries.
+
+CoCo's P2 internal modules now implement strict JSONL transport
+(`cortexProtocol.ts`), direct executable/env/version/startup and single-session
+ownership (`cortexRuntime.ts`), per-conversation leases/discovery/reset/idle and
+reusable shutdown generations (`cortexSessions.ts`), and identity-checked POSIX
+descendant cleanup (`cortexProcess.ts`). Domain shapes live in `src/types/cortex.ts`.
+These modules have no production Grok/Kiro dependency. No `CortexCodeAdapter` is
+registered in server.ts yet: event/interactions mapping and durable chat still
+must implement their advertised surface. Session creation and catalog discovery
+are not authentication checks. The [CoCo runtime spec](spec-cortex-code.md#native-transport-and-runtime-ownership)
+defines exact argv, environment, deadlines, fingerprints and cleanup limitations.
 
 ### Adding a New Backend
 

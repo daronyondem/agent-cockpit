@@ -1,6 +1,6 @@
 # Cortex Code (CoCo) harness implementation plan
 
-**Status:** P0–P1 complete; profile/capability foundations implemented, runtime pending.
+**Status:** P0–P2 complete; profile/capability and native runtime foundations implemented; event/adapter integration pending.
 **Created:** 2026-11-05.
 **Planning baseline:** Agent Cockpit `0.4.166`, revision `11d14825e955f6c83364c3917558b4d3068a4bac`, plus the uncommitted CoCo research/guidance documents.
 **Native compatibility baseline:** Cortex Code `1.2.35`, distribution `1.2.35+191333.f82de3d91715`, macOS arm64.
@@ -34,8 +34,8 @@ Planning assumptions:
 - Deliver core chat before optional parity work. Unverified features remain
   explicitly unavailable; do not emulate native goals or silently reroute work
   to a different profile to make a selector appear functional.
-- This change delivers the tracking document; the implementation tasks below
-  remain proposed.
+- C01–C12 are complete as recorded below. Later phases remain proposed and do
+  not describe shipped support.
 
 Track work as follows:
 
@@ -596,7 +596,8 @@ decisions; it does not close the production release gates below.
 - [x] C04 — Add harness/backend identity/label plumbing, including
   server-configured IDs and setup-profile recognition. Verify existing defaults
   and legacy `vendor` migration remain stable. Register the actual adapter in
-  P2 once a usable runtime exists; P1 does not expose a runnable backend.
+  after event/interaction mapping and the advertised adapter surface exist;
+  P1/P2 foundations do not expose a runnable backend.
 - [x] C05 — Add validated `cortexCode.connection` to server profile types,
   normalization and browser-safe draft/settings contracts. Verify create/edit/
   load/save, unknown/wrong-type fields, disabled/missing profiles and env/command
@@ -615,22 +616,35 @@ every processor/client remains P6/P7 work; no native adapter is registered.
 
 ### P2 — Transport, runtime, and lifecycle
 
-- [ ] C08 — Implement typed JSONL ACP client with split/multiple frames,
+- [x] C08 — Implement typed JSONL ACP client with split/multiple frames,
   malformed/oversized stdout, stderr diagnostics, numeric/string/zero RPC IDs,
   reverse requests, timeout and EOF/error propagation tests.
-- [ ] C09 — Implement executable/env/cwd/connection resolution and exact ACP
+- [x] C09 — Implement executable/env/cwd/connection resolution and exact ACP
   argv. Verify no shell interpolation, no terminal stdout, no config wizard,
   correct version detection and compatible automatic-update control. Register
   the dedicated adapter only once the runtime implements its advertised surface.
-- [ ] C10 — Implement serialized per-conversation runtime/session preparation,
+- [x] C10 — Implement serialized per-conversation runtime/session preparation,
   fingerprints and profile-scoped metadata discovery. Verify concurrent startup,
   model catalog failure, profile/cwd changes and session close.
-- [ ] C11 — Implement native cancel with bounded fallback and owned descendant
+- [x] C11 — Implement native cancel with bounded fallback and owned descendant
   cleanup. Verify live sleeper stops, root-exit descendants stop, unrelated PIDs
   survive and no interrupted command is retried.
-- [ ] C12 — Implement idle/reset/shutdown generation handling. Verify late
+- [x] C12 — Implement idle/reset/shutdown generation handling. Verify late
   startups close, pending RPCs/interactions terminate and a new runtime works
   after `BackendRegistry.shutdownAll()`.
+
+P2 evidence (November 6): dedicated transport/runtime/session/process modules,
+47 focused tests, and `scripts/probe-cortex-runtime.ts` using the actual new
+modules on CoCo 1.2.35 / macOS arm64. Real authenticated inference, native
+cancel/session reuse, saved-session load, forced-root descendant cleanup,
+empty-auth inference failure and reusable shutdown passed. The registry boundary
+is tested through a lifecycle-only test adapter. Server registration waits for
+P3/P5's advertised adapter/event/chat surface; no runnable capabilities are
+published by P2. See [the current runtime spec](../spec-cortex-code.md).
+The private report includes revision 869ee8a plus the P2 dirty working tree and
+no account/connection/OAuth data. Discovery is intentionally uncached until
+model mapping needs a profile-scoped cache. Native Windows is explicitly gated;
+Linux certification and full app compatibility remain pending.
 
 ### P3 — Events, interactions, models, usage, and attachments
 
@@ -872,7 +886,7 @@ or release is required to validate this planning document.
 | Gate | Current status | Required experiment / resolution | Release effect |
 |---|---|---|---|
 | G1 — Strict tool-free execution | Gated after Phase 0: three native calls still emitted with unmatched allowlist; source confirms allowlist does not remove declarations | Demonstrate native zero-tool boundary across every invocation path, including default/deferred/MCP tools, hooks, skills, slash commands and sequential calls | Blocks CoCo Memory processor and restricted titles/summaries; deterministic fallbacks permit core chat |
-| G2 — Root-exit/descendant cleanup | Phase 0 macOS pattern passed with real native sleeper and unrelated process; dedicated adapter acceptance pending | Implement identity tracking and verify cancel/timeout/root death with detached children on each OS | Blocks core release on that OS until adapter cleanup policy is tested |
+| G2 — Root-exit/descendant cleanup | Dedicated P2 macOS runtime passed native sleeper cancel/root death/unrelated preservation; timeout fallback and identity races covered by focused tests | Retain userspace sampling limitation; verify full adapter/background finalization and each additional OS | Blocks core release on that OS until full adapter cleanup policy is tested |
 | G3 — Recovery and terminal errors | Native evidence partial; no adapter | Test saved-session load/replay, missing-session-only fallback, error-as-text classification, abort and durable job recovery through Cockpit | Blocks reliable core chat/restart claims |
 | G4 — Media and artifacts | PNG input verified on one model; broader formats/output unverified | Model-specific image/OCR/KB pipeline evidence first; separate native PDF/audio/video/generation experiments | Only verified modality/model/transport combinations enabled |
 | G5 — Account isolation and refresh | Shared auth works across days; expiry/two accounts unverified | Real two-account auth home/cache/Keychain tests and expiry refresh under the actual server user | Blocks isolation claim/automatic isolated profile setup; shared-auth core remains possible |
@@ -919,6 +933,7 @@ At implementation time update only the relevant current specifications:
 | 2026-11-05 | Planning baseline; all tasks initially unchecked | Checkpoint `083d4e3` | CoCo 1.2.35 / macOS arm64 | Prior research plus fresh saved-auth real inference; G1–G10 tracked above |
 | 2026-11-05 | P0 C01–C03 complete; 56 production tasks remain unchecked | Planning checkpoint `083d4e3`; preflight work in this change | CoCo 1.2.35 / macOS arm64 / Node 26.0.0 | Seven sanitized excerpts; real startup/inference/cancel/root-exit/restriction/missing-auth probe; production gates retained |
 | 2026-11-06 | P1 C04–C07 complete; 52 tasks remain unchecked | Profile/capability foundation change | No new native CLI claims | 135 suites / 2,604 tests passed; backend/web/mobile typechecks; no runtime/UI execution registration |
+| 2026-11-06 | P2 C08–C12 complete; 47 tasks remain unchecked | Dedicated native runtime foundation change, following `869ee8a` | CoCo 1.2.35 / macOS arm64 / Node 26.0.0 | 138 suites / 2,651 tests passed, including 47 P2 tests; real runtime smoke passed all scenarios; no adapter/UI registration; P3 event mapping next |
 
 ## 13. References
 

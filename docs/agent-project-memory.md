@@ -179,6 +179,13 @@ tool is unavailable.
   setup drafts cannot resolve/promote, and shared role/media selection policy
   lives in `src/contracts/backendCapabilities.ts`. A recognized profile identity
   does not prove runtime availability or authentication; the adapter is pending.
+  P2 dedicated CoCo protocol/runtime/session/process foundations and the real
+  `scripts/probe-cortex-runtime.ts` passed on macOS arm64 / CoCo 1.2.35. Keep
+  generation-safe reusable shutdown, exact ACP-first argv, fatal timeout cleanup,
+  replay suppression and identity-checked descendants; no production dependency
+  on Grok/Kiro. Userspace sampling is not OS containment. Adapter registration
+  waits for its event/interaction/chat surface. Review focused P2 tests and run
+  the opt-in runtime probe for native drift; it is not a complete app/UI suite.
 - Fresh installs should be provider-neutral. Do not imply Claude Code is
   configured when the user has not installed or authenticated it.
 - CLI profiles are scoped per conversation where applicable and can support
