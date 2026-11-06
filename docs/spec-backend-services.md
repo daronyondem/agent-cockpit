@@ -1315,10 +1315,20 @@ ownership (`cortexRuntime.ts`), per-conversation leases/discovery/reset/idle and
 reusable shutdown generations (`cortexSessions.ts`), and identity-checked POSIX
 descendant cleanup (`cortexProcess.ts`). Domain shapes live in `src/types/cortex.ts`.
 These modules have no production Grok/Kiro dependency. No `CortexCodeAdapter` is
-registered in server.ts yet: event/interactions mapping and durable chat still
+registered in server.ts yet: durable chat and the adapter facade still
 must implement their advertised surface. Session creation and catalog discovery
 are not authentication checks. The [CoCo runtime spec](spec-cortex-code.md#native-transport-and-runtime-ownership)
 defines exact argv, environment, deadlines, fingerprints and cleanup limitations.
+
+P3 now adds the internal `CortexTurn` bridge, with focused event, interaction,
+model, terminal-error, usage, attachment and artifact modules. It consumes a
+prepared leased runtime and emits existing StreamEvents. Exact decision IDs
+are required for answers; native IDs are not browser ownership tokens. Dynamic
+configOptions and native auto reset, version-tested error text withholding,
+once-per-turn cache counters, explicit PNG input and explicit scoped file
+delivery are specified in [the P3 CoCo contract](spec-cortex-code.md#internal-turn-bridge-and-event-mapping-p3).
+The actual auth/adapter/MCP/processor/client paths remain later phases; no new
+backend registration, endpoint or processor capability is introduced by P3.
 
 ### Adding a New Backend
 

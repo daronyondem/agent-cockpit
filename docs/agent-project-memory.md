@@ -186,6 +186,16 @@ tool is unavailable.
   on Grok/Kiro. Userspace sampling is not OS containment. Adapter registration
   waits for its event/interaction/chat surface. Review focused P2 tests and run
   the opt-in runtime probe for native drift; it is not a complete app/UI suite.
+  P3 internal mapping now passes the dedicated `scripts/probe-cortex-events.ts`
+  on the same native baseline. Keep exact RPC/tool identity separate from fresh
+  per-turn decision IDs, native auto reset, classified/withheld terminal error
+  text, final token counters separate from context snapshots, unknown Snowflake
+  pricing and scoped PNG-only image evidence. Artifact downloads use explicit
+  delivery markers/resource links; code diffs remain tool outcomes. An empty
+  Snowflake home can omit the model catalog, so configured chat fails selection
+  before inference; auth setup must still verify a minimal real request instead
+  of bypassing model validation. P4 auth setup is next; durable adapter/client
+  integration remains pending. See the current CoCo spec and progress tracker.
 - Fresh installs should be provider-neutral. Do not imply Claude Code is
   configured when the user has not installed or authenticated it.
 - CLI profiles are scoped per conversation where applicable and can support

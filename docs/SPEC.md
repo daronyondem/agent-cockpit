@@ -11,7 +11,7 @@
 | 3. API Endpoints | [spec-api-endpoints.md](spec-api-endpoints.md) | REST + WebSocket API surface |
 | 4. Backend Services | [spec-backend-services.md](spec-backend-services.md) | ChatService, adapter system, KB pipeline, update service |
 | 4.2 Grok Build | [spec-grok-build.md](spec-grok-build.md) | ACP transport, profiles/auth, interactions, background work, usage/media, native goals, and compatibility checks |
-| 4.2 Cortex Code foundations | [spec-cortex-code.md](spec-cortex-code.md) | Implemented CoCo profile/capability contracts and dedicated ACP/runtime/process ownership; execution adapter registration remains pending |
+| 4.2 Cortex Code foundations | [spec-cortex-code.md](spec-cortex-code.md) | Implemented CoCo profiles, ACP/runtime ownership and internal event/interaction/model/usage/media mapping; execution adapter registration remains pending |
 | 5. Workspace Context Feature | [spec-workspace-context.md](spec-workspace-context.md) | Markdown-first workspace operating memory, CLI-maintained context files, scan and maintenance runs |
 | 6. Workspace Routines | [spec-routines.md](spec-routines.md) | Workspace-owned markdown workflows, scheduled/manual harness runs, proposal installation, run folders, and Telegram outreach destination pairing |
 | 7. Server Initialization & Security | [spec-server-security.md](spec-server-security.md) | Config, startup order, auth, CSRF, CSP |
@@ -27,7 +27,7 @@ Design and planning documents that preserve product intent, implementation plans
 
 | Document | Status | Description |
 |----------|--------|-------------|
-| [design/cortex-code-implementation-plan.md](design/cortex-code-implementation-plan.md) | P0–P2 complete; adapter/event integration pending | CoCo harness feature mapping, remote OAuth setup, ACP/runtime/MCP design, phased implementation checklist, and native/client/platform acceptance gates |
+| [design/cortex-code-implementation-plan.md](design/cortex-code-implementation-plan.md) | P0–P3 complete; auth setup and durable adapter integration pending | CoCo harness feature mapping, remote OAuth setup, ACP/runtime/MCP design, phased implementation checklist, and native/client/platform acceptance gates |
 | [design/claude-code-interactive/implementation-plan.md](design/claude-code-interactive/implementation-plan.md) | Implemented | End-to-end implementation plan for a separate Claude Code Interactive backend using hidden PTY control, transcript-derived events, shared Claude profiles, and provider-specific CLI compatibility warnings |
 | [design/claude-code-interactive/hardening-plan.md](design/claude-code-interactive/hardening-plan.md) | Implemented | Follow-up hardening plan for Claude Code Interactive terminal query responses, hook-driven lifecycle signals, transcript finalization, and real-CLI drift coverage |
 | [design/knowledge-base/ingestion-hybrid.md](design/knowledge-base/ingestion-hybrid.md) | Implemented | Hybrid AI-assisted KB ingestion (PDF/DOCX/PPTX/image conversion at ingest time) — shipped across PRs #213–#228 |

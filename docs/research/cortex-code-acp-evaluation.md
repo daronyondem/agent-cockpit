@@ -354,6 +354,39 @@ work, system-prompt envelopes, expired-token flows, other OSes, and actual
 Cockpit adapter execution remain gates in the implementation plan. Phase 0
 changes no desktop/mobile UI or assets.
 
+## P3 native mapping follow-up — 2026-11-06
+
+The dedicated internal CortexTurn and focused event/interaction/model/usage/
+attachment/artifact modules passed `scripts/probe-cortex-events.ts` on the same
+CoCo 1.2.35 / macOS arm64 baseline, following revision 549f111. This is native
+mapping acceptance, not a registered Cockpit chat/UI harness.
+
+- Actual configOptions discovery and changing explicit low effort back to native
+  auto succeeded. Shared authentication still worked in fresh native processes.
+- Native write/read, explicit FILE_DELIVERY and exact artifact-byte persistence
+  succeeded. Generated text may include a trailing newline, so the protocol
+  fixture accepts that formatting while comparing stored bytes to the real file.
+- Two sequential questions accepted typed free-form and option answers; duplicate
+  responses were rejected at the decision-generation boundary.
+- A revised plan produced a second gate. The fixture output was absent at both
+  gates and appeared only after approval. Rejected-plan failed tool output did
+  not terminate the valid revision turn.
+- Explicit validated PNG input on claude-sonnet-4-6 identified the blue square
+  and green circle. Other image models/formats were not certified.
+- Empty SNOWFLAKE_HOME omitted the model config option, while mode/effort/scope
+  options were still present. Configured chat correctly failed selection before
+  prompting. A separate minimal raw native inference request returned the
+  retained missing-connection error signature. This strengthens the rule that
+  catalogs/session creation are not authentication evidence; it does not justify
+  bypassing failed model validation in ordinary chat.
+
+The private temporary report records platform/version/revision/dirty evidence
+and assertion booleans without connection/account/OAuth values or raw transcript.
+The implementation tracker and [current spec](../spec-cortex-code.md) define
+the implemented boundaries. Strict processors, native image generation, billing,
+full isolation, delegation finalization, new OSes and actual adapter/UI workflows
+remain separate gates.
+
 ## Official references
 
 - [ACP support](https://docs.snowflake.com/en/user-guide/cortex-code/cortex-code-acp)

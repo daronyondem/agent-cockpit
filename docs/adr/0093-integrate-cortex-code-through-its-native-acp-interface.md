@@ -24,6 +24,15 @@ affects:
   - src/services/backends/cortexSessions.ts
   - src/services/backends/cortexProcess.ts
   - scripts/probe-cortex-runtime.ts
+  - src/services/backends/cortexTurn.ts
+  - src/services/backends/cortexEvents.ts
+  - src/services/backends/cortexInteractions.ts
+  - src/services/backends/cortexModels.ts
+  - src/services/backends/cortexErrors.ts
+  - src/services/backends/cortexUsage.ts
+  - src/services/backends/cortexAttachments.ts
+  - src/services/backends/cortexArtifacts.ts
+  - scripts/probe-cortex-events.ts
   - src/services/chat/workspaceInstructionStore.ts
   - docs/spec-cortex-code.md
 ---
@@ -105,6 +114,17 @@ the runtime rather than leaving possibly side-effectful requests executing.
 Shutdown remains reusable after registry-driven CLI updates. POSIX ownership
 sampling is best-effort userspace cleanup, not a sandbox or atomic containment;
 retain that limitation even after the native smoke passes.
+
+P3 keeps mapping in an internal turn bridge until durable adapter integration.
+Generate a distinct decision ID for each UI gate, preserve native IDs for RPC
+responses, and require expected-decision identity on replies. Withhold possible
+native terminal error text until result classification to avoid persisting raw
+connection/service diagnostics. Use current per-runtime configOptions and native
+auto reset rather than a copied account catalog or sticky effort override.
+Require complete final token counters; context snapshots are not billing.
+Scope explicit PNG inputs to trusted conversation uploads and verified native
+model/version evidence. Follow Cockpit's explicit FILE_DELIVERY/resource-link
+policy for downloads; a normal code diff is not a downloadable artifact.
 
 Preserve native token/cache categories and context snapshots separately. Use
 `costSource:'none'` until Snowflake billing evidence exists; never infer direct

@@ -1,4 +1,6 @@
 import type { CliProfile } from './cliProfiles';
+import type { EffortLevel } from './cliProfiles';
+import type { AttachmentMeta } from './attachments';
 
 export type CortexRecord = Record<string, unknown>;
 export type CortexRpcId = string | number;
@@ -29,4 +31,25 @@ export interface CortexSessionOptions {
   contextKey?: string;
   pluginDir?: string;
   sessionId?: string;
+}
+
+export interface CortexConfigOption {
+  id: string;
+  currentValue: string;
+  options: Array<{ value: string; name: string }>;
+}
+
+export interface CortexSelection {
+  model?: string;
+  effort?: EffortLevel;
+  mode?: 'standard' | 'plan';
+}
+
+export interface CortexTurnOptions extends CortexSelection {
+  text: string;
+  attachments?: AttachmentMeta[];
+  /** Trusted conversation-specific upload directory, supplied by the server. */
+  attachmentRoot?: string;
+  allowTools: boolean;
+  timeoutMs?: number;
 }

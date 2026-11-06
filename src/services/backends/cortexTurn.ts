@@ -1,0 +1,92 @@
+import type { CortexTurnOptions, StreamEvent } from '../../types';
+import { CortexRuntime } from './cortexRuntime';
+import { cortexRecord } from './cortexProtocol';
+import { CortexEventDecoder } from './cortexEvents';
+import { CortexInteractions } from './cortexInteractions';
+import { configureCortex } from './cortexModels';
+import { cortexPromptContent } from './cortexAttachments';
+import { CortexArtifacts } from './cortexArtifacts';
+import { cortexRuntimeError, cortexTerminalError } from './cortexErrors';
+
+/** Internal turn bridge; durable adapter/route ownership is added in P5. */
+export class CortexTurn {
+  private events: StreamEvent[] = [];
+  private wake?: () => void;
+  private ended = false;
+  private aborted = false;
+  private started = false;
+  private prompting = false;
+  private interactions: CortexInteractions;
+
+  constructor(private runtime: CortexRuntime, private options: CortexTurnOptions) {
+    this.interactions = new CortexInteractions(runtime.client, runtime.sessionId || '', event => this.emit(event), options.allowTools);
+  }
+
+  get pendingId(): string | null { return this.interactions.pendingId; }
+  input(text: string, decisionId: string): boolean { return !this.ended && this.interactions.input(text, decisionId); }
+  async abort(): Promise<void> {
+    this.aborted = true;
+    this.interactions.cancel();
+    if (this.started && !this.prompting && !this.ended) await this.runtime.client.close();
+    else await this.runtime.cancel();
+  }
+
+  async *stream(): AsyncGenerator<StreamEvent> {
+    if (this.started) throw new Error('Cortex turn stream is already consumed');
+    this.started = true;
+    const running = this.run();
+    try {
+      while (!this.ended || this.events.length) {
+        if (this.events.length) yield this.events.shift()!;
+        else await new Promise<void>(resolve => { this.wake = resolve; });
+      }
+    } finally {
+      if (!this.ended) await this.abort();
+      await running;
+    }
+  }
+
+  private emit(event: StreamEvent): void { this.events.push(event); this.wake?.(); }
+
+  private async run(): Promise<void> {
+    const decoder = new CortexEventDecoder(this.runtime.sessionId || '');
+    const artifacts = new CortexArtifacts(this.runtime.sessionId || '', this.runtime.config.cwd);
+    let unsubscribe: (() => void) | undefined;
+    let artifactWork = Promise.resolve();
+    try {
+      if (this.aborted) { this.emit({ type: 'error', error: 'Cortex turn cancelled', source: 'abort' }); return; }
+      const model = await configureCortex(this.runtime, this.options);
+      const content = await cortexPromptContent(this.options.text, this.options.attachments || [], this.options.attachmentRoot,
+        model, this.runtime.version, cortexRecord(cortexRecord(this.runtime.init.agentCapabilities).promptCapabilities).image === true);
+      if (this.aborted) { this.emit({ type: 'error', error: 'Cortex turn cancelled', source: 'abort' }); return; }
+      unsubscribe = this.runtime.subscribe(message => {
+        if (message.id !== undefined) return this.interactions.handle(message);
+        this.interactions.observe(message);
+        for (const event of decoder.decode(message)) this.emit(event);
+        artifactWork = artifactWork.then(async () => { for (const event of await artifacts.collect(message)) this.emit(event); });
+      });
+      this.prompting = true;
+      const result = cortexRecord(await this.runtime.prompt(content, this.options.timeoutMs));
+      await artifactWork;
+      const usage = decoder.usage.complete(result.usage, model);
+      const error = cortexTerminalError(this.aborted ? { ...result, stopReason: 'cancelled' } : result, decoder.finalText, this.runtime.version);
+      if (!error) {
+        for (const event of decoder.finishText()) this.emit(event);
+        for (const event of await artifacts.deliver(decoder.deliveries)) this.emit(event);
+      }
+      if (usage) this.emit(usage);
+      if (error) this.emit(error);
+      else if (decoder.resultText) this.emit({ type: 'result', content: decoder.resultText });
+      if (!usage && result.stopReason !== 'cancelled' && !error) this.emit({ type: 'error', error: 'Cortex did not report complete token usage for this turn.', terminal: false, source: 'backend' });
+    } catch (error) {
+      await artifactWork;
+      this.emit(this.aborted ? { type: 'error', error: 'Cortex turn cancelled', source: 'abort' } : cortexRuntimeError(error));
+    } finally {
+      unsubscribe?.();
+      this.interactions.cancel();
+      this.emit({ type: 'done' });
+      this.ended = true;
+      this.wake?.();
+    }
+  }
+}

@@ -2,8 +2,9 @@
 
 [← Back to index](SPEC.md)
 
-**Implemented scope:** P1 contract/profile and P2 transport/runtime foundations,
-November 6, 2026. Native runtime smoke passed on CoCo 1.2.35, macOS arm64.
+**Implemented scope:** P1 profiles, P2 transport/runtime, and P3 internal
+events/interactions/models/usage/attachments/artifacts, November 6, 2026.
+Native acceptance baseline is CoCo 1.2.35, macOS arm64.
 **Runtime status:** No Cortex Code adapter is registered in `server.ts` yet.
 CoCo is not an executable chat/processor/auth/update option in this slice.
 See [the implementation tracker](design/cortex-code-implementation-plan.md),
@@ -170,8 +171,8 @@ and `cortexSessions.ts` owns conversation leases, discovery and generations.
 They do not import Grok/Kiro implementations. Domain wire/config/identity shapes
 live in declaration-only `src/types/cortex.ts` and the server type barrel.
 These are internal foundations; no adapter is registered, no routes are added,
-and no new runnable capabilities are advertised yet. Event/interactions/model
-mapping is P3; durable ChatService, external-session persistence and plugin
+and no new runnable capabilities are advertised yet. P3's internal turn bridge
+is specified below; durable ChatService, external-session persistence and plugin
 integration remain P5. The native runtime API is not a tool-free processor.
 
 ### Executable, environment and startup
@@ -312,6 +313,186 @@ platform's timestamp precision. Native evidence deliberately waits for ownership
 observation before killing the root. Full finalization/background-delegation
 policy remains a later release gate; do not infer that P2 supports subagents.
 
+## Internal turn bridge and event mapping (P3)
+
+`CortexTurn` in `cortexTurn.ts` expects a prepared runtime owned by a conversation
+lease. It exposes a single-use async `stream()`, `pendingId`,
+`input(text,decisionId):boolean`, and awaitable `abort()`. Domain selection/turn
+options are declared in `src/types/cortex.ts`: text, optional model/effort,
+optional standard/plan mode, trusted attachment metadata/root, permission policy
+`allowTools`, and prompt timeout. It configures the runtime, validates attachments,
+subscribes before prompting, routes reverse requests and owned notifications,
+drains asynchronous artifact work, classifies the final result and emits one
+`done`. Every terminal path unsubscribes and cancels pending decisions. Dropping
+the iterator aborts unfinished work. Pre-start abort sends no prompt; abort
+during setup closes the transport; active-prompt abort uses native cancellation.
+The bridge does not acquire/release leases, persist external sessions, inject
+system instructions/MCP, register an adapter, or implement processor roles.
+Those responsibilities remain P5/P6. `allowTools:false` only denies reverse
+permissions; it does not establish a tool-free native session.
+
+### Models, effort and modes
+
+`cortexModels.ts` parses `select` configOptions with string IDs/current values
+and flat string-valued choices. It skips malformed/duplicate IDs and choices,
+preserves opaque native model IDs/names and native Auto, and returns ModelOptions
+with family `cortex`. It does not publish an account's catalog as a fixed list.
+Effort metadata is the advertised intersection with minimal/low/medium/high/
+xhigh/max. The current native model value marks the default. No model-vendor
+name infers media, pricing, or other capabilities.
+
+`configureCortex(runtime,selection)` reads only that runtime's configOptions and
+uses `session/set_config_option` sequentially for model, thought_level and mode.
+Omitted model/effort explicitly select native `auto`, including after a prior
+override; omitted mode selects `standard`. Validate every selection against the
+latest response catalog, and re-read returned configOptions after each set.
+An RPC failure, malformed response, or unconfirmed current value clears the
+catalog and rejects; do not send a prompt or silently choose another model.
+Only standard/plan mode is allowed even if the native catalog advertises bypass.
+Never set `_restricted_session_scope` or another SQL privilege option.
+
+P3 performs no model-cache fallback. Missing/changed catalogs cannot borrow
+another profile's metadata. An empty Snowflake auth home was observed to omit
+the model option altogether; configured chat then fails model validation before
+inference. Auth verification must independently make a minimal native request,
+rather than bypassing a missing catalog in ordinary configured chat.
+
+### Text, tools and terminal errors
+
+`CortexEventDecoder` accepts only `session/update` with the exact owned native
+session ID. It maps text/thought chunks to streaming text/thinking, initial tool
+calls to one tool activity per native tool ID, and completed/failed updates to
+one outcome. A new tool after assistant text emits `turn_boundary` and resets
+the final-text segment. Duplicate calls/completions do not create extra cards or
+outcomes. Unknown variants are ignored; unknown tool names remain named tools
+without inventing agent/subagent capabilities. In-progress updates do not create
+duplicate activity cards. Native titles map read/write/edit/bash/grep/glob,
+questions/plans and web tools to the existing tool vocabulary. Interactive cards
+come from reverse requests, not empty question/plan tool activities.
+
+Outcomes prefer native content, then string rawOutput, then native status.
+Text resources, resource names and diff path/old/new text become outcome text,
+bounded to 1,000 characters. Native `failed` marks that tool as failed; it is not
+a terminal turn error. A rejected plan can fail a tool while valid revision
+continues. Final assistant text becomes an existing `result` event.
+
+`cortexErrors.ts` owns locally authored value-free input errors and sanitized
+runtime/terminal failures. Candidate assistant text beginning with `Error:`
+(including a fragmented prefix) is held until final classification. On tested
+1.2.35/1.2.35+ distributions, an anchored native missing-connection signature or
+`Error: Error: API error <4xx/5xx>:` without complete token usage becomes a
+friendly terminal error. Do not stream/persist raw account paths, service URLs,
+request IDs or connection diagnostics. Unknown leading errors without complete
+usage remain visible as a generic terminal failure. Quoted errors with complete
+usage, and normal prose mentioning an error, remain valid text. A missing usage
+object by itself is not a turn failure: emit the valid answer with a nonterminal
+warning and no fabricated token event. Unknown/missing stopReason and limit stops
+are terminal failures; cancelled is an abort. RPC error data is never echoed to
+clients. No failure path retries the original prompt or its tools.
+
+### Question, permission and plan ownership
+
+`cortexInteractions.ts` keeps exact native reverse RPC identity independently
+from native tool IDs. Each UI decision receives a fresh
+`cortex-decision:<turn UUID>:<ordinal>` activity ID; stale browser decisions cannot
+address a later request even when native IDs are reused. One queued decision is
+presented at a time. The future adapter/client boundary must retain that expected
+decision ID when accepting an answer; routing it is P5/P7 work.
+
+Recognize a question by valid integer questionIndex/totalQuestions metadata and
+allow-once choices. Preserve native option IDs separately from displayed names.
+An exact unambiguous label/ID selects that option; otherwise a native option
+marked `_meta.freeForm:true` receives the typed answer in
+`outcome._meta.freeFormText`. Choosing the free-form label without typed content
+does not submit an answer. Blank, oversized (>16,000 characters), duplicate,
+stale, ambiguous and unsupported replies return false. One selection per native
+question is supported; multi-select remains unverified and is denied. Request
+ID 0 works, and sequential questions create independent decisions.
+
+Ordinary permissions can auto-select only the observed allow-once `allow` plus
+reject-once `deny` schema with kind other and no question metadata, when
+allowTools is true. Never choose allow-always. Unknown/malformed permissions,
+unsupported question shapes and denied calls return cancelled. Foreign-session
+or unknown-method reverse requests are left unclaimed for transport rejection.
+Native reads can exist without reverse approval; this is not a processor sandbox.
+
+A plan decision requires kind switch_mode, proceed/keep_planning choices, and
+a prior owned `plan` update with `_meta.kind:'plan_document'` and planDocument
+(bounded to 50,000 characters). Emit EnterPlanMode then ExitPlanMode with that
+document for each gate, including a revision, so existing stream state reopens
+the approval UI. Approve/yes/continue/run selects proceed; reject/no selects
+keep_planning; other nonblank feedback selects keep_planning with freeFormText.
+Cancel/abandon cancels that decision; stopping the whole turn uses `abort()`.
+After response ownership ends, emit a decision outcome and present the next
+queued decision. Abort/completion/process exit prevent later input and clear all
+outstanding reverse ownership. A failed revision tool does not end the turn.
+
+### Token usage and pricing
+
+`CortexTurnUsage` is per prompt. `usage_update {size,used}` is a context snapshot,
+converted to a bounded 0–100 percentage, never a billable delta. Final prompt
+usage requires all four finite nonnegative counters: inputTokens, outputTokens,
+cachedReadTokens and cachedWriteTokens. Map them directly to Cockpit input,
+output, cacheRead and cacheWrite; native uncached input already excludes cache,
+so do not subtract caches again or add totalTokens as another counter.
+
+The tracker finalizes once; duplicate terminal RPC responses are ignored by the
+transport and load replay is suppressed by the runtime. Complete counters on a
+cancelled turn remain billable known usage even though the turn is interrupted.
+Absent/malformed/partial counters emit no invented zero usage. The last valid
+context snapshot accompanies complete usage. Existing conversation/daily ledger
+stores consume normal usage events; their format is unchanged. Tests reconcile
+two turns and caches through the actual ledger store. Durable job/restart
+ownership is still P5, not a new competing deduplication store.
+
+CoCo emits costSource none and numeric costUsd 0 only as the contract's unknown
+amount placeholder. No Snowflake dollar spend has been verified. Existing pricing
+dispatch excludes cortex-code even when its model ID names Claude/OpenAI; no
+direct-vendor estimate/costSnapshot is added. Context occupancy is not spend.
+
+### Attachment and artifact boundaries
+
+`cortexAttachments.ts` builds ACP prompt content from text plus trusted attachment
+metadata. It never parses/open paths from `[Uploaded files: ...]` or other user
+text. The server must supply the conversation's own upload directory; canonical
+real paths must remain beneath that root. Queued AttachmentMeta is accepted
+after the same validation. Text/code/markdown files are regular-file references
+for native tools, not inline file contents. The current extension allowlist is
+txt/md/markdown/csv/tsv/json/js/ts/py/html/css/sql/xml. Other non-image formats,
+including direct PDF/audio/video/Office input, are rejected in this bridge.
+
+Explicit image content is verified only for claude-sonnet-4-6 on 1.2.35/1.2.35+
+and requires initialize's image prompt capability. Auto/unknown models fail
+closed. Current format is PNG only: extension, PNG signature/IHDR dimensions and
+actual decoding must agree. Maximums are ten attachments, 5 MiB per image,
+10 MiB images per turn and 20 million pixels. Open canonical files without
+following a replaced final symlink and bound the read to limit+1 bytes. Files
+outside the conversation, sibling uploads, missing/invalid/oversized images and
+unsupported MIME/model combinations fail before prompting. This is explicit
+upload scoping, not containment of the CLI's normal authorized file tools.
+
+`cortexArtifacts.ts` remembers completed native write/edit paths but does not
+turn ordinary coding changes into downloads. Explicit file-resource links from
+completed edit/execute tools, or assistant FILE_DELIVERY markers after completed
+output work, can emit standard artifact source events. Markers split across
+chunks are removed from normalized text and converted to delivery paths; normal
+HTML comments remain text. Bound an incomplete comment buffer to 8 KiB, each
+delivery path to 4,096 characters and delivery markers to ten per turn. The
+collector checks canonical cwd scope, regular file, <=50 MiB, and excludes native
+.cortex internals; reject remote/non-file resources, traversal/symlink escapes,
+unavailable files and failed/read-only tool output. Never guess a file path from
+arbitrary stdout. Deduplicate canonical path/size/mtime across source and marker
+events; preserve source tool ID when a native write owns that canonical path.
+
+The bridge drains file-resource work and explicit deliveries before its final
+usage/result/done boundary. Existing processStream/ArtifactStore copies files
+into the conversation artifact directory and emits/persists the existing shared
+descriptor. Tests verify text/code, real Office/PDF fixture bytes, sanitized
+filenames, conversation ownership, download routes and text preview. Binary
+previews retain the existing client/file-type behavior; no new Office converter,
+native image generation or additional input media support is claimed. Shared
+file-delivery markers continue to follow Cockpit's explicit-deliverable policy.
+
 ## Verification and client impact
 
 - `test/cortexProfiles.test.ts`: connection request validation, literal name
@@ -341,6 +522,17 @@ policy remains a later release gate; do not infer that P2 supports subagents.
   reusable shutdown on November 6, 2026. It uses the dedicated production
   foundations, rather than Phase 0's Grok research helpers. No browser/route or
   full ChatService integration is implied by this smoke result.
+- `test/cortexEvents.test.ts`, `test/cortexModels.test.ts`,
+  `test/cortexInteractions.test.ts`, `test/cortexTurn.test.ts`,
+  `test/cortexAttachments.test.ts`, `test/cortexArtifacts.test.ts`: native excerpt
+  mapping and focused boundary tests, plus real scoped upload/queue, artifact
+  storage/download/preview and ledger integration. No server adapter is registered
+  by those tests. `test/helpers/cortexFixtures.ts` provides transport control using
+  retained native excerpts; it is not a substitute for real CLI acceptance.
+- `scripts/probe-cortex-events.ts`: opt-in P3 native acceptance for configuration/
+  effort reset, tools and explicit delivery, sequential/free-text questions,
+  duplicate answers, revised plan gates with no write before approval, explicit
+  PNG recognition and missing-auth catalog/inference failure classification.
 
 Desktop/mobile receive additive type fields and share the pure contract module;
 no composer/setup controls, mobile assets, PWA metadata or browser interaction

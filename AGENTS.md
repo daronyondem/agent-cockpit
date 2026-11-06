@@ -157,7 +157,7 @@ tool-free processors gated until zero-tool execution is demonstrated; an
 allowlist or denied approval alone does not establish that boundary. See
 Proposed ADR-0093 and `docs/design/cortex-code-implementation-plan.md`.
 
-P1 profile/capability and P2 transport/runtime foundations are specified in
+P1 profile/capability, P2 transport/runtime and P3 internal turn mapping are specified in
 `docs/spec-cortex-code.md`; adapter registration remains pending. CoCo owns its
 dedicated `cortexProtocol.ts`, `cortexRuntime.ts`, `cortexSessions.ts` and
 `cortexProcess.ts` modules; production code must not import Grok/Kiro adapters.
@@ -166,6 +166,14 @@ and `test/cortexProcess.test.ts` when changing those boundaries. Run the opt-in
 `scripts/probe-cortex-runtime.ts` for native runtime drift, as documented in
 `docs/spec-testing.md`; it is not yet a full Cockpit adapter/UI suite. Retain
 generation-safe reusable shutdown and identity-checked descendant cleanup.
+CoCo event, interaction, model, error, usage, attachment and artifact ownership
+lives in the focused `cortex*.ts` modules. Review the corresponding focused
+tests and run opt-in `scripts/probe-cortex-events.ts` for native mapping drift.
+Keep decision generation separate from native RPC/tool IDs, use native auto for
+override reset, hold terminal error text until classified, and retain unknown
+Snowflake pricing. Artifacts require explicit delivery markers/resource links;
+ordinary code diffs remain tool outcomes. Model catalog discovery is not auth
+evidence; an empty auth home can omit the model option before inference.
 Shared role/media selection policy belongs
 in browser-safe `src/contracts/backendCapabilities.ts`, with the backend media
 module kept as a compatibility facade. Configuration completeness is distinct

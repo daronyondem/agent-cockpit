@@ -1,6 +1,6 @@
 # Cortex Code (CoCo) harness implementation plan
 
-**Status:** P0–P2 complete; profile/capability and native runtime foundations implemented; event/adapter integration pending.
+**Status:** P0–P3 complete; native runtime and internal event/interaction/media mapping implemented; auth setup and durable adapter integration pending.
 **Created:** 2026-11-05.
 **Planning baseline:** Agent Cockpit `0.4.166`, revision `11d14825e955f6c83364c3917558b4d3068a4bac`, plus the uncommitted CoCo research/guidance documents.
 **Native compatibility baseline:** Cortex Code `1.2.35`, distribution `1.2.35+191333.f82de3d91715`, macOS arm64.
@@ -34,7 +34,7 @@ Planning assumptions:
 - Deliver core chat before optional parity work. Unverified features remain
   explicitly unavailable; do not emulate native goals or silently reroute work
   to a different profile to make a selector appear functional.
-- C01–C12 are complete as recorded below. Later phases remain proposed and do
+- C01–C20 are complete as recorded below. Later phases remain proposed and do
   not describe shipped support.
 
 Track work as follows:
@@ -648,30 +648,46 @@ Linux certification and full app compatibility remain pending.
 
 ### P3 — Events, interactions, models, usage, and attachments
 
-- [ ] C13 — Map text/thinking/tools/outcomes and edit/diff/resource content to
+- [x] C13 — Map text/thinking/tools/outcomes and edit/diff/resource content to
   normalized events. Verify fragmented updates, unknown variants, duplicated IDs,
   nonfatal failed tools and session ownership.
-- [ ] C14 — Implement `configOptions` parsing, dynamic model catalogs and
+- [x] C14 — Implement `configOptions` parsing, dynamic model catalogs and
   `session/set_config_option`. Verify model/effort changes, native auto reset,
   invalid selections, stale catalogs and profile separation.
-- [ ] C15 — Implement question/free-text/sequential-question replies and
+- [x] C15 — Implement question/free-text/sequential-question replies and
   ordinary permissions. Verify request ID 0, option identity, no double response,
   stale replies, denied/unknown requests and process exit.
-- [ ] C16 — Implement plan approval/reject/revise with prior plan document.
+- [x] C16 — Implement plan approval/reject/revise with prior plan document.
   Verify fixture output appears only after approval, revision produces a new
   gate and rejected tools do not end a valid revision turn.
-- [ ] C17 — Implement version-tested error classification and result handling.
+- [x] C17 — Implement version-tested error classification and result handling.
   Verify missing auth, service/API failure, timeouts, legitimate quoted errors,
   absent usage and unknown failures without success fabrication or retries.
-- [ ] C18 — Implement token/cache/context normalization, ledger deduplication
+- [x] C18 — Implement token/cache/context normalization, ledger deduplication
   and unknown pricing. Verify two turns, cache hits, replay, abort/incomplete
   usage and estimator exclusion from direct Anthropic/OpenAI prices.
-- [ ] C19 — Implement validated attachment bridge and explicit ACP image
+- [x] C19 — Implement validated attachment bridge and explicit ACP image
   content for verified models. Verify queued uploads, unsupported formats/models,
   image limits/MIME and no accidental file-content exfiltration via arbitrary paths.
-- [ ] C20 — Implement artifact extraction through existing storage. Verify
+- [x] C20 — Implement artifact extraction through existing storage. Verify
   generated text/code/office/PDF files, filenames, ownership, download/preview,
   duplicate events and non-file resources; defer native image generation claims.
+
+P3 evidence (November 6): 30 focused tests and `scripts/probe-cortex-events.ts`
+using the dedicated turn bridge on real CoCo 1.2.35 / macOS arm64. Native dynamic
+model configuration, low-to-auto effort reset, explicit file delivery/storage,
+sequential/free-form questions, stale duplicate rejection, revised plan approval
+and PNG recognition passed. Plan fixture writes were absent at both gates and
+appeared after approval. An empty auth home omitted the model catalog, blocking
+configured chat before prompting; an independent raw native request verified
+the retained connection-error classification. API 408 behavior is retained
+native fixture evidence, not a newly forced live outage. Tests also exercise
+real queue/upload, artifact download/text preview and ledger storage boundaries.
+PNG is limited to the verified model/version; other input formats, strict
+processors, native image generation and full app/client execution remain gated.
+Artifact events follow explicit delivery markers/resources, not every code edit.
+No adapter or new routes are registered by this phase. See the current spec for
+the ownership/limits and testing doc for the opt-in runner and evidence scope.
 
 ### P4 — Shared connection and remote authentication setup
 
@@ -934,6 +950,7 @@ At implementation time update only the relevant current specifications:
 | 2026-11-05 | P0 C01–C03 complete; 56 production tasks remain unchecked | Planning checkpoint `083d4e3`; preflight work in this change | CoCo 1.2.35 / macOS arm64 / Node 26.0.0 | Seven sanitized excerpts; real startup/inference/cancel/root-exit/restriction/missing-auth probe; production gates retained |
 | 2026-11-06 | P1 C04–C07 complete; 52 tasks remain unchecked | Profile/capability foundation change | No new native CLI claims | 135 suites / 2,604 tests passed; backend/web/mobile typechecks; no runtime/UI execution registration |
 | 2026-11-06 | P2 C08–C12 complete; 47 tasks remain unchecked | Dedicated native runtime foundation change, following `869ee8a` | CoCo 1.2.35 / macOS arm64 / Node 26.0.0 | 138 suites / 2,651 tests passed, including 47 P2 tests; real runtime smoke passed all scenarios; no adapter/UI registration; P3 event mapping next |
+| 2026-11-06 | P3 C13–C20 complete; 39 tasks remain unchecked | Internal turn mapping change, following `549f111` | CoCo 1.2.35 / macOS arm64 / Node 26.0.0 | 144 suites / 2,681 tests passed, including 30 P3 tests; real event/config/question/revised-plan/PNG/delivery/missing-auth probe passed; generic upload/queue/ledger/artifact route integration; P4 auth setup next |
 
 ## 13. References
 
