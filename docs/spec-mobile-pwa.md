@@ -1,5 +1,10 @@
 # Mobile PWA Client
 
+CoCo P1 extends shared profile/capability types and pure eligibility contracts
+without adding a mobile runtime choice or UI flow. No PWA metadata, assets or
+administration behavior changes. See [CoCo foundations](spec-cortex-code.md);
+native mobile chat acceptance remains a later phase.
+
 [← Back to index](SPEC.md)
 
 Grok Build uses the shared mobile profile/model/effort, interaction, tool/Agent,

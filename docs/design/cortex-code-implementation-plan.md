@@ -1,6 +1,6 @@
 # Cortex Code (CoCo) harness implementation plan
 
-**Status:** Phase 0 complete; production harness implementation pending.
+**Status:** P0–P1 complete; profile/capability foundations implemented, runtime pending.
 **Created:** 2026-11-05.
 **Planning baseline:** Agent Cockpit `0.4.166`, revision `11d14825e955f6c83364c3917558b4d3068a4bac`, plus the uncommitted CoCo research/guidance documents.
 **Native compatibility baseline:** Cortex Code `1.2.35`, distribution `1.2.35+191333.f82de3d91715`, macOS arm64.
@@ -593,18 +593,25 @@ decisions; it does not close the production release gates below.
 
 ### P1 — Contracts and profiles
 
-- [ ] C04 — Add harness/backend label and registration plumbing, including
+- [x] C04 — Add harness/backend identity/label plumbing, including
   server-configured IDs and setup-profile recognition. Verify existing defaults
-  and legacy `vendor` migration remain stable.
-- [ ] C05 — Add validated `cortexCode.connection` to server profile types,
+  and legacy `vendor` migration remain stable. Register the actual adapter in
+  P2 once a usable runtime exists; P1 does not expose a runnable backend.
+- [x] C05 — Add validated `cortexCode.connection` to server profile types,
   normalization and browser-safe draft/settings contracts. Verify create/edit/
   load/save, unknown/wrong-type fields, disabled/missing profiles and env/command
   handling without credential disclosure.
-- [ ] C06 — Add explicit execution/interaction capability metadata and one
+- [x] C06 — Add explicit execution/interaction capability metadata and one
   shared role-eligibility helper. Verify chat, restricted Memory, tool-enabled
   processors, image tasks, replies and steering are distinguished correctly.
-- [ ] C07 — Add CoCo to instruction harness labels/source mapping using
+- [x] C07 — Add CoCo to instruction harness labels/source mapping using
   `AGENTS.md`. Verify status/repair preserves user content and existing harnesses.
+
+P1 evidence: `test/cortexProfiles.test.ts`, `test/backendCapabilities.test.ts`,
+existing media/settings/auth/instruction/update coverage and backend/web/mobile
+typechecks. [Current CoCo foundations](../spec-cortex-code.md) define persisted
+drafts versus configured profiles and the shared policy. Role enforcement in
+every processor/client remains P6/P7 work; no native adapter is registered.
 
 ### P2 — Transport, runtime, and lifecycle
 
@@ -613,7 +620,8 @@ decisions; it does not close the production release gates below.
   reverse requests, timeout and EOF/error propagation tests.
 - [ ] C09 — Implement executable/env/cwd/connection resolution and exact ACP
   argv. Verify no shell interpolation, no terminal stdout, no config wizard,
-  correct version detection and compatible automatic-update control.
+  correct version detection and compatible automatic-update control. Register
+  the dedicated adapter only once the runtime implements its advertised surface.
 - [ ] C10 — Implement serialized per-conversation runtime/session preparation,
   fingerprints and profile-scoped metadata discovery. Verify concurrent startup,
   model catalog failure, profile/cwd changes and session close.
@@ -910,6 +918,7 @@ At implementation time update only the relevant current specifications:
 |---|---|---|---|---|
 | 2026-11-05 | Planning baseline; all tasks initially unchecked | Checkpoint `083d4e3` | CoCo 1.2.35 / macOS arm64 | Prior research plus fresh saved-auth real inference; G1–G10 tracked above |
 | 2026-11-05 | P0 C01–C03 complete; 56 production tasks remain unchecked | Planning checkpoint `083d4e3`; preflight work in this change | CoCo 1.2.35 / macOS arm64 / Node 26.0.0 | Seven sanitized excerpts; real startup/inference/cancel/root-exit/restriction/missing-auth probe; production gates retained |
+| 2026-11-06 | P1 C04–C07 complete; 52 tasks remain unchecked | Profile/capability foundation change | No new native CLI claims | 135 suites / 2,604 tests passed; backend/web/mobile typechecks; no runtime/UI execution registration |
 
 ## 13. References
 

@@ -96,6 +96,17 @@ describe('CliUpdateService', () => {
     expect(mockExecFileFn).not.toHaveBeenCalled();
   });
 
+  test('keeps CoCo profile foundations out of update targets until its updater is implemented', async () => {
+    const service = new CliUpdateService(tmpDir);
+    const status = await service.checkNow(async () => ({
+      theme: 'system', sendBehavior: 'enter', systemPrompt: '', defaultBackend: 'cortex-code',
+      cliProfiles: [{ id: 'coco-work', name: 'CoCo', harness: 'cortex-code', authMode: 'server-configured',
+        cortexCode: { connection: 'work' }, createdAt: '2026-11-06', updatedAt: '2026-11-06' }],
+    }));
+    expect(status.items).toEqual([]);
+    expect(mockExecFileFn).not.toHaveBeenCalled();
+  });
+
   test('checks a global npm Codex installation and marks updates available', async () => {
     const service = new CliUpdateService(tmpDir);
     mockExecFile((cmd, args) => {

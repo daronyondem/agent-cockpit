@@ -1,5 +1,11 @@
 # 7. Frontend Behavior
 
+CoCo P1 adds browser-safe profile/capability types and shared pure eligibility
+helpers, described in [CoCo foundations](spec-cortex-code.md). It adds no CoCo
+Harness option, setup controls or composer execution path yet. Existing desktop
+behavior/assets remain unchanged; runtime/client phases will consume the new
+execution and interaction contracts.
+
 [← Back to index](SPEC.md)
 
 Grok Build profile, billing, interaction, and native goal behavior is specified in

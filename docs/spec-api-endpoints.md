@@ -425,6 +425,15 @@ Context scheduling until restored.
 
 ## 3.9 Settings
 
+CoCo foundations extend existing settings/draft validators with
+`cliProfiles[].harness:'cortex-code'` and `cortexCode:{connection:string}`.
+Omitted configuration can be saved as a setup draft; it is excluded from default
+promotion and cannot resolve for execution. Supplied configuration rejects
+missing/blank/control-character names, non-object values, credentials/unknown
+fields and use with a different harness. Valid names are preserved verbatim.
+Metadata still requires a registered adapter; CoCo runtime/setup-auth routes
+are not implemented in this phase. See [CoCo foundations](spec-cortex-code.md).
+
 | Method | Path | CSRF | Description |
 |--------|------|------|-------------|
 | GET | `/settings` | — | Returns settings (defaults if file missing). Fresh defaults include no `defaultBackend`, no `defaultCliProfileId`, and an empty `cliProfiles` array. If a persisted legacy `defaultBackend` exists without `defaultCliProfileId`, read-time migration creates the matching `server-configured-<harness>` profile. If enabled profiles exist but no default is selected, the first enabled profile becomes `defaultCliProfileId`. Legacy `cliProfiles[].vendor` is accepted on read as migration input and rewritten as canonical `cliProfiles[].harness`. Default Workspace Context settings include `scanIntervalMinutes: 5`, `cliConcurrency: 1`, `maintenanceIntervalHours: 24`, and `maintenanceCliConcurrency: 1`. Global integration secrets are redacted; `integrations.telegram.configured` reports whether a Telegram bot token is saved, but `integrations.telegram.botToken` is never returned. |

@@ -1066,7 +1066,7 @@ Audits are append-only review records. They do not change `snapshot.json` direct
     paths: string[]        // workspace-relative files detected for that source
   }],
   harnesses: [{
-    harness: 'codex' | 'claude-code' | 'kiro' | 'opencode' | 'grok-build',
+    harness: 'codex' | 'claude-code' | 'kiro' | 'opencode' | 'grok-build' | 'cortex-code',
     label: string,
     sourceId: 'agents' | 'claude' | 'kiro',
     expectedPath: string,
@@ -1673,7 +1673,7 @@ type CliInstallMethod = 'npm-global' | 'self-update' | 'unknown' | 'missing';
 
 interface CliUpdateStatus {
   id: string;
-  harness: 'claude-code' | 'codex' | 'kiro' | 'opencode' | 'grok-build';
+  harness: 'claude-code' | 'codex' | 'kiro' | 'opencode' | 'grok-build' | 'cortex-code';
   label: string;
   command: string;
   resolvedPath: string | null;
@@ -1711,6 +1711,16 @@ interface CliUpdatesResponse {
 ```
 
 ## Settings (`data/chat/settings.json`)
+
+Cortex Code profile foundations add `harness:'cortex-code'` and optional
+`cortexCode:{connection:string}`. Omitted configuration is a retained setup
+draft, excluded from automatic defaults and runtime resolution. Supplied config
+accepts only a nonempty named connection without control characters, preserved
+verbatim; credentials/unknown fields are rejected. Setup account identities
+strip `configDir`/`SNOWFLAKE_HOME`, while explicit profile home metadata remains
+unverified for runtime isolation. See [the complete CoCo contract](spec-cortex-code.md)
+for validation, defaults, migration, capability fields and current availability.
+There is no registered CoCo execution/auth/update adapter yet.
 
 ```json
 {

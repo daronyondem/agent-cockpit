@@ -157,6 +157,12 @@ tool-free processors gated until zero-tool execution is demonstrated; an
 allowlist or denied approval alone does not establish that boundary. See
 Proposed ADR-0093 and `docs/design/cortex-code-implementation-plan.md`.
 
+P1 profile/capability foundations are specified in `docs/spec-cortex-code.md`;
+the runtime adapter remains pending. Shared role/media selection policy belongs
+in browser-safe `src/contracts/backendCapabilities.ts`, with the backend media
+module kept as a compatibility facade. Configuration completeness is distinct
+from registered runtime availability and successful authentication.
+
 # Server Management
 
 NEVER run `node server.js` directly. This causes orphan processes and port conflicts.

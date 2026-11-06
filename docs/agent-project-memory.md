@@ -175,6 +175,10 @@ tool is unavailable.
   `scripts/probe-cortex-phase0.ts` is research scaffolding, not an adapter suite.
   Keep strict processors gated: an allowlist/denied approval does not establish
   zero-tool execution. Track implementation in the CoCo plan and Proposed ADR-0093.
+  P1 profile/capability foundations are in `docs/spec-cortex-code.md`: incomplete
+  setup drafts cannot resolve/promote, and shared role/media selection policy
+  lives in `src/contracts/backendCapabilities.ts`. A recognized profile identity
+  does not prove runtime availability or authentication; the adapter is pending.
 - Fresh installs should be provider-neutral. Do not imply Claude Code is
   configured when the user has not installed or authenticated it.
 - CLI profiles are scoped per conversation where applicable and can support

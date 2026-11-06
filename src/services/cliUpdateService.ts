@@ -36,6 +36,7 @@ const HARNESS_LABELS: Record<CliHarness, string> = {
   kiro: 'Kiro',
   opencode: 'OpenCode',
   'grok-build': 'Grok Build',
+  'cortex-code': 'Cortex Code (CoCo)',
 };
 
 const HARNESS_DEFAULT_COMMANDS: Record<CliHarness, string> = {
@@ -44,6 +45,7 @@ const HARNESS_DEFAULT_COMMANDS: Record<CliHarness, string> = {
   kiro: 'kiro-cli',
   opencode: 'opencode',
   'grok-build': 'grok',
+  'cortex-code': 'cortex',
 };
 
 const HARNESS_NPM_PACKAGES: Partial<Record<CliHarness, string>> = {

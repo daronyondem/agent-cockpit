@@ -7,6 +7,7 @@ import type {
   UsageLedger,
 } from './responses';
 import { asRecord, contractError, optionalString, optionalStringEnum } from './validation';
+import { parseCortexCodeProfileConfig } from './cliProfiles';
 export { parseServiceTierInput } from './serviceTier';
 
 export interface ApiErrorResponse {
@@ -127,6 +128,10 @@ function validateCliProfileRecord(record: Record<string, unknown>, label: string
   optionalString(record, 'vendor', `${label} legacy vendor must be a string`);
   optionalString(record, 'command', `${label} command must be a string`);
   optionalStringEnum(record, 'protocol', ['standard', 'interactive'], `${label} protocol must be standard or interactive`);
+  if (record.cortexCode !== undefined) {
+    if ((record.harness || record.vendor) !== 'cortex-code') contractError('cortexCode requires the cortex-code harness');
+    parseCortexCodeProfileConfig(record.cortexCode);
+  }
   if (record.opencode !== undefined) {
     const opencode = asRecord(record.opencode, `${label} opencode must be an object`);
     optionalString(opencode, 'provider', `${label} opencode.provider must be a string`);

@@ -11,8 +11,17 @@ export interface BackendCapabilities {
   toolActivity: boolean;
   userQuestions: boolean;
   stdinInput: boolean;
+  /** Whether an existing plan can be returned to the harness with revision feedback. */
+  planRevision?: boolean;
+  oneShot?: BackendOneShotCapabilities;
   oneShotMediaInput?: OneShotMediaInputCapabilities;
   goals?: boolean | BackendGoalCapability;
+}
+
+export interface BackendOneShotCapabilities {
+  restrictedText: boolean;
+  toolEnabled: boolean;
+  sequential: boolean;
 }
 
 export type ModelInputModality = 'text' | 'image' | 'audio' | 'pdf' | 'video';

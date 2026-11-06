@@ -1291,6 +1291,24 @@ Before injecting, the adapter reads the selected runtime's `config.toml` (`~/.co
 
 **Regenerating protocol types (drift check):** When upgrading the Codex CLI, run `codex app-server --enable goals generate-ts --out /tmp/codex-ts` and diff the relevant interfaces (`v2/ThreadStartParams.ts`, `TurnStartParams.ts`, `ItemStartedNotification.ts`, `ThreadItem.ts`, `ServerRequest.ts`, `ToolRequestUserInputParams.ts`, `ToolRequestUserInputResponse.ts`, `Model.ts`, `ModelListResponse.ts`, `ThreadGoal.ts`, `ThreadGoalStatus.ts`, `ThreadGoalUpdatedNotification.ts`, `ThreadGoalClearedNotification.ts`) against the hand-typed shapes in `codexProtocol.ts`, `codexEvents.ts`, and `codexModels.ts`; also inspect `codexStreamDispatch.ts` for notification-method and params behavior assumptions. The hand-typed subset is intentionally narrow — only fields the adapter reads. For effort support, the important fields are `Model.supportedReasoningEfforts`, `Model.defaultReasoningEffort`, and `TurnStartParams.effort`. For goals, the generated notification shapes are authoritative; current goal client request params are still hand-typed because some generated client-request unions lag the shipped app-server RPC methods even though the binary accepts them. Note that `item/tool/requestUserInput` and the goal API are marked EXPERIMENTAL upstream and could change shape without notice.
 
+### Shared capability selection and CoCo profile foundations
+
+`src/contracts/backendCapabilities.ts` owns browser-safe execution-role,
+interaction and media eligibility. `BackendCapabilities` adds optional
+`planRevision` and `oneShot:{restrictedText,toolEnabled,sequential}`. CoCo's
+missing one-shot metadata fails closed; existing harnesses retain legacy
+eligibility when the optional object is absent. Sequential and media tasks
+also require their independent checks. Pending question/plan replies do not
+require `stdinInput`, which denotes unsolicited steering. Current Grok plan
+revision support is retained when its optional revision flag is absent.
+
+`src/services/backends/mediaCapabilities.ts` remains a compatibility re-export
+facade, preserving upload/KB media behavior. CoCo profile resolution validates
+a named connection but does not establish auth or register an adapter. See
+[CoCo foundations](spec-cortex-code.md) and
+[Proposed ADR-0093](adr/0093-integrate-cortex-code-through-its-native-acp-interface.md)
+for exact contracts and remaining runtime/client enforcement boundaries.
+
 ### Adding a New Backend
 
 1. Create `src/services/backends/myBackend.ts` extending `BaseBackendAdapter`

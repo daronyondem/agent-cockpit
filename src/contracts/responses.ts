@@ -238,11 +238,12 @@ export interface CurrentUserResponse {
 export interface CliProfile {
   id: string;
   name: string;
-  harness: 'codex' | 'claude-code' | 'kiro' | 'opencode' | 'grok-build';
+  harness: 'codex' | 'claude-code' | 'kiro' | 'opencode' | 'grok-build' | 'cortex-code';
   protocol?: 'standard' | 'interactive';
   opencode?: {
     provider?: string;
   };
+  cortexCode?: { connection: string };
   disabled?: boolean;
 }
 
@@ -282,8 +283,16 @@ export interface BackendCapabilities {
   toolActivity?: boolean;
   userQuestions?: boolean;
   stdinInput?: boolean;
+  planRevision?: boolean;
+  oneShot?: BackendOneShotCapabilities;
   oneShotMediaInput?: OneShotMediaInputCapabilities;
   goals?: boolean | BackendGoalCapability;
+}
+
+export interface BackendOneShotCapabilities {
+  restrictedText: boolean;
+  toolEnabled: boolean;
+  sequential: boolean;
 }
 
 export interface BackendMetadata {

@@ -11,6 +11,15 @@ affects:
   - docs/research/cortex-code-acp-evaluation.md
   - scripts/probe-cortex-phase0.ts
   - test/fixtures/cortex/1.2.35
+  - src/contracts/cliProfiles.ts
+  - src/contracts/backendCapabilities.ts
+  - src/types/cliProfiles.ts
+  - src/types/backends.ts
+  - src/services/cliProfiles.ts
+  - src/services/settingsService.ts
+  - src/services/backends/mediaCapabilities.ts
+  - src/services/chat/workspaceInstructionStore.ts
+  - docs/spec-cortex-code.md
 ---
 
 ## Context
@@ -32,6 +41,11 @@ existing ChatService, stream, artifact, storage and service ownership boundaries
 do not make other harnesses depend on a new generic ACP framework.
 
 Persist named connection selection as `CliProfile.cortexCode.connection`.
+An omitted `cortexCode` object represents a retained setup draft; exclude it
+from automatic defaults and refuse runtime resolution until a valid named
+connection is supplied. Validate supplied configuration at request and
+persistence boundaries with the same browser-safe parser; reject unknown
+credential fields rather than preserving them in settings/draft responses.
 Server-configured and Welcome setup profiles reuse terminal Snowflake config
 and auth. Explicit `SNOWFLAKE_HOME`/configDir account isolation remains gated
 until real two-account/cache tests pass. Keep executable/update location separate
@@ -115,6 +129,7 @@ string as a failed turn. Unknown failures remain visible.
 - [Phase 0 native probe](../../scripts/probe-cortex-phase0.ts)
 - [Versioned wire excerpts](../../test/fixtures/cortex/1.2.35/README.md)
 - [Adapter system](../spec-backend-services.md#42-backend-adapter-system)
+- [Implemented profile/capability foundations](../spec-cortex-code.md)
 - [Shared ownership/contracts](0051-adopt-shared-contracts-and-logging-foundations.md)
 - [Harness identity](0079-use-harness-for-cli-profile-runtime-identity.md)
 - [Comparable Grok lifecycle constraints](0092-integrate-grok-build-through-acp-and-native-extensions.md)

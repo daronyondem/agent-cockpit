@@ -2,6 +2,7 @@ import fsp from 'fs/promises';
 import path from 'path';
 import type { CliHarness, CliProfile, Settings } from '../types';
 import { atomicWriteFile } from '../utils/atomicWrite';
+import { parseCortexCodeProfileConfig } from '../contracts/cliProfiles';
 import {
   backendForCliProfile,
   cliProtocolForBackend,
@@ -9,6 +10,7 @@ import {
   ensureServerConfiguredCliProfiles,
   isSetupAccountCliProfile,
   isCliHarness,
+  hasRequiredCliProfileConfig,
   serverConfiguredCliProfileId,
 } from './cliProfiles';
 import {
@@ -175,7 +177,7 @@ export class SettingsService {
   }
 
   private _withFirstAvailableCliProfileDefault(settings: Settings): Settings {
-    const profiles = Array.isArray(settings.cliProfiles) ? settings.cliProfiles.filter((profile) => !profile.disabled) : [];
+    const profiles = Array.isArray(settings.cliProfiles) ? settings.cliProfiles.filter((profile) => !profile.disabled && hasRequiredCliProfileConfig(profile)) : [];
     if (profiles.length === 0) return settings;
 
     const current = settings.defaultCliProfileId
@@ -252,7 +254,7 @@ export class SettingsService {
       : [];
 
     const defaultProfile = settings.defaultCliProfileId
-      ? profiles.find((profile) => profile.id === settings.defaultCliProfileId && !profile.disabled)
+      ? profiles.find((profile) => profile.id === settings.defaultCliProfileId && !profile.disabled && hasRequiredCliProfileConfig(profile))
       : undefined;
 
     const next: Settings = {
@@ -445,6 +447,10 @@ export class SettingsService {
       }
     }
 
+    if (harness === 'cortex-code' && profile.cortexCode !== undefined) {
+      normalized.cortexCode = parseCortexCodeProfileConfig(profile.cortexCode);
+    }
+
     const isSetupAccount = isSetupAccountCliProfile(normalized);
     const configDir = profile.configDir?.trim();
     if (configDir && harness !== 'kiro' && harness !== 'opencode' && !isSetupAccount) normalized.configDir = configDir;
@@ -468,7 +474,8 @@ function isCliAuthHomeEnvKey(harness: CliProfile['harness'], key: string): boole
   const normalized = key.toUpperCase();
   return (harness === 'claude-code' && normalized === 'CLAUDE_CONFIG_DIR')
     || (harness === 'codex' && normalized === 'CODEX_HOME')
-    || (harness === 'grok-build' && normalized === 'GROK_HOME');
+    || (harness === 'grok-build' && normalized === 'GROK_HOME')
+    || (harness === 'cortex-code' && normalized === 'SNOWFLAKE_HOME');
 }
 
 function normalizeClaudeCodeProfileConfig(value: unknown): NonNullable<CliProfile['claudeCode']> {
