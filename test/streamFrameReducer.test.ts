@@ -73,6 +73,14 @@ function replayFrames(
 }
 
 describe('streamFrameReducer', () => {
+  test('retains opaque decision generations for question and replacement-plan replies', () => {
+    const question = replayFrames(baseState(), [{ type: 'tool_activity', tool: 'AskUserQuestion',
+      isQuestion: true, id: 'cortex-decision:question', questions: [{ question: 'Color?', options: [] }] }]);
+    expect(question.state.pendingInteraction).toMatchObject({ type: 'userQuestion', decisionId: 'cortex-decision:question' });
+    const plan = replayFrames(question.state, [{ type: 'tool_activity', tool: 'ExitPlanMode', isPlanMode: true,
+      planAction: 'exit', id: 'cortex-decision:plan', planContent: '# Plan' }]);
+    expect(plan.state.pendingInteraction).toMatchObject({ type: 'planApproval', decisionId: 'cortex-decision:plan' });
+  });
   test('builds placeholder content blocks from streamed frames', () => {
     const initial = baseState({ conv: baseConversation(), streaming: true, uiState: 'streaming' });
 

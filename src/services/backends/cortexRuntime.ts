@@ -21,7 +21,7 @@ export function resolveCortexRuntime(options: CortexSessionOptions): CortexRunti
   const shared = isSetupAccountCliProfile(profile);
   const overrides = Object.fromEntries(Object.entries(profile.env || {}).filter(([key]) => !shared || key.toUpperCase() !== 'SNOWFLAKE_HOME'));
   const env: NodeJS.ProcessEnv = {
-    ...process.env, ...overrides, CORTEX_ENABLE_MEMORY: '0', CORTEX_ACP_TEST_MODE: '0', CORTEX_OAUTH_MANUAL: '1',
+    ...process.env, ...overrides, ...options.managedEnv, CORTEX_ENABLE_MEMORY: '0', CORTEX_ACP_TEST_MODE: '0', CORTEX_OAUTH_MANUAL: '1',
   };
   if (!shared && profile.configDir?.trim()) env.SNOWFLAKE_HOME = path.resolve(profile.configDir.replace(/^~(?=\/|$)/, os.homedir()));
   const resolved = resolveCliCommandForRuntime('cortex-code', profile.command?.trim() || 'cortex', env);

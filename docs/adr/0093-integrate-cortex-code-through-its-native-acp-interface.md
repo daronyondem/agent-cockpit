@@ -45,6 +45,11 @@ affects:
   - src/routes/chat/cliProfileRoutes.ts
   - web/AgentCockpitWeb/src/cortexSetup.jsx
   - scripts/probe-cortex-auth.ts
+  - src/services/backends/cortex.ts
+  - src/services/backends/cortexPlugin.ts
+  - src/contracts/streams.ts
+  - src/routes/chat/streamRoutes.ts
+  - scripts/probe-cortex-chat.ts
   - docs/spec-cortex-code.md
 ---
 
@@ -105,7 +110,10 @@ Memory tools can still use a separately configured supported governance processo
 Tool-enabled processors and media are independently certified before selection.
 
 Pending question/plan replies use `sendInput` and exact reverse RPC ownership,
-including ID 0. `stdinInput:false` denotes unsupported unsolicited steering;
+including ID 0. Carry a fresh opaque decision generation through REST/WS and
+both clients so a delayed reply cannot resolve a newer question; keep the field
+optional for existing harnesses. Native RPC/tool IDs are not that generation.
+`stdinInput:false` denotes unsupported unsolicited steering;
 clients preserve normal text through the message queue instead of dropping it.
 Expose plan revision through capability metadata, not harness-name checks.
 

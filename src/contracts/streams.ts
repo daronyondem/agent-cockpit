@@ -22,6 +22,8 @@ export interface ValidatedSendMessageRequest extends Omit<SendMessageRequest, 'c
 export interface ConversationInputRequest {
   text: string;
   streamActive?: boolean;
+  /** Opaque interaction generation, required by Cortex question/plan replies. */
+  decisionId?: string;
 }
 
 export interface SendMessageResponse {
@@ -69,5 +71,6 @@ export function validateConversationInputRequest(body: unknown): ConversationInp
   return {
     text: requiredNonEmptyString(record, 'text', 'Input text required'),
     streamActive: optionalBoolean(record, 'streamActive'),
+    decisionId: optionalString(record, 'decisionId'),
   };
 }

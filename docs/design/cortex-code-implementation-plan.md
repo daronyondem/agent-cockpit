@@ -1,6 +1,6 @@
 # Cortex Code (CoCo) harness implementation plan
 
-**Status:** P0–P3 complete; P4 C21–C25 setup implemented, C26 actual remote-browser acceptance pending; durable adapter integration remains next.
+**Status:** P0–P3 and P5 complete; P4 C21–C25 setup implemented, C26 actual remote-browser acceptance pending. P6 processor execution is next.
 **Created:** 2026-11-05.
 **Planning baseline:** Agent Cockpit `0.4.166`, revision `11d14825e955f6c83364c3917558b4d3068a4bac`, plus the uncommitted CoCo research/guidance documents.
 **Native compatibility baseline:** Cortex Code `1.2.35`, distribution `1.2.35+191333.f82de3d91715`, macOS arm64.
@@ -34,8 +34,8 @@ Planning assumptions:
 - Deliver core chat before optional parity work. Unverified features remain
   explicitly unavailable; do not emulate native goals or silently reroute work
   to a different profile to make a selector appear functional.
-- C01–C20 are complete as recorded below. Later phases remain proposed and do
-  not describe shipped support.
+- C01–C25 and C27–C32 are complete as recorded below. C26 and P6–P9 remain
+  open and do not describe shipped support.
 
 Track work as follows:
 
@@ -124,7 +124,7 @@ means that feature is already integrated into Cockpit. Phase IDs refer to §9.
 
 | Cockpit functionality | CoCo implementation | Evidence / release gate | Work |
 |---|---|---|---|
-| New chats and streaming responses | `initialize` → `session/new` → configuration → `session/prompt`; map message chunks to text frames | V; adapter and route acceptance pending | P2, P3 |
+| New chats and streaming responses | `initialize` → `session/new` → configuration → `session/prompt`; map message chunks to text frames | V; P5 adapter/route and native app probe pass | P2, P3, P5 |
 | Visible thinking | Map `agent_thought_chunk` to existing thinking blocks, without merging replay/other-session output | V | P3, P7 |
 | Model picker | Translate current `configOptions` model catalog into `ModelOption`; preserve opaque native IDs and Auto choices | V tested account; profile-specific caching | P1, P3 |
 | Effort picker | Use `thought_level`; observed `minimal/low/medium/high/xhigh/max`, native `auto` represented by no explicit override | V low only; verify reset-to-auto after explicit effort | P3 |
@@ -612,7 +612,7 @@ P1 evidence: `test/cortexProfiles.test.ts`, `test/backendCapabilities.test.ts`,
 existing media/settings/auth/instruction/update coverage and backend/web/mobile
 typechecks. [Current CoCo foundations](../spec-cortex-code.md) define persisted
 drafts versus configured profiles and the shared policy. Role enforcement in
-every processor/client remains P6/P7 work; no native adapter is registered.
+every processor/client remains P6/P7 work; P5 now registers the native chat adapter.
 
 ### P2 — Transport, runtime, and lifecycle
 
@@ -737,29 +737,72 @@ fixtures are not an actual human remote-browser handoff through these routes.
 The current shared login is valid; do not delete/revoke it merely to fabricate
 a challenge. Re-run actual setup when a native login challenge is needed and
 record its selected deadline plus the new redirect's ownership/fresh inference.
-CoCo adapter registration, chat, processors and updates remain pending. Current
+P5 now adds adapter registration and chat; processors and updates remain pending. Current
 behavior and exact limits: [CoCo specification](../spec-cortex-code.md).
 
 ### P5 — Durable chat, recovery, and managed MCP
 
-- [ ] C27 — Implement private plugin generation from existing Memory/KB MCP
+- [x] C27 — Implement private plugin generation from existing Memory/KB MCP
   configs. Verify native discovery and real stdio shims, env placeholders,
   separate tokens, feature disablement and manifest cleanup.
-- [ ] C28 — Implement refresh by safe-boundary respawn/session load. Verify
+- [x] C28 — Implement refresh by safe-boundary respawn/session load. Verify
   rotated/expired/revoked tokens, new endpoint, no stale permissions, no leaked
   runtime files and context retained without transcript duplication.
-- [ ] C29 — Wire `external_session/backend_runtime` and saved-session reload.
+- [x] C29 — Wire `external_session/backend_runtime` and saved-session reload.
   Verify nonce continuity after idle/server restart, replay suppression, missing
   native session recovery and no active-turn prompt resend.
-- [ ] C30 — Exercise existing stream jobs, finalizers, queue, abort/reset,
+- [x] C30 — Exercise existing stream jobs, finalizers, queue, abort/reset,
   archive/delete, profile switching and reconnect. Verify exactly one persisted
   answer, terminal boundary and usage application per turn.
-- [ ] C31 — Exercise real Memory governance/search and KB database search with
+- [x] C31 — Exercise real Memory governance/search and KB database search with
   isolated Cockpit data. Verify scopes and write outcomes with a separately
   supported Memory processor while CoCo strict execution remains gated.
-- [ ] C32 — Exercise managed instructions/Workspace Context pointer, worktree
+- [x] C32 — Exercise managed instructions/Workspace Context pointer, worktree
   cwd, workspace relocation, file explorer/Git changes and artifact persistence.
   Verify canonical workspace identity and no cross-workspace runtime reuse.
+
+**P5 evidence, November 6, 2026:** `CortexCodeAdapter` is registered for durable
+chat. Complete enabled CoCo setup profiles can become the first default while
+existing explicit defaults and incomplete-draft gates are preserved.
+`cortexPlugin.ts` owns private native manifests/child env and conservative
+orphan cleanup; `CortexSessions` owns their runtime lifetime. Focused backend,
+plugin and actual process/router suites exercise token/endpoint/feature/context
+refresh, idle/load/recovery, abort/reset/archive/delete, queue/profile locks,
+question generation through REST/WS/reconnect, instructions/Workspace Context,
+worktree writes/Git/downloads and workspace relocation. Current MCP tokens do
+not have expiry TTLs; invalid/revoked-token behavior remains the existing MCP
+services' focused tests. No new token-expiry policy was added.
+
+The opt-in `scripts/probe-cortex-chat.ts` passed with authenticated CoCo 1.2.35
+on macOS arm64, using isolated Cockpit data, real Memory/KB stdio shims, a real
+separate Claude Memory processor, governed note persistence/search, SQLite
+topic reads and PGLite keyword search. It verified nonce continuity after idle
+eviction and adapter restart, one final answer/usage per turn and native file
+delivery/storage, plus a relocated native session reading/writing in its new
+cwd while retaining canonical workspace/native IDs and nonce. The fixture deliberately disables embedding access; Ollama
+semantic search is not certified. An initial probe assertion incorrectly counted
+intermediate progress messages as final answers; after correcting the assertion
+the complete probe passed. A later run issued no required MCP calls and remains
+failed; its cause was not established. The final complete run passed all checks
+and exited zero after explicitly closing the fixture's PGLite/SQLite stores
+(unclosed PGLite otherwise leaves exit code 99). No production prompt/tool retry
+was added. Fresh native runtime drift also passed startup,
+cancel/subsequent turn, load, root-exit descendant cleanup, missing auth and
+reusable shutdown. Reports remain private temporary artifacts, with no native
+account/connection/OAuth values or protocol transcripts committed.
+
+C26 stays open. Full OS-process restart/native browser/desktop/mobile/platform
+acceptance remains in P7/P9. Upload options are structured at the adapter
+boundary; browser upload/tag bridging remains client work. CoCo one-shot roles,
+native goals, agents and unsolicited steering remain unavailable. See
+[the current P5 contract](../spec-cortex-code.md#durable-chat-and-managed-mcp-p5).
+
+P5 verification: 154 suites / 2,783 tests pass, with three opt-in suites and
+20 tests skipped. V8 statements/lines 88.37%, branches 75.75%, functions 93.77%;
+floors raised to 88.3/75.7/93.7. Backend/web/mobile typechecks, zero-warning lint,
+maintainability, API drift, ADR lint, both production builds and web budget pass
+(JS 903.4/910 KiB, CSS 202.3/230 KiB). Builds were restored after the full suite.
+Desktop/mobile changes retain decision generations; PWA metadata is unchanged.
 
 ### P6 — Background workflows and processor eligibility
 

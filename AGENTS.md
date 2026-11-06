@@ -139,9 +139,9 @@ automatically retry interrupted tool work. Keep auth isolation separate from
 the shared CLI executable/update location. See `docs/spec-grok-build.md` and
 ADR-0092.
 
-# Cortex Code (CoCo) Evaluation
+# Cortex Code (CoCo) Compatibility
 
-CoCo is not yet an implemented harness. Future setup work should preserve the
+CoCo is registered for durable chat. Setup work must preserve the
 verified `CORTEX_OAUTH_MANUAL=1` flow: show the native login URL, accept the full
 loopback redirect from another machine, retain shared terminal auth, and verify
 the result from a fresh process. ACP initialization/session creation alone is
@@ -158,7 +158,7 @@ allowlist or denied approval alone does not establish that boundary. See
 Proposed ADR-0093 and `docs/design/cortex-code-implementation-plan.md`.
 
 P1 profile/capability, P2 transport/runtime and P3 internal turn mapping are specified in
-`docs/spec-cortex-code.md`; adapter registration remains pending. CoCo owns its
+`docs/spec-cortex-code.md`; P5 now registers the chat adapter. CoCo owns its
 dedicated `cortexProtocol.ts`, `cortexRuntime.ts`, `cortexSessions.ts` and
 `cortexProcess.ts` modules; production code must not import Grok/Kiro adapters.
 Review the focused `test/cortexProtocol.test.ts`, `test/cortexRuntime.test.ts`
@@ -195,7 +195,22 @@ run opt-in `scripts/probe-cortex-auth.ts` for native saved-auth/UI drift. It use
 an isolated PM2 fixture and normal terminal credentials, without forcing logout.
 The actual human remote-browser handoff through Cockpit remains C26 pending;
 fixture ownership checks and the earlier research handoff do not close that gate.
-CoCo must not become an automatic default before adapter registration.
+Unconfigured profiles must not become defaults. Processor execution, native
+goals, agents and steering remain gated independently of chat registration.
+
+P5 chat orchestration belongs to `cortex.ts`; private native MCP manifest/env
+generation and conservative abandoned-owner cleanup belong to `cortexPlugin.ts`.
+Keep secrets in child env placeholders, use Cockpit's actual Node executable
+for the Memory/KB shims, dispose descendants before deleting plugin directories,
+and refresh changed tokens/endpoints/instructions/profile/cwd only at a safe
+turn boundary. Load failures recover only on the version-tested missing-session
+signature; auth/transport failures must never cause prompt resend. Preserve
+opaque decision generations through REST/WS and both clients; native RPC/tool
+IDs are separate. Review `test/cortexBackend.test.ts`, `test/cortexPlugin.test.ts`
+and `test/cortexIntegration.test.ts`, and run opt-in
+`scripts/probe-cortex-chat.ts` for native app/MCP/resume/artifact compatibility.
+This isolated HTTP/WS fixture is not full native browser/process-manager or
+Windows/Linux acceptance. See `docs/spec-testing.md` for exact limits.
 
 # Server Management
 

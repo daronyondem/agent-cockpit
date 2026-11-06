@@ -204,7 +204,7 @@ export interface StreamJobFile {
 export interface ActiveStreamEntry {
   stream: AsyncGenerator<StreamEvent>;
   abort: () => void;
-  sendInput: (text: string) => void;
+  sendInput: (text: string, decisionId?: string) => void | boolean;
   backend: string;
   needsTitleUpdate: boolean;
   titleUpdateMessage: string | null;

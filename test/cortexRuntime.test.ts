@@ -1,11 +1,11 @@
 import fs from 'fs/promises';
 import os from 'os';
 import path from 'path';
-import type { BackendMetadata, CliProfile } from '../src/types';
+import type { CliProfile } from '../src/types';
 import { cortexRecord, type CortexAcpClient } from '../src/services/backends/cortexProtocol';
 import { CortexRuntime, cortexVersion, resolveCortexRuntime, startCortexRuntime, type CortexSessionOptions } from '../src/services/backends/cortexRuntime';
 import { CortexSessions } from '../src/services/backends/cortexSessions';
-import { BaseBackendAdapter } from '../src/services/backends/base';
+import { CortexCodeAdapter } from '../src/services/backends/cortex';
 import { BackendRegistry } from '../src/services/backends/registry';
 
 // The deterministic executable is a POSIX shebang fixture; Windows launch is gated.
@@ -217,15 +217,8 @@ runtimeSuite('CoCo POSIX runtime foundations', () => {
 
   test('shutdown generation closes pending startups and remains reusable through BackendRegistry.shutdownAll', async () => {
     const sessions = pool();
-    // Harness is intentionally not registered in server.ts yet. This test adapter
-    // verifies the real registry lifecycle contract without advertising chat support.
-    class LifecycleAdapter extends BaseBackendAdapter {
-      stopping = Promise.resolve();
-      get metadata(): BackendMetadata { return { id: 'test-cortex-lifecycle' } as BackendMetadata; }
-      shutdown(): void { this.stopping = sessions.shutdown(); }
-    }
     const registry = new BackendRegistry();
-    const adapter = new LifecycleAdapter();
+    const adapter = new CortexCodeAdapter({ sessions });
     registry.register(adapter);
     const first = await sessions.acquire('one', options);
     const pending = sessions.acquire('late', options);

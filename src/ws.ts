@@ -311,7 +311,7 @@ export function attachWebSocket(
         if (frame.type === 'input') {
           if (entry && entry.sendInput) {
             wsLog.debug('sending stdin input', { convId: convId.slice(0, 8), textLength: frame.text.length });
-            entry.sendInput(frame.text);
+            entry.sendInput(frame.text, frame.decisionId);
           }
         } else if (frame.type === 'abort') {
           if (abortStream) {

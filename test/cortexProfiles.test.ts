@@ -104,12 +104,12 @@ describe('CoCo profile persistence', () => {
     expect(onlyDraft.defaultBackend).toBeUndefined();
   });
 
-  test('complete CoCo setup does not become the automatic default while adapter registration is pending', async () => {
+  test('complete CoCo setup can become the first default after chat registration while explicit defaults remain intact', async () => {
     const record = profile({ id: 'setup-cortex-code-account', authMode: 'account' });
     const saved = await service.saveSettings({ ...settings, cliProfiles: [record] });
-    expect(saved.defaultCliProfileId).toBeUndefined(); expect(saved.defaultBackend).toBeUndefined();
+    expect(saved.defaultCliProfileId).toBe(record.id); expect(saved.defaultBackend).toBe('cortex-code');
     const old = createServerConfiguredCliProfile('codex');
-    expect((await service.saveSettings({ ...settings, cliProfiles: [record, old] })).defaultCliProfileId).toBe(old.id);
+    expect((await service.saveSettings({ ...settings, cliProfiles: [record, old], defaultCliProfileId: old.id })).defaultCliProfileId).toBe(old.id);
   });
 
   test('rejects bad direct saves atomically, including credentials in the config object', async () => {

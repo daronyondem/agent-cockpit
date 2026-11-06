@@ -14,8 +14,8 @@ export const AFTER_ASSISTANT_MESSAGE_RECONCILE_DELAY_MS = 5000;
 export type StreamUiState = 'streaming' | 'awaiting' | 'error' | null;
 
 export type PendingInteraction =
-  | { type: 'planApproval'; planContent: string }
-  | { type: 'userQuestion'; question: string; options: Array<{ label: string; description?: string }> };
+  | { type: 'planApproval'; planContent: string; decisionId?: string }
+  | { type: 'userQuestion'; question: string; options: Array<{ label: string; description?: string }>; decisionId?: string };
 
 export interface StreamMemoryUpdateMessage {
   id: string;
@@ -127,6 +127,7 @@ export function reduceStreamFrame(
           pendingInteraction: {
             type: 'planApproval',
             planContent: stringOrEmpty(frame.planContent),
+            ...(frame.id ? { decisionId: frame.id } : {}),
           },
           planModeActive: false,
           uiState: 'awaiting',
@@ -142,6 +143,7 @@ export function reduceStreamFrame(
           type: 'userQuestion',
           question: question.question,
           options: question.options,
+          ...(frame.id ? { decisionId: frame.id } : {}),
         },
         uiState: 'awaiting',
       });

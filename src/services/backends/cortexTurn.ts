@@ -8,7 +8,7 @@ import { cortexPromptContent } from './cortexAttachments';
 import { CortexArtifacts } from './cortexArtifacts';
 import { cortexRuntimeError, cortexTerminalError } from './cortexErrors';
 
-/** Internal turn bridge; durable adapter/route ownership is added in P5. */
+/** Native prompt mapping; cortex.ts owns durable chat leases. */
 export class CortexTurn {
   private events: StreamEvent[] = [];
   private wake?: () => void;
@@ -23,6 +23,7 @@ export class CortexTurn {
   }
 
   get pendingId(): string | null { return this.interactions.pendingId; }
+  get didPrompt(): boolean { return this.prompting; }
   input(text: string, decisionId: string): boolean { return !this.ended && this.interactions.input(text, decisionId); }
   async abort(): Promise<void> {
     this.aborted = true;

@@ -4,6 +4,14 @@ import { cortexHasCompleteUsage } from './cortexUsage';
 
 /** Only locally authored, value-free validation messages may cross this boundary. */
 export class CortexInputError extends Error {}
+export class CortexMissingSessionError extends Error {}
+
+/** Exact native load failure observed on 1.2.35; never classify connection/auth errors. */
+export function cortexMissingSession(error: unknown, sessionId: string, version: string): boolean {
+  return (version === '1.2.35' || version.startsWith('1.2.35+'))
+    && error instanceof CortexRpcError && error.code === -32603 && error.message === 'Internal error'
+    && cortexRecord(error.data).details === `Failed to load session ${sessionId}: Session '${sessionId}' not found`;
+}
 
 export function cortexTerminalError(value: unknown, text: string, version: string): ErrorEvent | null {
   const result = cortexRecord(value);

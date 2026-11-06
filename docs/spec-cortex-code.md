@@ -1,18 +1,147 @@
-# Cortex Code profile, runtime and authentication setup
+# Cortex Code chat, runtime and authentication setup
 
 [← Back to index](SPEC.md)
 
 **Implemented scope:** P1 profiles, P2 transport/runtime, and P3 internal
-events/interactions/models/usage/attachments/artifacts, and P4 connection/auth
-setup, November 6, 2026.
+events/interactions/models/usage/attachments/artifacts, P4 connection/auth
+setup, and P5 durable chat/managed MCP, November 6, 2026.
 Native acceptance baseline is CoCo 1.2.35, macOS arm64.
-**Runtime status:** No Cortex Code adapter is registered in `server.ts` yet.
-CoCo setup/authentication is available; executable chat, processors and CLI
-installation/update support remain pending. The actual remote-browser setup
+**Runtime status:** `CortexCodeAdapter` is registered in `server.ts` for chat.
+CoCo setup/authentication and durable chat are available; processors, full
+desktop/mobile acceptance and CLI installation/update support remain pending.
+The actual remote-browser setup
 through Cockpit is still an open acceptance gate (C26).
 See [the implementation tracker](design/cortex-code-implementation-plan.md),
 [native evaluation](research/cortex-code-acp-evaluation.md), and
 [Proposed ADR-0093](adr/0093-integrate-cortex-code-through-its-native-acp-interface.md).
+
+## Durable chat and managed MCP (P5)
+
+`src/services/backends/cortex.ts` is the registered public adapter facade.
+Its static metadata has ID `cortex-code`, label `Cortex Code (CoCo)`, null icon,
+and an empty model list. `getMetadata({cliProfile})` discovers this profile's
+live catalog through an ephemeral `CortexSessions` lease. Discovery failure
+returns an empty catalog, never another profile's models or raw native errors.
+Discovery is still not authentication evidence. Chat advertises thinking,
+tools, questions, plans and plan revision. Steering, agents, goals and all three
+one-shot roles are false. Active-turn resume is unsupported; saved-session
+resume is supported. Titles use the inherited deterministic fallback; summaries
+return the supplied fallback without inference. Processor methods remain the
+base class's explicit unsupported behavior until P6.
+
+### Chat ownership and instructions
+
+`SendMessageOptions` now optionally carries immutable `workspaceId`, structured
+server-validated `attachments` and a conversation-specific `attachmentRoot`.
+CoCo requires profile, workspaceId and workingDir before starting a chat.
+The ordinary chat route supplies canonical workspaceId and effective execution
+cwd (`executionDir`, then workingDir), plus the existing native session ID,
+recovery hook and enabled Memory/KB configurations. CoCo builds current global,
+workspace, Memory/KB and file-delivery instructions on every request; other
+harnesses retain the existing first-message behavior. The instruction text's
+SHA-256 participates in runtime ownership. A fresh runtime prepends current
+instructions to its first submitted native user message, including after load.
+A configuration/attachment validation failure does not consume that prefix.
+The normal first-session discussion/Memory/KB pointers remain in the user
+message. Native project AGENTS.md/managed Workspace Context loading stays native.
+No new instruction file or competing conversation store is created.
+
+Each adapter conversation has one active owner, reserved synchronously when
+`sendMessage` returns its stream/abort/input handles. Pool leases serialize
+native work; every exit releases the matching lease. `CortexTurn` alone owns
+the terminal `done` after delegation. Startup failures produce one sanitized
+error and one done; a cancelled owner cannot proceed to a prompt or recovery.
+The adapter emits `external_session` and `backend_runtime` with native session
+ID and process PID before prompting. Existing ChatService/session persistence,
+StreamJobSupervisor, usage ledger, finalizers, queues, WebSocket replay, reset,
+archive/delete and artifact stores consume these events unchanged. Final
+answers are distinct from allowed `turn:'progress'` messages between tools.
+No native replay is stored as a new answer. Ten-minute idle eviction skips
+active leases; its unref'ed timer is cleared at shutdown and recreated on a
+later send, preserving CLI-update reuse. Reset/shutdown invalidate active
+adapter owners and pool generations before asynchronous process disposal.
+
+The structured upload bridge is an adapter option at this phase. Browser
+upload/tag-to-structured-input wiring and full native desktop/mobile acceptance
+are P7 work; do not claim arbitrary upload formats are certified by P5.
+
+### Private native plugin resources
+
+`cortexPlugin.ts` converts current `McpServerConfig[]` to a native manifest:
+`{name:'agent-cockpit',version:'1.0.0',mcpServers:{[name]:{type:'stdio',command,args,env}}}`.
+Duplicate names reject. A literal `node` command becomes `process.execPath`,
+so shims use Cockpit's actual Node runtime. Each original environment value
+gets a distinct child-only name `COCKPIT_CORTEX_MCP_<server-index>_<env-index>`;
+the manifest maps the original variable name to `${COCKPIT_CORTEX_MCP_…}`.
+Memory and KB tokens remain separate. Endpoints use placeholders too. Their
+actual values enter only the child environment, never settings, argv, logs or
+manifest bytes. A SHA-256 of manifest plus environment participates in the
+pool fingerprint. Profile environment cannot override the managed values.
+
+On a new/replaced pool entry, create a private random directory under the OS
+temp root named `agent-cockpit-cortex-plugin-*`, mode 0700; create
+`.cortex-plugin/` mode 0700 and `plugin.json` mode 0600. Append its absolute path
+with `--plugin-dir`. An empty server list creates no directory/argument.
+Temporary random paths do not themselves invalidate reuse. Token/endpoint,
+feature-list, instruction, profile/env/executable, workspace identity or cwd
+changes force disposal and respawn on the next turn boundary, followed by
+session/load when an external ID exists. No prompt/tool operation is retried.
+Native session/new/load still receives `mcpServers:[]`: 1.2.35 ignores those
+fields; only explicit plugins supply MCP. Ambient plugins/skills/MCP and native
+memory stay disabled by the existing runtime switches.
+
+The lease writes secret-free `owner.json` mode 0600 with version 1, server PID
+and native child PID, recording the child before initialization. Reset, idle,
+startup failure and shutdown close native descendants before removing the
+lease directory. Startup pruning examines only same-user ordinary directories
+with the managed prefix and valid positive integer server/child PID records;
+both must be proven absent (`ESRCH`). Live/reused PIDs, EPERM, unknown owners,
+malformed files and incomplete startup records are conservatively retained.
+No directory is deleted based on age or a guessed PID identity. This can leave
+an incomplete crash record for manual cleanup. Runtime files stay outside
+the data bundle and shared Snowflake/plugin configuration is never modified.
+Cockpit's current MCP tokens have no expiry TTL; expiry is not invented here.
+Revocation/auth rejection is owned by existing Memory/KB services. Changed
+tokens refresh at the next boundary; a tool failure is not automatically retried.
+
+### Missing sessions and interaction generations
+
+After load failure the pool closes its transport/plugin. Only the retained
+1.2.35 (including build suffixes) signature is classified as missing: native
+`CortexRpcError` code -32603, message `Internal error`, and data.details exactly
+`Failed to load session <requested-id>: Session '<requested-id>' not found`.
+Different IDs, versions, auth/network errors and other diagnostics do not
+trigger recovery. `CortexMissingSessionError` carries a local value-free message.
+The adapter lazily creates the existing snapshot (excluding the current user
+request), rechecks ownership, creates a fresh session, emits the existing
+recovery event and replacement identities, and sends the recovery pointer plus
+current request exactly once. Missing snapshots use the existing incomplete
+context warning. Interrupted active work is never reattached or resent.
+
+REST `/conversations/:id/input` now accepts optional `decisionId`; WS input
+frames accept the same field. Desktop/mobile pending-interaction projections
+retain the tool activity's opaque ID and echo it in replies. CoCo requires an
+exact current `cortex-decision:<generation>:<ordinal>` owned by that live turn.
+`sendInput(text,decisionId)` returns false for absent, stale, duplicate, invalid
+or cancelled replies. REST returns 409 without creating a new user message;
+a stale CoCo decision after stream teardown also returns 409. Other harnesses
+can ignore the optional second argument and preserve existing behavior. Native
+RPC IDs and tool IDs never substitute for a decision generation. Late HTTP
+acknowledgement still clears only the submitted interaction object.
+
+P5 fixtures cover real process/router/persistence behavior, worktree cwd,
+relocation with canonical workspace identity, instruction refresh, queue,
+reset/abort/archive/delete/profile locks, questions through REST/WS and
+reconnect, native-load replay suppression, classified recovery and artifacts.
+`scripts/probe-cortex-chat.ts` is opt-in real inference: native plugin discovery,
+actual stdio shims and separate Claude Memory governance, Memory search,
+PGLite keyword search, SQLite topic read, nonce after idle/adapter restart, one
+final answer/usage per turn, native delivered-file persistence and native
+session relocation with subsequent read/write in the new cwd. It uses an
+isolated in-process HTTP/WS test fixture, never the production data directory.
+The KB fixture deliberately makes embeddings unavailable: Ollama semantic
+search is not certified. Full process-manager restart, UI and platform release
+acceptance remain later gates; fixture evidence is not a substitute.
 
 ## Shared connection and authentication setup (P4)
 
@@ -184,9 +313,12 @@ configDir allocation. Explicit isolation metadata remains unchanged; remote
 login rejects those profiles and directs their login to their own terminal.
 Their read-only checks can use their configured home without claiming safe
 credential separation (native OS keychain behavior remains shared/uncertified).
-Setup never promotes CoCo. Settings' automatic first-profile fallback excludes
-CoCo while adapter registration is pending; explicit stored defaults retain
-the prior profile-identity contract.
+With P5 chat registration, complete enabled CoCo profiles participate in the
+normal first-profile default selection. Setup can promote the first configured
+CoCo profile, or replace a server-configured CoCo default, using the same policy
+as other harnesses. Existing explicit unrelated defaults remain intact.
+Incomplete connection drafts remain ineligible; profile selection still does
+not establish installation, account authentication or platform certification.
 
 Welcome and Settings CLI Profiles compose the same focused `CortexSetup`
 component. It loads only on expansion, lists/refreshes names, creates an OAuth
@@ -371,10 +503,9 @@ P2 introduces four independent CoCo modules under `src/services/backends/`:
 and `cortexSessions.ts` owns conversation leases, discovery and generations.
 They do not import Grok/Kiro implementations. Domain wire/config/identity shapes
 live in declaration-only `src/types/cortex.ts` and the server type barrel.
-These are internal foundations; no adapter is registered, no routes are added,
-and no new runnable capabilities are advertised yet. P3's internal turn bridge
-is specified below; durable ChatService, external-session persistence and plugin
-integration remain P5. The native runtime API is not a tool-free processor.
+These focused foundations are now owned by the P5 adapter described above.
+P3's turn bridge is specified below. The native runtime API is not a tool-free
+processor.
 
 ### Executable, environment and startup
 
@@ -407,8 +538,8 @@ acp serve -c <literal connection> -w <absolute cwd>
   [--plugin-dir <absolute private directory>]
 ```
 
-The pluginDir hook accepts a future runtime-owned directory; P2 does not create
-or inject MCP plugins. ACP initialization sends protocolVersion 1, clientInfo
+The pluginDir hook accepts the P5 runtime-owned directory. ACP initialization
+sends protocolVersion 1, clientInfo
 `{name:'agent-cockpit',version:'1'}`, and clientCapabilities with file read/write
 and terminal all false. Reject other negotiated protocol versions. Do not call
 the native no-op `authenticate` handler. Startup requests have a 45-second
@@ -486,13 +617,13 @@ down the transport. Closing is idempotent and forbids new prompts. Busy close
 terminates directly rather than waiting for a graceful idle response.
 
 `reset` deletes ownership before disposal. `evictIdle(idleMs,now)` closes only
-released leases; P2 exposes the operation without installing an idle scheduler.
+released leases; the P5 adapter installs its ten-minute idle scheduler.
 `shutdown` increments the generation, clears ownership and disposes all current
 entries. A late version probe/startup cannot reinsert an old entry: it closes
 as soon as a client/runtime appears. Initialization/session failures also close.
-Shutdown is reusable, not a permanent disabled state. The eventual adapter's
-`shutdown()` will delegate here; a lifecycle-only test adapter verifies the real
-`BackendRegistry.shutdownAll()` boundary without registering CoCo in server.ts.
+Shutdown is reusable, not a permanent disabled state. The registered adapter's
+`shutdown()` delegates here; the runtime suite verifies the real
+`BackendRegistry.shutdownAll()` boundary with that adapter.
 
 ### Owned process cleanup
 
@@ -529,7 +660,8 @@ the iterator aborts unfinished work. Pre-start abort sends no prompt; abort
 during setup closes the transport; active-prompt abort uses native cancellation.
 The bridge does not acquire/release leases, persist external sessions, inject
 system instructions/MCP, register an adapter, or implement processor roles.
-Those responsibilities remain P5/P6. `allowTools:false` only denies reverse
+P5 owns those chat responsibilities; processor roles remain P6.
+`allowTools:false` only denies reverse
 permissions; it does not establish a tool-free native session.
 
 ### Models, effort and modes
@@ -598,7 +730,7 @@ from native tool IDs. Each UI decision receives a fresh
 `cortex-decision:<turn UUID>:<ordinal>` activity ID; stale browser decisions cannot
 address a later request even when native IDs are reused. One queued decision is
 presented at a time. The future adapter/client boundary must retain that expected
-decision ID when accepting an answer; routing it is P5/P7 work.
+decision ID when accepting an answer; P5 routes it through REST/WS and the clients.
 
 Recognize a question by valid integer questionIndex/totalQuestions metadata and
 allow-once choices. Preserve native option IDs separately from displayed names.
@@ -644,7 +776,7 @@ Absent/malformed/partial counters emit no invented zero usage. The last valid
 context snapshot accompanies complete usage. Existing conversation/daily ledger
 stores consume normal usage events; their format is unchanged. Tests reconcile
 two turns and caches through the actual ledger store. Durable job/restart
-ownership is still P5, not a new competing deduplication store.
+ownership belongs to P5, not a new competing deduplication store.
 
 CoCo emits costSource none and numeric costUsd 0 only as the contract's unknown
 amount placeholder. No Snowflake dollar spend has been verified. Existing pricing
@@ -727,15 +859,15 @@ file-delivery markers continue to follow Cockpit's explicit-deliverable policy.
   `test/cortexInteractions.test.ts`, `test/cortexTurn.test.ts`,
   `test/cortexAttachments.test.ts`, `test/cortexArtifacts.test.ts`: native excerpt
   mapping and focused boundary tests, plus real scoped upload/queue, artifact
-  storage/download/preview and ledger integration. No server adapter is registered
-  by those tests. `test/helpers/cortexFixtures.ts` provides transport control using
+  storage/download/preview and ledger integration. P5's separate adapter and
+  route suites exercise registration. `test/helpers/cortexFixtures.ts` provides transport control using
   retained native excerpts; it is not a substitute for real CLI acceptance.
 - `scripts/probe-cortex-events.ts`: opt-in P3 native acceptance for configuration/
   effort reset, tools and explicit delivery, sequential/free-text questions,
   duplicate answers, revised plan gates with no write before approval, explicit
   PNG recognition and missing-auth catalog/inference failure classification.
 
-Desktop/mobile receive additive type fields and share the pure contract module;
-no composer/setup controls, mobile assets, PWA metadata or browser interaction
-behavior changes in this phase. Existing frontend typechecks must remain valid.
+Desktop/mobile share the pure role contract; P4 adds setup controls and P5
+retains opaque decision IDs in both clients. P5 changes no PWA metadata or
+service-worker policy. Existing frontend typechecks must remain valid.
 Native CLI compatibility suites are not replaced by these foundation tests.

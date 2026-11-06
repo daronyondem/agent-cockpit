@@ -335,7 +335,6 @@ function maybePromoteSetupProfile(
   profile: CliProfile,
   harness: SetupAuthHarness,
 ): Settings | null {
-  if (harness === 'cortex-code') return null; // Runtime registration is a later phase.
   const defaultProfile = settings.defaultCliProfileId
     ? profiles.find(candidate => candidate.id === settings.defaultCliProfileId)
     : undefined;

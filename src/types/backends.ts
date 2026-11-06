@@ -3,6 +3,7 @@
 import type { EffortLevel, ClaudeCodeMode, ServiceTier, CliProfile } from './cliProfiles';
 import type { SessionRecoveryOptions } from './sessionRecovery';
 import type { StreamEvent } from './streams';
+import type { AttachmentMeta } from './attachments';
 
 export interface BackendCapabilities {
   thinking: boolean;
@@ -115,6 +116,8 @@ export interface SendMessageOptions {
   sessionId: string;
   /** Stable conversation ID (does not change on session reset). */
   conversationId?: string;
+  /** Immutable workspace identity; required by Cortex runtime ownership. */
+  workspaceId?: string;
   /** Runtime CLI profile selected for the conversation. */
   cliProfileId?: string;
   /** Full profile record for adapters that support profile-isolated runtimes. */
@@ -147,10 +150,13 @@ export interface SendMessageOptions {
    * Memory MCP stub.  Backends that don't support MCP ignore this.
    */
   mcpServers?: McpServerConfig[];
+  /** Server-validated conversation uploads, never arbitrary model/user paths. */
+  attachments?: AttachmentMeta[];
+  attachmentRoot?: string;
 }
 
 export interface SendMessageResult {
   stream: AsyncGenerator<StreamEvent>;
   abort: () => void;
-  sendInput: (text: string) => void;
+  sendInput: (text: string, decisionId?: string) => void | boolean;
 }

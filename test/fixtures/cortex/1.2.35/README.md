@@ -19,6 +19,7 @@ must not be treated as absent. Excerpts may start/end mid-session.
 | `questions.json` | Two sequential questions in one native tool, request ID 0, options and typed free-form reply metadata |
 | `plan-revision.json` | Rejection with feedback, failed activity during valid revision, second plan/approval, execution after approval |
 | `load-replay.json` | Native history replay before load response, then an independent new prompt/result |
+| `load-missing.json` | November 6, 2026 native load of a synthetic missing UUID; exact version-bound recovery classifier |
 | `auth-error.json` | Missing connection reported as assistant text plus `end_turn` without usage |
 | `api-error.json` | Service HTTP 408 reported as assistant text plus `end_turn` without usage |
 

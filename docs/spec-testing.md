@@ -8,7 +8,7 @@
 
 **Framework:** Jest 30.x — run with `npm test`. The script is `node --experimental-vm-modules node_modules/.bin/jest` because the KB handler tests import `unpdf` (ESM-only, wraps `pdfjs-dist`) and Jest's VM needs the flag to allow runtime `import()` calls. `jest.config.js` uses `ts-jest` for TypeScript and also transforms JS/JSX with `allowJs: true`, `module: CommonJS`, and `jsx: react-jsx` so tests can import the V2 frontend ES modules directly instead of evaluating browser globals. Default Jest execution is capped at `maxWorkers: '50%'` so process-spawning suites still run in parallel without stampeding local or CI machines, and the global per-test timeout is 30 seconds so widened harness-specific timeouts can surface their route/process-specific errors before Jest's generic timeout.
 
-**Coverage gate:** Run `npm run test:coverage` for backend coverage. The script keeps plain `npm test` unchanged for fast local iteration and runs Jest with `--coverage --runInBand`; serial execution keeps the full-suite coverage gate stable on local machines where parallel workers can exceed short route-test timeouts. `jest.config.js` collects coverage from `src/**/*.ts` and `server.ts`, excludes declaration-only `src/types/**` and `*.d.ts` files, writes reports under `coverage/`, and uses V8 coverage with `text-summary` plus `lcov` reporters. The global threshold floor is statements/lines 88.2%, branches 75.3%, and functions 93.5%, raised with CoCo connection/authentication coverage against the November 6, 2026 V8 baseline of statements/lines 88.33%, branches 75.56%, and functions 93.69% (151 passing suites, 2,759 passing tests; three opt-in suites and 20 tests skipped), measured on macOS. When meaningful tests land, raise the thresholds toward the new baseline in the same PR. Do not lower thresholds to merge a regression; either add behavior coverage, make a narrow intentional exclusion in `jest.config.js`, or document the explicit exception in the PR.
+**Coverage gate:** Run `npm run test:coverage` for backend coverage. The script keeps plain `npm test` unchanged for fast local iteration and runs Jest with `--coverage --runInBand`; serial execution keeps the full-suite coverage gate stable on local machines where parallel workers can exceed short route-test timeouts. `jest.config.js` collects coverage from `src/**/*.ts` and `server.ts`, excludes declaration-only `src/types/**` and `*.d.ts` files, writes reports under `coverage/`, and uses V8 coverage with `text-summary` plus `lcov` reporters. The global threshold floor is statements/lines 88.3%, branches 75.7%, and functions 93.7%, raised with CoCo durable chat/plugin coverage against the November 6, 2026 V8 baseline of statements/lines 88.37%, branches 75.75%, and functions 93.77% (154 passing suites, 2,783 passing tests; three opt-in suites and 20 tests skipped), measured on macOS. When meaningful tests land, raise the thresholds toward the new baseline in the same PR. Do not lower thresholds to merge a regression; either add behavior coverage, make a narrow intentional exclusion in `jest.config.js`, or document the explicit exception in the PR.
 
 Shared chat route tests use `test/helpers/chatEnv.ts` for isolated Express/WebSocket servers and scratch data directories. Teardown waits for active streams, the session finalizer queue, and any in-flight durable stream-job registry mutation to become idle before closing the server and removing the scratch directory, so background finalizer/job writes cannot race temp-directory cleanup.
 
@@ -323,6 +323,74 @@ The six P3 Jest suites contain 30 tests. They include existing conversation
 upload/queue/artifact/preview/download and ledger storage without registering a
 CortexCodeAdapter. Whole app/native UI acceptance is separate; normalization
 fixtures do not certify a processor role or native image generation.
+
+## Cortex durable chat and managed MCP (P5)
+
+Normal Jest coverage adds `test/cortexBackend.test.ts` (registered adapter,
+profile-local catalog/roles, instructions, session IDs, usage/terminal ownership,
+idle/restart load, MCP config refresh, classified recovery and cancellation),
+`test/cortexPlugin.test.ts` (private modes, child env placeholders, actual Node,
+independent tokens, cleanup and conservative dead-owner pruning), and
+`test/cortexIntegration.test.ts` (real process fixture through HTTP/WS and stores:
+metadata, multi-turn persistence, idle/restart load/replay suppression, questions
+through REST/WS/reconnect/stale rejection, recovery snapshot, queue/abort/reset/
+archive/delete/profile lock, worktree/Git/download artifacts and canonical
+workspace relocation/Workspace Context/instruction refresh). Its deterministic
+executable is `test/fixtures/cortex/chat-acp.cjs`, separate from the P2 fixture.
+`load-missing.json` retains the actual synthetic missing-session error signature.
+Desktop reducer/store and mobile projection/send-pipeline suites verify opaque
+decision IDs and preservation of newer interactions during HTTP acknowledgement.
+The runtime registry test now uses the real CortexCodeAdapter.
+
+Opt-in native app probe (paid inference through CoCo plus a separate authenticated
+Claude Memory processor; no shared credential changes):
+
+```sh
+CORTEX_CHAT_PROBE=1 CORTEX_TEST_CONNECTION='<authenticated native connection>' \
+  npx tsx scripts/probe-cortex-chat.ts
+```
+
+Optional command overrides are `CORTEX_TEST_COMMAND` and
+`CORTEX_TEST_MEMORY_COMMAND`. This probe certifies CoCo 1.2.35 on macOS only.
+It creates isolated real ChatService/HTTP/WS data through the existing test
+fixture, selects shared setup-account profiles and real Claude `haiku` as the
+Memory processor. Native Memory/KB discovery and actual stdio shims must execute
+memory_note, memory_search, search_topics and get_topic; governed Memory state
+and separate processor invocation are checked. Actual SQLite/PGLite stores are
+seeded with synthetic knowledge. Embeddings intentionally point at an unavailable
+loopback endpoint; actual PGLite keyword fallback and SQLite topic read are
+tested, not Ollama/semantic embedding availability.
+
+The same conversation must recall its nonce after idle process eviction and
+adapter shutdown/reuse, retain its native ID, persist exactly one **final** answer
+and usage per turn (progress messages are allowed), and deliver a verified native
+write/read file as an artifact in existing conversation storage. It then moves
+the workspace and requires the loaded native session to retain canonical
+workspace/native IDs and nonce while reading/writing in the new cwd. The websocket
+fixture clears a completed replay buffer before a deliberately new send; the
+dedicated reconnect test retains buffers while the current decision is pending.
+Reports are private 0700/0600 temporary summary artifacts with version/platform/
+Node/revision/dirty state and assertion booleans, without native credentials,
+OAuth values, raw protocol or transcript content. Native turns have an external
+180-second completion deadline; adapter shutdown drains owned processes in finally.
+Full OS-process restart/browser UI/other platform acceptance remains P7/P9.
+
+On November 6, 2026 the native app assertions passed on CoCo 1.2.35,
+macOS arm64, Node 26.0.0, revision 5679917 plus P5 work. An earlier assertion
+incorrectly included intermediate progress messages in the final-answer count;
+it was corrected before the complete assertion run. A later native run issued
+no required MCP calls and remains failed; its cause was not established. The
+final complete run passed all checks, including native relocation, and exited
+zero. The standalone fixture explicitly closes its PGLite/vector and SQLite
+stores before deleting data; unclosed PGLite initialization leaves a process
+exit code of 99 even when application assertions pass. No automatic prompt/tool
+retry was added. The unchanged native
+runtime probe also passed all startup/cancel/load/root-exit/missing-auth/reusable
+shutdown scenarios with the P5 pool. Current service tokens have no TTL; token,
+endpoint and feature refresh are deterministic pool tests, and invalid/revoked
+token authorization remains the real Memory/KB service suites. No token-expiry
+policy is claimed. C26 human remote-browser setup stays open; strict processor
+capabilities and one-shot execution remain unavailable.
 
 ## CI/CD
 

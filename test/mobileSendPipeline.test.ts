@@ -3,7 +3,7 @@ import { act, createElement, useState, type Dispatch, type SetStateAction } from
 import { createRoot } from 'react-dom/client';
 import { loadMobileModule } from './mobileModuleLoader';
 
-type PendingInteraction = { kind: 'question' | 'plan'; prompt: string; options?: unknown[] };
+type PendingInteraction = { kind: 'question' | 'plan'; prompt: string; options?: unknown[]; decisionId?: string };
 
 const { useSendPipeline } = loadMobileModule('useSendPipeline.ts', {
   react: require('react'), './api': {}, './appModel': {},
@@ -41,6 +41,7 @@ const question: PendingInteraction = { kind: 'question', prompt: 'Color?', optio
 test.each<{ first: PendingInteraction; next: PendingInteraction }>([
   { first: question, next: { kind: 'question', prompt: 'Size?', options: [] } },
   { first: { kind: 'plan', prompt: '# Original plan' }, next: { kind: 'plan', prompt: '# Revised plan' } },
+  { first: { ...question, decisionId: 'cortex-decision:original' }, next: { ...question, decisionId: 'cortex-decision:next' } },
 ])('mobile preserves a follow-up $next.kind received before the input response', async ({ first, next }) => {
   let acknowledge!: (response: { mode: string }) => void;
   const sendInput = jest.fn(() => new Promise(resolve => { acknowledge = resolve; }));
@@ -52,10 +53,11 @@ test.each<{ first: PendingInteraction; next: PendingInteraction }>([
     await act(async () => { acknowledge({ mode: 'stdin' }); await answering; });
     expect(view.current.interaction).toBe(next);
     expect(view.container.textContent).toBe(next.prompt);
-    expect(sendInput).toHaveBeenCalledWith('fixture', 'Blue', true);
+    expect(sendInput).toHaveBeenCalledWith('fixture', 'Blue', true, first.decisionId);
     sendInput.mockResolvedValueOnce({ mode: 'stdin' });
     await act(async () => { await view.current.submitInteraction('Large'); });
     expect(sendInput).toHaveBeenCalledTimes(2);
+    expect(sendInput).toHaveBeenLastCalledWith('fixture', 'Large', true, next.decisionId);
     expect(view.current.interaction).toBeNull();
   } finally { await view.close(); }
 });

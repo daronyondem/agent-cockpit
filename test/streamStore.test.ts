@@ -147,6 +147,7 @@ test('plan-exit frame sets pendingInteraction and uiState=awaiting', async () =>
   expect(state.pendingInteraction).toEqual({
     type: 'planApproval',
     planContent: '# Plan\n\n- step 1\n- step 2',
+    decisionId: 't-plan',
   });
   expect(state.uiState).toBe('awaiting');
   expect(Store.convStates()).toEqual({ c1: 'awaiting' });
@@ -469,7 +470,7 @@ test('respond() with mode:stdin clears pendingInteraction without a fresh send',
   const [callPath, callOpts] = api.fetch.mock.calls[0];
   expect(callPath).toBe('conversations/c1/input');
   expect(callOpts.method).toBe('POST');
-  expect(callOpts.body).toEqual({ text: 'yes', streamActive: false });
+  expect(callOpts.body).toEqual({ text: 'yes', streamActive: false, decisionId: 't' });
 
   const state = Store.getState('c1');
   expect(state.pendingInteraction).toBeNull();
@@ -482,13 +483,13 @@ test.each([
     label: 'next question with the same tool ID',
     first: { isQuestion: true, questions: [{ question: 'Color?', options: [] }] },
     next: { isQuestion: true, questions: [{ question: 'Size?', options: [] }] },
-    expected: { type: 'userQuestion', question: 'Size?', options: [] },
+    expected: { type: 'userQuestion', question: 'Size?', options: [], decisionId: 'same-tool' },
   },
   {
     label: 'revised plan',
     first: { isPlanMode: true, planAction: 'exit', planContent: '# Original plan' },
     next: { isPlanMode: true, planAction: 'exit', planContent: '# Revised plan' },
-    expected: { type: 'planApproval', planContent: '# Revised plan' },
+    expected: { type: 'planApproval', planContent: '# Revised plan', decisionId: 'same-tool' },
   },
 ])('respond() preserves a $label received before the input response', async ({ first, next, expected }) => {
   const ws = await openWs('c1');

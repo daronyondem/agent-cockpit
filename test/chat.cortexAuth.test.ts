@@ -80,4 +80,14 @@ describe('Cortex setup HTTP boundaries', () => {
     expect(finished).toBe(false); finish(); await shutdown;
     expect(finished).toBe(true); drain.mockRestore();
   });
+
+  test('a first configured CoCo setup profile can become the default after chat registration', async () => {
+    jest.spyOn(CortexAuth.prototype, 'check').mockImplementation(async profile => ({ profileId: profile.id, harness: 'cortex-code', command: 'cortex',
+      available: true, authenticated: true, status: 'ok', output: 'Fresh inference verified.' }));
+    const settings = await env.chatService.getSettings();
+    await env.chatService.saveSettings({ ...settings, cliProfiles: [], defaultBackend: undefined, defaultCliProfileId: undefined });
+    const result = await env.request('POST', `${base}/setup-auth/cortex-code/test`, { connection: 'fixture' });
+    expect(result.status).toBe(200);
+    expect(result.body.settings).toMatchObject({ defaultBackend: 'cortex-code', defaultCliProfileId: 'setup-cortex-code-account' });
+  });
 });

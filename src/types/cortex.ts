@@ -1,6 +1,7 @@
 import type { CliProfile } from './cliProfiles';
 import type { EffortLevel } from './cliProfiles';
 import type { AttachmentMeta } from './attachments';
+import type { McpServerConfig } from './backends';
 
 export type CortexRecord = Record<string, unknown>;
 export type CortexRpcId = string | number;
@@ -30,6 +31,9 @@ export interface CortexSessionOptions {
   /** Instruction/plugin generation; changing it requires a new native runtime. */
   contextKey?: string;
   pluginDir?: string;
+  /** Cockpit-owned child environment; never persisted into the CLI profile. */
+  managedEnv?: Record<string, string>;
+  mcpServers?: McpServerConfig[];
   sessionId?: string;
 }
 

@@ -312,7 +312,7 @@ export function createStreamRouter(opts: StreamRoutesOptions): express.Router {
     }
 
     let systemPrompt = '';
-    if (isNewSession) {
+    if (isNewSession || backendId === 'cortex-code') {
       const settings = await chatService.getSettings();
       const globalPrompt = settings.systemPrompt || '';
       const wsInstructions = workspaceIdForSend ? (await chatService.getWorkspaceInstructions(workspaceIdForSend)) || '' : '';
@@ -410,6 +410,7 @@ export function createStreamRouter(opts: StreamRoutesOptions): express.Router {
     const sendResult = adapter.sendMessage(cliMessage, {
       sessionId: conv.currentSessionId,
       conversationId: convId,
+      workspaceId: workspaceIdForSend || undefined,
       cliProfileId: runtime.cliProfileId || refreshedConv?.cliProfileId || conv.cliProfileId || undefined,
       cliProfile: runtime.profile,
       isNewSession,
@@ -478,7 +479,7 @@ export function createStreamRouter(opts: StreamRoutesOptions): express.Router {
       }
       throw err;
     }
-    const { text, streamActive } = body;
+    const { text, streamActive, decisionId } = body;
 
     const conv = await chatService.getConversation(convId);
     if (!conv) return res.status(404).json({ error: 'Conversation not found' });
@@ -502,8 +503,14 @@ export function createStreamRouter(opts: StreamRoutesOptions): express.Router {
         }
         return res.json({ mode: 'stdin' });
       }
-      entry.sendInput(text.trim());
+      if (entry.sendInput(text.trim(), decisionId) === false) {
+        return res.status(409).json({ error: 'This interaction is no longer active or its answer is invalid.' });
+      }
       return res.json({ mode: 'stdin' });
+    }
+
+    if (decisionId?.startsWith('cortex-decision:')) {
+      return res.status(409).json({ error: 'This interaction is no longer active.' });
     }
 
     return res.json({ mode: 'message' });

@@ -92,12 +92,12 @@ export function chatStreamEventActions(event: StreamEvent): ChatStreamEventActio
       break;
     case 'tool_activity': {
       if (event.isPlanMode && (event.planContent || event.planAction === 'exit')) {
-        actions.push({ type: 'set-pending-interaction', interaction: { kind: 'plan', prompt: event.planContent || 'Plan ready for approval.' } });
+        actions.push({ type: 'set-pending-interaction', interaction: { kind: 'plan', prompt: event.planContent || 'Plan ready for approval.', ...(event.id ? { decisionId: event.id } : {}) } });
       } else if (event.isQuestion && event.questions?.length) {
         const question = event.questions[0];
         actions.push({
           type: 'set-pending-interaction',
-          interaction: { kind: 'question', prompt: question.question, options: question.options || [] },
+          interaction: { kind: 'question', prompt: question.question, options: question.options || [], ...(event.id ? { decisionId: event.id } : {}) },
         });
       }
       const notification = streamEventNotification(event);

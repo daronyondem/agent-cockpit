@@ -2218,7 +2218,7 @@ import { reduceStreamFrame } from './stream/streamFrameReducer.ts';
     try {
       const streamActive = s.streaming || s.sending;
       /** @type {ConversationInputRequest} */
-      const body = { text, streamActive };
+      const body = { text, streamActive, ...(interaction.decisionId ? { decisionId: interaction.decisionId } : {}) };
       const res = await AgentApi.fetch(
         'conversations/' + encodeURIComponent(convId) + '/input',
         { method: 'POST', body }

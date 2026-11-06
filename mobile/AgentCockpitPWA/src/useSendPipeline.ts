@@ -372,7 +372,7 @@ export function useSendPipeline(options: UseSendPipelineOptions) {
       return;
     }
     try {
-      const response = await options.clientRef.current.sendInput(conversation.id, answer, options.isStreaming || options.loading);
+      const response = await options.clientRef.current.sendInput(conversation.id, answer, options.isStreaming || options.loading, interaction.decisionId);
       options.setPendingInteraction((current) => current === interaction ? null : current);
       options.setInteractionAnswer('');
       if (response.mode === 'message') {

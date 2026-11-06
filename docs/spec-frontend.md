@@ -284,6 +284,7 @@ After a Worktrees enable or disable succeeds, `workspaceSettings.jsx` refreshes 
   5. On network/HTTP error — surface via `streamError` and flip `uiState` to `'error'`.
 
   **Lifecycle edges:**
+  - Pending plan/question interactions retain an optional opaque `decisionId` from `tool_activity.id`; `respond()` echoes it to `/input`. CoCo requires this current generation and returns 409 for stale/invalid replies; the error is surfaced without falling back to a new user message. Other harnesses may ignore the field.
   - `reset(convId)` clears `pendingInteraction` and `uiState` along with the rest of the session.
   - `send(convId, text)` clears `pendingInteraction` as part of the optimistic update — if the user bypasses the card by typing into the composer (which only happens when we're not correctly guarding — see above), we don't leave a stale interaction behind.
   - `archive(convId)` deletes the whole entry so `pendingInteraction` naturally goes away.

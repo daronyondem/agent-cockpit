@@ -112,7 +112,9 @@ modules. It reserves a shared auth home across profiles, keeps URL/code/state
 out of saved events/settings, and clears handoffs before terminal cleanup.
 Chat router shutdown awaits its drain of jobs and direct checks before the
 server exits; native version/startup work receives the same abort signal.
-Setup does not promote a CoCo default while the adapter is unregistered.
+With the registered CoCo chat adapter, complete enabled CoCo setup profiles use
+the normal default-promotion policy; incomplete drafts remain ineligible and
+existing explicit unrelated defaults remain intact.
 See [the complete P4 contract](spec-cortex-code.md#shared-connection-and-authentication-setup-p4).
 
 `src/services/cliProfileAuthService.ts` owns remote account-auth jobs for CLI profiles. It supports Codex, Claude Code and Grok Build account profiles plus the dedicated CoCo shared-home flow; self-configured profiles are treated as already managed on the server, and Kiro remains unsupported until it has a safe dedicated profile/config directory. `profileWithAuthDefaults(settings, profileId)` looks up the profile and, when an explicit non-setup account profile has no `configDir`, assigns a deterministic directory under `data/cli-profiles/<slug>-<sha1>/` so future runtime spawns and the auth job use the same isolated home. For Welcome setup account profiles, the same helper removes stale `configDir`, `CODEX_HOME`, and `CLAUDE_CONFIG_DIR` values instead of assigning a private directory. `checkProfile(profile)` runs the harness status command (`codex login status` or `claude auth status --json`) with the profile command/env/config directory and returns availability/authentication status plus redacted output; Codex is exit-code based, while Claude Code parses the JSON status body and requires `loggedIn: true` so a logged-out exit-0 response does not become a false verified state. On Windows those commands are built from the shared CLI resolver, so installer-managed Codex uses `node.exe <installDir>\cli-tools\node_modules\@openai\codex\bin\codex.js ...` and installer-managed Claude uses the package `claude.exe` before any npm `.cmd` shim fallback. The route-level `/cli-profiles/:id/test` wrapper also asks the registered harness adapter for `getMetadata({ cliProfile })` so the profile-specific model catalog is warmed/read during the check. `startAuth(profile)` starts one in-memory job per profile using `codex login --device-auth` or `claude auth login --claudeai`, captures redacted stdout/stderr/info/exit events, and leaves recent job snapshots pollable by ID. A running auth job has a 15-minute timeout; timeout marks it `failed`, records an actionable message, and sends `SIGTERM` to the login process. When the login process exits successfully, the service polls the harness status command before marking the job `succeeded`; Claude Code polling also requires `loggedIn: true`. Status timeout, nonzero status, or repeated logged-out Claude JSON leaves the job `failed` with the last redacted status output. `cancelJob(jobId)` marks a running job cancelled and sends `SIGTERM`; `shutdown()` cancels any running auth jobs during server shutdown.
@@ -1323,9 +1325,8 @@ CoCo's P2 internal modules now implement strict JSONL transport
 ownership (`cortexRuntime.ts`), per-conversation leases/discovery/reset/idle and
 reusable shutdown generations (`cortexSessions.ts`), and identity-checked POSIX
 descendant cleanup (`cortexProcess.ts`). Domain shapes live in `src/types/cortex.ts`.
-These modules have no production Grok/Kiro dependency. No `CortexCodeAdapter` is
-registered in server.ts yet: durable chat and the adapter facade still
-must implement their advertised surface. Session creation and catalog discovery
+These modules have no production Grok/Kiro dependency. `CortexCodeAdapter` is
+now registered in server.ts for chat. Session creation and catalog discovery
 are not authentication checks. The [CoCo runtime spec](spec-cortex-code.md#native-transport-and-runtime-ownership)
 defines exact argv, environment, deadlines, fingerprints and cleanup limitations.
 
@@ -1336,8 +1337,19 @@ are required for answers; native IDs are not browser ownership tokens. Dynamic
 configOptions and native auto reset, version-tested error text withholding,
 once-per-turn cache counters, explicit PNG input and explicit scoped file
 delivery are specified in [the P3 CoCo contract](spec-cortex-code.md#internal-turn-bridge-and-event-mapping-p3).
-The actual auth/adapter/MCP/processor/client paths remain later phases; no new
-backend registration, endpoint or processor capability is introduced by P3.
+P4 implements shared authentication. P5 adds the registered facade, private
+`cortexPlugin.ts` resources, per-turn managed instruction fingerprints and
+durable native-session recovery; see [the P5 contract](spec-cortex-code.md#durable-chat-and-managed-mcp-p5).
+`SendMessageOptions` gains optional canonical workspaceId and structured
+attachment metadata/root. CoCo requires profile/workspace/cwd, emits the
+existing external/runtime identity events and uses existing stream/storage
+services. Its ten-minute idle timer and reset/shutdown are reusable across CLI
+updates. Per-profile metadata never populates a shared model catalog.
+Questions/plans echo their opaque decision generation through the optional
+second `sendInput` argument. CoCo rejects missing/stale/duplicate/invalid
+decisions; REST returns 409. Other adapters retain their existing behavior.
+Processor roles, native goals, steering and agents remain unavailable; P7 owns
+full native client acceptance and the browser structured-upload bridge.
 
 ### Adding a New Backend
 

@@ -161,8 +161,8 @@ export type DirectoryBrowseResponse = {
 };
 
 export type PendingInteraction =
-  | { kind: 'plan'; prompt: string }
-  | { kind: 'question'; prompt: string; options: Array<{ label: string; description?: string }> };
+  | { kind: 'plan'; prompt: string; decisionId?: string }
+  | { kind: 'question'; prompt: string; options: Array<{ label: string; description?: string }>; decisionId?: string };
 
 export type UserQuestion = {
   question: string;

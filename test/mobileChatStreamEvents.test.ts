@@ -3,6 +3,14 @@ import { loadMobileModule } from './mobileModuleLoader';
 describe('mobile chat stream event projections', () => {
   const events = loadMobileModule('chatStreamEvents.ts');
 
+  test('retains question and plan decision generations for authenticated replies', () => {
+    for (const frame of [{ type: 'tool_activity', isQuestion: true, questions: [{ question: 'Color?', options: [] }] },
+      { type: 'tool_activity', isPlanMode: true, planAction: 'exit', planContent: '# Plan' }]) {
+      const actions = events.chatStreamEventActions({ ...frame, id: 'cortex-decision:current' });
+      expect(actions.find((action: { type: string }) => action.type === 'set-pending-interaction').interaction.decisionId).toBe('cortex-decision:current');
+    }
+  });
+
   test('projects incremental text and assistant messages for the open chat', () => {
     expect(events.chatStreamEventActions({ type: 'text', content: 'Hello' })).toEqual([
       { type: 'set-stream-placeholder', value: false },

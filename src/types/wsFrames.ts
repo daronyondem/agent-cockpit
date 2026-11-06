@@ -6,6 +6,7 @@ import type { StreamEvent } from './streams';
 export interface WsInputFrame {
   type: 'input';
   text: string;
+  decisionId?: string;
 }
 
 export interface WsAbortFrame {

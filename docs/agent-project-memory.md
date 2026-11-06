@@ -169,8 +169,8 @@ tool is unavailable.
   wants this mechanism in future Cockpit setup. Preserve shared terminal auth,
   keep the login job alive, and handle the native two-minute timeout (a
   connection `browserActionTimeout = 600000` provided ten minutes). ACP
-  initialization/session creation alone does not prove authentication. CoCo
-  remains pre-integration; see `docs/research/cortex-code-acp-evaluation.md`.
+  initialization/session creation alone does not prove authentication. See
+  `docs/research/cortex-code-acp-evaluation.md` for the original evidence.
   Phase 0 fixtures live under `test/fixtures/cortex/1.2.35`; the opt-in
   `scripts/probe-cortex-phase0.ts` is research scaffolding, not an adapter suite.
   Keep strict processors gated: an allowlist/denied approval does not establish
@@ -178,13 +178,12 @@ tool is unavailable.
   P1 profile/capability foundations are in `docs/spec-cortex-code.md`: incomplete
   setup drafts cannot resolve/promote, and shared role/media selection policy
   lives in `src/contracts/backendCapabilities.ts`. A recognized profile identity
-  does not prove runtime availability or authentication; the adapter is pending.
+  does not prove runtime availability or authentication.
   P2 dedicated CoCo protocol/runtime/session/process foundations and the real
   `scripts/probe-cortex-runtime.ts` passed on macOS arm64 / CoCo 1.2.35. Keep
   generation-safe reusable shutdown, exact ACP-first argv, fatal timeout cleanup,
   replay suppression and identity-checked descendants; no production dependency
-  on Grok/Kiro. Userspace sampling is not OS containment. Adapter registration
-  waits for its event/interaction/chat surface. Review focused P2 tests and run
+  on Grok/Kiro. Userspace sampling is not OS containment. Review focused P2 tests and run
   the opt-in runtime probe for native drift; it is not a complete app/UI suite.
   P3 internal mapping now passes the dedicated `scripts/probe-cortex-events.ts`
   on the same native baseline. Keep exact RPC/tool identity separate from fresh
@@ -203,8 +202,19 @@ tool is unavailable.
   1.2.35/macOS arm64 using an isolated PM2 fixture, including fresh exact
   inference, cancel/retry and narrow layout. C26 actual human remote-browser
   handoff through Cockpit remains pending because shared saved login was reused;
-  do not clear shared credentials just to force it. CoCo automatic default
-  promotion and durable adapter/client integration remain gated. See the current CoCo spec and progress tracker.
+  do not clear shared credentials just to force it. P5 now registers
+  `CortexCodeAdapter` for durable chat. Private native MCP plugin resources and
+  child-only secret env belong to `cortexPlugin.ts` and the session pool; refresh
+  changed tokens/endpoints/instructions/profile/cwd only between turns. Recover
+  native load only on the version-tested missing-session signature; never resend
+  interrupted work. Propagate opaque decision generations through REST/WS and
+  desktop/mobile replies. Real CoCo 1.2.35/macOS app probes passed native Memory/KB
+  discovery, actual shims, separate Claude Memory governance/search, SQLite/PGLite
+  keyword access, idle/adapter-restart nonce recall and persisted native delivery.
+  Current MCP tokens have no TTL; native semantic embedding availability was not
+  tested. Strict processors/one-shots, goals, agents and steering remain gated;
+  full native client/OS-process-restart/platform acceptance remains later work.
+  See the current CoCo spec and progress tracker.
 - Fresh installs should be provider-neutral. Do not imply Claude Code is
   configured when the user has not installed or authenticated it.
 - CLI profiles are scoped per conversation where applicable and can support
