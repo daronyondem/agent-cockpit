@@ -9,7 +9,7 @@ export function loadMobileModule(relativePath: string, dependencies: Record<stri
   return loadFrontendModule(path.join('mobile/AgentCockpitPWA/src', relativePath), dependencies);
 }
 
-export function loadFrontendModule(relativePath: string, dependencies: Record<string, unknown> = {}): Record<string, any> {
+export function loadFrontendModule(relativePath: string, dependencies: Record<string, unknown> = {}, globals: Record<string, unknown> = {}): Record<string, any> {
   const sourcePath = path.join(ROOT, relativePath);
   const source = fs.readFileSync(sourcePath, 'utf8');
   const transformed = ts.transpileModule(source, {
@@ -34,6 +34,7 @@ export function loadFrontendModule(relativePath: string, dependencies: Record<st
       createElement: jest.fn(),
       body: { append: jest.fn() },
     },
+    ...globals,
   };
   vm.runInNewContext(transformed, sandbox, { filename: sourcePath });
   return module.exports;

@@ -1,15 +1,216 @@
-# Cortex Code profile, transport and runtime foundations
+# Cortex Code profile, runtime and authentication setup
 
 [← Back to index](SPEC.md)
 
 **Implemented scope:** P1 profiles, P2 transport/runtime, and P3 internal
-events/interactions/models/usage/attachments/artifacts, November 6, 2026.
+events/interactions/models/usage/attachments/artifacts, and P4 connection/auth
+setup, November 6, 2026.
 Native acceptance baseline is CoCo 1.2.35, macOS arm64.
 **Runtime status:** No Cortex Code adapter is registered in `server.ts` yet.
-CoCo is not an executable chat/processor/auth/update option in this slice.
+CoCo setup/authentication is available; executable chat, processors and CLI
+installation/update support remain pending. The actual remote-browser setup
+through Cockpit is still an open acceptance gate (C26).
 See [the implementation tracker](design/cortex-code-implementation-plan.md),
 [native evaluation](research/cortex-code-acp-evaluation.md), and
 [Proposed ADR-0093](adr/0093-integrate-cortex-code-through-its-native-acp-interface.md).
+
+## Shared connection and authentication setup (P4)
+
+`CliProfileAuthService` remains the public facade. Its CoCo operations delegate
+to `src/services/cortexAuth.ts`; other harness transports/status interpretation
+are unchanged. Auth declarations live in `src/types/cliAuth.ts` and remain
+compatibility re-exports of the facade. The browser-safe CoCo summaries,
+handoff shape and exact-body validators live in `src/contracts/cortexAuth.ts`.
+
+### Native connections
+
+`cortexConnections.ts` resolves the server's `SNOWFLAKE_HOME` (expanding `~/`)
+or `os.homedir()/.snowflake`. Setup enumerates **connections.toml only**; it
+does not run a CLI wizard, switch the terminal's default connection or expose
+config paths supplied by browsers. A missing file is an empty list. Files
+must be ordinary non-symlink files, at most 1 MiB of UTF-8, valid TOML; parsing
+errors never expose source lines. Top-level tables with a string `account`
+become sorted summaries `{name,manualOAuth,browserTimeoutMs}`. `manualOAuth`
+means the case-insensitive authenticator is `OAUTH_AUTHORIZATION_CODE`.
+Timeout reads `browserActionTimeout`, then `browser_action_timeout`; a positive
+safe integer is milliseconds, otherwise the native default is 120000.
+`config.toml` fallback connections and organization-specific OAuth domains
+outside the validated Snowflake domains are not certified by this phase.
+
+Create requests accept exactly `{name,account,user}`. Name is nonblank and at
+most 128 UTF-16 code units; account/user at most 256. All reject Unicode
+controls and unpaired surrogate code units. Account is a bare Snowflake
+identifier matching alphanumeric/underscore/hyphen groups separated by dots;
+it cannot be a URL, host/path override or credential. User and name retain
+their literal valid text, including quotes/Unicode. Setup/check selects a
+nonblank name of at most 1024 units and accepts no additional fields.
+
+Creation adds only a new quoted top-level table with `account`, `user`,
+`authenticator="OAUTH_AUTHORIZATION_CODE"`,
+`client_store_temporary_credential=true`, `browserActionTimeout=600000`.
+`smol-toml` 1.9.1+ parses/serializes TOML syntax. Original bytes, comments and
+all other connections remain unchanged; the combined document is validated
+before writing. An exclusive `.cockpit-connections.lock` serializes Cockpit
+writers, in addition to the instance's in-flight guard. Existing locks are
+reported, never deleted as stale guesses. The new home is created with `0700`;
+an exclusive same-directory random temporary file is `0600` from creation,
+written and fsynced before atomic rename. Existing native file content is read
+again before rename and any observed external edit aborts creation. This is
+best-effort detection of external writers that ignore Cockpit's lock, not an
+OS compare-and-swap guarantee. All paths clean up their own temp/lock handles;
+the final native file is `0600`. Creation never edits existing timeouts,
+credentials or the CLI's selected default.
+
+### Job ownership and transport
+
+`CortexAuth.start()` requires an enabled account profile, reserves its
+effective shared Snowflake home **before any await**, creates a random job ID
+and handoff generation, and returns a clone of the in-memory job. A different
+profile cannot start/check the same home while its job/check owns it. Completed
+history is bounded to 40 jobs. Terminal snapshots contain only sanitized status
+events; raw terminal output, URL, state, PKCE material and redirect codes never
+enter those events, settings, conversation history or logs in Cockpit.
+
+The job first makes one fresh verification request. Valid shared credentials
+finish successfully without starting another login or fabricating a URL.
+Otherwise manual login requires an OAuth authorization-code connection.
+`cortexVersion()` checks the executable; native terminal parsing is gated to
+1.2.35 (including build suffixes). Other versions can still use terminal login
+plus Check login but cannot use this unverified terminal parser. Windows
+runtime launch remains unsupported by the dedicated runtime resolver.
+
+`cortexLogin.ts` loads the native `node-pty` addon only when starting a login,
+so an unused CoCo setup path does not add an eager native-addon requirement to
+server startup. It launches the pinned native binary through the PTY, never
+a shell, with an empty private temporary cwd and:
+
+```
+--no-auto-update --private -c <connection> -w <temporary-cwd>
+--only-explicit-plugins --only-explicit-skills --only-explicit-mcp-servers
+```
+
+Runtime resolution forces `CORTEX_OAUTH_MANUAL=1`, native memory/test mode off,
+and shared setup auth rules. A pipe is insufficient for fresh onboarding
+(native 1.2.35 explicitly requires a TTY). The PTY uses xterm-256color,
+1024 columns and 40 rows to retain a complete native URL. The parser holds a
+bounded 128 KiB private tail, strips terminal escapes and handles split output.
+Known first-run prompts skip importing Claude settings, confirm the default
+theme, acknowledge native security notes, and select the **exact named** agent
+account from the native table; it does not blindly choose the first account.
+An ambiguous/unrecognized account table fails closed. It never answers
+arbitrary connection, SQL-account, workspace-trust or tool-permission prompts.
+Native first-run preferences outside these known states may still require
+terminal setup. Vendor onboarding itself can perform native account tests and
+default skill-repository setup; Cockpit sends no task/tool prompt in this PTY.
+
+The starting deadline is 90 seconds. On the validated native URL, the browser
+deadline is conservatively native-spawn time plus the selected effective
+browser timeout (so initial onboarding can shorten the remaining window).
+`cortex` is the sole OAuth client: it owns the callback listener, PKCE exchange,
+cache and its own stale account-lock recovery. Cockpit never deletes native
+`oac_login_*.lock` files or shared credentials. A URL appears only in a running
+handoff with `{phase,generation,connection,version?,authorizationUrl?,expiresAt?}`.
+Phases are `starting`, `waiting-for-browser`, `verifying`; timestamps advance
+monotonically so browser polling cannot restore older URLs/status.
+
+### Redirect boundary and verification
+
+The native authorization URL must be HTTPS on a single Snowflake account host
+under `snowflakecomputing.com` or `.cn`, `/oauth/authorize`, with no port,
+userinfo or fragment; exactly one nonempty state/redirect URI/challenge,
+`response_type=code`, `code_challenge_method=S256` are required. The callback
+must be `http://127.0.0.1:<explicit-port>/` with no query or fragment. Expected
+issuer is the authorization origin plus `/oauth`.
+
+Redirect POST accepts exactly `{generation,redirectUrl}` with nonblank strings
+(generation <=128, URL <=16384 units, no controls/surrogates). It requires the
+active waiting job, unexpired deadline and exact generation, callback origin/
+path, state and issuer. Exactly one nonempty `code`, `state`, `iss` is allowed;
+code <=4096 units. Duplicate/extra parameters, credentials in the authority,
+fragments and other targets are rejected without echoing values. A valid
+redirect is consumed **before** writing it plus Enter to native stdin. The
+service does not fetch it or build an independent OAuth exchange. A rejected
+validation can be corrected on the same active job; a consumed/write-failed
+redirect requires a new job. URL/state ownership are cleared at consumption.
+
+Callback receipt only changes phase; it does not prove cache completion or
+start a racing verification request. Known native onboarding completion
+(`All tests passed!`) or main prompt readiness (`? for shortcuts`), or native
+exit, releases the waiting step. The exchange/verification completion deadline
+is 90 seconds after redirect submission/receipt. The native job retains its
+process/listener until fresh verification finishes or cancellation/timeout
+starts bounded cleanup.
+
+`cortexAuthVerification.ts` uses a **new** ACP runtime in a private empty
+synthetic workspace and an independently generated random `COCKPIT_AUTH_…`
+nonce. It sends exactly one bounded prompt requesting that exact text, no
+tools/files/agents/web/SQL. Success requires `end_turn`, the exact stripped
+response, complete final native token counters and no observed tool activity or
+reverse interaction. Any tool update/interaction closes the client; no approval
+is granted. This is evidence for the minimal auth request, not certification of
+a zero-tool processor boundary. Initialization, model discovery, connection
+tests, callback receipt, arbitrary assistant text and missing usage cannot pass.
+The overall verification deadline is 90 seconds, with abort wired into the
+native client's startup and process teardown. No paid inference polling/retry
+loop exists. Normal model-catalog validation for chat is unchanged; the auth
+probe uses raw native default selection so an empty-home missing model option
+does not accidentally count as login evidence.
+
+Known missing-connection text returns `not-authenticated`/false; other native
+API, grant, expired/invalid credential, malformed or unexpected responses return
+`error` with unknown authentication and locally authored guidance. Accounts,
+native errors, returned nonce text, tokens and credential URLs are never echoed.
+Successful output is `Cortex Code credentials and inference access verified
+from a fresh process.` Each check incurs the small native inference request.
+
+Cancel/shutdown/timeout invalidates the handoff immediately and aborts its
+verification. `CortexProcessScope` accepts both child-process and PTY ownership
+handles, tracks PID/start identities and drains descendants before releasing the
+home reservation or allowing retry. Shutdown advances a generation so late
+startups/callbacks cannot register a new handoff, and remains reusable. Server
+shutdown awaits `CortexAuth.drain()` for both jobs and direct checks before
+exiting; abort signals also reach native version detection, so shutdown cannot
+strand a version/startup owner before ACP initialization. Process
+cleanup is the existing bounded POSIX implementation, not OS containment.
+
+### Setup/profile and client behavior
+
+Setup test/start requires `{connection}` and creates/reuses only
+`setup-cortex-code-account*`; it never edits an unrelated explicit profile.
+Changing selection updates that setup profile's connection only. Setup
+normalization removes configDir and case-insensitive `SNOWFLAKE_HOME`, retaining
+unrelated env. Shared non-setup CoCo account profiles also avoid automatic
+configDir allocation. Explicit isolation metadata remains unchanged; remote
+login rejects those profiles and directs their login to their own terminal.
+Their read-only checks can use their configured home without claiming safe
+credential separation (native OS keychain behavior remains shared/uncertified).
+Setup never promotes CoCo. Settings' automatic first-profile fallback excludes
+CoCo while adapter registration is pending; explicit stored defaults retain
+the prior profile-identity contract.
+
+Welcome and Settings CLI Profiles compose the same focused `CortexSetup`
+component. It loads only on expansion, lists/refreshes names, creates an OAuth
+connection, checks saved login, starts/cancels a native job, presents a selectable
+URL and deadline, and accepts the complete remote redirect. While running,
+selection/creation/check/start controls are disabled. One-second polling stops
+on terminal state/unmount, discards older job timestamps and clears input after
+submission/cancel/completion. A reload can recover the active handoff from
+connection enumeration without storing a URL or job token in localStorage.
+Errors are sanitized server messages. Account/user creation fields are cleared
+after success and never copied into browser settings/profile objects. Settings
+merges the returned setup profile into its local draft without overwriting
+unrelated unsaved edits. Generic profile-edit/chat controls for CoCo remain a
+later phase; existing CoCo metadata is retained rather than mis-edited by another
+harness's form. Mobile PWA remains chat-only; the desktop setup panel wraps to
+narrow browser viewports, without adding a PWA admin/auth flow or changing
+mobile metadata. APIs use the existing remote authentication wall and CSRF
+guard; all connection/job/redirect responses carrying handoff state are no-store.
+
+`scripts/probe-cortex-auth.ts` is opt-in native saved-auth/UI evidence through a
+PM2-managed server with isolated Cockpit data and shared terminal auth. It does
+not log out/delete shared credentials to force reauthorization. An actual human
+remote-browser URL/redirect through these new routes remains **C26 pending**;
+the earlier research handoff and fixture state/issuer tests do not close it.
 
 ## Identity and profile data
 
@@ -81,10 +282,10 @@ ID and profile only; the caller must still obtain a registered backend adapter.
 
 Normal setup profiles remove `configDir` and case-insensitive `SNOWFLAKE_HOME`
 env overrides in settings normalization/read migration, retaining connection
-selection and unrelated env values. This prepares future shared terminal auth.
+selection and unrelated env values. P4 setup uses this shared terminal authentication.
 Explicit non-setup profiles retain their configured home metadata; this slice
 does not certify account isolation. CoCo auth routes/jobs and
-Welcome connection selection remain later phases. CLI Update label/command
+Welcome connection selection are specified in P4 above. CLI Update label/command
 maps recognize the expanded type, but CoCo is excluded from update targets and
 no CoCo executable is launched by CLI Update.
 

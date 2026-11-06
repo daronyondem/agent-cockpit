@@ -8,7 +8,7 @@
 
 **Framework:** Jest 30.x — run with `npm test`. The script is `node --experimental-vm-modules node_modules/.bin/jest` because the KB handler tests import `unpdf` (ESM-only, wraps `pdfjs-dist`) and Jest's VM needs the flag to allow runtime `import()` calls. `jest.config.js` uses `ts-jest` for TypeScript and also transforms JS/JSX with `allowJs: true`, `module: CommonJS`, and `jsx: react-jsx` so tests can import the V2 frontend ES modules directly instead of evaluating browser globals. Default Jest execution is capped at `maxWorkers: '50%'` so process-spawning suites still run in parallel without stampeding local or CI machines, and the global per-test timeout is 30 seconds so widened harness-specific timeouts can surface their route/process-specific errors before Jest's generic timeout.
 
-**Coverage gate:** Run `npm run test:coverage` for backend coverage. The script keeps plain `npm test` unchanged for fast local iteration and runs Jest with `--coverage --runInBand`; serial execution keeps the full-suite coverage gate stable on local machines where parallel workers can exceed short route-test timeouts. `jest.config.js` collects coverage from `src/**/*.ts` and `server.ts`, excludes declaration-only `src/types/**` and `*.d.ts` files, writes reports under `coverage/`, and uses V8 coverage with `text-summary` plus `lcov` reporters. The global threshold floor is statements/lines 88.1%, branches 74.9%, and functions 93.4%, raised with CoCo event/interaction/media coverage against the November 6, 2026 V8 baseline of statements/lines 88.22%, branches 75.10%, and functions 93.62% (144 passing suites, 2,681 passing tests; three opt-in suites and 20 tests skipped), measured on macOS. When meaningful tests land, raise the thresholds toward the new baseline in the same PR. Do not lower thresholds to merge a regression; either add behavior coverage, make a narrow intentional exclusion in `jest.config.js`, or document the explicit exception in the PR.
+**Coverage gate:** Run `npm run test:coverage` for backend coverage. The script keeps plain `npm test` unchanged for fast local iteration and runs Jest with `--coverage --runInBand`; serial execution keeps the full-suite coverage gate stable on local machines where parallel workers can exceed short route-test timeouts. `jest.config.js` collects coverage from `src/**/*.ts` and `server.ts`, excludes declaration-only `src/types/**` and `*.d.ts` files, writes reports under `coverage/`, and uses V8 coverage with `text-summary` plus `lcov` reporters. The global threshold floor is statements/lines 88.2%, branches 75.3%, and functions 93.5%, raised with CoCo connection/authentication coverage against the November 6, 2026 V8 baseline of statements/lines 88.33%, branches 75.56%, and functions 93.69% (151 passing suites, 2,759 passing tests; three opt-in suites and 20 tests skipped), measured on macOS. When meaningful tests land, raise the thresholds toward the new baseline in the same PR. Do not lower thresholds to merge a regression; either add behavior coverage, make a narrow intentional exclusion in `jest.config.js`, or document the explicit exception in the PR.
 
 Shared chat route tests use `test/helpers/chatEnv.ts` for isolated Express/WebSocket servers and scratch data directories. Teardown waits for active streams, the session finalizer queue, and any in-flight durable stream-job registry mutation to become idle before closing the server and removing the scratch directory, so background finalizer/job writes cannot race temp-directory cleanup.
 
@@ -337,3 +337,58 @@ fixtures do not certify a processor role or native image generation.
 **Version bump** (`.github/workflows/version-bump.yml`): Runs on push to `main`. Skips `chore: bump version` commits. Steps: `npm version patch --no-git-tag-version`, commit the package files, and push `main`. It does not create or force-push `v*` tags; public production releases are explicit GitHub Releases.
 
 **Production release workflow** (`.github/workflows/release.yml`): Manual `workflow_dispatch` promotion to a GitHub Release. Inputs are `version`, `source_ref` (default `main`), `prerelease` (default `false`), and `smoke_only` (default `false`). The `windows-smoke` job runs on `windows-latest`: it checks out the selected ref with `fetch-depth: 0`, sets up Node.js 22, runs root/mobile `npm ci`, root/web/mobile TypeScript checks, web/mobile production builds, the web bundle budget check, `npm run lint`, Windows-focused installer/doctor/install-state Jest tests plus the Windows-named update-service Jest tests, parses `scripts/install-windows.ps1` with PowerShell's parser API, runs `npm run release:package`, verifies the release manifest has macOS/Linux/Windows app and installer artifacts, then runs `scripts/install-windows.ps1 -Channel dev` against a temporary checkout with forced private Node, an install path containing spaces, `-SkipOpen`, and a fixed high port. The Windows installer smoke step verifies the `AgentCockpit` ONLOGON scheduled task, probes `/auth/setup`, checks Install Doctor `node`/`npm`/`pm2`, and runs the generated stop script. The `linux-smoke` job runs on `ubuntu-latest`: it performs the same root/mobile install, typecheck, build, web-budget checks, and lint gate, runs Linux installer static coverage plus install doctor/install-state tests and the Linux-named update-service tests, parses `scripts/install-linux.sh` with `bash -n`, runs `npm run release:package`, verifies the release manifest has macOS/Linux/Windows app and installer artifacts, then runs `scripts/install-linux.sh --channel dev` against a temporary checkout and install root, verifies the systemd user unit file exists, probes `/auth/setup`, checks Install Doctor `node`/`npm`/`pm2`, disables/removes the test user unit, and deletes the PM2 process. When `smoke_only` is false, the publish job depends on both smoke jobs, checks out the selected ref on Ubuntu, normalizes the version, updates package files in the runner when needed, runs `npm ci`, `npm --prefix mobile/AgentCockpitPWA ci`, `npm run typecheck`, `npm run web:typecheck`, `npm run web:build`, `npm run web:budget`, `npm run mobile:typecheck`, `npm run lint`, `npm run maintainability:check`, `npm run spec:drift`, `npm run mobile:build`, `npm test`, and `npm run adr:lint`, then runs `npm run release:package` and `npm run release:notes`. It creates GitHub Release `v<version>` with the rendered release-notes file as `--notes-file`, and uploads `agent-cockpit-v<version>.tar.gz`, `agent-cockpit-v<version>.zip`, `release-manifest.json`, `SHA256SUMS`, `install-macos.sh`, `install-linux.sh`, and `install-windows.ps1`.
+
+## Cortex shared authentication setup (P4)
+
+Focused suites:
+
+- `test/cortexConnections.test.ts`: safe summaries, TOML quoting/Unicode,
+  byte-preserved original content, duplicate/create-only behavior, private
+  permissions, file bounds/symlinks/malformed input, write locks/concurrency,
+  observed external edit rejection, exact-body input validation.
+- `test/cortexOAuth.test.ts`: PKCE URL ownership, strict loopback/state/issuer,
+  malicious/duplicate/foreign/expired-target inputs, split terminal output,
+  known first-run prompts and exact native account selection.
+- `test/cortexLogin.test.ts`: pinned no-shell PTY argv, process-scope ownership,
+  idempotent teardown and late terminal suppression.
+- `test/cortexAuthVerification.test.ts`: independent private workspaces, exact
+  nonce/usage success, initialization-only failure, missing connection, grant/
+  credential/API errors, tool/reverse-request rejection, cancellation/deadline,
+  sanitized failures and cleanup without a paid retry loop.
+- `test/cortexAuth.test.ts`: shared facade defaults, explicit-isolation gate,
+  reserved auth-home exclusion across profiles/checks, one-time generation-bound
+  handoff, native-completion-before-verification, timeout/cancel/retry, shutdown
+  generation and late callbacks, abortable version detection, direct-check drain,
+  version/authenticator gates and secret removal.
+- `test/chat.cortexAuth.test.ts`: real route registration, exact bodies, CSRF,
+  no-store headers, safe summaries, profile persistence/default preservation,
+  explicit profile retention, redirect delegation/error behavior and awaited
+  server shutdown draining.
+- `test/cortexSetupUi.test.ts`: rendered React controls for create/check,
+  transient redirect submission, polling/completion/cancel and reload recovery
+  without persisting secrets. The test module loader accepts optional globals
+  to exercise browser timers directly.
+
+Existing CLI auth/service/profile suites remain regression gates. Auth/runtime
+fixture suites follow the POSIX resolver gate and skip native Windows; TOML
+symlink checks are POSIX-only because Windows symlink privileges are optional.
+These guards do not establish native Windows support. For native
+saved-login/browser compatibility after building web/mobile assets:
+
+```sh
+CORTEX_AUTH_PROBE=1 CORTEX_TEST_CONNECTION='<authenticated-name>' \
+  npx tsx scripts/probe-cortex-auth.ts
+```
+
+This opt-in runner uses a PM2-managed isolated server/data/workspace and normal
+shared terminal auth. It makes several tiny real inference requests, checks
+remote API authentication rejection, Welcome setup login, cached-auth jobs,
+cancellation/retry, narrow viewport fit and absence of handoff material in
+settings. It stops its PM2 fixture and writes a private sanitized report with
+CLI/OS/Node/revision evidence. It does not clear saved credentials or force a
+new OAuth login. **It is not C26's actual human remote-browser handoff** and
+is not a full CoCo chat/processor suite. Do not run browser checks alongside
+full Jest suites that replace ignored production assets; rebuild those assets
+first. Native first-run PTY onboarding was separately exercised with temporary
+connection metadata and existing credentials; this does not certify isolated
+OS-keychain auth or a new remote-browser callback.

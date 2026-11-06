@@ -48,9 +48,9 @@ export function resolveCortexRuntime(options: CortexSessionOptions): CortexRunti
   return { command, args, env, cwd, fingerprint };
 }
 
-export async function cortexVersion(config: CortexRuntimeConfig): Promise<string> {
+export async function cortexVersion(config: CortexRuntimeConfig, signal?: AbortSignal): Promise<string> {
   try {
-    const { stdout } = await exec(config.command, ['--version'], { cwd: config.cwd, env: config.env, timeout: 20_000, maxBuffer: 64 * 1024 });
+    const { stdout } = await exec(config.command, ['--version'], { cwd: config.cwd, env: config.env, timeout: 20_000, maxBuffer: 64 * 1024, signal });
     const version = stdout.match(/\bCortex Code v(\d+\.\d+\.\d+(?:[+.-][\w.-]+)?)/)?.[1];
     if (!version) throw new Error('Unexpected version');
     return version;
@@ -121,8 +121,9 @@ export class CortexRuntime {
   }
 }
 
-export async function startCortexRuntime(config: CortexRuntimeConfig, onClient?: (client: CortexAcpClient) => void): Promise<CortexRuntime> {
-  const version = await cortexVersion(config);
+export async function startCortexRuntime(config: CortexRuntimeConfig, onClient?: (client: CortexAcpClient) => void, signal?: AbortSignal): Promise<CortexRuntime> {
+  const version = await cortexVersion(config, signal);
+  if (signal?.aborted) throw new Error('Cortex startup cancelled');
   const child = spawn(config.command, config.args, { cwd: config.cwd, env: config.env, detached: true, stdio: ['pipe', 'pipe', 'pipe'] });
   const scope = new CortexProcessScope(child);
   const client = new CortexAcpClient(child, () => scope.stop());

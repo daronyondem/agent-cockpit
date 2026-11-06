@@ -3,6 +3,7 @@ import React from 'react';
 import { AgentApi } from './api.js';
 import { Ico } from './icons.jsx';
 import { ScreenLoading } from './shellState.jsx';
+const CortexSetup = React.lazy(() => import('./cortexSetup.jsx').then(mod => ({ default: mod.CortexSetup })));
 
 export function WelcomeScreen({ onDone, onOpenSettings, onNewConversation }){
   const [loading, setLoading] = React.useState(true);
@@ -214,6 +215,7 @@ export function WelcomeScreen({ onDone, onOpenSettings, onNewConversation }){
                 />
               ))}
               <p className="welcome-note">Install only the backend CLIs you plan to use. Unused backends can stay uninstalled.</p>
+              <React.Suspense fallback={null}><CortexSetup/></React.Suspense>
               <div className="welcome-actions">
                 <button className="btn" type="button" onClick={() => onOpenSettings('cli')}>{Ico.terminal(14)} CLI Profiles</button>
               </div>

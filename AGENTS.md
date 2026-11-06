@@ -179,6 +179,24 @@ in browser-safe `src/contracts/backendCapabilities.ts`, with the backend media
 module kept as a compatibility facade. Configuration completeness is distinct
 from registered runtime availability and successful authentication.
 
+P4 setup/auth is implemented behind `CliProfileAuthService` through dedicated
+`cortexConnections.ts`, `cortexOAuth.ts`, `cortexLogin.ts`, `cortexAuth.ts` and
+`cortexAuthVerification.ts` modules, with browser-safe contracts in
+`src/contracts/cortexAuth.ts`. Keep native connections create-only and preserve
+existing TOML bytes/comments. Keep login URLs/state/codes in the active job
+only, bind redirect submissions to its generation/callback/state/issuer, and
+retain the shared-home reservation until native descendants drain. Server
+shutdown must await auth/check draining, including abortable version
+detection and late startups. Native
+first-run login needs a PTY; its parser is version-gated to 1.2.35. Saved login
+must pass one exact-response fresh inference check, never model discovery alone.
+Review the focused connection/OAuth/PTY/auth/verification/route/React suites and
+run opt-in `scripts/probe-cortex-auth.ts` for native saved-auth/UI drift. It uses
+an isolated PM2 fixture and normal terminal credentials, without forcing logout.
+The actual human remote-browser handoff through Cockpit remains C26 pending;
+fixture ownership checks and the earlier research handoff do not close that gate.
+CoCo must not become an automatic default before adapter registration.
+
 # Server Management
 
 NEVER run `node server.js` directly. This causes orphan processes and port conflicts.

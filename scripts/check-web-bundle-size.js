@@ -8,7 +8,7 @@ const DEFAULT_BUILD_DIR = path.join(ROOT, 'public', 'v2-built');
 const KIB = 1024;
 
 const DEFAULT_BUDGETS = {
-  totalJs: 900 * KIB,
+  totalJs: 910 * KIB,
   totalCss: 230 * KIB,
   maxJsAsset: 230 * KIB,
   maxCssAsset: 230 * KIB,
@@ -20,6 +20,7 @@ const DEFAULT_BUDGETS = {
     'workspaceSettings.js': 95 * KIB,
     'settingsScreen.js': 80 * KIB,
     'settingsMigrationTab.js': 20 * KIB,
+    'cortexSetup.js': 8 * KIB,
     'dialog.js': 60 * KIB,
     'filesBrowser.js': 45 * KIB,
     'memoryReview.js': 35 * KIB,

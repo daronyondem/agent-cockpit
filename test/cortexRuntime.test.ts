@@ -75,6 +75,12 @@ runtimeSuite('CoCo POSIX runtime foundations', () => {
     await expect(startCortexRuntime(bad({ FIXTURE_BAD_PROTOCOL: '1' }))).rejects.toThrow('ACP version 1');
   });
 
+  test('cancelled startup cannot leave a version probe or spawn a new ACP owner', async () => {
+    const abort = new AbortController(); abort.abort();
+    await expect(cortexVersion(resolveCortexRuntime(options), abort.signal)).rejects.toThrow('version detection failed');
+    await expect(startCortexRuntime(resolveCortexRuntime(options), jest.fn(), abort.signal)).rejects.toThrow('version detection failed');
+  });
+
   test('load suppresses replay, preserves session ID, and new turns still emit updates', async () => {
     const runtime = await start();
     const frames: unknown[] = [];

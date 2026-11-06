@@ -1542,6 +1542,7 @@ export function createChatRouter({ chatService, backendRegistry, updateService, 
     memoryWatcher.unwatchAll();
     memoryFingerprints.clear();
     cliProfileAuth.shutdown();
+    await cliProfileAuth.cortexAuth.drain();
     if (updateService) updateService.stop();
     if (cliUpdateService) cliUpdateService.stop();
   }

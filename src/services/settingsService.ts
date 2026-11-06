@@ -177,7 +177,8 @@ export class SettingsService {
   }
 
   private _withFirstAvailableCliProfileDefault(settings: Settings): Settings {
-    const profiles = Array.isArray(settings.cliProfiles) ? settings.cliProfiles.filter((profile) => !profile.disabled && hasRequiredCliProfileConfig(profile)) : [];
+    const profiles = Array.isArray(settings.cliProfiles) ? settings.cliProfiles.filter((profile) => !profile.disabled && hasRequiredCliProfileConfig(profile)
+      && (profile.harness !== 'cortex-code' || profile.id === settings.defaultCliProfileId)) : [];
     if (profiles.length === 0) return settings;
 
     const current = settings.defaultCliProfileId

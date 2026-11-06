@@ -32,10 +32,10 @@ module.exports = {
   testTimeout: 30000,
   coverageThreshold: {
     global: {
-      statements: 88.1,
-      branches: 74.9,
-      functions: 93.4,
-      lines: 88.1,
+      statements: 88.2,
+      branches: 75.3,
+      functions: 93.5,
+      lines: 88.2,
     },
   },
 };

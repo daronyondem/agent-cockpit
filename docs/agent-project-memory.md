@@ -194,8 +194,17 @@ tool is unavailable.
   delivery markers/resource links; code diffs remain tool outcomes. An empty
   Snowflake home can omit the model catalog, so configured chat fails selection
   before inference; auth setup must still verify a minimal real request instead
-  of bypassing model validation. P4 auth setup is next; durable adapter/client
-  integration remains pending. See the current CoCo spec and progress tracker.
+  of bypassing model validation. P4 shared connection/auth setup now lives in focused CoCo modules behind
+  `CliProfileAuthService`, with browser-safe handoff contracts and lazy Welcome/
+  Settings controls. Keep native TOML append-only, state/code/URLs in the active
+  generation-owned job only, and shared-home ownership until process cleanup.
+  Native first-run login requires a PTY and version-scoped prompt parsing.
+  The native saved-auth/UI probe (`scripts/probe-cortex-auth.ts`) passed on
+  1.2.35/macOS arm64 using an isolated PM2 fixture, including fresh exact
+  inference, cancel/retry and narrow layout. C26 actual human remote-browser
+  handoff through Cockpit remains pending because shared saved login was reused;
+  do not clear shared credentials just to force it. CoCo automatic default
+  promotion and durable adapter/client integration remain gated. See the current CoCo spec and progress tracker.
 - Fresh installs should be provider-neutral. Do not imply Claude Code is
   configured when the user has not installed or authenticated it.
 - CLI profiles are scoped per conversation where applicable and can support

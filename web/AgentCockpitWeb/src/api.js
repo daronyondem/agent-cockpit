@@ -1092,9 +1092,9 @@
       }
       return data;
     }),
-    testSetupCliAuth: (harness) => chatFetch(
+    testSetupCliAuth: (harness, options = {}) => chatFetch(
       'cli-profiles/setup-auth/' + encodeURIComponent(harness) + '/test',
-      { method: 'POST', body: {} },
+      { method: 'POST', body: options },
     ).then(r => r.json()).then(data => {
       if (data && data.settings) {
         state._settingsCache = data.settings;
@@ -1103,9 +1103,9 @@
       }
       return data;
     }),
-    startSetupCliAuth: (harness) => chatFetch(
+    startSetupCliAuth: (harness, options = {}) => chatFetch(
       'cli-profiles/setup-auth/' + encodeURIComponent(harness) + '/start',
-      { method: 'POST', body: {} },
+      { method: 'POST', body: options },
     ).then(r => r.json()).then(data => {
       if (data && data.settings) {
         state._settingsCache = data.settings;
@@ -1120,6 +1120,15 @@
     cancelCliProfileAuth: (jobId) => chatFetch(
       'cli-profiles/auth-jobs/' + encodeURIComponent(jobId) + '/cancel',
       { method: 'POST', body: {} },
+    ).then(r => r.json()),
+    cortexConnections: () => chatFetch('cli-profiles/cortex-code/connections').then(r => r.json()),
+    createCortexConnection: (connection) => chatFetch('cli-profiles/cortex-code/connections', {
+      method: 'POST', body: connection,
+    }).then(r => r.json()),
+    submitCortexRedirect: (jobId, generation, redirectUrl) => chatFetch(
+      'cli-profiles/auth-jobs/' + encodeURIComponent(jobId) + '/redirect', {
+        method: 'POST', body: { generation, redirectUrl },
+      },
     ).then(r => r.json()),
   };
 

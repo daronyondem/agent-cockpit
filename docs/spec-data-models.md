@@ -2501,3 +2501,18 @@ The dreaming CLI returns `{ "operations": [...] }` JSON. 10 supported operation 
 Connection confidence levels: `extracted` (entry explicitly states relationship), `inferred` (deduced from overlapping concepts), `speculative` (weaker thematic connection). Most connections should be `inferred`.
 
 All operations are parsed by `parseDreamOutput()` (extracts JSON from potentially noisy CLI output via markdown-fence matching or a string-aware balanced-brace scanner that ignores braces inside JSON string literals), validated by `validateOp()`, and applied transactionally by `applyOperations()` in `dreamOps.ts`. The same string-aware scanner backs `parseVerificationOutput()`, `parseDiscoveryOutput()`, and `parseReflectionOutput()` in `dream.ts`.
+
+### Cortex setup/authentication DTOs
+
+CoCo adds no persisted credential fields. `CliProfile.cortexCode` continues to
+contain only a named `connection`. Server auth job/check declarations now live
+in `src/types/cliAuth.ts`, re-exported through `src/types/index.ts` and the
+existing service facade. Optional `CliAuthJobSnapshot.cortex` is transient:
+`{phase:'starting'|'waiting-for-browser'|'verifying', generation, connection,
+version?, authorizationUrl?, expiresAt?}`. It exists only while a CoCo job is
+running and disappears after submission/completion/cancel/timeout as specified
+in [CoCo P4](spec-cortex-code.md#shared-connection-and-authentication-setup-p4).
+`CortexConnectionSummary` is `{name,manualOAuth,browserTimeoutMs}`; account,
+user and all native credentials stay in the native TOML file. Request validators
+and browser-safe handoff declarations live in `src/contracts/cortexAuth.ts`.
+These API objects are not a persisted settings/history schema.

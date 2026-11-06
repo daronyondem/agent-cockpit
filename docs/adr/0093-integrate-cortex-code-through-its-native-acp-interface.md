@@ -34,6 +34,17 @@ affects:
   - src/services/backends/cortexArtifacts.ts
   - scripts/probe-cortex-events.ts
   - src/services/chat/workspaceInstructionStore.ts
+  - src/contracts/cortexAuth.ts
+  - src/types/cliAuth.ts
+  - src/services/cortexConnections.ts
+  - src/services/cortexOAuth.ts
+  - src/services/cortexLogin.ts
+  - src/services/cortexAuth.ts
+  - src/services/cortexAuthVerification.ts
+  - src/services/cliProfileAuthService.ts
+  - src/routes/chat/cliProfileRoutes.ts
+  - web/AgentCockpitWeb/src/cortexSetup.jsx
+  - scripts/probe-cortex-auth.ts
   - docs/spec-cortex-code.md
 ---
 
@@ -131,6 +142,22 @@ Preserve native token/cache categories and context snapshots separately. Use
 Anthropic/OpenAI prices from a CoCo model ID. Classify version-tested native
 terminal error signatures without treating every failed tool or quoted `Error:`
 string as a failed turn. Unknown failures remain visible.
+
+Keep CoCo authentication behind the existing CLI auth facade, delegated to
+focused native connection, OAuth ownership, PTY and verification modules. Use
+`smol-toml` for syntax/quoting and preserve the original file verbatim when
+appending new connections. A hand-written TOML parser or whole-file
+parse/stringify would add syntax risk or destroy comments. Keep URL/state/code
+in an active in-memory handoff only; a generation-bound POST transfers the full
+validated redirect to native stdin once. Do not forward arbitrary browser URLs
+or create an independent OAuth client/exchange in Cockpit. Reserve the shared
+Snowflake home across profiles until process cleanup completes. Verify with an
+exact nonce response and complete final usage from a fresh native process;
+listing models or receiving a callback is insufficient. Keep automatic CoCo
+default promotion disabled until its runtime adapter is registered. Lazy-load
+the setup component on Welcome/Settings; retain the 260 KiB entrypoint budget
+and give the new chunk its own 8 KiB limit. Raise the aggregate JS allowance
+from 900 to 910 KiB for the added setup/API functionality.
 
 ## Alternatives Considered
 

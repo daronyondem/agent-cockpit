@@ -397,3 +397,41 @@ remain separate gates.
 
 The installed binary and real wire behavior take precedence over assumptions
 drawn from documentation for a different CLI version.
+
+## P4 setup implementation evidence — 2026-11-06
+
+CoCo 1.2.35 on macOS arm64 / Node 26.0.0 passed the opt-in
+`scripts/probe-cortex-auth.ts` against an actual PM2-managed Cockpit fixture
+with isolated application data and normal terminal Snowflake credentials.
+The browser exercised Welcome connection selection, a fresh exact-response
+inference check, a cached-login job, cancellation/retry, and 390px responsive
+layout. Remote unauthenticated connection enumeration returned HTTP 401;
+settings contained no authorization URL, redirect or PKCE fields. The report
+recorded the source base `f1cb14923ec003272966148d5823bf88e557f0e4` with the
+P4 working changes, native version/OS/Node and safe boolean/status outcomes.
+No account, native URL, code, state or token is retained in this evidence.
+
+A separate native transport probe used private temporary connection metadata
+and the production PTY controller. It skipped unrelated CLI settings import,
+confirmed theme/security acknowledgement, selected the exact named native agent
+account and reached native account-test completion using existing credentials.
+The equivalent pipe startup rejected first-run onboarding because stdin was
+not a terminal. Native onboarding can also auto-apply vendor default skill
+repositories; this is native first-run behavior, despite explicit discovery
+flags. No arbitrary wizard/tool/SQL prompts are answered by Cockpit.
+
+These tests establish saved shared auth and known first-run PTY behavior;
+they do not establish isolated OS-keychain accounts or a fresh remote-browser
+OAuth exchange through Cockpit. **C26 remains pending.** The current shared
+credentials were reused, without forcing logout/deleting credential caches.
+Keep the earlier successful manual OAuth research evidence distinct from this
+application acceptance gate. Exact ownership, timeout, validation, error and
+verification contracts are now in [the CoCo specification](../spec-cortex-code.md#shared-connection-and-authentication-setup-p4).
+
+An additional standalone first-run PTY attempt exhausted its 60-second external
+probe deadline; its final terminal state was not captured, so the cause is
+unconfirmed. Repeating the unchanged controller reached native onboarding/
+saved-credential completion. The saved-auth Cockpit browser probe also passed
+again after the abortable-startup/awaited-shutdown changes. Retain production's
+90-second startup bound and the open C26 acceptance gate; do not treat the
+standalone timeout as successful authentication evidence.

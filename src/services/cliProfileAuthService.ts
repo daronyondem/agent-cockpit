@@ -2,53 +2,16 @@ import crypto from 'crypto';
 import fsp from 'fs/promises';
 import path from 'path';
 import { spawn, type ChildProcess } from 'child_process';
-import type { CliProfile, Settings } from '../types';
+import type { CliProfile, Settings, CliAuthJobSnapshot, CliAuthCheckResult, CliAuthEventType } from '../types';
 import { resolveClaudeCliRuntime } from './backends/claudeCode';
 import { resolveCodexCliRuntime } from './backends/codex';
 import { resolveOpenCodeCliRuntime } from './backends/opencode';
 import { grokAuthenticationStatus, resolveGrokCliRuntime } from './backends/grokRuntime';
 import { buildCliCommandInvocation, type CliCommandResolution } from './cliCommandResolver';
+import { CortexAuth } from './cortexAuth';
 import { isSetupAccountCliProfile } from './cliProfiles';
 
-export type CliAuthJobStatus = 'running' | 'succeeded' | 'failed' | 'cancelled';
-export type CliAuthEventType = 'info' | 'stdout' | 'stderr' | 'error' | 'exit';
-
-export interface CliAuthEvent {
-  at: string;
-  type: CliAuthEventType;
-  text: string;
-}
-
-export interface CliAuthJobSnapshot {
-  id: string;
-  profileId: string;
-  profileName: string;
-  harness: CliProfile['harness'];
-  status: CliAuthJobStatus;
-  startedAt: string;
-  updatedAt: string;
-  command: string;
-  args: string[];
-  events: CliAuthEvent[];
-  exitCode?: number | null;
-  signal?: NodeJS.Signals | null;
-  error?: string;
-}
-
-export interface CliAuthCheckResult {
-  profileId: string;
-  harness: CliProfile['harness'];
-  command: string;
-  available: boolean;
-  authenticated: boolean | null;
-  status: 'ok' | 'not-authenticated' | 'unavailable' | 'unsupported' | 'error';
-  output: string;
-  error?: string;
-  exitCode?: number | null;
-  modelsAvailable?: boolean;
-  modelCount?: number;
-  modelListError?: string;
-}
+export type { CliAuthJobStatus, CliAuthEventType, CliAuthEvent, CliAuthJobSnapshot, CliAuthCheckResult } from '../types';
 
 type SpawnLike = typeof spawn;
 
@@ -66,6 +29,7 @@ const DEFAULT_STATUS_POLL_TIMEOUT_MS = 60_000;
 const DEFAULT_STATUS_POLL_INTERVAL_MS = 2_000;
 
 export class CliProfileAuthService {
+  readonly cortexAuth: CortexAuth;
   private readonly _baseDir: string;
   private readonly _spawn: SpawnLike;
   private readonly _authTimeoutMs: number;
@@ -74,12 +38,14 @@ export class CliProfileAuthService {
   private readonly _jobs = new Map<string, { snapshot: CliAuthJobSnapshot; child?: ChildProcess; timeout?: NodeJS.Timeout }>();
 
   constructor(baseDir: string, opts: {
+    cortexAuth?: CortexAuth;
     spawn?: SpawnLike;
     authTimeoutMs?: number;
     statusPollTimeoutMs?: number;
     statusPollIntervalMs?: number;
   } = {}) {
     this._baseDir = baseDir;
+    this.cortexAuth = opts.cortexAuth || new CortexAuth();
     this._spawn = opts.spawn || spawn;
     this._authTimeoutMs = opts.authTimeoutMs ?? DEFAULT_AUTH_TIMEOUT_MS;
     this._statusPollTimeoutMs = opts.statusPollTimeoutMs ?? DEFAULT_STATUS_POLL_TIMEOUT_MS;
@@ -114,7 +80,7 @@ export class CliProfileAuthService {
       };
     }
 
-    if (profile.configDir) {
+    if (profile.harness === 'cortex-code' || profile.configDir) {
       return { settings, profile, changed: false };
     }
 
@@ -130,6 +96,7 @@ export class CliProfileAuthService {
   }
 
   async checkProfile(profile: CliProfile): Promise<CliAuthCheckResult> {
+    if (profile.harness === 'cortex-code') return this.cortexAuth.check(profile);
     try {
       this._assertSupported(profile);
       const runtime = await this._runtimeFor(profile);
@@ -199,6 +166,7 @@ export class CliProfileAuthService {
 
   async startAuth(profile: CliProfile): Promise<CliAuthJobSnapshot> {
     this._assertCanAuth(profile);
+    if (profile.harness === 'cortex-code') return this.cortexAuth.start(profile);
     for (const { snapshot } of this._jobs.values()) {
       if (snapshot.profileId === profile.id && snapshot.status === 'running') {
         throw new Error(`Authentication is already running for ${profile.name}`);
@@ -260,11 +228,14 @@ export class CliProfileAuthService {
   }
 
   getJob(jobId: string): CliAuthJobSnapshot | null {
+    const cortex = this.cortexAuth.get(jobId);
+    if (cortex) return cortex;
     const entry = this._jobs.get(jobId);
     return entry ? this._cloneSnapshot(entry.snapshot) : null;
   }
 
   cancelJob(jobId: string): CliAuthJobSnapshot {
+    if (this.cortexAuth.get(jobId)) return this.cortexAuth.cancel(jobId);
     const entry = this._jobs.get(jobId);
     if (!entry) throw new Error(`Auth job not found: ${jobId}`);
     if (entry.snapshot.status !== 'running') return this._cloneSnapshot(entry.snapshot);
@@ -278,6 +249,7 @@ export class CliProfileAuthService {
   }
 
   shutdown(): void {
+    this.cortexAuth.shutdown();
     for (const [jobId, entry] of this._jobs) {
       if (entry.snapshot.status !== 'running') continue;
       if (entry.timeout) clearTimeout(entry.timeout);
@@ -296,7 +268,7 @@ export class CliProfileAuthService {
   }
 
   private _assertCanAuth(profile: CliProfile): void {
-    if (profile.harness !== 'codex' && profile.harness !== 'claude-code' && profile.harness !== 'grok-build') {
+    if (profile.harness !== 'codex' && profile.harness !== 'claude-code' && profile.harness !== 'grok-build' && profile.harness !== 'cortex-code') {
       throw new Error(profile.harness === 'opencode'
         ? 'Remote authentication is not supported for OpenCode profiles yet. Configure OpenCode with opencode auth login.'
         : 'Remote authentication is not supported for Kiro profiles yet.');
@@ -545,7 +517,8 @@ function stripSetupAuthHomeEnv(harness: CliProfile['harness'], env: Record<strin
     const normalized = key.toUpperCase();
     const remove = (harness === 'claude-code' && normalized === 'CLAUDE_CONFIG_DIR')
       || (harness === 'codex' && normalized === 'CODEX_HOME')
-      || (harness === 'grok-build' && normalized === 'GROK_HOME');
+      || (harness === 'grok-build' && normalized === 'GROK_HOME')
+      || (harness === 'cortex-code' && normalized === 'SNOWFLAKE_HOME');
     if (remove) {
       changed = true;
       continue;

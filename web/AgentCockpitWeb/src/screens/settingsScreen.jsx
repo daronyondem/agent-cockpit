@@ -6,6 +6,7 @@ import { useDialog } from '../dialog.jsx';
 import { useToasts } from '../toast.jsx';
 import { CliUpdateStore } from '../cliUpdateStore.js';
 import { cliConfigDirField } from './cliProfileConfigDir.js';
+const CortexSetup = React.lazy(() => import('../cortexSetup.jsx').then(mod => ({ default: mod.CortexSetup })));
 
 const MigrationTab = React.lazy(() => import('./settingsMigrationTab.jsx').then(mod => ({ default: mod.MigrationTab })));
 const ArchivedWorkspacesPanel = React.lazy(() => import('./archivedWorkspaces.jsx').then(mod => ({ default: mod.ArchivedWorkspacesPanel })));
@@ -1216,10 +1217,14 @@ function CliProfilesTab({ settings, backends, onPatch, onSave, saving, onValidat
 
       <CliUpdatesPanel/>
 
+      <React.Suspense fallback={null}><CortexSetup onProfileSaved={profile => onPatch(prev => ({ ...prev,
+        cliProfiles: [...(prev.cliProfiles || []).filter(item => item.id !== profile.id), profile],
+      }))}/></React.Suspense>
+
       <div className="cli-list">
         {profiles.length === 0 ? (
           <div className="settings-empty u-dim">No CLI profiles are configured yet.</div>
-        ) : profiles.map(profile => {
+        ) : profiles.filter(profile => profile.harness !== 'cortex-code').map(profile => {
           const isKiro = profile.harness === 'kiro';
           const isOpenCode = profile.harness === 'opencode';
           const isClaudeCode = profile.harness === 'claude-code';

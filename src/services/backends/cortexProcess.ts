@@ -20,7 +20,7 @@ export class CortexProcessScope {
   private scanning: Promise<CortexProcessIdentity[]> | null = null;
   private stopping: Promise<void> | null = null;
 
-  constructor(private child: ChildProcess) {}
+  constructor(private child: Pick<ChildProcess, 'pid' | 'exitCode' | 'signalCode' | 'kill'>) {}
 
   watch(): void {
     if (this.timer || this.stopping || !this.child.pid) return;

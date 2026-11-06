@@ -377,3 +377,24 @@ After a Worktrees enable or disable succeeds, `workspaceSettings.jsx` refreshes 
   - **Auto-drain on `done`** — when a stream completes with no `pendingInteraction` and no `streamError`, the store marks `queue[0]` as in-flight and composes the entry's wire-format content via `composeWireContent` (content + `[Uploaded files: …]` tag rebuilt from `attachments[]`). The content is sent via the internal `sendWireContent(convId, queuedMessage)` helper (bypasses the pendingAttachments pipeline since attachments were already uploaded at enqueue time). The server-side queue is shortened only after `/message` accepts the send; on success the follow-up PUT persists the current non-in-flight queue tail, not the stale tail captured at drain start. If `/message` returns 409 because the server still owns an active stream, or the send fails before the POST can start, the original queued item, including attachments, is restored at the head and the restored queue is PUT back to the server. Rollback merges that original head with the current non-in-flight queue tail, so edits to later queued items made while the head was in flight are preserved locally and across reloads.
 
   **Backwards compatibility (historical transcripts):** messages saved before the typed queue existed may carry `[Uploaded files: /abs/path1, /abs/path2]` trailing text on `Message.content` (user messages). The renderer feeds these through `StreamStore.parseUploadedFilesTag(content)`, which strips the tag and returns `{ content, attachments }` where each `AttachmentMeta` has `name` + `path` + `kind` (inferred from extension via `attachmentKindFromPath`). `size`/`meta` are unavailable for legacy entries — the `md` chip shows only the filename and kind badge in that case. Users receive the same typed-chip UX for old transcripts at read-time; the on-disk bytes are untouched.
+
+### Cortex Code setup preview
+
+Welcome's CLI panel and Settings → CLI Profiles lazy-load the shared focused
+`cortexSetup.jsx`/CSS component. Its explicit expansion loads native connection
+summaries and any live job. It supports create-only OAuth connections, named
+selection, paid minimal Check login, Authenticate, Cancel, a selectable native
+URL/deadline and complete remote redirect submission. The panel polls once per
+second, recovers active jobs after reload, ignores older update timestamps,
+clears pasted redirect fields and removes terminal handoff URLs. No OAuth data
+is stored in localStorage or settings. Settings merges only the returned setup
+profile into its current draft; CoCo's generic profile editor/chat selectors
+remain a later integration phase. Setup leaves defaults unchanged. See
+[CoCo P4](spec-cortex-code.md#shared-connection-and-authentication-setup-p4) for
+all transport/state rules. The mobile PWA gains no administrative setup flow;
+the desktop browser panel wraps at narrow viewports.
+
+The dedicated lazy setup chunk has an 8 KiB JS budget; the existing 260 KiB
+index limit is unchanged. Total JS budget is 910 KiB (previously 900 KiB) to
+accommodate the new API/setup code without eagerly loading the setup component
+in normal chat. CSS retains its existing 230 KiB aggregate limit.

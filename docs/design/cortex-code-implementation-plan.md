@@ -1,6 +1,6 @@
 # Cortex Code (CoCo) harness implementation plan
 
-**Status:** P0–P3 complete; native runtime and internal event/interaction/media mapping implemented; auth setup and durable adapter integration pending.
+**Status:** P0–P3 complete; P4 C21–C25 setup implemented, C26 actual remote-browser acceptance pending; durable adapter integration remains next.
 **Created:** 2026-11-05.
 **Planning baseline:** Agent Cockpit `0.4.166`, revision `11d14825e955f6c83364c3917558b4d3068a4bac`, plus the uncommitted CoCo research/guidance documents.
 **Native compatibility baseline:** Cortex Code `1.2.35`, distribution `1.2.35+191333.f82de3d91715`, macOS arm64.
@@ -111,8 +111,8 @@ means that feature is already integrated into Cockpit. Phase IDs refer to §9.
 | Harness registration and defaults | Register `CortexCodeAdapter` with ID `cortex-code`; add supported harness labels, server-configured profile generation, resolution, disabled-profile checks, and selection persistence | C; preserve existing profile IDs/defaults | P1, P2 |
 | Multiple logical CLI profiles | Structured `cortexCode.connection` selects a named Snowflake connection; retain command override and profile env | P; never infer isolated auth from a different profile name | P1, P4 |
 | Existing terminal authentication | Use normal Snowflake config and credential store; no setup-created isolated home | V for tested shared OAuth connection | P4 |
-| Welcome and Settings authentication | Native manual OAuth job, copyable login URL, complete redirect submission, cancel/retry, fresh-process verification | V native handoff; application work pending | P4, P7 |
-| New Snowflake connection | Select existing names; optionally create a dedicated OAuth connection from account/user fields without modifying unrelated connections | P; TOML writing, conflict handling, native prompts must be tested | P4 |
+| Welcome and Settings authentication | Native manual OAuth job, copyable login URL, complete redirect submission, cancel/retry, fresh-process verification | P4 setup implemented; saved-auth UI and actual remote handoff tracked separately | P4, P7 |
+| New Snowflake connection | Select existing names; optionally create a dedicated OAuth connection from account/user fields without modifying unrelated connections | Implemented create-only TOML append with focused safety tests; native onboarding baseline checked | P4 |
 | Explicit isolated account profiles | Map explicit `configDir` to tested `SNOWFLAKE_HOME` semantics; verify credential cache/Keychain scope with two real accounts | U; G5, no isolation claim before evidence | P4, P8 |
 | Executable/version detection | Shared runtime resolver, absolute override/PATH/native install discovery, bounded version probe | V macOS install only; native Windows/Linux pending | P2, P8 |
 | Install Doctor and Welcome install actions | Detect fresh installs without restart; install the official distribution through reviewed platform actions | C + upstream installer docs; G8 | P8 |
@@ -691,24 +691,54 @@ the ownership/limits and testing doc for the opt-in runner and evidence scope.
 
 ### P4 — Shared connection and remote authentication setup
 
-- [ ] C21 — Implement safe connection enumeration and dedicated OAuth connection
+- [x] C21 — Implement safe connection enumeration and dedicated OAuth connection
   creation. Verify TOML quoting, comments/other connections, duplicate names,
   file permissions, atomic writes and setup input validation.
-- [ ] C22 — Implement native auth job transport/state parsing with manual OAuth
+- [x] C22 — Implement native auth job transport/state parsing with manual OAuth
   and the selected connection's effective browser timeout. Verify no competing
   job, first-run prompts, pipe/PTY choice, timeout/cancel/retry and stale locks.
-- [ ] C23 — Add handoff contracts and redirect submission route. Verify exact
+- [x] C23 — Add handoff contracts and redirect submission route. Verify exact
   job generation/loopback/state/issuer matching, malicious targets, duplicate
   params, expired jobs, authorization/CSRF and one-time submission.
-- [ ] C24 — Implement fresh-process auth/request verification with bounded
+- [x] C24 — Implement fresh-process auth/request verification with bounded
   synthetic prompt and no tool approval. Verify saved auth reuse, empty home,
   invalid/expired credentials, account/model grant failure and sanitized output.
-- [ ] C25 — Extend setup shared-auth normalization and add Welcome/Settings
+- [x] C25 — Extend setup shared-auth normalization and add Welcome/Settings
   controls. Verify terminal and Cockpit use the same normal auth, existing
   explicit isolated profiles are untouched, and codes/state/tokens never persist.
 - [ ] C26 — Run actual remote-browser setup through Cockpit. Record native
   version/platform/deadline, successful redirect ownership, fresh-process exact
   response, cancellation and retry; do not record the real URL/code/account.
+
+P4 implementation evidence (2026-11-06): C21–C25 code and focused tests are
+implemented. Native CoCo 1.2.35 / macOS arm64 passed
+`scripts/probe-cortex-auth.ts` through a PM2-isolated real Cockpit server and
+headless browser: shared saved login, exact fresh-process inference, cached
+login jobs, cancellation/retry, unauthenticated remote rejection and 390px
+viewport fit. The native job reused terminal credentials; no browser URL was
+fabricated. A separate temporary native-home/connection metadata probe reached
+first-run onboarding/account-test completion through the actual PTY controller.
+The pipe experiment exited with the native interactive-terminal requirement.
+Fixture suites cover URL/issuer/state/generation, one-time submission, foreign
+and duplicate redirects, deadlines, shutdown races, TOML safety and sanitized
+failures. Invalid/grant/expired-response cases are deterministic fixtures;
+we did not force a live account outage or revoke shared credentials.
+
+Validation: 151 passing suites / 2,759 passing tests, with three opt-in suites
+and 20 tests skipped. V8 statements/lines 88.33%, branches 75.56%, functions
+93.69%; floors raised to 88.2% / 75.3% / 93.5%. Backend/desktop/mobile typechecks,
+zero-warning lint, maintainability, API drift, ADR lint and both production
+builds pass. The lazy setup chunk is 5.2 KiB; index stays below 260 KiB. The
+aggregate JS budget is intentionally 910 KiB (actual 903.3 KiB), with a separate
+8 KiB setup chunk guard. Existing CSS aggregate limit remains unchanged.
+
+**C26 remains open.** Earlier successful research OAuth and the new ownership
+fixtures are not an actual human remote-browser handoff through these routes.
+The current shared login is valid; do not delete/revoke it merely to fabricate
+a challenge. Re-run actual setup when a native login challenge is needed and
+record its selected deadline plus the new redirect's ownership/fresh inference.
+CoCo adapter registration, chat, processors and updates remain pending. Current
+behavior and exact limits: [CoCo specification](../spec-cortex-code.md).
 
 ### P5 — Durable chat, recovery, and managed MCP
 
