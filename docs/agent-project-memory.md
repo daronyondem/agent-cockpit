@@ -261,7 +261,19 @@ tool is unavailable.
   explicit. The expanded native auth/UI probe passed responsive editing/save,
   native model/effort/icon/unsupported-control gates and fresh browser inference
   on CoCo 1.2.35/macOS arm64. Its PM2 fixture allows 20 seconds for shutdown
-  draining. C26, strict Memory and C43–C47/full platform acceptance remain open.
+  draining. C43 now uses shared plan-revision role eligibility in both clients,
+  rendered decision generations, synchronous reply exclusion and latest
+  conversation/interaction ownership. Delayed acknowledgements/errors/fallbacks
+  must not erase a newer draft/card or resend an old reply. Native 1.2.35 chat
+  separately asks to enter planning with approve/decline; only the verified
+  schema can auto-enter, without granting finished-plan execution. Headless/
+  restricted/unknown entry remains denied. Preserve the sanitized plan-entry
+  fixture and opt-in `scripts/probe-cortex-interactions.ts`: native PM2 desktop/
+  mobile sequential/free-text questions, revised gates, rejection/nonexecution,
+  approved writes and stale/duplicate rejection passed with shared terminal auth.
+  Rejection may finish in text; never invent a card or replay a prompt. Run native
+  browser fixtures separately from full Jest, which can mutate built assets.
+  C26, strict Memory and C44–C47/full platform acceptance remain open.
   See the current CoCo spec and progress tracker.
 - Fresh installs should be provider-neutral. Do not imply Claude Code is
   configured when the user has not installed or authenticated it.

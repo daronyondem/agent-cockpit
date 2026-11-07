@@ -47,6 +47,16 @@ export class CortexInteractions {
       && Number(meta.questionIndex) >= 0 && Number(meta.questionIndex) < Number(meta.totalQuestions);
     const plan = call.kind === 'switch_mode';
     if (plan) {
+      // 1.2.35 asks separately to enter planning; this never approves execution.
+      const enter = call.title === 'Create a plan before executing?' && options.length === 2
+        && options.some(option => option.id === 'approve' && option.kind === 'allow_once')
+        && options.some(option => option.id === 'decline' && option.kind === 'reject_once');
+      if (enter) {
+        if (this.onInteractionRequired) return deny();
+        this.client.respond(message.id, { outcome: { outcome: 'selected', optionId: 'approve' } });
+        this.emit({ type: 'tool_activity', tool: 'EnterPlanMode', id: null, description: 'Preparing plan', isPlanMode: true, planAction: 'enter' });
+        return true;
+      }
       if (!this.plan.trim() || !options.some(option => option.id === 'proceed' && option.kind === 'allow_once')
         || !options.some(option => option.id === 'keep_planning' && option.kind === 'reject_once')) return deny();
     } else if (question) {

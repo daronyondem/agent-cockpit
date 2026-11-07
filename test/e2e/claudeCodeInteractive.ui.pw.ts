@@ -298,6 +298,7 @@ test.describe('Claude Code Interactive UI', () => {
     const plan = page.getByRole('group', { name: 'Plan approval' });
     await expect(plan).toBeVisible({ timeout: 180_000 });
     await expect(plan).toContainText(planToken);
+    await expect(plan.getByRole('button', { name: 'Request changes', exact: true })).toHaveCount(0);
     await plan.getByRole('button', { name: 'Approve & run' }).click();
 
     await expect(page.locator('.msg-agent').filter({ hasText: finalToken })).toBeVisible({ timeout: 180_000 });

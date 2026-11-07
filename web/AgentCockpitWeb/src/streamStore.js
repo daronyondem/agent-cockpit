@@ -2206,11 +2206,12 @@ import { reduceStreamFrame } from './stream/streamFrameReducer.ts';
      — we just clear the pending interaction. Otherwise `{mode:'message'}`
      means the stream is over and the answer must be sent as a fresh user
      message via the normal /message endpoint. */
-  async function respond(convId, text){
+  async function respond(convId, text, decisionId){
     const s = states.get(convId);
     if (!s || !text || s.respondPending) return;
     if (!s.pendingInteraction) return;
     const interaction = s.pendingInteraction;
+    if (decisionId !== undefined && interaction.decisionId !== decisionId) return;
 
     update(convId, { respondPending: true });
 
@@ -2226,7 +2227,9 @@ import { reduceStreamFrame } from './stream/streamFrameReducer.ts';
       const data = await res.json();
       mode = data && data.mode;
     } catch (err) {
-      update(convId, { streamError: err.message || String(err), streamErrorSource: null, respondPending: false, uiState: 'error' });
+      update(convId, cur => cur.pendingInteraction === interaction
+        ? { ...cur, streamError: err.message || String(err), streamErrorSource: null, respondPending: false, uiState: 'error' }
+        : { ...cur, respondPending: false });
       return;
     }
 
@@ -2246,6 +2249,10 @@ import { reduceStreamFrame } from './stream/streamFrameReducer.ts';
       return;
     }
 
+    if (states.get(convId)?.pendingInteraction !== interaction) {
+      update(convId, { respondPending: false });
+      return;
+    }
     update(convId, { pendingInteraction: null, respondPending: false, uiState: null });
     await send(convId, text);
   }

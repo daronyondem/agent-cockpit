@@ -11,7 +11,7 @@
 | 3. API Endpoints | [spec-api-endpoints.md](spec-api-endpoints.md) | REST + WebSocket API surface |
 | 4. Backend Services | [spec-backend-services.md](spec-backend-services.md) | ChatService, adapter system, KB pipeline, update service |
 | 4.2 Grok Build | [spec-grok-build.md](spec-grok-build.md) | ACP transport, profiles/auth, interactions, background work, usage/media, native goals, and compatibility checks |
-| 4.2 Cortex Code chat and setup | [spec-cortex-code.md](spec-cortex-code.md) | CoCo profiles, shared authentication, durable chat/MCP, sequential processors, PNG OCR, native KB, Workspace Context and Routine workflows and processor selection, desktop profile/catalog controls; remote-browser and full client/platform gates remain pending |
+| 4.2 Cortex Code chat and setup | [spec-cortex-code.md](spec-cortex-code.md) | CoCo profiles, shared authentication, durable chat/MCP, sequential processors, PNG OCR, native KB, Workspace Context and Routine workflows and processor selection, desktop profile/catalog controls and desktop/mobile decisions; remote-browser and full client/platform gates remain pending |
 | 5. Workspace Context Feature | [spec-workspace-context.md](spec-workspace-context.md) | Markdown-first workspace operating memory, CLI-maintained context files, scan and maintenance runs |
 | 6. Workspace Routines | [spec-routines.md](spec-routines.md) | Workspace-owned markdown workflows, scheduled/manual harness runs, proposal installation, run folders, and Telegram outreach destination pairing |
 | 7. Server Initialization & Security | [spec-server-security.md](spec-server-security.md) | Config, startup order, auth, CSRF, CSP |
@@ -27,7 +27,7 @@ Design and planning documents that preserve product intent, implementation plans
 
 | Document | Status | Description |
 |----------|--------|-------------|
-| [design/cortex-code-implementation-plan.md](design/cortex-code-implementation-plan.md) | P0–P3/P5 and P6 C33/C34/C36–C41 and P7 C42 complete; C26, conditional C35 and C43–C59 pending | CoCo feature mapping, OAuth setup, ACP/runtime/MCP/processor/KB/Context/Routine design, progress and acceptance gates |
+| [design/cortex-code-implementation-plan.md](design/cortex-code-implementation-plan.md) | P0–P3/P5 and P6 C33/C34/C36–C41 and P7 C42/C43 complete; C26, conditional C35 and C44–C59 pending | CoCo feature mapping, OAuth setup, ACP/runtime/MCP/processor/KB/Context/Routine design, progress and acceptance gates |
 | [design/claude-code-interactive/implementation-plan.md](design/claude-code-interactive/implementation-plan.md) | Implemented | End-to-end implementation plan for a separate Claude Code Interactive backend using hidden PTY control, transcript-derived events, shared Claude profiles, and provider-specific CLI compatibility warnings |
 | [design/claude-code-interactive/hardening-plan.md](design/claude-code-interactive/hardening-plan.md) | Implemented | Follow-up hardening plan for Claude Code Interactive terminal query responses, hook-driven lifecycle signals, transcript finalization, and real-CLI drift coverage |
 | [design/knowledge-base/ingestion-hybrid.md](design/knowledge-base/ingestion-hybrid.md) | Implemented | Hybrid AI-assisted KB ingestion (PDF/DOCX/PPTX/image conversion at ingest time) — shipped across PRs #213–#228 |

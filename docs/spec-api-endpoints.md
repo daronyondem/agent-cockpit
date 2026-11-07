@@ -906,6 +906,17 @@ See Section 4.6 (`CodexPlanUsageService`) for the spawn / RPC / kill semantics.
 
 Unauthenticated requests to `/api/*` return `401 { error: "Not authenticated" }` as JSON so the client can react without trying to parse an HTML login page. All other unauthenticated requests redirect to `/auth/login`.
 
+## Plan/question reply ownership (CoCo C43)
+
+No route, stream frame or request/response field changes. Both clients retain
+opaque `decisionId` in existing input bodies. Desktop additionally passes the
+rendered decision to its store; mobile checks the captured conversation and
+interaction. Both synchronously reject duplicate/stale submissions and preserve
+newer pending state when old acknowledgements/errors arrive. A stale CoCo input
+continues to return 409 and never falls through to a fresh message. Revision UI
+eligibility is the shared backend capability policy, not a Grok-only condition.
+See [C43 client/native semantics](spec-cortex-code.md#desktopmobile-decisions-p7-c43).
+
 ## Desktop profile metadata caching (CoCo C42)
 
 Desktop profile model catalogs still use `GET /cli-profiles/:profileId/metadata`

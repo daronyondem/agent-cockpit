@@ -192,6 +192,15 @@ Approval-request tool IDs differ from the native `exit_plan_mode` activity ID;
 question IDs likewise differ from the underlying tool activity. Keep interaction
 ownership separate from the tool-event map.
 
+The November 7 C43 standard-chat probe additionally observed a distinct
+`enter_plan_mode` permission: `kind: "switch_mode"`, title `Create a plan before
+executing?`, and exactly `approve`/allow_once (`Yes, plan first`) plus
+`decline`/reject_once (`No, execute directly`). It precedes any plan document.
+Cancelling this request makes the native tool report that plan mode was declined;
+the model may finish with explanatory text instead of presenting a plan gate.
+It must not be confused with finished-plan execution approval. The sanitized
+request is retained in `test/fixtures/cortex/1.2.35/plan-entry.json`.
+
 `session/load` replayed user/assistant/tool history before the next turn.
 Suppress that replay when restoring an existing Cockpit transcript, then stream
 only the new response. The nonce-recall probe confirmed actual continuity.

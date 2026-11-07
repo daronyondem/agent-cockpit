@@ -8,7 +8,7 @@
 
 **Framework:** Jest 30.x — run with `npm test`. The script is `node --experimental-vm-modules node_modules/.bin/jest` because the KB handler tests import `unpdf` (ESM-only, wraps `pdfjs-dist`) and Jest's VM needs the flag to allow runtime `import()` calls. `jest.config.js` uses `ts-jest` for TypeScript and also transforms JS/JSX with `allowJs: true`, `module: CommonJS`, and `jsx: react-jsx` so tests can import the V2 frontend ES modules directly instead of evaluating browser globals. Default Jest execution is capped at `maxWorkers: '50%'` so process-spawning suites still run in parallel without stampeding local or CI machines, and the global per-test timeout is 30 seconds so widened harness-specific timeouts can surface their route/process-specific errors before Jest's generic timeout.
 
-**Coverage gate:** Run `npm run test:coverage` for backend coverage. The script keeps plain `npm test` unchanged for fast local iteration and runs Jest with `--coverage --runInBand`; serial execution keeps the full-suite coverage gate stable on local machines where parallel workers can exceed short route-test timeouts. `jest.config.js` collects coverage from `src/**/*.ts` and `server.ts`, excludes declaration-only `src/types/**` and `*.d.ts` files, writes reports under `coverage/`, and uses V8 coverage with `text-summary` plus `lcov` reporters. The global threshold floor is statements/lines 88.5%, branches 76.4%, and functions 93.8%, last raised with CoCo processor-selection coverage. The November 7, 2026 C42 V8 baseline is statements/lines 88.57%, branches 76.49%, and functions 93.81% (164 passing suites, 2,866 passing tests; three opt-in suites and 20 tests skipped), measured on macOS; those floors remain unchanged. When meaningful tests land, raise the thresholds toward the new baseline in the same PR. Do not lower thresholds to merge a regression; either add behavior coverage, make a narrow intentional exclusion in `jest.config.js`, or document the explicit exception in the PR.
+**Coverage gate:** Run `npm run test:coverage` for backend coverage. The script keeps plain `npm test` unchanged for fast local iteration and runs Jest with `--coverage --runInBand`; serial execution keeps the full-suite coverage gate stable on local machines where parallel workers can exceed short route-test timeouts. `jest.config.js` collects coverage from `src/**/*.ts` and `server.ts`, excludes declaration-only `src/types/**` and `*.d.ts` files, writes reports under `coverage/`, and uses V8 coverage with `text-summary` plus `lcov` reporters. The global threshold floor is statements/lines 88.5%, branches 76.4%, and functions 93.8%, last raised with CoCo processor-selection coverage. The November 7, 2026 C43 V8 baseline is statements/lines 88.57%, branches 76.50%, and functions 93.81% (165 passing suites, 2,882 passing tests; three opt-in suites and 20 tests skipped), measured on macOS; those floors remain unchanged. When meaningful tests land, raise the thresholds toward the new baseline in the same PR. Do not lower thresholds to merge a regression; either add behavior coverage, make a narrow intentional exclusion in `jest.config.js`, or document the explicit exception in the PR.
 
 Shared chat route tests use `test/helpers/chatEnv.ts` for isolated Express/WebSocket servers and scratch data directories. Teardown waits for active streams, the session finalizer queue, and any in-flight durable stream-job registry mutation to become idle before closing the server and removing the scratch directory, so background finalizer/job writes cannot race temp-directory cleanup.
 
@@ -16,6 +16,7 @@ Test HTTP servers that are contacted through `127.0.0.1` bind explicitly to `127
 
 | File | Focus |
 |------|-------|
+| `test/cortexInteractionUi.test.ts` | Actual desktop/mobile cards use shared capability metadata, preserve Claude/Codex/Grok controls, respect explicit denial, reset identical-text drafts on fresh CoCo generations, bind callbacks to rendered IDs and disable every mobile reply input/action in flight. Expanded stream-store/mobile-pipeline suites cover duplicate/stale callbacks, newer interactions/drafts and delayed success/error/fallback responses. |
 | `test/cortexDesktopSelection.test.ts` | Rendered desktop model/effort/mode/tier/profile controls, incomplete profile retention, same-ID connection changes, late/failing catalog responses, unavailable model replacements, shared catalog projections and saved-profile invalidation. Existing Claude Standard/Interactive, Codex and Grok controls retain coverage. |
 | `test/cortexProfileEditor.test.ts` | Actual Settings profile fields, name/connection save, enable/delete, Harness transitions/auth-home cleanup, connection config removal and incomplete default/model retention. Setup lazy loader is stubbed; its auth UI has separate rendered/native coverage. |
 | `test/profileMetadataCache.test.ts` | Actual browser API cache with deferred HTTP responses: settings invalidation prevents old successes caching and old failures deleting newer pending requests; in-flight and completed requests stay deduplicated. |
@@ -44,7 +45,7 @@ Test HTTP servers that are contacted through `127.0.0.1` bind explicitly to `127
 | `test/grokIntegration.test.ts` | Local process fixtures for profile metadata and native effort persistence, cached auth precedence, API-key method negotiation including an unadvertised method, access gates/API-key ambiguity, billing route/cache identity/sparse balances, setup auth-home migration, device jobs, incompatible ACP initialization cleanup, and two successive plan approvals through the real WebSocket/input route after revision feedback without repeated native mode entry. |
 | `test/grokProcess.test.ts` | Process ancestry and real POSIX detached descendants: cleanup after root death with TERM/KILL escalation while an unrelated process survives. Mocked process tables and signals cover start-identity PID-reuse exclusion, explicit SIGTERM-then-SIGKILL escalation, the process-group fallback when `ps` fails, and Windows `taskkill` with direct-kill fallback. |
 | `test/grokWindows.test.ts` | Windows native executable preference, managed package/private Node fallback, terminal wrapper repair and missing targets. Native Windows execution still requires a platform run. |
-| `test/grokUi.test.ts` | Rendered desktop sparse/zero billing, Grok-only plan revision feedback, mobile explicit plan decisions with Grok-only revision feedback, and mobile profile switching with late-response isolation. Uses the frontend module loader with React dependencies supplied explicitly. |
+| `test/grokUi.test.ts` | Rendered desktop sparse/zero billing, advertised plan revision feedback, mobile explicit plan decisions, and mobile profile switching with late-response isolation. Uses the frontend module loader with React dependencies supplied explicitly. |
 | `test/planUsageStores.test.ts` Grok coverage | Per-profile cache/request coalescing, subscription notifications, and clearing unavailable billing without affecting another profile. |
 | `test/grokBuild.e2e.test.ts` | Eight opt-in authenticated real-CLI checks through `npm run e2e:grok-build`: terminal auth/catalog, restricted sequential calls/slash protection, empty auth-home isolation and invalid-key failure, real isolated device-login cancellation, hard-exit descendant cleanup/recovery, background children/settled usage, questions/revised plans, goal controls, and full autonomous goal completion. Completion has an external 360-second cancellation deadline. Uses temporary workspaces/native sessions; verified on Grok Build 1.0.52 macOS arm64. |
 | `test/grokWorkflows.e2e.test.ts` | Three native application checks included in `npm run e2e:grok-build`: real KB ingestion/digestion and Memory/KB token-scoped MCP tools/governance, Workspace Context maintenance from a reference, and an opt-in manual Routine with notifications off. Uses isolated HTTP/WS services and temporary data. |
@@ -333,6 +334,50 @@ The six P3 Jest suites contain 30 tests. They include existing conversation
 upload/queue/artifact/preview/download and ledger storage without registering a
 CortexCodeAdapter. Whole app/native UI acceptance is separate; normalization
 fixtures do not certify a processor role or native image generation.
+
+## Cortex desktop/mobile interaction controls (P7 C43)
+
+The normal rendered tests listed above exercise the cards and actual reply
+orchestrators with deferred HTTP responses; deterministic native interaction and
+HTTP/WS integration suites continue to cover generation IDs and exact
+approve/revise/reject/option/free-form outcomes. A new sanitized `plan-entry.json`
+captures the separate native approve/decline entry schema; interaction tests
+verify chat entry without execution and restricted/headless/unknown rejection.
+The Claude Interactive native UI suite adds an assertion that revision
+controls remain absent; it is reviewed/aligned here, not a new real-Claude CLI
+version compatibility claim.
+
+Build both clients, then opt in with:
+
+```sh
+CORTEX_INTERACTION_PROBE=1 CORTEX_TEST_CONNECTION=<saved-name> npx tsx scripts/probe-cortex-interactions.ts
+```
+
+This macOS/CoCo 1.2.35 probe serves real production assets from an isolated
+PM2/data/workspace fixture and retains shared terminal credentials. It selects
+the verified Sonnet 4.6/low pair through both clients (asserted in outgoing message
+requests), answers sequential questions
+with custom text and an option, requests a revised plan, checks fresh decisions,
+rejects old/duplicate REST replies and verifies no file exists before approval.
+Separate rejection conversations verify nonexecution whether native planning
+finishes in text or returns to another approval gate; any remaining live turn is
+explicitly stopped and drained. Each conversation has one original user prompt,
+so replies cannot silently become prompt resends. The external eight-minute
+deadline closes the owned browser; PM2 allows twenty seconds for native shutdown.
+Only sanitized stages/booleans/version/revision/platform evidence go into the
+private temp report; failures keep a private diagnostic file. This is interaction
+acceptance only, not C26's human OAuth, full C44–C47/P9 or Windows/Linux evidence.
+
+The November 7 native run passed, with private evidence under system temp at
+`cockpit-cortex-interactions-MVtAcg/report.json`. The PM2 fixture was deleted and
+shared credentials were retained. Scoped existing-harness UI attempts do not
+count as passes: Claude 2.1.318 exited code 1 before SessionStart/plan handling
+(the serial question case did not run). Grok 1.0.52 could not select the suite's
+4.7 model from the available fallback catalog; a temporary 4.6-scoped copy then
+reported Authentication required before questions. The temporary test copy was
+removed. Native compatibility for these environments remains unverified;
+rendered policy/ownership regression coverage passed. No Claude/Grok protocol,
+credentials or production model policy was changed to obtain a pass.
 
 ## Cortex desktop profile controls (P7 C42)
 

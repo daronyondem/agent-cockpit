@@ -3,15 +3,16 @@ import { act, createElement } from 'react';
 import { createRoot } from 'react-dom/client';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { loadFrontendModule, loadMobileModule } from './mobileModuleLoader';
+import { checkBackendRoleEligibility } from '../src/contracts/backendCapabilities';
 const reactDependencies = { react: require('react'), 'react/jsx-runtime': require('react/jsx-runtime') };
 const { GrokBillingSection } = loadFrontendModule('web/AgentCockpitWeb/src/chat/grokBillingSection.jsx', reactDependencies);
 const { GrokBilling } = loadMobileModule('grokBilling.tsx', reactDependencies);
 const { InteractionCard: MobileInteractionCard } = loadMobileModule('interactionCard.tsx', {
-  ...reactDependencies, './mobilePrimitives': loadMobileModule('mobilePrimitives.tsx', reactDependencies),
+  ...reactDependencies, '../../../src/contracts/backendCapabilities': { checkBackendRoleEligibility }, './mobilePrimitives': loadMobileModule('mobilePrimitives.tsx', reactDependencies),
 });
 const respond = jest.fn();
 const { InteractionCard } = loadFrontendModule('web/AgentCockpitWeb/src/chat/chatStatusCards.jsx', {
-  ...reactDependencies, '../icons.jsx': { Ico: {} }, '../streamStore.js': { StreamStore: { respond } },
+  ...reactDependencies, '../../../../src/contracts/backendCapabilities': { checkBackendRoleEligibility }, '../icons.jsx': { Ico: {} }, '../streamStore.js': { StreamStore: { respond } },
   './chatTime.js': { msgTime: () => '' }, './messageContent.jsx': { renderMarkdown: (text: string) => text },
 });
 
@@ -23,7 +24,7 @@ test('Grok plans accept revision feedback while other plan cards retain their ap
   const root = createRoot(container);
   const props = { convId: 'fixture', interaction: { type: 'planApproval', planContent: 'Fixture plan' }, respondPending: false };
   try {
-    await act(async () => { root.render(createElement(InteractionCard, { ...props, allowPlanFeedback: true })); });
+    await act(async () => { root.render(createElement(InteractionCard, { ...props, backend: { id: 'grok-build', label: 'Grok', capabilities: { planMode: true } } })); });
     const button = () => Array.from(container.querySelectorAll('button')).find(item => item.textContent === 'Request changes')!;
     expect(button().disabled).toBe(true);
     const input = container.querySelector('textarea')!;
@@ -32,20 +33,20 @@ test('Grok plans accept revision feedback while other plan cards retain their ap
       input.dispatchEvent(new Event('input', { bubbles: true }));
     });
     await act(async () => { button().click(); });
-    expect(respond).toHaveBeenCalledWith('fixture', 'Verify Blue first');
+    expect(respond).toHaveBeenCalledWith('fixture', 'Verify Blue first', undefined);
     await act(async () => { root.render(createElement(InteractionCard, props)); });
     expect(container.querySelector('textarea')).toBeNull();
     expect(container.textContent).toContain('Approve & run');
   } finally { await act(async () => { root.unmount(); }); container.remove(); }
 });
 
-test('mobile plan approval sends explicit decisions and offers revision feedback only for Grok', async () => {
+test('mobile plan approval sends explicit decisions and uses advertised revision capability', async () => {
   (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
   const container = document.createElement('div');
   document.body.append(container);
   const root = createRoot(container);
   const onSubmit = jest.fn();
-  const props = { interaction: { kind: 'plan', prompt: 'Fixture plan' }, answer: '', setAnswer: jest.fn(), onSubmit, allowPlanFeedback: false };
+  const props = { interaction: { kind: 'plan', prompt: 'Fixture plan' }, answer: '', setAnswer: jest.fn(), onSubmit, backend: undefined };
   const button = (label: string) => Array.from(container.querySelectorAll('button')).find(item => item.textContent === label)!;
   try {
     await act(async () => { root.render(createElement(MobileInteractionCard, props)); });
@@ -54,7 +55,7 @@ test('mobile plan approval sends explicit decisions and offers revision feedback
     await act(async () => { button('Approve & run').click(); });
     await act(async () => { button('Reject').click(); });
     expect(onSubmit.mock.calls).toEqual([['yes'], ['no']]);
-    await act(async () => { root.render(createElement(MobileInteractionCard, { ...props, allowPlanFeedback: true, answer: 'Verify Blue first' })); });
+    await act(async () => { root.render(createElement(MobileInteractionCard, { ...props, backend: { id: 'grok-build', label: 'Grok', capabilities: { planMode: true } }, answer: 'Verify Blue first' })); });
     expect(container.querySelector('textarea')!.value).toBe('Verify Blue first');
     await act(async () => { button('Request changes').click(); });
     expect(onSubmit).toHaveBeenLastCalledWith();

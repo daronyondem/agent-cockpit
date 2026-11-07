@@ -9,8 +9,17 @@ P7 C42 updates the desktop/shared responsive setup and Settings profile editor,
 desktop catalog ownership and the backend-supplied CoCo icon. Mobile receives
 the icon through existing metadata. No PWA administration screen, endpoint,
 manifest, service worker, asset source or protocol change is introduced. The
-desktop's profile-catalog hook is not imported by mobile; native mobile model/
-interaction/usage/reconnect acceptance remains C43–C47, including C46.
+desktop's profile-catalog hook is not imported by mobile; broader native mobile
+model/usage/reconnect acceptance remains C44–C47, including C46.
+
+P7 C43 applies shared revision capability policy to mobile/desktop plan cards.
+The mobile send pipeline synchronously prevents duplicate/stale submissions,
+exposes reply-busy state and preserves newer interactions/drafts on late input
+responses. CoCo rejection selects keep_planning and may end with explanatory
+text or return to another native gate; approval permits execution.
+Question drafts reset on decision/prompt changes. Wire contracts and PWA metadata,
+manifest, service worker and asset sources stay unchanged. Native interaction
+acceptance is scoped separately from the remaining C44–C47 mobile feature matrix.
 
 P6 C33/C34/C36 adds server-side tool-enabled sequential execution and verified
 PNG OCR through the existing endpoint. No new PWA settings, assets, metadata or
@@ -98,7 +107,7 @@ See [ADR-0025](adr/0025-use-mobile-pwa-as-sole-mobile-client.md).
 - `src/mobileComponents.tsx` — stable re-export boundary for the mobile screens and modals consumed by `App.tsx`.
 - `src/mobileConversationListScreen.tsx` — conversation-list rendering, workspace filtering controls, live/goal row state, and conversation-card presentation.
 - `src/mobileChatScreen.tsx` — chat transcript rendering, composer shell, backend-neutral goal strip/event cards, assistant identity projection, message Markdown/file-card rendering, wrapped Markdown code-block copy controls, queue stack, usage meter, and attachment tray. It passes the conversation backend's plan-feedback support to the interaction card.
-- `src/interactionCard.tsx` — pending plan-approval and clarifying-question card. Plan cards send explicit `Approve & run` (`yes`) and `Reject` (`no`) decisions, matching desktop; only Grok plan cards add the `Plan revision feedback` textarea and `Request changes` button. Question cards keep option chips, free-text answers, and `Answer`.
+- `src/interactionCard.tsx` — pending plan-approval and clarifying-question card. Plan cards send explicit `Approve & run` (`yes`) and `Reject` (`no`) decisions, matching desktop; shared `planRevision` capability eligibility controls the `Plan revision feedback` textarea and `Request changes` button (CoCo explicit support, Grok legacy default, explicit denial honored). Question cards keep option chips, free-text answers, and `Answer`. The card receives conversation backend metadata and reply-busy state; all actions/inputs disable during delivery.
 - `src/mobileModals.tsx` — stable re-export boundary for modal and secondary-screen modules.
 - `src/mobileConversationModals.tsx` — New Conversation/folder picker, conversation actions, Markdown sharing, and run settings sheets.
 - `src/mobileSessionScreens.tsx` — session list and read-only session viewer surfaces.

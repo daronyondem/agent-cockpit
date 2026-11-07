@@ -71,6 +71,7 @@ export function ChatScreen(props: {
   goalMode: boolean;
   goalCapable: boolean;
   pendingInteraction: PendingInteraction | null;
+  respondPending?: boolean;
   interactionAnswer: string;
   setInteractionAnswer: (value: string) => void;
   pendingAttachments: PendingAttachment[];
@@ -340,7 +341,8 @@ export function ChatScreen(props: {
         <InteractionCard
           interaction={props.pendingInteraction}
           answer={props.interactionAnswer}
-          allowPlanFeedback={conversation.backend === 'grok-build'}
+          backend={props.backends.find(backend => backend.id === conversation.backend)}
+          respondPending={props.respondPending}
           setAnswer={props.setInteractionAnswer}
           onSubmit={props.onSubmitInteraction}
         />

@@ -203,6 +203,7 @@ export default function App() {
   });
   const {
     isSending,
+    isResponding,
     sendDraft,
     drainNextQueuedMessage,
     submitInteraction,
@@ -753,6 +754,7 @@ export default function App() {
           goalCapable={goalCapable}
           pendingInteraction={pendingInteraction}
           interactionAnswer={interactionAnswer}
+          respondPending={isResponding}
           setInteractionAnswer={setInteractionAnswer}
           pendingAttachments={pendingAttachments}
           hasUploadingAttachments={hasUploadingAttachments}

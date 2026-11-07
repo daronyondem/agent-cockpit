@@ -383,8 +383,55 @@ empty or unavailable, display generic guidance, and retain an unavailable saved
 model as a disabled row alongside eligible replacements. Catalog discovery is
 never authentication evidence. Claude mode and Codex service tier remain
 specific to those harnesses; CoCo does not expose them or a goal-mode toggle.
-Role-gated processor controls remain governed by C41. Full question/plan,
-steering/queue/reconnect, usage and mobile acceptance remain C43–C47.
+Role-gated processor controls remain governed by C41. C43 decision controls are
+specified below; steering/queue/reconnect, usage and full mobile acceptance remain
+C44–C47.
+
+## Desktop/mobile decisions (P7 C43)
+
+Both interaction cards receive metadata for the conversation backend and use
+shared browser-safe `checkBackendRoleEligibility` for `planRevision`. CoCo's
+explicit `planRevision:true` enables trimmed revision feedback. The existing
+Grok fallback remains only when its flag is absent; explicit false wins. Claude
+Standard/Interactive and other non-advertising harnesses retain approval/rejection
+only. Missing metadata keeps revision feedback hidden until the catalog arrives.
+This changes no advertised role or browser stream/request shape.
+
+Desktop question/plan draft state is keyed by decision ID and displayed text.
+Identical text with a fresh generation starts empty. Rendered buttons/input
+callbacks pass their generation to `StreamStore.respond`, which rejects stale
+callbacks before HTTP and synchronously blocks duplicate delivery. Successful
+stdin acknowledgements preserve a newer interaction. Old input errors cannot
+replace its state, and an old `mode:'message'` response cannot resend the answer
+after the interaction changed. Existing two-argument store callers remain valid.
+
+Mobile's send pipeline owns synchronous in-flight reply exclusion and an
+`isResponding` state wired through App/ChatScreen to disable all card inputs and
+actions. Conversation/interaction snapshot ownership is checked before sending
+and after acknowledgement/failure; stale callbacks/errors and delayed responses
+cannot clear a newer interaction/draft or send an old fallback message. Draft
+reset keys include conversation, decision ID, kind and prompt. Current delivery
+failure retains the answer and permits explicit retry after the pending flag
+clears. No automatic retry or fabricated human answer is introduced.
+
+The native `no` decision selects `keep_planning` without feedback, `yes` selects
+`proceed`, and nonempty revision feedback selects `keep_planning` with
+`_meta.freeFormText`. A rejection may finish with explanatory text or return to
+another approval gate; clients never invent a new permission card or replay a
+prompt. Stop can abandon a turn still awaiting another native decision. Approval
+and revision ownership remain distinct from native RPC/tool IDs. Strict Memory,
+steering/queues/reconnect and complete mobile feature acceptance remain separate.
+
+Standard chat can invoke native `enter_plan_mode` before producing a plan.
+CoCo 1.2.35 first requests `switch_mode` with title `Create a plan before
+executing?` and exactly `approve`/allow_once plus `decline`/reject_once choices.
+For tool-enabled chat, the interaction module selects `approve` to enter
+planning and emits only an EnterPlanMode indicator. This does not authorize
+execution or create a user decision generation. Finished-plan approval remains
+a separate `proceed`/`keep_planning` gate with the owned plan document.
+Restricted/headless execution cancels entry; headless work reports the same
+human-decision-required failure as other plans. Unrecognized entry schemas
+remain denied. The sanitized native request is retained in `plan-entry.json`.
 
 ## Durable chat and managed MCP (P5)
 
@@ -1120,7 +1167,9 @@ unsupported question shapes and denied calls return cancelled. Foreign-session
 or unknown-method reverse requests are left unclaimed for transport rejection.
 Native reads can exist without reverse approval; this is not a processor sandbox.
 
-A plan decision requires kind switch_mode, proceed/keep_planning choices, and
+The separately verified planning-entry schema described under P7 C43 may enter
+planning in chat without executing a plan. A finished-plan decision requires
+kind switch_mode, proceed/keep_planning choices, and
 a prior owned `plan` update with `_meta.kind:'plan_document'` and planDocument
 (bounded to 50,000 characters). Emit EnterPlanMode then ExitPlanMode with that
 document for each gate, including a revision, so existing stream state reopens

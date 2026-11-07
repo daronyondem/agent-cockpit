@@ -55,8 +55,10 @@ test('desktop selects the native model and effort, answers questions, revises pl
   await question.getByRole('button', { name: 'Send', exact: true }).click();
   try { await expect(question).toContainText('Size?'); }
   finally { releaseInput(); }
-  await expect(question.getByRole('button', { name: 'Send', exact: true })).toBeEnabled();
+  await expect(question.locator('input')).toHaveValue('');
+  await expect(question.getByRole('button', { name: 'Send', exact: true })).toBeDisabled();
   await question.getByRole('button', { name: /^Large/ }).click();
+  await expect(question.getByRole('button', { name: 'Send', exact: true })).toBeEnabled();
   await question.getByRole('button', { name: 'Send', exact: true }).click();
   const plan = page.getByRole('group', { name: 'Plan approval' });
   await expect(plan).toBeVisible();

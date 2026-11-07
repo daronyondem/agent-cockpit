@@ -2266,3 +2266,31 @@ describe('WebSocket revalidation', () => {
     dateSpy.mockRestore();
   });
 });
+
+test('rendered decision identity rejects stale callbacks and duplicate input before a pending request resolves', async () => {
+  const ws = await openWs('c1'); const Store = (window as any).StreamStore; const api = (global as any).AgentApi;
+  ws.dispatch({ type: 'tool_activity', id: 'cortex-decision:current', isQuestion: true, questions: [{ question: 'Color?', options: [] }] });
+  await Store.respond('c1', 'Blue', 'cortex-decision:old'); expect(api.fetch).not.toHaveBeenCalled();
+  let acknowledge!: (response: ReturnType<typeof makeResponse>) => void;
+  api.fetch.mockReturnValueOnce(new Promise(resolve => { acknowledge = resolve; }));
+  const sending = Store.respond('c1', 'Blue', 'cortex-decision:current');
+  await Store.respond('c1', 'Blue', 'cortex-decision:current'); expect(api.fetch).toHaveBeenCalledTimes(1);
+  ws.dispatch({ type: 'tool_activity', id: 'cortex-decision:next', isQuestion: true, questions: [{ question: 'Color?', options: [] }] });
+  acknowledge(makeResponse({ mode: 'stdin' })); await sending;
+  expect(Store.getState('c1').pendingInteraction.decisionId).toBe('cortex-decision:next');
+  await Store.respond('c1', 'Blue', 'cortex-decision:current'); expect(api.fetch).toHaveBeenCalledTimes(1);
+});
+
+test.each(['failed', 'message'])('a late %s input response cannot replace a newer interaction or resend its old answer', async mode => {
+  const ws = await openWs('c1'); const Store = (window as any).StreamStore; const api = (global as any).AgentApi;
+  const question = (id: string) => ws.dispatch({ type: 'tool_activity', id, isQuestion: true, questions: [{ question: 'Color?', options: [] }] });
+  question('cortex-decision:first');
+  let resolve!: (response: ReturnType<typeof makeResponse>) => void, reject!: (error: Error) => void;
+  api.fetch.mockReturnValueOnce(new Promise((yes, no) => { resolve = yes; reject = no; }));
+  const answering = Store.respond('c1', 'Blue', 'cortex-decision:first'); question('cortex-decision:next');
+  if (mode === 'failed') reject(new Error('old reply failed')); else resolve(makeResponse({ mode: 'message' }));
+  await answering;
+  expect(Store.getState('c1').pendingInteraction.decisionId).toBe('cortex-decision:next');
+  expect(Store.getState('c1').streamError).toBeFalsy(); expect(Store.getState('c1').respondPending).toBe(false);
+  expect(api.fetch).toHaveBeenCalledTimes(1);
+});

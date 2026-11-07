@@ -3,6 +3,7 @@
 Sanitized, ordered excerpts from real authenticated ACP probes on macOS arm64
 on November 2, 2026 (some UTC capture timestamps fall on November 3).
 Distribution: `1.2.35+191333.f82de3d91715`.
+Later follow-up captures carry their own dates in the rows and source metadata.
 See [the evaluation](../../../../docs/research/cortex-code-acp-evaluation.md)
 and [the implementation plan](../../../../docs/design/cortex-code-implementation-plan.md).
 
@@ -17,6 +18,7 @@ must not be treated as absent. Excerpts may start/end mid-session.
 | `session-config.json` | Initialization, native agent version mismatch, session creation, unsupported `session/set_model`, successful `session/set_config_option` |
 | `file-shell.json` | Thinking, file and shell tools, ordinary allow-once reverse RPCs, progress/outcomes, context snapshots and final billing counters |
 | `questions.json` | Two sequential questions in one native tool, request ID 0, options and typed free-form reply metadata |
+| `plan-entry.json` | November 7, 2026 standard-chat entry permission: approve/decline enters planning, distinct from proceed/keep_planning execution approval |
 | `plan-revision.json` | Rejection with feedback, failed activity during valid revision, second plan/approval, execution after approval |
 | `load-replay.json` | Native history replay before load response, then an independent new prompt/result |
 | `load-missing.json` | November 6, 2026 native load of a synthetic missing UUID; exact version-bound recovery classifier |

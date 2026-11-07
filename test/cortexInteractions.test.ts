@@ -2,10 +2,10 @@ import type { StreamEvent, CortexRpcMessage } from '../src/types';
 import { CortexInteractions } from '../src/services/backends/cortexInteractions';
 import { cortexFixture, cortexWire } from './helpers/cortexFixtures';
 
-function fixture(allow = true) {
+function fixture(allow = true, onInteractionRequired?: () => void) {
   const f = cortexFixture();
   const events: StreamEvent[] = [];
-  const interactions = new CortexInteractions(f.client, 'fixture-session', event => events.push(event), allow);
+  const interactions = new CortexInteractions(f.client, 'fixture-session', event => events.push(event), allow, onInteractionRequired);
   f.client.subscribe(frame => frame.id === undefined ? interactions.observe(frame) : interactions.handle(frame));
   const send = (frame: CortexRpcMessage) => f.send({ ...frame, params: { ...frame.params, sessionId: 'fixture-session' } });
   return { ...f, events, interactions, send };
@@ -51,6 +51,41 @@ test('plan revision/rejection/approval use the prior document and generate a fre
   expect(f.interactions.input('reject', f.interactions.pendingId!)).toBe(true);
   expect(f.writes[2]).toMatchObject({ result: { outcome: { optionId: 'keep_planning' } } });
   await f.client.close();
+});
+
+test('standard chat can enter native planning without granting finished-plan execution', async () => {
+  const f = fixture();
+  f.send(cortexWire('plan-entry')[0]);
+  expect(f.writes[0]).toMatchObject({ id: 0, result: { outcome: { outcome: 'selected', optionId: 'approve' } } });
+  expect(f.events).toEqual([{ type: 'tool_activity', tool: 'EnterPlanMode', id: null,
+    description: 'Preparing plan', isPlanMode: true, planAction: 'enter' }]);
+  expect(f.interactions.pendingId).toBeNull();
+  const frames = cortexWire('plan-revision');
+  f.send(frames.find(frame => (frame.params?.update as any)?.sessionUpdate === 'plan')!);
+  f.send(frames.find(frame => frame.method === 'session/request_permission')!);
+  expect(f.writes).toHaveLength(1);
+  expect(f.interactions.pendingId).toMatch(/^cortex-decision:/);
+  expect(f.interactions.input('approve', f.interactions.pendingId!)).toBe(true);
+  expect(f.writes[1]).toMatchObject({ result: { outcome: { optionId: 'proceed' } } });
+  await f.client.close();
+});
+
+test('planning entry stays blocked for restricted/headless work and unrecognized entry schemas', async () => {
+  const entry = cortexWire('plan-entry')[0];
+  const required = jest.fn();
+  const restricted = fixture(false), headless = fixture(true, required), unknown = fixture();
+  restricted.send(entry); headless.send(entry);
+  unknown.send({ ...entry, params: { ...entry.params, toolCall: { ...(entry.params!.toolCall as object), title: 'Unknown switch' } } });
+  unknown.send({ ...entry, params: { ...entry.params, options: [
+    { kind: 'allow_always', name: 'Approve', optionId: 'approve' }, { kind: 'reject_once', name: 'Decline', optionId: 'decline' },
+  ] } });
+  for (const f of [restricted, headless, unknown]) {
+    expect(f.interactions.pendingId).toBeNull();
+    expect(f.events).toEqual([]);
+    for (const write of f.writes) expect(write).toMatchObject({ result: { outcome: { outcome: 'cancelled' } } });
+  }
+  expect(required).toHaveBeenCalledTimes(1);
+  await Promise.all([restricted, headless, unknown].map(f => f.client.close()));
 });
 
 test('only known ordinary allow-once permissions are approved; missing plan, denied and unknown requests cancel safely', async () => {

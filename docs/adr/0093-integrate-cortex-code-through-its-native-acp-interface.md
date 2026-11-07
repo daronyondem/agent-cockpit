@@ -58,6 +58,11 @@ affects:
   - web/AgentCockpitWeb/src/useProfileBackends.js
   - web/AgentCockpitWeb/src/api.js
   - scripts/probe-cortex-auth.ts
+  - scripts/probe-cortex-interactions.ts
+  - web/AgentCockpitWeb/src/chat/chatStatusCards.jsx
+  - web/AgentCockpitWeb/src/streamStore.js
+  - mobile/AgentCockpitPWA/src/interactionCard.tsx
+  - mobile/AgentCockpitPWA/src/useSendPipeline.ts
   - src/services/backends/cortex.ts
   - src/services/backends/cortexPlugin.ts
   - src/services/backends/cortexShots.ts
@@ -181,6 +186,17 @@ optional for existing harnesses. Native RPC/tool IDs are not that generation.
 `stdinInput:false` denotes unsupported unsolicited steering;
 clients preserve normal text through the message queue instead of dropping it.
 Expose plan revision through capability metadata, not harness-name checks.
+
+Both clients use the shared plan-revision role check on conversation metadata;
+rendered callbacks carry their decision generation and reply ownership survives
+delayed HTTP acknowledgements/errors without clearing a newer decision or
+resending an old answer. Reset drafts for new decisions and exclude duplicate
+submissions synchronously. In tool-enabled chat, automatically accept only the
+verified 1.2.35 planning-entry approve/decline schema to enter planning; it grants
+no finished-plan execution. Keep proceed/keep_planning approval independent and
+explicit. Headless/restricted entry remains denied. A native rejection may end
+with explanatory text or request a new decision; never synthesize a new card or
+resend the prompt to force a preferred outcome.
 
 Advertise native history recovery only after adapter reload tests pass; leave
 active-turn reattachment, goals and subagents unavailable until verified. Never

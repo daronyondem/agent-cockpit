@@ -1,6 +1,6 @@
 # Cortex Code (CoCo) harness implementation plan
 
-**Status:** P0–P3 and P5 complete; P4 C21–C25 setup implemented, C26 actual remote-browser acceptance pending. P6 C33/C34/C36–C41 complete; P7 C42 desktop profile/catalog controls complete; C43–C47 client acceptance is next. C35 remains conditional on G1.
+**Status:** P0–P3 and P5 complete; P4 C21–C25 setup implemented, C26 actual remote-browser acceptance pending. P6 C33/C34/C36–C41 complete; P7 C42 desktop profile/catalog and C43 desktop/mobile decisions implemented; C44–C47 client acceptance is next. C35 remains conditional on G1.
 **Created:** 2026-11-05.
 **Planning baseline:** Agent Cockpit `0.4.166`, revision `11d14825e955f6c83364c3917558b4d3068a4bac`, plus the uncommitted CoCo research/guidance documents.
 **Native compatibility baseline:** Cortex Code `1.2.35`, distribution `1.2.35+191333.f82de3d91715`, macOS arm64.
@@ -34,8 +34,8 @@ Planning assumptions:
 - Deliver core chat before optional parity work. Unverified features remain
   explicitly unavailable; do not emulate native goals or silently reroute work
   to a different profile to make a selector appear functional.
-- C01–C25, C27–C34 and C36–C42 are complete as recorded below. C26, conditional
-  C35 and C43–C59 remain open and do not describe shipped support.
+- C01–C25, C27–C34 and C36–C43 are implemented as recorded below. C26, conditional
+  C35 and C44–C59 remain open and do not describe shipped support.
 
 Track work as follows:
 
@@ -1028,7 +1028,7 @@ P6 C41 evidence (November 7, 2026; changes following `be4bbed`):
 - [x] C42 — Wire desktop Harness/Profile/model/effort/connection fields, icon,
   setup/doctor hints and metadata state. Verify stale request handling and all
   unsupported mode/tier/goal/processor controls.
-- [ ] C43 — Replace Grok-only plan revision checks with shared capability,
+- [x] C43 — Replace Grok-only plan revision checks with shared capability,
   keeping Claude/Grok behavior stable. Verify CoCo approval/revision/rejection,
   sequential/free-text questions and duplicate/stale response prevention.
 - [ ] C44 — Make unsupported mid-turn steering explicit while pending replies
@@ -1086,6 +1086,54 @@ P7 C42 evidence (November 7, 2026; changes following `c6707f2`):
   rebuilt desktop/mobile production assets passed. Final desktop JS/CSS budget
   measured 911.3/912 KiB and 202.3/230 KiB. C43 interaction controls are next;
   19 implementation tasks remain unchecked.
+
+P7 C43 evidence (November 7, 2026; changes following `fa17897`):
+
+- Desktop/mobile interaction cards now consume the shared plan-revision role
+  policy on conversation metadata. CoCo feedback is enabled, Grok retains its
+  absent-flag fallback and honors explicit false, and Claude approval/rejection
+  stays unchanged. Rendered desktop callbacks carry exact decision generations;
+  both reply orchestrators exclude duplicates synchronously and preserve newer
+  interactions/drafts across delayed acknowledgements, failures and legacy
+  message fallbacks. Fresh question/plan generations start with empty drafts.
+- A native standard-chat probe exposed a distinct entry permission, absent from
+  the earlier explicit-plan-mode fixture: approve/decline with title `Create a
+  plan before executing?`. The interaction module can accept only that verified
+  schema to enter planning in tool-enabled chat. It grants no execution; the
+  owned finished-plan document still needs proceed/keep_planning approval.
+  Restricted/headless/unknown entry remains denied. Sanitized native evidence
+  lives in `plan-entry.json`, with focused positive/negative tests.
+- The opt-in `scripts/probe-cortex-interactions.ts` passed on CoCo 1.2.35/macOS
+  arm64/Node 26.0.0 with real production desktop/mobile assets and an isolated
+  PM2/data/workspace fixture. It verified sequential questions, custom/option
+  answers, empty next drafts, revision/new gate, rejection without writes,
+  approval-controlled exact file writes, opaque generations, stale/duplicate
+  rejection and one original prompt per conversation. Outgoing requests assert
+  verified Sonnet 4.6/low. Private report
+  `cockpit-cortex-interactions-MVtAcg/report.json` under system temp. Shared
+  credentials stayed intact. Earlier attempts exposed default assertion timing,
+  unpinned model selection, native entry cancellation, ambiguous revision text
+  that changed the file payload, and the invalid assumption that Reject always
+  returns a new gate. These remain failed evidence; no automatic prompt replay
+  or relaxed execution gate was added to obtain a pass.
+- The rendered capability matrix and deferred-response/store/pipeline tests
+  cover existing harness behavior. The native Claude UI plan/question cases
+  were attempted with 2.1.318: startup exited code 1 before SessionStart/plan
+  interaction (the serial question case did not run). Native Grok 1.0.52 UI cases
+  could not select the suite's 4.7 from the available fallback catalog; a scoped
+  4.6 attempt then reported Authentication required before any question. These
+  are explicit compatibility limitations, not native regression passes. The
+  aligned Claude/Grok UI suites retain approval and fresh-draft expectations.
+- Mobile uses its existing chat scope; no administration, PWA manifest/service
+  worker, persistence schema or REST/WS frame changes are introduced. C26,
+  C44–C47, conditional strict Memory and full platform acceptance remain separate.
+  The durable interaction/verification workflow note was saved through Memory.
+- Final verification passed 165 suites/2,882 tests, including 144 focused tests.
+  V8 measured 88.57% statements/lines, 76.50% branches and 93.81% functions;
+  existing floors stay unchanged for this small backend increment. Backend/web/
+  mobile typechecks, zero-warning lint, maintainability, API drift, ADR lint and
+  rebuilt production assets passed. Desktop JS/CSS measured 911.8/912 KiB and
+  202.3/230 KiB. Eighteen implementation tasks remain unchecked; C44 is next.
 
 ### P8 — Installation, updates, migration, and platforms
 
@@ -1261,6 +1309,7 @@ At implementation time update only the relevant current specifications:
 | 2026-11-07 | P6 C40 complete; 21 tasks remain unchecked | Routine workflow certification change following `17071bf` | CoCo 1.2.35 / macOS arm64 / Node 26.0.0 | 160 suites / 2,833 tests passed; V8 88.54% lines, 76.34% branches, 93.8% functions; native chat/proposal/install/manual/scheduled files/state/stub outreach/retention/real minute-timeout/fresh inference passed. Required checks and rebuilt web/mobile assets/budget passed; shared auth retained. C26, conditional C35 and C41–C59 remain open |
 | 2026-11-07 | P6 C41 complete; 20 tasks remain unchecked | Processor-selection boundaries change following `be4bbed` | CoCo 1.2.35 / macOS arm64 / Node 26.0.0 | 161 suites / 2,851 tests passed; V8 88.58% lines, 76.48% branches, 93.81% functions; exact selection persistence/import, role preflights, failed-state ownership and rendered controls passed. Native sequential/headless/OCR/cancel/fresh-inference probe passed with shared auth. Required checks and rebuilt web/mobile assets/budget passed; C26, conditional C35 and C42–C59 remain open; P7 desktop/mobile acceptance next |
 | 2026-11-07 | P7 C42 complete; 19 tasks remain unchecked | Desktop profile/catalog integration following `c6707f2` | CoCo 1.2.35 / macOS arm64 / Node 26.0.0 | 164 suites / 2,866 tests passed; V8 88.57% lines, 76.49% branches, 93.81% functions. Native PM2 auth/editor/responsive/save/default/catalog/effort/icon/hidden controls/browser inference passed. All required checks and rebuilt web/mobile assets/budget passed; shared auth retained. C26, conditional C35 and C43–C59 remain open; C43 interactions next |
+| 2026-11-07 | P7 C43 complete; 18 tasks remain unchecked | Desktop/mobile decision controls following `fa17897` | CoCo 1.2.35 / macOS arm64 / Node 26.0.0 | 165 suites / 2,882 tests passed; V8 88.57% lines, 76.50% branches, 93.81% functions. Native production desktop/mobile questions, revision, rejection, approval-controlled writes and decision ownership passed; shared auth retained. Native Claude startup and Grok model/auth limitations are recorded above; no pass is claimed for them. Standard checks, rebuilt assets/budget and saved Memory passed. C26, conditional C35 and C44–C59 remain open |
 
 ## 13. References
 

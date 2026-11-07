@@ -1,4 +1,4 @@
-import { useRef, useState, type Dispatch, type RefObject, type SetStateAction } from 'react';
+import { useEffect, useRef, useState, type Dispatch, type RefObject, type SetStateAction } from 'react';
 import { AgentAPIError } from './api';
 import {
   applyConversationRuntimeSelection,
@@ -81,6 +81,14 @@ function isAlreadyStreamingError(error: unknown): error is AgentAPIError {
 export function useSendPipeline(options: UseSendPipelineOptions) {
   const sendInFlightRef = useRef(false);
   const [isSending, setIsSending] = useState(false);
+  const [isResponding, setIsResponding] = useState(false);
+  const interactionInFlight = useRef(false);
+  const interactionOwner = useRef({ conversationId: options.activeConversation?.id, interaction: options.pendingInteraction });
+  interactionOwner.current = { conversationId: options.activeConversation?.id, interaction: options.pendingInteraction };
+  const interactionKey = JSON.stringify([options.activeConversation?.id, options.pendingInteraction?.decisionId,
+    options.pendingInteraction?.kind, options.pendingInteraction?.prompt]);
+  const setInteractionAnswer = options.setInteractionAnswer;
+  useEffect(() => { setInteractionAnswer(''); }, [interactionKey, setInteractionAnswer]);
 
   async function sendDraft() {
     if (sendInFlightRef.current) {
@@ -368,23 +376,31 @@ export function useSendPipeline(options: UseSendPipelineOptions) {
     const conversation = options.activeConversation;
     const interaction = options.pendingInteraction;
     const answer = (answerOverride ?? options.interactionAnswer).trim();
-    if (!conversation || !interaction || !answer) {
+    const ownsInteraction = () => interactionOwner.current.conversationId === conversation?.id && interactionOwner.current.interaction === interaction;
+    if (!conversation || !interaction || !answer || interactionInFlight.current || !ownsInteraction()) {
       return;
     }
+    interactionInFlight.current = true;
+    setIsResponding(true);
     try {
       const response = await options.clientRef.current.sendInput(conversation.id, answer, options.isStreaming || options.loading, interaction.decisionId);
+      if (!ownsInteraction()) return;
       options.setPendingInteraction((current) => current === interaction ? null : current);
       options.setInteractionAnswer('');
       if (response.mode === 'message') {
         await sendMessageNow({ content: answer });
       }
     } catch (error) {
-      options.onError(error);
+      if (ownsInteraction()) options.onError(error);
+    } finally {
+      interactionInFlight.current = false;
+      setIsResponding(false);
     }
   }
 
   return {
     isSending,
+    isResponding,
     sendDraft,
     drainNextQueuedMessage,
     submitInteraction,

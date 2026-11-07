@@ -286,7 +286,21 @@ account log box. Review `test/cortexDesktopSelection.test.ts`,
 `test/cortexProfileEditor.test.ts`, `test/profileMetadataCache.test.ts` and the
 expanded `scripts/probe-cortex-auth.ts` for native responsive
 profile/catalog/fresh-chat drift. This scoped desktop probe does not certify the
-remaining P7 interactions/queues/usage/mobile cases or C26's human handoff.
+broader P7 decisions/queues/usage/mobile cases or C26's human handoff.
+
+P7 C43 decision controls use shared `planRevision` role eligibility on conversation
+metadata in both clients. Preserve rendered decision IDs, synchronous duplicate
+exclusion and newer interaction/draft ownership across delayed replies/errors.
+The verified native 1.2.35 planning-entry approve/decline schema may enter planning
+in tool-enabled chat; it never grants finished-plan execution. Headless/restricted
+or unknown entry stays denied. Rejection can end in text or another native gate;
+never synthesize a permission card or resend a prompt. Review
+`test/cortexInteractionUi.test.ts`, the interaction/store/mobile pipeline suites,
+and `plan-entry.json`; run opt-in `scripts/probe-cortex-interactions.ts` for native
+desktop/mobile questions/revision/rejection/approval drift. Its isolated PM2
+fixture uses production assets and shared terminal auth. Do not run asset-mutating
+full Jest concurrently with native browser checks. C26, C44 queue/reconnect,
+usage/full mobile and platform acceptance remain independent.
 
 # Server Management
 
