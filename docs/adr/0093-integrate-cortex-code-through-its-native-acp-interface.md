@@ -52,6 +52,11 @@ affects:
   - src/services/cliProfileAuthService.ts
   - src/routes/chat/cliProfileRoutes.ts
   - web/AgentCockpitWeb/src/cortexSetup.jsx
+  - web/AgentCockpitWeb/src/screens/settingsScreen.jsx
+  - web/AgentCockpitWeb/src/chat/composerPicks.jsx
+  - web/AgentCockpitWeb/src/profileCatalog.js
+  - web/AgentCockpitWeb/src/useProfileBackends.js
+  - web/AgentCockpitWeb/src/api.js
   - scripts/probe-cortex-auth.ts
   - src/services/backends/cortex.ts
   - src/services/backends/cortexPlugin.ts
@@ -149,6 +154,14 @@ leave operational state useful and must precede destructive synthesis rebuild.
 Do not rewrite import bundles or erase credentials/configuration to implement
 eligibility. Preserve unavailable UI selections as disabled rows requiring an
 explicit user choice, with shared projection outside large screen entrypoints.
+
+Keep profile-specific browser catalogs owned by request generation and persisted
+profile identity, with shared projection outside Settings and composer entrypoints.
+Invalidate on profile/auth saves; a late response must not reinstate a previous
+connection's model list. Configuration, catalog discovery and authenticated
+inference are separate evidence. Keep shared remote OAuth in its dedicated panel
+instead of the generic account log box, and keep isolated/custom terminal auth
+explicit. Lazy-load the focused composer selectors to preserve initial-load size.
 
 Service wrappers must also honor native execution ownership. Add server-only
 adapter policies for automatic one-shot retry and required processor image

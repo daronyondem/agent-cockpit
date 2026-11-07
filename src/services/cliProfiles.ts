@@ -1,5 +1,6 @@
 import type { CliCommunicationProtocol, CliHarness, CliProfile, Settings } from '../types';
-import { parseCortexCodeProfileConfig } from '../contracts/cliProfiles';
+import { hasRequiredCliProfileConfig } from '../contracts/cliProfiles';
+export { hasRequiredCliProfileConfig } from '../contracts/cliProfiles';
 
 export const SUPPORTED_CLI_HARNESSES: CliHarness[] = ['claude-code', 'kiro', 'codex', 'opencode', 'grok-build', 'cortex-code'];
 export const CLAUDE_CODE_INTERACTIVE_BACKEND_ID = 'claude-code-interactive';
@@ -60,13 +61,6 @@ export function isSetupAccountCliProfile(profile: Pick<CliProfile, 'id' | 'harne
   if (profile.harness !== 'claude-code' && profile.harness !== 'codex' && profile.harness !== 'grok-build' && profile.harness !== 'cortex-code') return false;
   return profile.id === `setup-${profile.harness}-account`
     || profile.id.startsWith(`setup-${profile.harness}-account-`);
-}
-
-/** Configuration completeness only; this does not imply CLI installation or authentication. */
-export function hasRequiredCliProfileConfig(profile: CliProfile): boolean {
-  if (profile.harness !== 'cortex-code') return true;
-  try { parseCortexCodeProfileConfig(profile.cortexCode); return true; }
-  catch { return false; }
 }
 
 export function cliProfileIdForBackend(backend: string | undefined | null): string | undefined {

@@ -41,7 +41,8 @@ export class CortexCodeAdapter extends BaseBackendAdapter {
   }
 
   get metadata(): BackendMetadata {
-    return { id: 'cortex-code', label: 'Cortex Code (CoCo)', icon: null, models: [],
+    return { id: 'cortex-code', label: 'Cortex Code (CoCo)',
+      icon: '<svg xmlns="http://www.w3.org/2000/svg" width="28" height="28" viewBox="0 0 28 28"><rect width="28" height="28" rx="7" fill="#1679a7"/><path d="M14 5v18M6.2 9.5l15.6 9M6.2 18.5l15.6-9M11 7l3 3 3-3M11 21l3-3 3 3" stroke="white" stroke-width="2" fill="none"/></svg>', models: [],
       capabilities: { thinking: true, planMode: true, planRevision: true, agents: false,
         toolActivity: true, userQuestions: true, stdinInput: false, goals: false,
         oneShot: { restrictedText: false, toolEnabled: true, sequential: true },

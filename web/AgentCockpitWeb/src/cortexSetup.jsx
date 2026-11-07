@@ -67,7 +67,7 @@ export function CortexSetup({ onProfileSaved }){
     }}>Cortex Code (CoCo) setup</button>
     {open ? <div className="cortex-setup-body">
       <p>Use the Cortex Code CLI installed on this server and share its terminal login. Each login check makes a small inference request.</p>
-      <p className="u-dim">Chat support is being implemented. Setup does not change your default Profile.</p>
+      <p className="u-dim">Save a named connection to use CoCo in chat. If the CLI is missing, install Cortex Code on this server, then check login here. Setup does not change your default Profile. Goals, agents, steering and tool-free Memory are unavailable.</p>
       <div className="cortex-setup-row">
         <label>Snowflake connection<select value={connection} disabled={busy || running} onChange={event => setConnection(event.target.value)}>
           <option value="">Select a connection</option>

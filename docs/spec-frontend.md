@@ -379,7 +379,7 @@ After a Worktrees enable or disable succeeds, `workspaceSettings.jsx` refreshes 
 
   **Backwards compatibility (historical transcripts):** messages saved before the typed queue existed may carry `[Uploaded files: /abs/path1, /abs/path2]` trailing text on `Message.content` (user messages). The renderer feeds these through `StreamStore.parseUploadedFilesTag(content)`, which strips the tag and returns `{ content, attachments }` where each `AttachmentMeta` has `name` + `path` + `kind` (inferred from extension via `attachmentKindFromPath`). `size`/`meta` are unavailable for legacy entries — the `md` chip shows only the filename and kind badge in that case. Users receive the same typed-chip UX for old transcripts at read-time; the on-disk bytes are untouched.
 
-### Cortex Code setup preview
+### Cortex Code profiles and setup
 
 Settings → Memory excludes CoCo from new processor choices through
 `screens/processorProfiles.ts`, which uses the shared restrictedText eligibility
@@ -410,13 +410,51 @@ URL/deadline and complete remote redirect submission. The panel polls once per
 second, recovers active jobs after reload, ignores older update timestamps,
 clears pasted redirect fields and removes terminal handoff URLs. No OAuth data
 is stored in localStorage or settings. Settings merges only the returned setup
-profile into its current draft; CoCo's generic profile editor/chat selectors
-remain a later integration phase. Setup leaves defaults unchanged. See
+profile into its current draft. Setup leaves defaults unchanged. See
 [CoCo P4](spec-cortex-code.md#shared-connection-and-authentication-setup-p4) for
 all transport/state rules. The mobile PWA gains no administrative setup flow;
 the desktop browser panel wraps at narrow viewports.
 
 The dedicated lazy setup chunk has an 8 KiB JS budget; the existing 260 KiB
-index limit is unchanged. Total JS budget is 910 KiB (previously 900 KiB) to
-accommodate the new API/setup code without eagerly loading the setup component
-in normal chat. CSS retains its existing 230 KiB aggregate limit.
+index limit is unchanged. C42 raises the total JS budget from 910 to 912 KiB for
+profile editing and metadata ownership; measured output is approximately
+911.3 KiB. Individual Settings (80 KiB), workspace (95 KiB) and setup limits stay
+unchanged. CSS retains its existing 230 KiB aggregate limit.
+
+CoCo appears in the standard Harness selector and profile cards, including
+profiles created by shared setup. Its executable default is `cortex`; its icon
+is supplied by backend metadata. The editor supports name, enable/delete,
+command override, named `cortexCode.connection`, and explicit account home/env
+overrides. Switching from another harness into CoCo selects account mode and
+clears that harness's auth-home/env; switching away removes `cortexCode`.
+`cliConfigDirField` describes `SNOWFLAKE_HOME`, with blank meaning shared terminal
+login. CoCo's generic account Authenticate/log box is hidden: the setup panel
+owns shared remote OAuth. Isolated homes/custom commands use terminal auth;
+the editor does not imply that setup verified those configurations. Connection
+edits are drafts until Save; model discovery uses the persisted profile.
+Incomplete profiles cannot be selected as a new default or composer choice;
+a stored incomplete composer/default selection stays visible and disabled.
+
+`profileCatalog.js` owns shared backend identity, scoped catalog selection,
+model labels/defaults and effort projection. A catalog whose backend ID differs
+from the profile's harness/protocol is discarded. Existing shell/chat helper
+exports remain compatibility facades. `useProfileBackends.js` owns view-local
+catalogs for global/workspace Settings and composer picks: in-flight loads are
+deduplicated, failed discovery is remembered as null, and the settings-saved
+event invalidates catalogs and pending ownership. Old completions and unmounted
+view completions cannot populate the current generation. Composer cache keys
+also include the selected profile snapshot, so a changed connection under the
+same ID cannot retain an old catalog. Keys stay in memory and are never logged
+or persisted. The API cache separately checks promise identity: an invalidated
+success returns null instead of caching stale metadata; an old failure cannot
+delete a newer pending request.
+
+`chat/composerPicks.jsx` owns the Profile/model/effort/mode/tier controls, lazy
+loaded by `ChatComposer` with an empty picks fallback. CoCo shows loading or
+unavailable-model guidance without exposing native errors. It preserves saved
+model/effort during pending/empty/failed discovery and retains an unknown saved
+model as a disabled row alongside available replacements. It never infers login
+success from a model list. Claude mode and Codex speed remain harness-specific;
+CoCo goals, agents, steering and restricted Memory remain unavailable. Native
+browser acceptance for interactions, queues, usage and the mobile PWA is tracked
+separately under the remaining P7 tasks.

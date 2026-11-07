@@ -67,6 +67,7 @@ describe('Cortex chat adapter ownership and recovery', () => {
     expect((await adapter.getMetadata()).models).toEqual([]);
     expect((await adapter.getMetadata({ cliProfile: options.cliProfile })).models?.some(model => model.id === options.model)).toBe(true);
     expect(adapter.metadata.models).toEqual([]);
+    expect(adapter.metadata.icon).toMatch(/^<svg /);
     expect(await adapter.generateSummary([], 'Saved summary')).toBe('Saved summary');
     expect(await adapter.generateTitle('a title', 'Fallback')).toBe('Fallback');
     await expect(adapter.runOneShot('do work')).rejects.toThrow('zero-tool');

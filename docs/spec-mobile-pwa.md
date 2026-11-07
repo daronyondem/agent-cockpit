@@ -5,11 +5,18 @@ without adding a mobile runtime choice or UI flow. No PWA metadata, assets or
 administration behavior changes. See [CoCo foundations](spec-cortex-code.md);
 native mobile chat acceptance remains a later phase.
 
+P7 C42 updates the desktop/shared responsive setup and Settings profile editor,
+desktop catalog ownership and the backend-supplied CoCo icon. Mobile receives
+the icon through existing metadata. No PWA administration screen, endpoint,
+manifest, service worker, asset source or protocol change is introduced. The
+desktop's profile-catalog hook is not imported by mobile; native mobile model/
+interaction/usage/reconnect acceptance remains C43–C47, including C46.
+
 P6 C33/C34/C36 adds server-side tool-enabled sequential execution and verified
 PNG OCR through the existing endpoint. No new PWA settings, assets, metadata or
 administrative screen is added. Mobile consumers retain the shared profile-local
 model/media checks; full native mobile acceptance and remaining selection parity
-are C41/P7. Memory processor selection is a desktop administrative control;
+are P7. Memory processor selection is a desktop administrative control;
 the backend rejects unsupported CoCo restricted calls regardless of client.
 
 P6 C37/C38 adds server-side KB conversion/digestion/dreaming certification.

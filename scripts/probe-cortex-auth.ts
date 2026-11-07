@@ -34,7 +34,7 @@ async function main(): Promise<void> {
   const app = `cortex-auth-probe-${process.pid}`;
   const config = path.join(root, 'ecosystem.config.cjs');
   await fs.writeFile(config, `module.exports=${JSON.stringify({ apps: [{ name: app, cwd, script: 'server.ts', interpreter: process.execPath,
-    node_args: ['--import', 'tsx'], autorestart: false, out_file: path.join(root, 'server-out.log'), error_file: path.join(root, 'server-error.log'),
+    node_args: ['--import', 'tsx'], autorestart: false, kill_timeout: 20000, out_file: path.join(root, 'server-out.log'), error_file: path.join(root, 'server-error.log'),
     env: { NODE_ENV: 'test', PORT: port, BASE_PATH: '', AGENT_COCKPIT_DATA_DIR: data, AUTH_DATA_DIR: path.join(data, 'auth'),
       DEFAULT_WORKSPACE: workspace, SESSION_SECRET: crypto.randomBytes(32).toString('hex'), WEB_BUILD_MODE: 'skip' },
   }] })};\n`, { mode: 0o600 });
@@ -76,6 +76,7 @@ async function main(): Promise<void> {
     results.checkHttpStatus = check.status();
     results.checkStatus = checked.result?.status;
     results.checkAuthenticated = checked.result?.authenticated;
+    if (!checked.result?.authenticated) results.checkError = checked.result?.error || 'No successful authentication result.';
     assert.equal(checked.result?.authenticated, true, 'Native fresh-process check did not verify');
     await panel.getByRole('status').filter({ hasText: 'credentials and inference access verified from a fresh process' }).waitFor({ timeout: 120_000 });
     results.savedAuthFreshInference = true;
@@ -96,10 +97,62 @@ async function main(): Promise<void> {
     await page.setViewportSize({ width: 390, height: 844 });
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth), false, 'Setup must fit a narrow browser viewport');
     results.responsiveSetup = true;
+    results.stage = 'desktop-profile-editor';
+    await page.setViewportSize({ width: 1280, height: 900 });
+    results.stage = 'desktop-default-selection';
+    await page.getByRole('button', { name: 'CLI Profiles', exact: true }).click();
+    const card = page.locator('.cli-card').first();
+    if (await card.locator('.cli-card-head').getAttribute('aria-expanded') !== 'true') await card.locator('.cli-card-head').click();
+    assert.equal(await card.getByLabel(/^Harness/).inputValue(), 'cortex-code');
+    assert.equal(await card.getByLabel(/^Snowflake connection/).inputValue(), connection);
+    assert.equal(await card.getByLabel(/^Command/).getAttribute('placeholder'), 'cortex');
+    assert.equal(await card.getByRole('button', { name: 'Authenticate', exact: true }).count(), 0, 'CoCo must use its owned shared-auth handoff');
+    await card.getByLabel('Name', { exact: true }).fill('CoCo desktop fixture');
+    await Promise.all([page.waitForResponse(response => response.url().endsWith('/chat/settings') && response.request().method() === 'PUT'),
+      page.getByRole('button', { name: 'Save', exact: true }).click()]);
+    results.profileEditor = true;
+    await page.setViewportSize({ width: 390, height: 844 });
+    assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth), false, 'Profile fields must fit a narrow browser viewport');
+    results.responsiveProfileEditor = true;
+    await page.setViewportSize({ width: 1280, height: 900 });
+    await page.getByRole('button', { name: 'General', exact: true }).click();
+    await page.getByLabel(/^Default CLI profile/).selectOption(profile.id);
+    await page.getByLabel(/^Default model/).selectOption('claude-sonnet-4-6', { timeout: 120_000 });
+    await Promise.all([page.waitForResponse(response => response.url().endsWith('/chat/settings') && response.request().method() === 'PUT'),
+      page.getByRole('button', { name: 'Save', exact: true }).click()]);
+    results.stage = 'desktop-conversation';
+    const csrf = (await (await page.request.get(`${baseUrl}/api/csrf-token`)).json()).csrfToken;
+    const headers = { 'x-csrf-token': csrf };
+    assert.ok((await page.request.post(`${baseUrl}/api/chat/install/welcome-complete`, { headers, data: {} })).ok());
+    const created = await page.request.post(`${baseUrl}/api/chat/conversations`, { headers,
+      data: { title: 'CoCo desktop selection', workingDir: workspace, cliProfileId: profile.id, model: 'claude-sonnet-4-6', effort: 'low' } });
+    assert.ok(created.ok(), 'Desktop fixture conversation could not be created');
+    const conversation = await created.json();
+    await page.goto(`${baseUrl}/v2/`);
+    await page.getByLabel('Workspace filter').selectOption(conversation.workspaceId);
+    await page.locator('.sb-row').filter({ hasText: 'CoCo desktop selection' }).click();
+    const composer = page.locator('.composer');
+    assert.equal(await composer.getByLabel('CLI Profile', { exact: true }).inputValue(), profile.id);
+    await composer.getByLabel('Model', { exact: true }).selectOption('claude-sonnet-4-6', { timeout: 120_000 });
+    await composer.getByLabel('Adaptive reasoning effort', { exact: true }).selectOption('low');
+    for (const label of ['Claude Code mode', 'Codex service tier']) assert.equal(await composer.getByLabel(label, { exact: true }).count(), 0);
+    assert.equal(await composer.locator('.goal-toggle').count(), 0, 'CoCo must not expose goal mode');
+    assert.ok(await composer.locator('.backend-inline-icon svg').count(), 'CoCo profile icon is missing');
+    results.desktopCatalogAndControls = true;
+    results.stage = 'desktop-inference';
+    const nonce = `C42-${crypto.randomBytes(6).toString('hex')}`;
+    await composer.locator('textarea').fill(`Reply with exactly ${nonce} and no other text.`);
+    await composer.getByRole('button', { name: 'Send', exact: true }).click();
+    await page.locator('.msg-agent').filter({ hasText: nonce }).waitFor({ timeout: 120_000 });
+    await composer.getByRole('button', { name: 'Send', exact: true }).waitFor({ timeout: 120_000 });
+    results.desktopFreshInference = true;
     const persisted = await fs.readFile(path.join(data, 'chat/settings.json'), 'utf8');
     assert.equal(/code_challenge|redirectUrl|authorizationUrl|oauth\/authorize/.test(persisted), false, 'Handoff secrets must never enter settings');
     results.noPersistedHandoff = true;
-    process.stdout.write('PASS native saved auth, fresh inference, UI jobs, cancellation/retry and responsive setup\n');
+    process.stdout.write('PASS native saved auth, UI jobs, responsive setup/profile editing, desktop catalogs/controls and fresh inference\n');
+  } catch (error) {
+    await fs.writeFile(path.join(root, 'failure.txt'), error instanceof Error ? error.stack || error.message : 'Probe failed', { mode: 0o600 });
+    throw error;
   } finally {
     await browser?.close(); pm2(['delete', app]);
     await fs.writeFile(path.join(root, 'report.json'), JSON.stringify({ ...report, finishedAt: new Date().toISOString() }, null, 2), { mode: 0o600 });

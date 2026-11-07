@@ -1,6 +1,13 @@
 import type { CortexCodeProfileConfig } from '../types';
 import { asRecord, contractError } from './validation';
 
+/** Configuration only; installation and authentication require separate checks. */
+export function hasRequiredCliProfileConfig(profile: { harness?: string; cortexCode?: unknown }): boolean {
+  if (profile.harness !== 'cortex-code') return true;
+  try { parseCortexCodeProfileConfig(profile.cortexCode); return true; }
+  catch { return false; }
+}
+
 /** Shared request/persistence validation; error messages never include field values. */
 export function parseCortexCodeProfileConfig(value: unknown): CortexCodeProfileConfig {
   const config = asRecord(value, 'cortexCode must be an object with a connection name');

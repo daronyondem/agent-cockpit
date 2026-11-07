@@ -1,3 +1,4 @@
+import { backendIdForProfile, backendForProfile, modelsForProfile, modelDisplayLabel, defaultModelId, effortLevelsForProfile, defaultEffortFor } from '../profileCatalog.js';
 import { processorProfileForSetting as profileForSetting } from './processorProfiles';
 import React from 'react';
 import { AgentApi } from '../api.js';
@@ -7,6 +8,8 @@ import { useDialog } from '../dialog.jsx';
 import { useToasts } from '../toast.jsx';
 import { CliUpdateStore } from '../cliUpdateStore.js';
 import { cliConfigDirField } from './cliProfileConfigDir.js';
+import { useProfileBackends } from '../useProfileBackends.js';
+import { hasRequiredCliProfileConfig } from '../../../../src/contracts/cliProfiles';
 const CortexSetup = React.lazy(() => import('../cortexSetup.jsx').then(mod => ({ default: mod.CortexSetup })));
 const LazyProcessorProfileSelect = React.lazy(() => import('./memoryProcessorSelect.jsx').then(mod => ({ default: mod.ProcessorProfileSelect })));
 function ProcessorProfileSelect(props){
@@ -46,13 +49,8 @@ const CLI_HARNESS_OPTIONS = [
   { id: 'kiro', label: 'Kiro' },
   { id: 'opencode', label: 'OpenCode' },
   { id: 'grok-build', label: 'Grok Build' },
+  { id: 'cortex-code', label: 'Cortex Code (CoCo)' },
 ];
-
-function backendIdForProfile(profile){
-  if (!profile) return null;
-  if (profile.harness === 'claude-code' && profile.protocol === 'interactive') return 'claude-code-interactive';
-  return profile.harness;
-}
 
 function protocolLabel(profile){
   if (!profile || profile.harness !== 'claude-code') return null;
@@ -97,6 +95,7 @@ function normalizeUiProfile(profile){
   } else {
     delete next.opencode;
   }
+  if (next.harness !== 'cortex-code') delete next.cortexCode;
   return next;
 }
 
@@ -182,7 +181,7 @@ function bedrockEnvWarning(profile){
 }
 
 function cliDefaultCommand(harness){
-  return harness === 'codex' ? 'codex' : harness === 'kiro' ? 'kiro-cli' : harness === 'opencode' ? 'opencode' : harness === 'grok-build' ? 'grok' : 'claude';
+  return harness === 'codex' ? 'codex' : harness === 'kiro' ? 'kiro-cli' : harness === 'opencode' ? 'opencode' : harness === 'grok-build' ? 'grok' : harness === 'cortex-code' ? 'cortex' : 'claude';
 }
 
 function defaultCliProfileName(harness){
@@ -199,6 +198,7 @@ function cliSelfConfiguredHome(harness){
   if (harness === 'claude-code') return '~/.claude';
   if (harness === 'opencode') return '~/.local/share/opencode and ~/.config/opencode';
   if (harness === 'grok-build') return '~/.grok';
+  if (harness === 'cortex-code') return '~/.snowflake';
   return 'the server Kiro CLI account';
 }
 
@@ -259,17 +259,7 @@ function modelsForBackend(backends, backendId){
   const b = (backends || []).find(b => b.id === backendId);
   return (b && Array.isArray(b.models)) ? b.models : [];
 }
-function modelDisplayLabel(modelOrId){
-  const raw = typeof modelOrId === 'string'
-    ? modelOrId
-    : String((modelOrId && (modelOrId.label || modelOrId.id)) || '');
-  return raw.startsWith('openrouter/') ? raw.slice('openrouter/'.length) : raw;
-}
-function defaultModelId(models){
-  if (!models || !models.length) return undefined;
-  const def = models.find(m => m.default);
-  return def ? def.id : models[0].id;
-}
+
 function effortLevelsForModel(backends, backendId, modelId){
   const models = modelsForBackend(backends, backendId);
   const m = models.find(x => x.id === modelId);
@@ -280,16 +270,7 @@ function backendIconFor(backends, backendId){
   const b = (backends || []).find(x => x.id === backendId);
   return (b && b.icon) || null;
 }
-function backendForProfile(backends, profileBackends, profile){
-  if (!profile) return null;
-  return (profileBackends && profileBackends[profile.id])
-    || (backends || []).find(b => b.id === backendIdForProfile(profile))
-    || null;
-}
-function modelsForProfile(backends, profileBackends, profile){
-  const b = backendForProfile(backends, profileBackends, profile);
-  return (b && Array.isArray(b.models)) ? b.models : [];
-}
+
 function backendSupportsOneShotInput(backend, modality){
   const transports = backend && backend.capabilities && backend.capabilities.oneShotMediaInput
     ? backend.capabilities.oneShotMediaInput[modality]
@@ -313,20 +294,11 @@ function providerOptionsFromModels(models){
   }
   return Array.from(seen.values());
 }
-function effortLevelsForProfile(backends, profileBackends, profile, modelId){
-  const models = modelsForProfile(backends, profileBackends, profile);
-  const m = models.find(x => x.id === modelId);
-  if (!m || !Array.isArray(m.supportedEffortLevels)) return [];
-  return m.supportedEffortLevels;
-}
+
 function activeCliProfiles(settings){
   return Array.isArray(settings && settings.cliProfiles)
     ? settings.cliProfiles.filter(p => p && !p.disabled)
     : [];
-}
-function defaultEffortFor(levels){
-  if (!levels || !levels.length) return undefined;
-  return levels.includes('high') ? 'high' : levels[0];
 }
 
 function memoryProcessorStatusLabel(status){
@@ -421,7 +393,7 @@ export function SettingsScreen({ onClose, initialTab, onOpenWorkspaceSettings })
   const [tab, setTab] = React.useState(() => SETTINGS_TABS.some(t => t.id === initialTab) ? initialTab : 'general');
   const [settings, setSettings] = React.useState(null);
   const [backends, setBackends] = React.useState([]);
-  const [profileBackends, setProfileBackends] = React.useState({});
+  const [profileBackends, loadProfileBackend] = useProfileBackends();
   const [loading, setLoading] = React.useState(true);
   const [loadError, setLoadError] = React.useState(null);
   const [saving, setSaving] = React.useState(false);
@@ -453,16 +425,6 @@ export function SettingsScreen({ onClose, initialTab, onOpenWorkspaceSettings })
       return { ...prev, ...u };
     });
   }
-
-  const loadProfileBackend = React.useCallback((profileId) => {
-    if (!profileId || profileBackends[profileId]) return;
-    AgentApi.getCliProfileMetadata(profileId)
-      .then((backend) => {
-        if (!backend) return;
-        setProfileBackends(prev => ({ ...prev, [profileId]: backend }));
-      })
-      .catch(() => {});
-  }, [profileBackends]);
 
   const canSave = !!settings && !loading && !saving && !cliValidationError;
 
@@ -574,7 +536,7 @@ function GeneralTab({ settings, backends, profileBackends, loadProfileBackend, o
      so we never carry a model id into a backend that doesn't support it. */
   function onProfileChange(v){
     const profile = profiles.find(p => p.id === v);
-    if (!profile) return;
+    if (!profile || !hasRequiredCliProfileConfig(profile)) return;
     const nextBackend = backendIdForProfile(profile);
     const m = modelsForProfile(backends, profileBackends, profile);
     const newModel = defaultModelId(m);
@@ -621,7 +583,7 @@ function GeneralTab({ settings, backends, profileBackends, loadProfileBackend, o
         <Field label="Default CLI profile">
           <select value={selectedProfile ? selectedProfile.id : ''} onChange={(e) => onProfileChange(e.target.value)}>
             {!selectedProfile ? <option value="">Select a profile</option> : null}
-            {profiles.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+            {profiles.map(p => <option key={p.id} value={p.id} disabled={!hasRequiredCliProfileConfig(p)}>{p.name}</option>)}
           </select>
         </Field>
       ) : (
@@ -950,7 +912,7 @@ function CliProfilesTab({ settings, backends, onPatch, onSave, saving, onValidat
         harness,
         name: usesGeneratedCliProfileName(current) ? defaultCliProfileName(harness) : current.name,
         protocol: harness === 'claude-code' ? (current.protocol || 'standard') : undefined,
-        authMode: (harness === 'kiro' || harness === 'opencode') ? 'server-configured' : current.authMode,
+        authMode: harness === 'cortex-code' ? 'account' : (harness === 'kiro' || harness === 'opencode') ? 'server-configured' : current.authMode,
         opencode: harness === 'opencode' ? (current.opencode || {}) : undefined,
       };
       if (harness === 'kiro' || harness === 'opencode') {
@@ -958,6 +920,7 @@ function CliProfilesTab({ settings, backends, onPatch, onSave, saving, onValidat
         next.configDir = undefined;
         next.env = undefined;
       }
+      if (harness === 'cortex-code') { next.configDir = undefined; next.env = undefined; }
       return next;
     });
   }
@@ -1214,7 +1177,7 @@ function CliProfilesTab({ settings, backends, onPatch, onSave, saving, onValidat
       <div className="cli-list">
         {profiles.length === 0 ? (
           <div className="settings-empty u-dim">No CLI profiles are configured yet.</div>
-        ) : profiles.filter(profile => profile.harness !== 'cortex-code').map(profile => {
+        ) : profiles.map(profile => {
           const isKiro = profile.harness === 'kiro';
           const isOpenCode = profile.harness === 'opencode';
           const isClaudeCode = profile.harness === 'claude-code';
@@ -1383,6 +1346,9 @@ function CliProfilesTab({ settings, backends, onPatch, onSave, saving, onValidat
                       </Field>
                     ) : null}
                   </div>
+                  {profile.harness === 'cortex-code' ? <Field label="Snowflake connection" hint="Save before loading models; check shared login in Cortex setup above.">
+                    <input className="inp" value={profile.cortexCode?.connection || ''} onChange={event => patchProfile(profile.id, { cortexCode: event.target.value ? { connection: event.target.value } : undefined })}/>
+                  </Field> : null}
                   <div className="cli-profile-grid">
                     <Field label="Setup mode" hint={isKiro ? 'Kiro is self-configured only for now.' : isOpenCode ? 'OpenCode provider credentials are managed by OpenCode for now.' : undefined}>
                       <div className="settings-select-wrap">
@@ -1500,7 +1466,7 @@ function CliProfilesTab({ settings, backends, onPatch, onSave, saving, onValidat
                         />
                         {envError ? <span className="settings-field-hint u-err">{envError}</span> : null}
                       </Field>
-                      <div className="cli-auth-box">
+                      {profile.harness !== 'cortex-code' ? <div className="cli-auth-box">
                         <div className="cli-auth-head">
                           <div>
                             <b>Account authentication</b>
@@ -1531,7 +1497,7 @@ function CliProfilesTab({ settings, backends, onPatch, onSave, saving, onValidat
                           ) : null}
                         </div>
                         {authText ? <pre className="cli-auth-log">{authText}</pre> : null}
-                      </div>
+                      </div> : <p className="settings-field-hint">Cortex setup uses shared terminal login. For an isolated Snowflake home or custom executable, authenticate in its terminal.</p>}
                     </>
                   ) : (
                     <>

@@ -2129,6 +2129,16 @@ Fetches and caches the OpenAI Codex (ChatGPT) account snapshot — plan tier (Pl
 - Any RPC error message verbatim (e.g. `'auth required'`, `'invalid params'`).
 - Any network/TLS error verbatim if `codex` itself fails to reach OpenAI's account API.
 
+## CLI profile configuration and metadata (CoCo C42)
+
+Configuration completeness is shared with desktop controls through
+`hasRequiredCliProfileConfig` in browser-safe `src/contracts/cliProfiles.ts`;
+`src/services/cliProfiles.ts` re-exports that helper for existing server callers.
+This retains the previous connection parser and runtime/default rules, without
+treating configuration or model discovery as successful authentication. CoCo
+metadata supplies its inline SVG icon to desktop/mobile; no new execution role
+is enabled by the C42 client integration.
+
 ## Processor selection preflight (CoCo C41)
 
 Global Memory/KB/Context and workspace Context selections preserve explicit

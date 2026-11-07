@@ -1,3 +1,4 @@
+import { backendIdForProfile as workspaceBackendIdForProfile, backendForProfile as workspaceBackendForProfile, modelsForProfile as workspaceModelsForProfile, modelDisplayLabel, defaultModelId as workspaceDefaultModelId, effortLevelsForProfile as workspaceEffortLevelsForProfile, defaultEffortFor as workspaceDefaultEffort } from './profileCatalog.js';
 import { processorProfileForSetting as workspaceProfileForSetting } from './screens/processorProfiles';
 import React from 'react';
 import { marked } from 'marked';
@@ -9,6 +10,7 @@ import { Tip } from './tooltip.jsx';
 import { useDialog } from './dialog.jsx';
 import { useToasts } from './toast.jsx';
 import { FolderPicker } from './folderPicker.jsx';
+import { useProfileBackends } from './useProfileBackends.js';
 const ProcessorProfileSelect = React.lazy(() => import('./screens/memoryProcessorSelect.jsx').then(mod => ({ default: mod.ProcessorProfileSelect })));
 
 /* ---------- WorkspaceSettingsPage — per-workspace settings screen. ---------- */
@@ -42,13 +44,6 @@ const ARCHIVE_MODE_LABELS = {
   history_only: 'Workspace Metadata and Conversations',
   file_snapshot: 'Full Backup with Workspace Folder',
 };
-
-function modelDisplayLabel(modelOrId){
-  const raw = typeof modelOrId === 'string'
-    ? modelOrId
-    : String((modelOrId && (modelOrId.label || modelOrId.id)) || '');
-  return raw.startsWith('openrouter/') ? raw.slice('openrouter/'.length) : raw;
-}
 
 function archiveModeLabel(mode){
   return ARCHIVE_MODE_LABELS[mode] || ARCHIVE_MODE_LABELS.history_only;
@@ -349,43 +344,6 @@ const MEMORY_STATUS_LABELS = {
 };
 const MEMORY_ALL_STATUSES = 'active,redacted,superseded,deleted';
 
-
-function workspaceBackendIdForProfile(profile){
-  if (!profile) return null;
-  if (profile.harness === 'claude-code' && profile.protocol === 'interactive') return 'claude-code-interactive';
-  return profile.harness;
-}
-
-function workspaceBackendForProfile(backends, profileBackends, profile){
-  if (!profile) return null;
-  return (profileBackends && profileBackends[profile.id])
-    || (backends || []).find(b => b.id === workspaceBackendIdForProfile(profile))
-    || null;
-}
-
-function workspaceModelsForProfile(backends, profileBackends, profile){
-  const b = workspaceBackendForProfile(backends, profileBackends, profile);
-  return (b && Array.isArray(b.models)) ? b.models : [];
-}
-
-function workspaceDefaultModelId(models){
-  const def = (models || []).find(m => m.default);
-  return (def || (models || [])[0] || {}).id;
-}
-
-function workspaceEffortLevelsForProfile(backends, profileBackends, profile, modelId){
-  const models = workspaceModelsForProfile(backends, profileBackends, profile);
-  const m = models.find(x => x.id === modelId);
-  if (!m || !Array.isArray(m.supportedEffortLevels)) return [];
-  return m.supportedEffortLevels;
-}
-
-function workspaceDefaultEffort(levels){
-  if (!levels || !levels.length) return undefined;
-  return levels.includes('high') ? 'high' : levels[0];
-}
-
-
 export function WorkspaceSettingsPage({ hash, label, initialTab, initialWorkspaceContextSection, initialRoutineId, onOpenFiles, onOpenSettings, onClose }){
   const [tab, setTab] = React.useState(() => WS_SETTINGS_TABS.some(t => t.id === initialTab) ? initialTab : 'instructions');
   const [loading, setLoading] = React.useState(true);
@@ -442,7 +400,7 @@ export function WorkspaceSettingsPage({ hash, label, initialTab, initialWorkspac
   const [worktreeBusy, setWorktreeBusy] = React.useState(false);
   const [globalSettings, setGlobalSettings] = React.useState({});
   const [backends, setBackends] = React.useState([]);
-  const [profileBackends, setProfileBackends] = React.useState({});
+  const [profileBackends, loadProfileBackend] = useProfileBackends();
   const dialog = useDialog();
   const toast = useToasts();
 
@@ -708,16 +666,6 @@ export function WorkspaceSettingsPage({ hash, label, initialTab, initialWorkspac
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps -- Telegram polling is keyed by pending connection status/code; the poll applier only consumes server responses.
   }, [hash, tab, routinesEnabled, routineTelegramConnect && routineTelegramConnect.status, routineTelegramConnect && routineTelegramConnect.code]);
-
-  const loadProfileBackend = React.useCallback((profileId) => {
-    if (!profileId || profileBackends[profileId]) return;
-    AgentApi.getCliProfileMetadata(profileId)
-      .then((backend) => {
-        if (!backend) return;
-        setProfileBackends(prev => ({ ...prev, [profileId]: backend }));
-      })
-      .catch(() => {});
-  }, [profileBackends]);
 
   if (!hash) return null;
 

@@ -906,6 +906,15 @@ See Section 4.6 (`CodexPlanUsageService`) for the spawn / RPC / kill semantics.
 
 Unauthenticated requests to `/api/*` return `401 { error: "Not authenticated" }` as JSON so the client can react without trying to parse an HTML login page. All other unauthenticated requests redirect to `/auth/login`.
 
+## Desktop profile metadata caching (CoCo C42)
+
+Desktop profile model catalogs still use `GET /cli-profiles/:profileId/metadata`
+against persisted settings; editing a connection does not introduce a draft
+metadata endpoint. C42 changes browser cache ownership only: settings/auth-save
+invalidation and promise/generation checks suppress stale catalogs. A returned
+catalog is not authentication evidence. Wire shapes and status codes stay the
+same; see [desktop controls](spec-cortex-code.md#desktop-profile-and-catalog-controls-p7-c42).
+
 ## Processor role validation
 
 Existing processor endpoints also enforce registered static one-shot roles

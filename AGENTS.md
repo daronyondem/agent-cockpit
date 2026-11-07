@@ -275,6 +275,19 @@ saved choices and require explicit changes. Review
 Memory/dreaming suites and full-bundle import coverage when changing these rules.
 Unset defaults/legacy migrations and strict zero-tool Memory gates remain intact.
 
+P7 C42 desktop profile/catalog projection lives in `profileCatalog.js`, catalog
+ownership in `useProfileBackends.js`, and lazy composer controls in
+`chat/composerPicks.jsx`. Settings/auth saves invalidate catalogs; retain pending
+request generation checks in both the hook and API cache. Same-ID connection
+changes and late/unmounted completions must not restore another catalog. Preserve
+saved CoCo model/effort through unavailable discovery; discovery is not auth proof.
+Keep CoCo remote OAuth in the dedicated setup panel rather than the generic
+account log box. Review `test/cortexDesktopSelection.test.ts`,
+`test/cortexProfileEditor.test.ts`, `test/profileMetadataCache.test.ts` and the
+expanded `scripts/probe-cortex-auth.ts` for native responsive
+profile/catalog/fresh-chat drift. This scoped desktop probe does not certify the
+remaining P7 interactions/queues/usage/mobile cases or C26's human handoff.
+
 # Server Management
 
 NEVER run `node server.js` directly. This causes orphan processes and port conflicts.

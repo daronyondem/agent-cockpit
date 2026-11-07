@@ -4,7 +4,8 @@
 
 **Implemented scope:** P1 profiles, P2 transport/runtime, and P3 internal
 events/interactions/models/usage/attachments/artifacts, P4 connection/auth
-setup, P5 durable chat/managed MCP, and P6 C33/C34/C36–C41 background workflows and processor selection,
+setup, P5 durable chat/managed MCP, P6 C33/C34/C36–C41 background workflows and processor selection,
+and P7 C42 desktop profile/catalog controls,
 November 7, 2026.
 Native acceptance baseline is CoCo 1.2.35, macOS arm64.
 **Runtime status:** `CortexCodeAdapter` is registered in `server.ts` for chat.
@@ -343,6 +344,47 @@ choices and explicit user changes. The existing native processor probe also
 passes with CoCo 1.2.35/macOS arm64: restricted rejection, sequential continuity,
 headless question failure, HTTP OCR/model gate, cancellation and fresh inference.
 Strict zero-tool Memory, C26 and full native browser/PM2/platform gates stay open.
+
+## Desktop profile and catalog controls (P7 C42)
+
+CoCo is available in the standard desktop Harness selector/profile cards and
+chat Profile picker. Cards expose name, enabled state/delete, executable override
+(`cortex` default), named Snowflake connection, and explicit account home/env.
+Changing into CoCo removes another harness's auth-home/env and selects account
+mode; changing away removes `cortexCode`. Empty connection configuration remains
+an incomplete draft, never an eligible new default/composer choice. Saved
+incomplete selections remain visible/disabled. Configuration completeness lives
+in browser-safe `hasRequiredCliProfileConfig` in `src/contracts/cliProfiles.ts`;
+the server profile service preserves its existing compatibility export.
+
+Setup continues to own shared terminal login. The generic account authentication
+box is hidden for CoCo so it cannot start a job without presenting the native
+generation-owned redirect UI. Explicit isolated homes and custom commands use
+terminal authentication and are not verified by a successful shared setup check.
+The setup panel explains manual installation when the CLI is unavailable and
+names unavailable goals/agents/steering/restricted Memory. Native installation/
+doctor actions and update management remain P8; no action is falsely advertised.
+Metadata supplies an inline blue snowflake-shaped icon to both clients.
+
+Desktop model/effort discovery uses the saved profile. The shared
+`useProfileBackends.js` owns catalog state for global/workspace Settings and lazy
+`chat/composerPicks.jsx`. It deduplicates active keys, stores failed discovery as
+null and invalidates all keys on settings-saved. Generation checks prevent old
+and unmounted view completions from restoring a catalog. Composer keys include
+the selected profile snapshot as well as ID; settings/auth-save events refresh
+even unchanged profile snapshots. The API cache independently checks pending
+promise identity so an invalidated success returns null and an old failure
+cannot remove a newer request. None of these in-memory keys are persisted/logged.
+Shared `profileCatalog.js` projects backend identity, matching scoped catalogs,
+models, labels, defaults and efforts; old shell/chat exports stay compatible.
+
+CoCo composer controls preserve saved model/effort while metadata is pending,
+empty or unavailable, display generic guidance, and retain an unavailable saved
+model as a disabled row alongside eligible replacements. Catalog discovery is
+never authentication evidence. Claude mode and Codex service tier remain
+specific to those harnesses; CoCo does not expose them or a goal-mode toggle.
+Role-gated processor controls remain governed by C41. Full question/plan,
+steering/queue/reconnect, usage and mobile acceptance remain C43–C47.
 
 ## Durable chat and managed MCP (P5)
 

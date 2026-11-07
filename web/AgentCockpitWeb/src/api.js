@@ -433,12 +433,13 @@
       .then(r => r.json())
       .then(data => {
         const backend = data && data.backend ? data.backend : null;
+        if (state._profileMetadataPromise.get(profileId) !== promise) return null;
         state._profileMetadataCache.set(profileId, backend);
         state._profileMetadataPromise.delete(profileId);
         return backend;
       })
       .catch(err => {
-        state._profileMetadataPromise.delete(profileId);
+        if (state._profileMetadataPromise.get(profileId) === promise) state._profileMetadataPromise.delete(profileId);
         throw err;
       });
     state._profileMetadataPromise.set(profileId, promise);

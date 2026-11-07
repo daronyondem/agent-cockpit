@@ -251,6 +251,17 @@ tool is unavailable.
   as disabled rows and emit only explicit eligible changes. Unset/legacy/default-
   chat behavior stays unchanged. The native processor/OCR/cancel/fresh probe passed;
   P7 full clients, C26, strict zero-tool Memory and platform acceptance remain open.
+  P7 C42 now exposes desktop CoCo Harness/profile/connection fields and a metadata
+  icon, with focused projection in `profileCatalog.js`, generation-owned catalogs
+  in `useProfileBackends.js` and lazy `chat/composerPicks.jsx` controls. Profile/auth
+  saves invalidate API/view caches; retain pending promise identity, same-ID
+  connection keys and late/unmounted completion checks. Keep saved model/effort
+  through unavailable discovery; catalogs do not establish auth. Remote OAuth
+  stays in the dedicated shared setup panel, with isolated/custom terminal auth
+  explicit. The expanded native auth/UI probe passed responsive editing/save,
+  native model/effort/icon/unsupported-control gates and fresh browser inference
+  on CoCo 1.2.35/macOS arm64. Its PM2 fixture allows 20 seconds for shutdown
+  draining. C26, strict Memory and C43–C47/full platform acceptance remain open.
   See the current CoCo spec and progress tracker.
 - Fresh installs should be provider-neutral. Do not imply Claude Code is
   configured when the user has not installed or authenticated it.

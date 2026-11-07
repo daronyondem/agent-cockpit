@@ -1,6 +1,6 @@
 # Cortex Code (CoCo) harness implementation plan
 
-**Status:** P0–P3 and P5 complete; P4 C21–C25 setup implemented, C26 actual remote-browser acceptance pending. P6 C33/C34/C36–C41 complete; P7 desktop/mobile acceptance is next. C35 remains conditional on G1.
+**Status:** P0–P3 and P5 complete; P4 C21–C25 setup implemented, C26 actual remote-browser acceptance pending. P6 C33/C34/C36–C41 complete; P7 C42 desktop profile/catalog controls complete; C43–C47 client acceptance is next. C35 remains conditional on G1.
 **Created:** 2026-11-05.
 **Planning baseline:** Agent Cockpit `0.4.166`, revision `11d14825e955f6c83364c3917558b4d3068a4bac`, plus the uncommitted CoCo research/guidance documents.
 **Native compatibility baseline:** Cortex Code `1.2.35`, distribution `1.2.35+191333.f82de3d91715`, macOS arm64.
@@ -34,8 +34,8 @@ Planning assumptions:
 - Deliver core chat before optional parity work. Unverified features remain
   explicitly unavailable; do not emulate native goals or silently reroute work
   to a different profile to make a selector appear functional.
-- C01–C25, C27–C34 and C36–C41 are complete as recorded below. C26, conditional
-  C35 and C42–C59 remain open and do not describe shipped support.
+- C01–C25, C27–C34 and C36–C42 are complete as recorded below. C26, conditional
+  C35 and C43–C59 remain open and do not describe shipped support.
 
 Track work as follows:
 
@@ -1025,7 +1025,7 @@ P6 C41 evidence (November 7, 2026; changes following `be4bbed`):
 
 ### P7 — Desktop and mobile
 
-- [ ] C42 — Wire desktop Harness/Profile/model/effort/connection fields, icon,
+- [x] C42 — Wire desktop Harness/Profile/model/effort/connection fields, icon,
   setup/doctor hints and metadata state. Verify stale request handling and all
   unsupported mode/tier/goal/processor controls.
 - [ ] C43 — Replace Grok-only plan revision checks with shared capability,
@@ -1044,6 +1044,48 @@ P6 C41 evidence (November 7, 2026; changes following `be4bbed`):
 - [ ] C47 — Run desktop/mobile behavior tests, typechecks, production builds
   and web bundle budget. Check auth URL/redirect copy-paste on narrow screens
   through the responsive setup page without storing secrets in browser state.
+
+P7 C42 evidence (November 7, 2026; changes following `c6707f2`):
+
+- Standard Settings now exposes CoCo Harness/profile cards, name/enable/delete,
+  executable, named connection and account home/env. Harness transitions clear
+  incompatible auth-home/config fields. Generic auth logs stay hidden for CoCo;
+  shared remote OAuth stays in its existing panel and isolated/custom commands
+  use terminal authentication. Setup explains manual installation and unsupported
+  features. Incomplete profiles are excluded from new default/composer choices
+  while saved incomplete selections remain visible/disabled. Metadata supplies
+  the icon to both clients.
+- Shared `profileCatalog.js` projection replaces duplicate profile/model/effort
+  lookups. `useProfileBackends.js` owns deduplicated catalogs and generation-safe
+  invalidation for Settings/workspace/composer; API promise identity additionally
+  rejects invalidated responses. Composer keys include profile configuration,
+  preserving model/effort through late/empty/failed discovery. Missing saved
+  models retain disabled rows with available replacements. Focused rendered
+  editor/selector/API tests replace the obsolete source-string metadata checks
+  and cover existing Claude Standard/Interactive, Codex and Grok controls.
+- The expanded opt-in `scripts/probe-cortex-auth.ts` passed on CoCo 1.2.35/macOS
+  arm64/Node 26.0.0: existing saved-auth, protected remote access, cancel/retry,
+  responsive setup, actual editor/save/default selection, model/effort discovery,
+  icon, hidden mode/tier/goal controls and browser-sent fresh exact inference.
+  Private report `cockpit-cortex-auth-ui-TBZF6r/report.json` under system temp.
+  Earlier attempts exposed two fixture locator assumptions (exact form labels
+  and workspace display name), which were corrected; one auth check returned an
+  inconclusive result and was left failed without weakening verification.
+  No shared credentials were cleared. PM2 fixture shutdown allows twenty seconds
+  for native draining.
+- Composer selectors now lazy-load, with shared projections outside large
+  entrypoints. Measured JS is approximately 911.3 KiB; the aggregate budget
+  increases from 910 to 912 KiB for the new fields/ownership while Settings,
+  workspace, index and CSS caps stay unchanged. The Claude Interactive UI suite
+  was reviewed; no private protocol/version compatibility change is claimed.
+  No mobile administrative screen, manifest/service-worker or protocol changes
+  are added. C26, conditional C35 and C43–C59 remain independent.
+- Final coverage passed 164 suites/2,866 tests: 88.57% statements/lines, 76.49%
+  branches and 93.81% functions, above the unchanged floors. Backend/web/mobile
+  typechecks, zero-warning lint, maintainability, API spec drift, ADR lint and
+  rebuilt desktop/mobile production assets passed. Final desktop JS/CSS budget
+  measured 911.3/912 KiB and 202.3/230 KiB. C43 interaction controls are next;
+  19 implementation tasks remain unchecked.
 
 ### P8 — Installation, updates, migration, and platforms
 
@@ -1218,6 +1260,7 @@ At implementation time update only the relevant current specifications:
 | 2026-11-07 | P6 C39 complete; 22 tasks remain unchecked | Context workflow certification change following `c76bb63` | CoCo 1.2.35 / macOS arm64 / Node 26.0.0 | 159 suites / 2,824 tests passed; V8 88.49% lines, 76.13% branches, 93.8% functions; native scan/upload/config/maintenance/Memory/retention/schedules/stop/fresh inference passed. Required checks and rebuilt web/mobile assets/budget passed; shared auth retained. C26, conditional C35 and C40–C59 remain open |
 | 2026-11-07 | P6 C40 complete; 21 tasks remain unchecked | Routine workflow certification change following `17071bf` | CoCo 1.2.35 / macOS arm64 / Node 26.0.0 | 160 suites / 2,833 tests passed; V8 88.54% lines, 76.34% branches, 93.8% functions; native chat/proposal/install/manual/scheduled files/state/stub outreach/retention/real minute-timeout/fresh inference passed. Required checks and rebuilt web/mobile assets/budget passed; shared auth retained. C26, conditional C35 and C41–C59 remain open |
 | 2026-11-07 | P6 C41 complete; 20 tasks remain unchecked | Processor-selection boundaries change following `be4bbed` | CoCo 1.2.35 / macOS arm64 / Node 26.0.0 | 161 suites / 2,851 tests passed; V8 88.58% lines, 76.48% branches, 93.81% functions; exact selection persistence/import, role preflights, failed-state ownership and rendered controls passed. Native sequential/headless/OCR/cancel/fresh-inference probe passed with shared auth. Required checks and rebuilt web/mobile assets/budget passed; C26, conditional C35 and C42–C59 remain open; P7 desktop/mobile acceptance next |
+| 2026-11-07 | P7 C42 complete; 19 tasks remain unchecked | Desktop profile/catalog integration following `c6707f2` | CoCo 1.2.35 / macOS arm64 / Node 26.0.0 | 164 suites / 2,866 tests passed; V8 88.57% lines, 76.49% branches, 93.81% functions. Native PM2 auth/editor/responsive/save/default/catalog/effort/icon/hidden controls/browser inference passed. All required checks and rebuilt web/mobile assets/budget passed; shared auth retained. C26, conditional C35 and C43–C59 remain open; C43 interactions next |
 
 ## 13. References
 
