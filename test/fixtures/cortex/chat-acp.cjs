@@ -50,6 +50,17 @@ readline.createInterface({ input: process.stdin }).on('line', line => {
         sessionId, toolCall: { toolCallId: 'native-tool', title: 'Choose a fixture color', kind: 'other' },
         options: [{ optionId: 'blue', name: 'Blue', kind: 'allow_once' }, { optionId: 'green', name: 'Green', kind: 'allow_once' }],
         _meta: { questionIndex: 0, totalQuestions: 1 } } });
+      if (process.env.CORTEX_FIXTURE_CONTEXT_MODE && text.startsWith('# Workspace Context')) {
+        const mode = process.env.CORTEX_FIXTURE_CONTEXT_MODE;
+        const directory = text.match(/^Workspace Context markdown folder: (.+)$/m)[1];
+        const section = text.split('## Memory Inbox Files\n')[1] || '';
+        const entries = [...section.matchAll(/^- ([^\n]+\.md): (.+)$/gm)];
+        fs.writeFileSync(path.join(directory, 'fixture-context.md'), '# Fixture Context\nCONTEXT_FIXTURE_UPDATED\n');
+        if (mode === 'missing-actions') return finish('Updated fixture-context.md.');
+        const acceptedMemoryFiles = mode === 'unknown-actions' ? ['notes/unknown.md'] : entries.map(entry => entry[1]);
+        const block = '```workspace-context-memory-actions\n' + JSON.stringify({ acceptedMemoryFiles }) + '\n```';
+        return finish('Updated fixture-context.md.\n' + (entries.length ? block + (mode === 'duplicate-actions' ? '\n' + block : '') : ''));
+      }
       const remember = text.match(/fixture-remember:(\w+)/);
       if (remember) { const state = read(); state[sessionId].nonce = remember[1]; write(state); }
       if (text.includes('fixture-deliver')) {

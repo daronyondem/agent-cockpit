@@ -17,6 +17,11 @@ Prepared CoCo PNG siblings use the existing KB media/Markdown routes; originals
 remain available. No PWA UI, metadata, asset source or administration changes
 are required. Native mobile/browser compatibility remains a separate gate.
 
+P6 C39 certifies the existing server-side Workspace Context service/scheduler
+with CoCo. Existing context/state/update routes and frames remain unchanged;
+no mobile source, built asset, manifest or settings changes are required.
+Full native mobile/browser acceptance remains pending.
+
 [← Back to index](SPEC.md)
 
 Grok Build uses the shared mobile profile/model/effort, interaction, tool/Agent,

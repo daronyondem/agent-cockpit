@@ -4,13 +4,13 @@
 
 **Implemented scope:** P1 profiles, P2 transport/runtime, and P3 internal
 events/interactions/models/usage/attachments/artifacts, P4 connection/auth
-setup, P5 durable chat/managed MCP, and P6 C33/C34/C36–C38 background/KB execution,
-November 6, 2026.
+setup, P5 durable chat/managed MCP, and P6 C33/C34/C36–C39 background/KB/Context execution,
+November 7, 2026.
 Native acceptance baseline is CoCo 1.2.35, macOS arm64.
 **Runtime status:** `CortexCodeAdapter` is registered in `server.ts` for chat.
 CoCo setup/authentication, durable chat, tool-enabled ephemeral execution and
-verified PNG OCR and native KB conversion/digestion/dreaming are available.
-Individual Context/Routine workflow certification,
+verified PNG OCR, native KB conversion/digestion/dreaming and Workspace Context are available.
+Individual Routine workflow certification,
 the remaining processor selection boundaries, full desktop/mobile acceptance
 and CLI installation/update support remain pending.
 The actual remote-browser setup
@@ -90,7 +90,7 @@ with an error and an instruction to select another profile; it is never silently
 replaced. Restored/programmatic CoCo Memory selections are still rejected by the
 adapter before spawn, and the actual Memory notes route reports that the note
 was not saved. The remaining global/workspace/import selection boundaries are
-C41; Workspace Context and Routine service certification remains C39–C40.
+C41; Routine service certification remains C40.
 
 Focused normal tests: `test/cortexShots.test.ts`, `test/processorProfiles.test.ts`,
 `test/memoryProcessorSelect.test.ts` (rendered choices, disabled saved selection,
@@ -183,7 +183,60 @@ Teardown drains native jobs and closes PGLite/SQLite before removing fixtures.
 Normal terminal auth and shared Office profiles/installations remain intact.
 This certifies macOS arm64 on CoCo 1.2.35, Pandoc 3.9.0.2 and LibreOffice 26.2.3.2;
 it is not full native browser/PM2/Windows/Linux acceptance. C26, conditional C35,
-C39–C41 and later client/install/platform gates remain open.
+C40–C41 and later client/install/platform gates remain open.
+
+## Workspace Context workflows (P6 C39)
+
+The existing `WorkspaceContextService` and `WorkspaceContextScheduler` use CoCo
+without a harness-specific service branch. Scans and maintenance select the
+global `Settings.workspaceContext` profile/model/effort or the explicit workspace
+override and call `runOneShot` with `allowTools:true`, workspace cwd, the run's
+AbortSignal and a ten-minute timeout. Native config selection is confirmed by
+the same version-tested CoCo runtime path used by other processors. No service
+retry or automatic fallback is introduced.
+
+Catch-up scans pass actual conversation/session export paths and promote
+uploaded-file paths to first-class sources. CoCo reads the generated
+`WORKSPACE_CONTEXT.md` directive and writes canonical context markdown directly.
+Maintenance reads current context, exact references, asset inventory and only
+eligible active Memory inbox files when Memory is enabled. It returns the normal
+single fenced `workspace-context-memory-actions` block; Cockpit validates the
+complete block before deleting accepted planned files and emits the existing
+silent `memory_update` with `displayInChat:false`. Superseded/disabled Memory is
+excluded. Missing, duplicate or unknown-file action blocks fail visibly without
+deletion or a second native prompt. Strict tool-free Memory governance/extraction
+remains separately gated.
+
+Headless native questions fail and leave the inbox intact. Stop uses the existing
+Workspace Context AbortSignal, waits for CoCo runtime/descendant cleanup through
+the processor promise, records `stopped` and releases the workspace reservation
+only when that call settles. Overlapping work is rejected while the owner is
+active. A stop endpoint acknowledges the request before cleanup finishes; callers
+can observe the active state until draining completes. Existing direct markdown
+edits before any failed/stopped run remain on disk; no filesystem rollback is
+claimed. Memory deletion is performed only after successful processor completion,
+the abort check and valid action parsing.
+
+Zero-source scans record a completed run/cadence without native startup. Disabled
+workspaces are skipped by processing/scheduling; the process call does not create
+context scaffolding or alter instructions when disabled. This is distinct from
+explicit enablement/repair APIs. Scan and maintenance intervals remain independent
+and use the existing concurrency/active-owner checks. Maintenance prunes report
+files and state-history rows older than seven days, retains recent records and
+`latest.md`, and preserves scheduler timestamps.
+
+`test/cortexContextIntegration.test.ts` exercises the actual process adapter with
+a deterministic native-protocol executable. `scripts/probe-cortex-context.ts`
+certifies real service/scheduler operations on CoCo 1.2.35/macOS arm64/Node 26.0.0:
+conversation/upload scans, native context writes, selected global/override config,
+accepted Memory folding/deletion and silent events, exact reference/asset bytes,
+retention, zero-source/disabled behavior, scheduled scans/maintenance, native
+cancellation without resend/deletion and fresh exact-response inference. Six
+native prompts comprise five successful complete-usage responses and one
+intentional interruption. Shared terminal auth remains intact. No new endpoint,
+persisted schema, MCP service, client flow or pricing ledger is added. Full
+browser/PM2/Windows/Linux, C26, conditional C35, C40–C41 and later acceptance
+remain separate.
 
 ## Durable chat and managed MCP (P5)
 

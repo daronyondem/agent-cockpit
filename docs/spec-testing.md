@@ -8,7 +8,7 @@
 
 **Framework:** Jest 30.x — run with `npm test`. The script is `node --experimental-vm-modules node_modules/.bin/jest` because the KB handler tests import `unpdf` (ESM-only, wraps `pdfjs-dist`) and Jest's VM needs the flag to allow runtime `import()` calls. `jest.config.js` uses `ts-jest` for TypeScript and also transforms JS/JSX with `allowJs: true`, `module: CommonJS`, and `jsx: react-jsx` so tests can import the V2 frontend ES modules directly instead of evaluating browser globals. Default Jest execution is capped at `maxWorkers: '50%'` so process-spawning suites still run in parallel without stampeding local or CI machines, and the global per-test timeout is 30 seconds so widened harness-specific timeouts can surface their route/process-specific errors before Jest's generic timeout.
 
-**Coverage gate:** Run `npm run test:coverage` for backend coverage. The script keeps plain `npm test` unchanged for fast local iteration and runs Jest with `--coverage --runInBand`; serial execution keeps the full-suite coverage gate stable on local machines where parallel workers can exceed short route-test timeouts. `jest.config.js` collects coverage from `src/**/*.ts` and `server.ts`, excludes declaration-only `src/types/**` and `*.d.ts` files, writes reports under `coverage/`, and uses V8 coverage with `text-summary` plus `lcov` reporters. The global threshold floor is statements/lines 88.4%, branches 76.0%, and functions 93.7%, raised with CoCo processor coverage against the November 6, 2026 V8 baseline of statements/lines 88.46%, branches 76.01%, and functions 93.74% (158 passing suites, 2,814 passing tests; three opt-in suites and 20 tests skipped), measured on macOS. When meaningful tests land, raise the thresholds toward the new baseline in the same PR. Do not lower thresholds to merge a regression; either add behavior coverage, make a narrow intentional exclusion in `jest.config.js`, or document the explicit exception in the PR.
+**Coverage gate:** Run `npm run test:coverage` for backend coverage. The script keeps plain `npm test` unchanged for fast local iteration and runs Jest with `--coverage --runInBand`; serial execution keeps the full-suite coverage gate stable on local machines where parallel workers can exceed short route-test timeouts. `jest.config.js` collects coverage from `src/**/*.ts` and `server.ts`, excludes declaration-only `src/types/**` and `*.d.ts` files, writes reports under `coverage/`, and uses V8 coverage with `text-summary` plus `lcov` reporters. The global threshold floor is statements/lines 88.4%, branches 76.1%, and functions 93.8%, raised with CoCo Context coverage against the November 7, 2026 V8 baseline of statements/lines 88.49%, branches 76.13%, and functions 93.8% (159 passing suites, 2,824 passing tests; three opt-in suites and 20 tests skipped), measured on macOS. When meaningful tests land, raise the thresholds toward the new baseline in the same PR. Do not lower thresholds to merge a regression; either add behavior coverage, make a narrow intentional exclusion in `jest.config.js`, or document the explicit exception in the PR.
 
 Shared chat route tests use `test/helpers/chatEnv.ts` for isolated Express/WebSocket servers and scratch data directories. Teardown waits for active streams, the session finalizer queue, and any in-flight durable stream-job registry mutation to become idle before closing the server and removing the scratch directory, so background finalizer/job writes cannot race temp-directory cleanup.
 
@@ -16,6 +16,7 @@ Test HTTP servers that are contacted through `127.0.0.1` bind explicitly to `127
 
 | File | Focus |
 |------|-------|
+| `test/cortexContextIntegration.test.ts` | Actual CoCo process fixture through Workspace Context: global/override profile/model/effort, uploaded sources, direct markdown/state/reports, eligible Memory action/deletion and silent update, disabled Memory exclusion, invalid action blocks/headless questions without retry, stop/overlap/drain/fresh run, disabled/zero-source passivity, scan/maintenance scheduler and seven-day retention. |
 | `test/cortexKbIntegration.test.ts` | Real CoCo process fixture through KB ingestion: JPEG-to-PNG preparation, original bytes, profile/model/effort, conversion records/dedup/location reuse, unsupported Auto refusal, headless failure and shutdown without resend or fabricated retry. |
 | `test/cortexShots.test.ts` | Tool-enabled isolated/native sequential lease ownership, no replay/concurrent reuse, restricted rejection before startup, deadlines, AbortSignal, shutdown draining/reuse, sanitized failures and verified explicit image transport. |
 | `test/processorProfiles.test.ts` | Browser-safe Memory processor choice projection: eligible choices, excluded unverified/missing profiles and disabled saved selections without replacement. |
@@ -327,6 +328,48 @@ The six P3 Jest suites contain 30 tests. They include existing conversation
 upload/queue/artifact/preview/download and ledger storage without registering a
 CortexCodeAdapter. Whole app/native UI acceptance is separate; normalization
 fixtures do not certify a processor role or native image generation.
+
+## Cortex native Workspace Context (P6 C39)
+
+`test/cortexContextIntegration.test.ts` uses the real adapter and ephemeral
+processor transport with the deterministic `test/fixtures/cortex/chat-acp.cjs`
+executable. Its explicit `CORTEX_FIXTURE_CONTEXT_MODE` branch writes only the
+synthetic prompt's context directory and generates valid or deliberately invalid
+Memory action blocks; other CoCo fixture behavior is unchanged. Native behavior
+is verified separately using saved terminal credentials:
+
+```sh
+CORTEX_CONTEXT_PROBE=1 CORTEX_TEST_CONNECTION=<saved-connection-name> \
+  npx tsx scripts/probe-cortex-context.ts
+```
+
+Optional `CORTEX_TEST_COMMAND` selects the binary. The probe rejects test mode
+and non-macOS platforms, creates an isolated HTTP/data/workspace fixture and
+private 0700 report directory/0600 report, and applies a ten-minute external
+deadline. It invokes actual Workspace Context service/scheduler paths, with
+synthetic session exports/uploads, references, an asset, active and superseded
+Memory inbox notes and expiring run records. It checks direct native markdown
+updates, selected global/override profile/model/effort, accepted inbox folding
+and server-owned deletion, silent Memory events, reference/asset preservation,
+seven-day report/history pruning, zero-source scans without startup, disabled
+passivity, scan/maintenance cadence using an injected clock, cancellation after
+native prompt submission without resend/deletion, and fresh exact-response
+inference. Teardown stops/drains service and native jobs before deleting files.
+No real external messages, credential reset, production restart or shared
+Snowflake profile changes are involved. Usage assertions cover successful native
+prompts; interrupted counters remain unknown and no processor billing ledger is
+invented. Failure reports include only stage, assertion/execution category and
+probe source line when available, not native error text. This fixture does not certify full browser/PM2, Windows/Linux, C26 or
+strict tool-free Memory processing.
+
+CoCo 1.2.35/macOS arm64/Node 26.0.0 passed with exit 0 on November 7, 2026;
+private reports `cockpit-cortex-context-n84NPH/report.json` and
+`cockpit-cortex-context-8fvaS7/report.json` under system temp.
+Each successful run's six native prompts covered five complete-usage responses and one
+intentional interruption. The first `41FmBi` attempt failed during `native-scan`
+without retaining the cause; it remains failed evidence. Two explicit separate
+runs passed the entire workflow without runtime retry or auth reset. Normal
+coverage passed 159 suites/2,824 tests; actual browser/PM2 acceptance is separate.
 
 ## Cortex native KB workflows (P6 C37/C38)
 

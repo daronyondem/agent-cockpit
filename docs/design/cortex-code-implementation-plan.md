@@ -1,6 +1,6 @@
 # Cortex Code (CoCo) harness implementation plan
 
-**Status:** P0–P3 and P5 complete; P4 C21–C25 setup implemented, C26 actual remote-browser acceptance pending. P6 C33/C34/C36–C38 complete; Context/Routine/remaining selection certification C39–C41 is next. C35 remains conditional on G1.
+**Status:** P0–P3 and P5 complete; P4 C21–C25 setup implemented, C26 actual remote-browser acceptance pending. P6 C33/C34/C36–C39 complete; Routine/remaining selection certification C40–C41 is next. C35 remains conditional on G1.
 **Created:** 2026-11-05.
 **Planning baseline:** Agent Cockpit `0.4.166`, revision `11d14825e955f6c83364c3917558b4d3068a4bac`, plus the uncommitted CoCo research/guidance documents.
 **Native compatibility baseline:** Cortex Code `1.2.35`, distribution `1.2.35+191333.f82de3d91715`, macOS arm64.
@@ -34,8 +34,8 @@ Planning assumptions:
 - Deliver core chat before optional parity work. Unverified features remain
   explicitly unavailable; do not emulate native goals or silently reroute work
   to a different profile to make a selector appear functional.
-- C01–C25, C27–C34 and C36–C38 are complete as recorded below. C26, conditional
-  C35 and C39–C59 remain open and do not describe shipped support.
+- C01–C25, C27–C34 and C36–C39 are complete as recorded below. C26, conditional
+  C35 and C40–C59 remain open and do not describe shipped support.
 
 Track work as follows:
 
@@ -824,7 +824,7 @@ Desktop/mobile changes retain decision generations; PWA metadata is unchanged.
 - [x] C38 — Certify actual KB digestion/gleaning/glossary and dreaming/search/
   synthesis operations with isolated databases. Verify structured output parsing,
   cancellation, usage and safe behavior of existing retry policies.
-- [ ] C39 — Certify Workspace Context scan/maintenance and active Memory inbox
+- [x] C39 — Certify Workspace Context scan/maintenance and active Memory inbox
   folding/deletion. Verify schedules, selected profile/model/effort, markdown
   updates, cancellation, zero-source behavior, run retention and disabled state.
 - [ ] C40 — Certify Routine proposals, manual/scheduled runs, output/history,
@@ -905,6 +905,43 @@ P6 C37/C38 evidence (November 6, 2026; changes following `f7d6d07`):
   runtimes and PGLite/SQLite before deleting fixture data. Normal tests use a
   deterministic CoCo process fixture; no native browser, PM2 restart, Windows
   or Linux claim is made. C26, G1/conditional C35 and C39–C59 remain open.
+
+P6 C39 evidence (November 7, 2026; changes following `c76bb63`):
+
+- Existing Workspace Context orchestration already passes tool-enabled one-shot
+  work, selected global/workspace profile/model/effort, workspace cwd, timeout
+  and AbortSignal through CoCo. No production runtime/service change was needed.
+  Added deterministic process/service coverage and a repeatable native probe.
+- `test/cortexContextIntegration.test.ts` covers native-protocol configuration,
+  uploaded source planning, direct markdown/state/reports, eligible active Memory
+  action/deletion and silent events, superseded/disabled Memory exclusion,
+  missing/duplicate/unknown actions without deletion/retry, headless question
+  failure, cancellation/overlap/drain/fresh execution, disabled/zero-source
+  passivity, scheduling and seven-day report/history pruning. Direct native
+  edits before failed output are retained rather than falsely rolled back.
+- `CORTEX_CONTEXT_PROBE=1 CORTEX_TEST_CONNECTION=<saved-name> npx tsx
+  scripts/probe-cortex-context.ts` passed exit 0 on CoCo 1.2.35/macOS arm64/
+  Node 26.0.0. Private evidence: `cockpit-cortex-context-n84NPH/report.json`
+  and final repeat `cockpit-cortex-context-8fvaS7/report.json` under system temp.
+  Actual conversation/upload scan, direct context writes,
+  global/override settings and native thought-level selection, active Memory
+  folding/server deletion, exact reference/asset bytes, silent updates,
+  retention, scheduled scans/maintenance, zero-source/disabled state,
+  interruption with retained inbox/no resend and fresh exact-response inference
+  all passed twice. Each run's six prompts include five successful complete-usage
+  responses and one intentional interruption; shared auth was preserved.
+- The first native report `41FmBi` failed during the scan without preserving the
+  cause. Both separate explicit native runs above passed without a production
+  retry or auth reset. Evidence is version/platform-scoped, not a reliability
+  guarantee. The probe owns a ten-minute external deadline and drains actual
+  service/native work before fixture cleanup; reports omit native diagnostics.
+- Full 159-suite/2,824-test coverage passed: 88.49% statements/lines, 76.13%
+  branches, 93.8% functions; branch/function floors raised to 76.1/93.8.
+  Backend/web/mobile and explicit probe typechecks, zero-warning lint,
+  maintainability, 189-route drift, 92-ADR lint, rebuilt web/mobile assets and
+  desktop bundle budget passed. No UI/API/schema change or new architectural
+  decision was required. C26, G1/conditional C35, C40–C59 and full client/PM2/
+  platform acceptance remain open; C40 Routine certification is next.
 
 ### P7 — Desktop and mobile
 
@@ -1098,6 +1135,7 @@ At implementation time update only the relevant current specifications:
 | 2026-11-06 | P3 C13–C20 complete; 39 tasks remain unchecked | Internal turn mapping change, following `549f111` | CoCo 1.2.35 / macOS arm64 / Node 26.0.0 | 144 suites / 2,681 tests passed, including 30 P3 tests; real event/config/question/revised-plan/PNG/delivery/missing-auth probe passed; generic upload/queue/ledger/artifact route integration; P4 auth setup next |
 | 2026-11-06 | P6 C33/C34/C36 complete; 25 tasks remain unchecked | Ephemeral processor/OCR change following `478d80b` | CoCo 1.2.35 / macOS arm64 / Node 26.0.0 | 156 suites / 2,797 tests passed; final V8 88.41% lines, 75.92% branches, 93.76% functions; native sequential/headless/OCR/model-gate/image-cancel/fresh-process probe passed; C26, conditional C35 and C37–C59 remain open |
 | 2026-11-06 | P6 C37/C38 complete; 23 tasks remain unchecked | KB workflow certification change following `f7d6d07` | CoCo 1.2.35 / macOS arm64 / Node 26.0.0 / Pandoc 3.9.0.2 / LibreOffice 26.2.3.2 | 158 suites / 2,814 tests passed; V8 88.46% lines, 76.01% branches, 93.74% functions; backend/web/mobile typechecks, lint, maintainability, spec drift, ADR lint, web/mobile builds and budget passed. Native conversion/reuse, digestion/gleaning, synthesis/re-dream, glossary/real embeddings/KB MCP and interrupt/fresh-process checks passed. Shared auth retained; C26, conditional C35 and C39–C59 remain open |
+| 2026-11-07 | P6 C39 complete; 22 tasks remain unchecked | Context workflow certification change following `c76bb63` | CoCo 1.2.35 / macOS arm64 / Node 26.0.0 | 159 suites / 2,824 tests passed; V8 88.49% lines, 76.13% branches, 93.8% functions; native scan/upload/config/maintenance/Memory/retention/schedules/stop/fresh inference passed. Required checks and rebuilt web/mobile assets/budget passed; shared auth retained. C26, conditional C35 and C40–C59 remain open |
 
 ## 13. References
 

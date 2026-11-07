@@ -222,7 +222,7 @@ root boundary. Review `test/cortexShots.test.ts`, `test/processorProfiles.test.t
 `test/memoryProcessorSelect.test.ts` and the restored CoCo Memory case in
 `test/memoryMcp.test.ts`. Run opt-in
 `scripts/probe-cortex-processors.ts` for native sequential/headless/OCR/cancel
-drift. C39–C41 workflow/selection certification and full client/platform acceptance
+drift. C40–C41 workflow/selection certification and full client/platform acceptance
 remain separate; a successful primitive or OCR run does not close those gates.
 
 P6 C37/C38 certifies native KB workflows through `scripts/probe-cortex-kb.ts`
@@ -236,6 +236,17 @@ image helper while preserving original bytes/media records and native image
 gates. Review `test/cortexKbIntegration.test.ts`, the page-conversion/handler/
 dreaming suites and CoCo backend tests. Native workflow success does not certify
 Windows/Linux, full browser/PM2 acceptance, C26, or strict Memory execution.
+
+P6 C39 certifies Workspace Context through the actual service/scheduler and
+`scripts/probe-cortex-context.ts` (opt-in, isolated HTTP/data/workspace fixture,
+shared terminal auth). Review `test/cortexContextIntegration.test.ts` and the
+Workspace Context service/route suites when changing profile/model/effort
+resolution, direct markdown updates, eligible Memory action validation/deletion,
+cancellation, scheduler cadence, zero-source runs, disabled passivity or run
+retention. Stopped/invalid runs must retain unaccepted Memory and must not resend
+tool work. Direct context edits before failure are not rolled back. This
+tool-enabled workflow does not enable strict CoCo Memory processors or close
+the full client/PM2/platform gates.
 
 # Server Management
 

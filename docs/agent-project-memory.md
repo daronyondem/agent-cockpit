@@ -225,9 +225,17 @@ tool is unavailable.
   inference. Keep adapter retry/image policies in the server facade: CoCo
   disables automatic one-shot retries and requires original-preserving PNG
   sidecars; invalid/empty synthesis must retain pending entries. Run
-  `scripts/probe-cortex-kb.ts` for native KB drift. C39–C41 Context/Routines and
-  remaining selection certification, plus full native client/OS-process-restart/
-  platform acceptance, remain later work.
+  `scripts/probe-cortex-kb.ts` for native KB drift. C39 Workspace Context now
+  passes actual native service/scheduler scan/upload, global/override selection,
+  maintenance/accepted active Memory folding/deletion, reference/asset bytes,
+  retention, schedules, disabled/zero-source, stop/no-resend and fresh inference
+  checks. Run `scripts/probe-cortex-context.ts` for native Context drift and
+  review `test/cortexContextIntegration.test.ts` plus service/route suites.
+  Direct context edits before failure are not rolled back; stopped/invalid
+  action runs retain unaccepted Memory. Tool-enabled Context does not enable
+  strict CoCo Memory processors. C40–C41 Routines and remaining selection
+  certification, plus full native client/OS-process-restart/platform acceptance,
+  remain later work.
   See the current CoCo spec and progress tracker.
 - Fresh installs should be provider-neutral. Do not imply Claude Code is
   configured when the user has not installed or authenticated it.

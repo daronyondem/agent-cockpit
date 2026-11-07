@@ -179,6 +179,14 @@ Memory, KB processors, summaries, titles, and OCR. The processor must be a CLI
 profile that resolves through `ChatService.resolveCliProfileRuntime()`, and the
 adapter must implement `runOneShot()`.
 
+CoCo uses its tool-enabled ephemeral processor path with the selected global or
+workspace override profile/model/effort, the workspace cwd, the ten-minute run
+timeout and the run's AbortSignal. The service does not retry failed or stopped
+processor work. Direct markdown edits made before a failure remain on disk;
+there is no filesystem transaction or rollback. Memory deletion is a separate
+server-owned step after successful completion and action-block validation.
+This does not enable CoCo for the restricted Memory governance/extraction roles.
+
 If source planning finds no source files for a scan or no markdown files for a
 maintenance pass, the service records a completed zero-file run with a concise
 summary and does not invoke the processor. Zero-file scan completions still
@@ -520,12 +528,18 @@ Focused coverage lives in:
 | File | Coverage |
 |------|----------|
 | `test/workspaceContext.service.test.ts` | Folder creation, generated instructions, `AGENTS.md` managed block, autonomous scan prompt execution, uploaded-file source expansion, maintenance prompt execution over existing context markdown, markdown writes, state, and run reports. |
+| `test/cortexContextIntegration.test.ts` | Actual CoCo process adapter with deterministic ACP executable: global and workspace override configuration, uploaded-source planning, direct markdown writes, eligible active Memory deletion and silent updates, disabled Memory exclusion, missing/duplicate/unknown actions retaining inbox entries without retry, headless question failure, stop/overlap/drain/fresh execution, zero-source/disabled passivity, scheduler cadence and seven-day run retention. |
 | `test/chat.workspaceContext.test.ts` | REST enablement/settings/file/scan/maintenance/stop behavior, conversation status hydration, and route-level update wiring. |
 | `test/settingsService.test.ts` | Global default normalization and legacy `contextMap` settings migration into `workspaceContext`. |
 | `test/chat.workspaceFeatureSettingsStore.test.ts` | Workspace index migration from `contextMapEnabled/contextMap` to `workspaceContextEnabled/workspaceContext`. |
 | `test/sessionFinalizerQueue.test.ts` | Persisted `workspace_context_conversation_final_pass` finalizer job handling. |
 | `test/streamStore.test.ts` | `workspace_context_update` frame handling and browser event dispatch. |
 | `test/frontendRoutes.test.ts` | Static frontend route/API guards for Workspace Context settings, markdown preview, run controls, and absence of old review/graph endpoints. |
+
+Native CoCo service/scheduler certification is opt-in through
+`scripts/probe-cortex-context.ts`; see the command and exact acceptance limits
+in [the testing spec](spec-testing.md#cortex-native-workspace-context-p6-c39).
+The deterministic fixture is transport/service coverage, not native CLI evidence.
 
 ## Implementation Files
 
