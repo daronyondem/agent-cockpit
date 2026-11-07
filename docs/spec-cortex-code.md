@@ -4,14 +4,13 @@
 
 **Implemented scope:** P1 profiles, P2 transport/runtime, and P3 internal
 events/interactions/models/usage/attachments/artifacts, P4 connection/auth
-setup, P5 durable chat/managed MCP, and P6 C33/C34/C36–C39 background/KB/Context execution,
+setup, P5 durable chat/managed MCP, and P6 C33/C34/C36–C40 background/KB/Context/Routine execution,
 November 7, 2026.
 Native acceptance baseline is CoCo 1.2.35, macOS arm64.
 **Runtime status:** `CortexCodeAdapter` is registered in `server.ts` for chat.
 CoCo setup/authentication, durable chat, tool-enabled ephemeral execution and
-verified PNG OCR, native KB conversion/digestion/dreaming and Workspace Context are available.
-Individual Routine workflow certification,
-the remaining processor selection boundaries, full desktop/mobile acceptance
+verified PNG OCR, native KB conversion/digestion/dreaming, Workspace Context
+and Routine workflows are available. Remaining processor selection boundaries, full desktop/mobile acceptance
 and CLI installation/update support remain pending.
 The actual remote-browser setup
 through Cockpit is still an open acceptance gate (C26).
@@ -90,7 +89,7 @@ with an error and an instruction to select another profile; it is never silently
 replaced. Restored/programmatic CoCo Memory selections are still rejected by the
 adapter before spawn, and the actual Memory notes route reports that the note
 was not saved. The remaining global/workspace/import selection boundaries are
-C41; Routine service certification remains C40.
+C41; individual KB, Workspace Context and Routine service certification is complete.
 
 Focused normal tests: `test/cortexShots.test.ts`, `test/processorProfiles.test.ts`,
 `test/memoryProcessorSelect.test.ts` (rendered choices, disabled saved selection,
@@ -183,7 +182,7 @@ Teardown drains native jobs and closes PGLite/SQLite before removing fixtures.
 Normal terminal auth and shared Office profiles/installations remain intact.
 This certifies macOS arm64 on CoCo 1.2.35, Pandoc 3.9.0.2 and LibreOffice 26.2.3.2;
 it is not full native browser/PM2/Windows/Linux acceptance. C26, conditional C35,
-C40–C41 and later client/install/platform gates remain open.
+C41 and later client/install/platform gates remain open.
 
 ## Workspace Context workflows (P6 C39)
 
@@ -235,8 +234,56 @@ cancellation without resend/deletion and fresh exact-response inference. Six
 native prompts comprise five successful complete-usage responses and one
 intentional interruption. Shared terminal auth remains intact. No new endpoint,
 persisted schema, MCP service, client flow or pricing ledger is added. Full
-browser/PM2/Windows/Linux, C26, conditional C35, C40–C41 and later acceptance
+browser/PM2/Windows/Linux, C26, conditional C35, C41 and later acceptance
 remain separate.
+
+## Routine workflows (P6 C40)
+
+CoCo uses the existing `RoutinesService`/`RoutinesScheduler`, authoring contract,
+proposal marker validation, explicit installation and manual/scheduled run
+paths. No harness-specific service branch is required. Actual HTTP/WS chat can
+read the installed authoring contract, write a valid proposed manifest/routine
+markdown and return `AGENT_COCKPIT_ROUTINE_PROPOSAL:v1`. The existing route
+validates its workspace-owned path and current state; proposed routines cannot
+execute before explicit installation. Disabled workspaces retain existing
+passive reads, no scaffolding/native work and stale managed-block removal.
+Enabling installs instructions; disabling removes only those instructions and
+preserves routine data. A disabled individual routine remains manually runnable
+but is excluded from schedules.
+
+Each run passes manifest CLI profile/model/effort, workspace cwd,
+`allowTools:true` and the manifest deadline to CoCo's ephemeral one-shot path.
+Native output/final/input/tmp/history and persistent state keep the standard
+Routine layout and explorer scopes. Persistent cursor continuity is verified
+through files across separate native sessions. Output retention uses run-folder
+mtime and preserves persistent state; run history retains the existing 50-record
+cap. Schedule intervals, timezone windows/weekdays and workspace/routine opt-in
+remain Cockpit infrastructure rather than native CoCo schedules/goals.
+
+Headless decisions, unavailable model selection, timeout and adapter shutdown
+fail visibly without a resend or silent harness/model fallback. Timeout/shutdown
+cleanup settles before releasing run ownership. Runs that fail during native
+execution retain partial output/state, have no completed `final.md`, and never
+deliver `notify.md`.
+There is no new stop API or filesystem rollback. Completed runs route notify
+files through Cockpit's existing notifier after checking mode/settings;
+notification failures are recorded separately without rerunning tool work.
+Credentials/destinations remain outside the native run envelope. Native usage
+remains final-response evidence, not a new processor cost ledger.
+
+`test/cortexRoutinesIntegration.test.ts` exercises the real process adapter with
+a deterministic ACP executable, including chat proposals, configuration,
+files/history/explorer, schedules, headless/model failures, overlap/shutdown,
+timer-driven deadline, output retention and stub-only outreach. The opt-in
+`scripts/probe-cortex-routines.ts` passed on CoCo 1.2.35/macOS arm64/Node 26.0.0
+through actual HTTP/WS chat and service/scheduler routes, native manual/scheduled
+files/cursor/notifications, and a real one-minute foreground shell/Python timeout
+in 60.247 seconds. Five native prompts include four successful complete-usage
+responses and one intentionally timed-out run; fresh exact-response inference
+succeeded afterward. All notification delivery was replaced by an injected stub
+on fixture-owned routes with synthetic credentials; no real message was sent.
+Shared terminal auth remained intact. Full browser/PM2/Windows/Linux acceptance,
+C26, G1/conditional C35, C41 and later gates remain independent.
 
 ## Durable chat and managed MCP (P5)
 

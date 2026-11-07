@@ -61,6 +61,27 @@ readline.createInterface({ input: process.stdin }).on('line', line => {
         const block = '```workspace-context-memory-actions\n' + JSON.stringify({ acceptedMemoryFiles }) + '\n```';
         return finish('Updated fixture-context.md.\n' + (entries.length ? block + (mode === 'duplicate-actions' ? '\n' + block : '') : ''));
       }
+      if (process.env.CORTEX_FIXTURE_ROUTINE_ITEMS && text.includes('fixture-propose-routine')) {
+        const directory = path.join(process.env.CORTEX_FIXTURE_ROUTINE_ITEMS, 'fixture-radar'); fs.mkdirSync(directory, { recursive: true });
+        const manifest = { schemaVersion: 1, kind: 'agent-cockpit.routine', id: 'fixture-radar', title: 'Fixture Radar',
+          routineFile: 'routine.md', state: 'proposed', trigger: { type: 'manual' },
+          harness: { cliProfileId: process.env.CORTEX_FIXTURE_PROFILE_ID, model: 'claude-sonnet-4-6', effort: 'medium' },
+          timeoutMinutes: 1, notification: { mode: 'workspaceDefault' } };
+        fs.writeFileSync(path.join(directory, 'manifest.json'), JSON.stringify(manifest));
+        fs.writeFileSync(path.join(directory, 'routine.md'), '# Fixture Radar\nWrite the fixture output and notification.\n');
+        return finish(`Proposed\n<!-- AGENT_COCKPIT_ROUTINE_PROPOSAL:v1:${path.join(directory, 'manifest.json')} -->`);
+      }
+      if (process.env.CORTEX_FIXTURE_ROUTINE_ITEMS && text.startsWith('# Agent Cockpit Routine Execution')) {
+        const field = label => text.match(new RegExp('^' + label + ': (.+)$', 'm'))[1];
+        const persistent = path.join(field('Persistent state folder'), 'cursor.json');
+        const previous = fs.existsSync(persistent) ? JSON.parse(fs.readFileSync(persistent, 'utf8')).count : 0;
+        fs.writeFileSync(persistent, JSON.stringify({ count: previous + 1 }));
+        fs.writeFileSync(path.join(field('Output folder'), 'report.txt'), 'ROUTINE_FIXTURE_OUTPUT');
+        fs.writeFileSync(path.join(field('Temporary folder'), 'scratch.txt'), 'SCRATCH');
+        fs.writeFileSync(field('Notification file'), 'ROUTINE_FIXTURE_NOTIFY');
+        if (text.includes('fixture-routine-hold')) return;
+        return finish('ROUTINE_FIXTURE_DONE');
+      }
       const remember = text.match(/fixture-remember:(\w+)/);
       if (remember) { const state = read(); state[sessionId].nonce = remember[1]; write(state); }
       if (text.includes('fixture-deliver')) {

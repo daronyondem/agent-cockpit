@@ -233,9 +233,16 @@ tool is unavailable.
   review `test/cortexContextIntegration.test.ts` plus service/route suites.
   Direct context edits before failure are not rolled back; stopped/invalid
   action runs retain unaccepted Memory. Tool-enabled Context does not enable
-  strict CoCo Memory processors. C40–C41 Routines and remaining selection
-  certification, plus full native client/OS-process-restart/platform acceptance,
-  remain later work.
+  strict CoCo Memory processors. C40 Routines now passes native HTTP/WS proposal
+  authoring/validation/explicit installation, manual/scheduled files/history/
+  persistent state, stub-only outreach, retention, a real one-minute deadline
+  with no resend/notification, and fresh authenticated inference. Run
+  `scripts/probe-cortex-routines.ts` for native drift; review
+  `test/cortexRoutinesIntegration.test.ts` and Routine service/route suites.
+  Preserve partial files and await timeout/shutdown cleanup before releasing
+  ownership; compatibility probes must inject an outreach stub. C41 remaining
+  selection certification and full native client/OS-process-restart/platform
+  acceptance remain later work.
   See the current CoCo spec and progress tracker.
 - Fresh installs should be provider-neutral. Do not imply Claude Code is
   configured when the user has not installed or authenticated it.

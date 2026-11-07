@@ -224,6 +224,36 @@ selected detail before committing terminal list state that stops the poll. The
 button is re-enabled only after the run becomes `completed` or `failed` and the
 run log reflects the terminal record.
 
+### Cortex Code execution
+
+CoCo uses the existing tool-enabled ephemeral `runOneShot` path. Routine
+manifest profile/model/effort and the workspace cwd are passed without changing
+harness or model. Native questions fail headlessly. Unsupported model selection
+fails before a native prompt, records the run as failed and does not fall back
+to another model. The manifest timeout is clamped to at least one minute and
+covers native startup and execution through CoCo's single processor deadline.
+Timeout/shutdown failures await native cleanup before releasing run ownership;
+the service records `failed`, leaves partial output/persistent-state files on
+disk, writes no completed `final.md`, and does not deliver `notify.md` from the
+failed run. Neither the service nor the adapter automatically resends that work.
+There is no new Routine stop endpoint or filesystem rollback.
+
+Completed CoCo runs keep the existing input/final/output/tmp/history and
+persistent-state layout. Explorer scopes use the same run records. Cross-run
+state is ordinary routine-owned files rather than a reused native session.
+Retention prunes old run directories by filesystem mtime, preserves persistent
+state, and leaves bounded state history (up to 50 records) unchanged. Outreach
+is performed only by Cockpit after successful execution, using the normal
+notification mode and workspace/global settings; bot credentials/destinations
+are not included in the native execution envelope. Notification delivery
+failure is recorded separately on a completed run and does not rerun native work.
+
+CoCo proposal authoring uses the existing opt-in instructions and proposal
+marker/validation/install routes. The harness leaves proposals uninstalled;
+Cockpit performs explicit installation. No new manifest schema, API, browser
+frame or mobile flow is added. Deterministic and native certification commands
+are described in [the testing spec](spec-testing.md#cortex-native-routines-p6-c40).
+
 ## Scheduling
 
 `RoutinesScheduler` ticks every 60 seconds. It lists active workspaces through
@@ -401,6 +431,12 @@ on the Routines tab after install.
 
 Focused coverage:
 
+- `test/cortexRoutinesIntegration.test.ts`: actual CoCo process fixture through
+  chat proposal/validation/install and Routine services, opt-in instructions,
+  disabled passivity, selected manifest configuration, files/history/explorer/
+  persistent state, schedule cadence/windows/weekdays, notification off/failure
+  through a stub, headless/model failures, overlap/shutdown/deadline draining
+  without resend/outreach, output retention and the 50-record history cap.
 - `test/routines.service.test.ts`: disabled workspace no-scaffolding listing,
   authoring files and AGENTS block, proposal validation, manifest schedule
   validation, install/edit/delete, run execution and notification routing,

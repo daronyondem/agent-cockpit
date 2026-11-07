@@ -222,7 +222,7 @@ root boundary. Review `test/cortexShots.test.ts`, `test/processorProfiles.test.t
 `test/memoryProcessorSelect.test.ts` and the restored CoCo Memory case in
 `test/memoryMcp.test.ts`. Run opt-in
 `scripts/probe-cortex-processors.ts` for native sequential/headless/OCR/cancel
-drift. C40–C41 workflow/selection certification and full client/platform acceptance
+drift. C41 selection certification and full client/platform acceptance
 remain separate; a successful primitive or OCR run does not close those gates.
 
 P6 C37/C38 certifies native KB workflows through `scripts/probe-cortex-kb.ts`
@@ -247,6 +247,19 @@ retention. Stopped/invalid runs must retain unaccepted Memory and must not resen
 tool work. Direct context edits before failure are not rolled back. This
 tool-enabled workflow does not enable strict CoCo Memory processors or close
 the full client/PM2/platform gates.
+
+P6 C40 certifies Routine proposal/chat/install and manual/scheduled execution
+through `scripts/probe-cortex-routines.ts` (opt-in, isolated HTTP/data/workspace,
+shared terminal auth, injected outreach stub). Review
+`test/cortexRoutinesIntegration.test.ts` and the Routine service/route suites
+when changing authoring, opt-in instructions, manifest configuration, runtime
+folders/history/persistent state, schedules, timeout or notifications. Preserve
+one native attempt on failure, drain timeout/shutdown before releasing ownership,
+retain partial files without delivering failed-run notify.md, and keep actual
+outreach disabled in compatibility probes. The native probe exercises the real
+one-minute manifest deadline; deterministic tests fire the registered timer.
+This does not certify a new stop API, full browser/PM2/platform acceptance,
+C26, or strict CoCo Memory processing.
 
 # Server Management
 

@@ -22,6 +22,11 @@ with CoCo. Existing context/state/update routes and frames remain unchanged;
 no mobile source, built asset, manifest or settings changes are required.
 Full native mobile/browser acceptance remains pending.
 
+P6 C40 certifies the existing Routine backend paths with CoCo, including
+proposals, manual/scheduled runs, files/history and timeout. It adds no mobile
+UI, routes, frames, assets or manifest changes. Full mobile Routine/proposal
+interaction acceptance remains part of the later client gates.
+
 [← Back to index](SPEC.md)
 
 Grok Build uses the shared mobile profile/model/effort, interaction, tool/Agent,
