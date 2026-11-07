@@ -212,6 +212,19 @@ and `test/cortexIntegration.test.ts`, and run opt-in
 This isolated HTTP/WS fixture is not full native browser/process-manager or
 Windows/Linux acceptance. See `docs/spec-testing.md` for exact limits.
 
+P6 ephemeral processor ownership belongs to `cortexShots.ts`. Require explicit
+`allowTools:true`, preserve a single deadline across startup and sequential
+prompts, never replay/retry interrupted work, and await cancellation/shutdown
+cleanup before releasing the job. Headless questions/plans must fail rather
+than invent a human response. Processor image paths are server-owned and reuse
+the version/model/PNG byte gates in `cortexAttachments.ts`; chat keeps its upload
+root boundary. Review `test/cortexShots.test.ts`, `test/processorProfiles.test.ts`,
+`test/memoryProcessorSelect.test.ts` and the restored CoCo Memory case in
+`test/memoryMcp.test.ts`. Run opt-in
+`scripts/probe-cortex-processors.ts` for native sequential/headless/OCR/cancel
+drift. C37–C41 workflow/selection certification and full client/platform acceptance
+remain separate; a successful primitive or OCR run does not close those gates.
+
 # Server Management
 
 NEVER run `node server.js` directly. This causes orphan processes and port conflicts.

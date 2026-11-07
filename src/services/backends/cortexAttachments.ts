@@ -2,7 +2,7 @@ import fs from 'fs';
 import fsp from 'fs/promises';
 import path from 'path';
 import { loadImage } from '@napi-rs/canvas';
-import type { AttachmentMeta } from '../../types';
+import type { AttachmentMeta, RunOneShotAttachment } from '../../types';
 import { cortexImageVerified } from './cortexModels';
 import { CortexInputError } from './cortexErrors';
 
@@ -15,10 +15,26 @@ export function cortexPathWithin(root: string, file: string): boolean {
 
 /** Only trusted attachment metadata is opened; never parse user text for paths. */
 export async function cortexPromptContent(text: string, attachments: AttachmentMeta[], root: string | undefined, model: string, version: string, nativeImage: boolean): Promise<unknown[]> {
+  return content(text, attachments, attachments.map(() => root), model, version, nativeImage);
+}
+
+/** Processor paths are supplied by server pipelines and may live outside cwd. */
+export async function cortexProcessorContent(text: string, attachments: RunOneShotAttachment[], model: string, version: string, nativeImage: boolean): Promise<unknown[]> {
+  const files = attachments.map((attachment): AttachmentMeta => {
+    if (!path.isAbsolute(attachment.path) || !['image', 'text'].includes(attachment.kind)) {
+      throw new CortexInputError('Cortex processors accept only absolute text or PNG attachment paths.');
+    }
+    return { path: attachment.path, name: path.basename(attachment.path), kind: attachment.kind === 'image' ? 'image' : 'text' };
+  });
+  return content(text, files, files.map(file => path.dirname(file.path)), model, version, nativeImage);
+}
+
+async function content(text: string, attachments: AttachmentMeta[], roots: Array<string | undefined>, model: string, version: string, nativeImage: boolean): Promise<unknown[]> {
   if (attachments.length > 10) throw new CortexInputError('Cortex accepts at most ten attachments per turn.');
   const blocks: unknown[] = [{ type: 'text', text }];
   let total = 0;
-  for (const attachment of attachments) {
+  for (const [index, attachment] of attachments.entries()) {
+    const root = roots[index];
     if (!root) throw new CortexInputError('Cortex attachments require a conversation upload directory.');
     let file: string;
     try {

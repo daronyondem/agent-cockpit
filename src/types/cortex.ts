@@ -1,7 +1,7 @@
 import type { CliProfile } from './cliProfiles';
 import type { EffortLevel } from './cliProfiles';
 import type { AttachmentMeta } from './attachments';
-import type { McpServerConfig } from './backends';
+import type { McpServerConfig, RunOneShotAttachment } from './backends';
 
 export type CortexRecord = Record<string, unknown>;
 export type CortexRpcId = string | number;
@@ -15,6 +15,11 @@ export interface CortexRpcMessage {
 }
 
 export interface CortexProcessIdentity { pid: number; parent: number; group: number; started: string }
+
+export interface CortexProcessorJob {
+  cancel: (message: string) => void;
+  done: Promise<string[]>;
+}
 
 export interface CortexRuntimeConfig {
   command: string;
@@ -54,6 +59,10 @@ export interface CortexTurnOptions extends CortexSelection {
   attachments?: AttachmentMeta[];
   /** Trusted conversation-specific upload directory, supplied by the server. */
   attachmentRoot?: string;
+  /** Explicit trusted processor files; never derived from prompt text. */
+  processorAttachments?: RunOneShotAttachment[];
+  /** Fail rather than wait for a human decision in background work. */
+  headless?: boolean;
   allowTools: boolean;
   timeoutMs?: number;
 }

@@ -1348,8 +1348,18 @@ updates. Per-profile metadata never populates a shared model catalog.
 Questions/plans echo their opaque decision generation through the optional
 second `sendInput` argument. CoCo rejects missing/stale/duplicate/invalid
 decisions; REST returns 409. Other adapters retain their existing behavior.
-Processor roles, native goals, steering and agents remain unavailable; P7 owns
-full native client acceptance and the browser structured-upload bridge.
+P6 adds tool-enabled `runOneShot`/native sequential `runSessionShot` through
+`cortexShots.ts`, with unique ephemeral leases, one startup-to-completion deadline,
+abort/shutdown draining, no prompt retries and fail-fast human interaction handling.
+Default/false allowTools calls reject before startup; Memory and deterministic
+title/summary behavior remain restricted. Explicit server-owned PNG paths use
+the verified Sonnet 4.6/1.2.35 transport, including the existing OCR route.
+`RunOneShotAttachment` now lives in the declaration-only backend domain module
+and retains its base-adapter type re-export. See the
+[P6 contract](spec-cortex-code.md#background-execution-and-ocr-p6-c33c34c36)
+for exact lifecycle, media limits, selection behavior and pending workflow gates.
+Native goals, steering and agents remain unavailable; P7 owns full native client
+acceptance and the browser structured-upload bridge.
 
 ### Adding a New Backend
 

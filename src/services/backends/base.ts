@@ -9,8 +9,10 @@ import type {
   ServiceTier,
   CliProfile,
   ThreadGoal,
-  ModelInputModality,
+  RunOneShotAttachment,
 } from '../../types';
+
+export type { RunOneShotAttachment } from '../../types';
 
 export interface BackendCallOptions {
   /** Full CLI profile for adapters that support profile-isolated runtimes. */
@@ -54,13 +56,6 @@ export interface RunOneShotOptions {
    * files through their structured attachment channel.
    */
   attachments?: RunOneShotAttachment[];
-}
-
-export interface RunOneShotAttachment {
-  path: string;
-  kind: ModelInputModality;
-  mimeType?: string;
-  name?: string;
 }
 
 /**

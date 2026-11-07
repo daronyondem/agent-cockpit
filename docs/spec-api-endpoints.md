@@ -318,6 +318,13 @@ Errors:
 - `500` — backend not registered.
 - `502` — `runOneShot` threw, or returned empty output (after trim).
 
+CoCo supports this endpoint through an isolated tool-enabled native session for
+verified PNG input on `claude-sonnet-4-6`/1.2.35. Auto/unknown model support fails
+the media check; unsupported image bytes/formats fail the adapter and return 502.
+The processor path is independent from the conversation's native chat session.
+Its image limits and headless/cancellation behavior are defined in
+[the CoCo processor contract](spec-cortex-code.md#background-execution-and-ocr-p6-c33c34c36).
+
 The composer's per-attachment OCR button (`AttChip` image branch, sits in the same slot as the dissolve button — image-only and paste-text-only buttons never co-exist on the same chip) calls this through `StreamStore.ocrAttachment(convId, attachmentId)`. The result is cached on the `PendingAttachment` (`ocrMarkdown`/`ocrStatus`/`ocrError` fields) so re-clicks insert instantly without re-spawning the CLI. The cache lives only for the lifetime of the pending attachment — once the message ships, the cache is discarded with the rest of the composer state.
 
 ```

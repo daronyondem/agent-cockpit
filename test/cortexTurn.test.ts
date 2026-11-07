@@ -37,6 +37,28 @@ test('native wire excerpt flows through the turn bridge; duplicate final replies
   expect(prompts).toHaveLength(2);
 });
 
+test('headless ordinary tools proceed; repeated human/unknown permissions fail even if cancellation reports a transport error', async () => {
+  const ordinary = fixture(); replay(ordinary, 'file-shell');
+  const result = await collect(new CortexTurn(ordinary.runtime, { text: 'fixture', allowTools: true, headless: true }));
+  expect(result.some(event => event.type === 'result')).toBe(true);
+  expect(result.some(event => event.type === 'error')).toBe(false);
+  const f = fixture();
+  const cancel = jest.spyOn(f.runtime, 'cancel').mockRejectedValue(new Error('PRIVATE cleanup diagnostic'));
+  f.onRequest(request => {
+    if (request.method !== 'session/prompt') return;
+    queueMicrotask(() => {
+      const question = cortexWire('questions').find(frame => frame.method === 'session/request_permission')!;
+      f.send({ ...question, params: { ...question.params, sessionId: f.runtime.sessionId } });
+      f.send({ ...question, id: 'malformed', params: { sessionId: f.runtime.sessionId } });
+      f.send({ jsonrpc: '2.0', id: request.id, error: { code: -32000, message: 'PRIVATE native diagnostic' } });
+    });
+  });
+  const events = await collect(new CortexTurn(f.runtime, { text: 'question', allowTools: true, headless: true }));
+  expect(cancel).toHaveBeenCalledTimes(1);
+  expect(events).toEqual([{ type: 'error', error: expect.stringContaining('requires a human decision'), source: 'backend' }, { type: 'done' }]);
+  expect(JSON.stringify(events)).not.toContain('PRIVATE');
+});
+
 test.each(['auth-error', 'api-error'])('%s produces a terminal error without raw text, fabricated result, usage or retry', async name => {
   const f = fixture(); replay(f, name);
   const events = await collect(new CortexTurn(f.runtime, { text: 'check', allowTools: false }));

@@ -47,6 +47,10 @@ affects:
   - scripts/probe-cortex-auth.ts
   - src/services/backends/cortex.ts
   - src/services/backends/cortexPlugin.ts
+  - src/services/backends/cortexShots.ts
+  - scripts/probe-cortex-processors.ts
+  - web/AgentCockpitWeb/src/screens/processorProfiles.ts
+  - web/AgentCockpitWeb/src/screens/memoryProcessorSelect.jsx
   - src/contracts/streams.ts
   - src/routes/chat/streamRoutes.ts
   - scripts/probe-cortex-chat.ts
@@ -108,6 +112,15 @@ CoCo's explicit eligibility at client and service boundaries. Default one-shot
 path is proven. Titles/summaries use deterministic fallback meanwhile. Chat
 Memory tools can still use a separately configured supported governance processor.
 Tool-enabled processors and media are independently certified before selection.
+
+P6 places ephemeral one-shot/sequential ownership in `cortexShots.ts`, sharing
+the native session/runtime and turn modules without durable chat state. One
+deadline covers startup and all prompts. Each call gets its own session, sends
+new prompts once, and drains on cancellation/shutdown; it never replays tool
+work. Headless questions/plans fail rather than invent human decisions. Explicit
+server image paths reuse the same version/model/byte validation as chat uploads.
+Keep Memory unavailable while G1 remains open and preserve unsupported saved
+selections visibly instead of silently replacing their harness.
 
 Pending question/plan replies use `sendInput` and exact reverse RPC ownership,
 including ID 0. Carry a fresh opaque decision generation through REST/WS and

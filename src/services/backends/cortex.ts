@@ -1,6 +1,6 @@
 import crypto from 'crypto';
 import type { BackendMetadata, Message, SendMessageOptions, SendMessageResult, StreamEvent } from '../../types';
-import { BaseBackendAdapter, type BackendCallOptions } from './base';
+import { BaseBackendAdapter, type BackendCallOptions, type RunOneShotOptions } from './base';
 import { CortexSessions } from './cortexSessions';
 import type { CortexRuntime } from './cortexRuntime';
 import { CortexTurn } from './cortexTurn';
@@ -8,11 +8,12 @@ import { cortexModels } from './cortexModels';
 import { CortexInputError, CortexMissingSessionError, cortexRuntimeError } from './cortexErrors';
 import { buildNativeSessionRecovery, buildSessionRecoveryEvent, createRecoverySnapshot } from './sessionRecovery';
 import { logger } from '../../utils/logger';
+import { CortexShots } from './cortexShots';
 
 interface ActiveTurn { aborted: boolean; turn?: CortexTurn }
 const log = logger.child({ module: 'cortex-code' });
 
-/** Chat facade. Native goals, steering and processor execution remain gated. */
+/** Chat and processor facade; native goals, steering and restricted work stay gated. */
 export class CortexCodeAdapter extends BaseBackendAdapter {
   private active = new Map<string, ActiveTurn>();
   private instructed = new WeakSet<CortexRuntime>();
@@ -22,9 +23,11 @@ export class CortexCodeAdapter extends BaseBackendAdapter {
   constructor(options: { workingDir?: string; sessions?: CortexSessions } = {}) {
     super(options);
     this.sessions = options.sessions || new CortexSessions();
+    this.shots = new CortexShots(this.sessions, this.workingDir);
     this.ensureIdleTimer();
   }
   private sessions: CortexSessions;
+  private shots: CortexShots;
 
   private ensureIdleTimer(): void {
     if (this.idleTimer) return;
@@ -38,7 +41,8 @@ export class CortexCodeAdapter extends BaseBackendAdapter {
     return { id: 'cortex-code', label: 'Cortex Code (CoCo)', icon: null, models: [],
       capabilities: { thinking: true, planMode: true, planRevision: true, agents: false,
         toolActivity: true, userQuestions: true, stdinInput: false, goals: false,
-        oneShot: { restrictedText: false, toolEnabled: false, sequential: false } },
+        oneShot: { restrictedText: false, toolEnabled: true, sequential: true },
+        oneShotMediaInput: { image: ['explicit-attachment'] } },
       resumeCapabilities: { activeTurnResume: 'unsupported',
         activeTurnResumeReason: 'Interrupted Cortex work is never resent automatically.',
         sessionResume: 'supported', sessionResumeReason: 'Loads the saved native session on the next user turn.' } };
@@ -119,6 +123,14 @@ export class CortexCodeAdapter extends BaseBackendAdapter {
 
   async generateSummary(_messages: Pick<Message, 'role' | 'content'>[], fallback: string): Promise<string> { return fallback; }
 
+  async runOneShot(prompt: string, options: RunOneShotOptions = {}): Promise<string> {
+    return (await this.runSessionShot([prompt], options))[0];
+  }
+
+  runSessionShot(prompts: string[], options: RunOneShotOptions = {}): Promise<string[]> {
+    return this.shots.run(prompts, options);
+  }
+
   onSessionReset(conversationId: string): void {
     const owner = this.active.get(conversationId);
     if (owner) { owner.aborted = true; void owner.turn?.abort(); }
@@ -132,6 +144,8 @@ export class CortexCodeAdapter extends BaseBackendAdapter {
     for (const owner of this.active.values()) { owner.aborted = true; void owner.turn?.abort(); }
     this.active.clear();
     // A later send recreates idle supervision after a CLI update.
-    this.stopping = this.sessions.shutdown().catch(() => log.warn('Cortex shutdown cleanup failed'));
+    this.stopping = Promise.allSettled([this.shots.shutdown(), this.sessions.shutdown()]).then(results => {
+      if (results.some(result => result.status === 'rejected')) log.warn('Cortex shutdown cleanup failed');
+    });
   }
 }

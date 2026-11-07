@@ -62,6 +62,7 @@ runtimeSuite('CoCo POSIX runtime foundations', () => {
     expect(() => resolveCortexRuntime({ ...options, profile: { ...profile, disabled: true } })).toThrow('enabled');
     expect(() => resolveCortexRuntime({ ...options, profile: { ...profile, cortexCode: undefined } })).toThrow(/connection/);
     expect(() => resolveCortexRuntime({ ...options, profile: { ...profile, command: '/private/no-such-command' } })).toThrow('executable is unavailable');
+    expect(() => resolveCortexRuntime({ ...options, profile: { ...profile, command: 'missing-cortex-processor', env: { PATH: dir } } })).toThrow('executable was not found');
     const platform = Object.getOwnPropertyDescriptor(process, 'platform')!;
     try {
       Object.defineProperty(process, 'platform', { value: 'win32' });

@@ -60,14 +60,14 @@ describe('Cortex chat adapter ownership and recovery', () => {
 
   test('exports profile-local catalogs, conservative roles and deterministic processor fallbacks', async () => {
     expect(adapter.metadata.capabilities).toMatchObject({ stdinInput: false, agents: false, goals: false,
-      oneShot: { restrictedText: false, toolEnabled: false, sequential: false } });
+      oneShot: { restrictedText: false, toolEnabled: true, sequential: true } });
     expect(adapter.metadata.resumeCapabilities).toMatchObject({ activeTurnResume: 'unsupported', sessionResume: 'supported' });
     expect((await adapter.getMetadata()).models).toEqual([]);
     expect((await adapter.getMetadata({ cliProfile: options.cliProfile })).models?.some(model => model.id === options.model)).toBe(true);
     expect(adapter.metadata.models).toEqual([]);
     expect(await adapter.generateSummary([], 'Saved summary')).toBe('Saved summary');
     expect(await adapter.generateTitle('a title', 'Fallback')).toBe('Fallback');
-    await expect(adapter.runOneShot('do work')).rejects.toThrow('not implemented');
+    await expect(adapter.runOneShot('do work')).rejects.toThrow('zero-tool');
     expect(() => adapter.sendMessage('missing options')).toThrow('workspace identity');
   });
 
@@ -213,5 +213,22 @@ describe('Cortex chat adapter ownership and recovery', () => {
     expect(cortexMissingSession(error, id, '1.2.36')).toBe(false);
     expect(cortexMissingSession(error, 'different', '1.2.35')).toBe(false);
     expect(cortexMissingSession(new Error('Session not found'), id, '1.2.35')).toBe(false);
+  });
+
+  test('idle cleanup continues after a pool failure and is supervised again after shutdown', async () => {
+    adapter.shutdown(); await adapter.stopping;
+    jest.useFakeTimers();
+    try {
+      const evict = jest.spyOn(sessions, 'evictIdle').mockRejectedValueOnce(new Error('PRIVATE cleanup diagnostic')).mockResolvedValue(undefined);
+      adapter.sendMessage('pending stream', options);
+      await jest.advanceTimersByTimeAsync(10 * 60_000);
+      expect(evict).toHaveBeenCalledTimes(1);
+      await jest.advanceTimersByTimeAsync(10 * 60_000);
+      expect(evict).toHaveBeenCalledTimes(2);
+      expect(fixtures).toHaveLength(0);
+    } finally {
+      adapter.shutdown(); await adapter.stopping;
+      jest.useRealTimers();
+    }
   });
 });

@@ -8,6 +8,8 @@ import { createMemoryMcpServer, MEMORY_MCP_STUB_PATH } from '../src/services/mem
 import { ChatService } from '../src/services/chatService';
 import { BackendRegistry } from '../src/services/backends/registry';
 import { BaseBackendAdapter, type RunOneShotOptions } from '../src/services/backends/base';
+import { CortexCodeAdapter } from '../src/services/backends/cortex';
+import { CortexSessions } from '../src/services/backends/cortexSessions';
 import type {
   BackendMetadata,
   SendMessageOptions,
@@ -429,6 +431,29 @@ function makeRequest(
 // ── POST /memory/notes handler tests ──────────────────────────────────────
 
 describe('POST /mcp/memory/notes', () => {
+  test('a restored CoCo Memory selection fails before startup, keeps its profile and never saves a fallback note', async () => {
+    const start = jest.fn();
+    const adapter = new CortexCodeAdapter({ sessions: new CortexSessions(start) });
+    registry.register(adapter);
+    try {
+      const settings = await service.getSettings();
+      await service.saveSettings({ ...settings, cliProfiles: [{ id: 'cortex-memory', name: 'CoCo Memory', harness: 'cortex-code', authMode: 'account',
+        cortexCode: { connection: 'fixture' }, createdAt: '', updatedAt: '' }], memory: { cliProfileId: 'cortex-memory', cliBackend: 'cortex-code' } });
+      const conversation = await service.createConversation('Restored Memory selection', tmpDir);
+      await service.setWorkspaceMemoryEnabled(conversation.workspaceId, true);
+      const session = memoryMcp.issueMemoryMcpSession(conversation.id, conversation.workspaceId);
+      await startHttpServer(memoryMcp.router);
+      const response = await makeRequest('POST', '/mcp/memory/notes', { content: 'Remember this fixture rule' }, { 'x-memory-token': session.token });
+      expect(response.status).toBe(502);
+      expect(response.body.message).toContain('Memory note was not saved');
+      expect(response.body.message).toContain('zero-tool');
+      expect(start).not.toHaveBeenCalled();
+      expect(stubCli._oneShotCalls).toHaveLength(0);
+      expect((await service.getWorkspaceMemory(conversation.workspaceId))?.files || []).toEqual([]);
+      expect((await service.getSettings()).memory?.cliProfileId).toBe('cortex-memory');
+    } finally { adapter.shutdown(); await adapter.stopping; }
+  });
+
   afterEach(async () => {
     await stopHttpServer();
   });

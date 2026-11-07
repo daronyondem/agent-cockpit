@@ -381,6 +381,18 @@ After a Worktrees enable or disable succeeds, `workspaceSettings.jsx` refreshes 
 
 ### Cortex Code setup preview
 
+Settings → Memory excludes CoCo from new processor choices through
+`screens/processorProfiles.ts`, which uses the shared restrictedText eligibility
+policy. An unsupported saved profile remains visible as a disabled option with
+its reason and an instruction to select another profile. Rendering does not
+rewrite the saved setting or choose another harness. The control lazy-loads
+`screens/memoryProcessorSelect.jsx` when the Memory tab renders, with a disabled
+loading select as its Suspense fallback. This keeps the shared selection policy
+out of the 80 KiB Settings entry chunk; the control has its own 6 KiB JS budget.
+Tool-enabled sequential
+execution and verified PNG OCR are backend capabilities; remaining processor
+selectors and full native browser acceptance stay in C41/P7.
+
 Welcome's CLI panel and Settings → CLI Profiles lazy-load the shared focused
 `cortexSetup.jsx`/CSS component. Its explicit expansion loads native connection
 summaries and any live job. It supports create-only OAuth connections, named

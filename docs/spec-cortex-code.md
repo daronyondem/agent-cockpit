@@ -4,16 +4,103 @@
 
 **Implemented scope:** P1 profiles, P2 transport/runtime, and P3 internal
 events/interactions/models/usage/attachments/artifacts, P4 connection/auth
-setup, and P5 durable chat/managed MCP, November 6, 2026.
+setup, P5 durable chat/managed MCP, and P6 C33/C34/C36 background execution,
+November 6, 2026.
 Native acceptance baseline is CoCo 1.2.35, macOS arm64.
 **Runtime status:** `CortexCodeAdapter` is registered in `server.ts` for chat.
-CoCo setup/authentication and durable chat are available; processors, full
-desktop/mobile acceptance and CLI installation/update support remain pending.
+CoCo setup/authentication, durable chat, tool-enabled ephemeral execution and
+verified PNG OCR are available. Individual KB/Context/Routine workflow certification,
+the remaining processor selection boundaries, full desktop/mobile acceptance
+and CLI installation/update support remain pending.
 The actual remote-browser setup
 through Cockpit is still an open acceptance gate (C26).
 See [the implementation tracker](design/cortex-code-implementation-plan.md),
 [native evaluation](research/cortex-code-acp-evaluation.md), and
 [Proposed ADR-0093](adr/0093-integrate-cortex-code-through-its-native-acp-interface.md).
+
+## Background execution and OCR (P6 C33/C34/C36)
+
+The public adapter delegates `runOneShot(prompt, options)` and
+`runSessionShot(prompts, options)` to `cortexShots.ts`. The former returns the
+first string from a one-prompt sequence; the latter returns one trimmed final
+answer per prompt. `allowTools` must be exactly `true`. Omitted/false values
+reject before session acquisition, plugin generation, version detection or
+native startup, including empty sequences and calls supplying MCP. G1 remains
+open: permission denial and native allowlists do not remove tool declarations.
+Memory governance/extraction/consolidation therefore cannot use CoCo. Existing
+deterministic title/summary fallbacks do not start inference.
+
+Each call requires an explicit profile and gets an unguessable processor lease
+and workspace identity, independent from durable chat and every concurrent job.
+The cwd is options.workingDir, adapter workingDir, then process.cwd. Selected
+profile/connection/model/effort and explicit MCP configuration use the existing
+native runtime/plugin boundaries. A sequence acquires one session and submits
+each new prompt once, without replaying earlier prompts or answers. It does not
+load a durable chat session, retry a prompt, or retain a runtime after returning.
+Native history retention remains CLI-owned.
+An empty tool-enabled sequence returns an empty array without spawning.
+
+A finite positive timeout (default 60 seconds) covers version detection,
+initialization, session creation, configuration, attachments and all prompts
+together. The native prompt receives only the remaining time. A pre-aborted
+signal rejects without startup. Deadline, caller abort and adapter shutdown
+stop the active turn/startup and await pool reset, including descendant and
+private MCP cleanup. Signal listeners/timers are removed on every path;
+cleanup is awaited before the job leaves the active set. Shutdown is reusable
+after CLI updates and cannot revive a late startup. Native diagnostics and
+cleanup failures are surfaced only as locally authored errors.
+
+Headless turns retain the observed ordinary allow/deny tool approval policy.
+Human questions, plan approval/revision and unrecognized/malformed permission
+requests receive native cancellation, cancel the current prompt and fail with
+`Cortex background work requires a human decision. Run this task in chat.`
+No question answer or plan approval is invented. Terminal failure ends the
+sequence before its next prompt. Ordinary chat continues using interactive
+decision cards and opaque generations. Token events still pass through
+`CortexTurn`; the existing string-only one-shot API does not return a usage
+ledger or fabricate Snowflake pricing.
+
+`RunOneShotAttachment` is declared in `src/types/backends.ts` and re-exported
+from the base adapter for compatibility. `CortexTurnOptions` additionally
+supports `headless` and `processorAttachments`. Processor attachments are
+explicit server-owned absolute paths (never parsed from prompt text), and may
+live outside execution cwd, such as conversation uploads or rendered KB pages.
+Only text and image modalities are accepted. Each path is checked against its
+real parent; a symlink escaping that parent rejects. Text uses the same extension/
+regular-file gate as chat. Images reuse bounded no-follow reads, PNG validation,
+5 MiB/file, 10 MiB/turn, ten attachments, 20-million-pixel and native-image gates.
+The verified model/version remains exactly `claude-sonnet-4-6` on 1.2.35 (including
+build suffixes); Auto and unsupported models fail before submitting a prompt.
+No PDF/audio/video attachment transport or JPEG support is claimed.
+
+Metadata now advertises `oneShot:{restrictedText:false,toolEnabled:true,sequential:true}`
+and `oneShotMediaInput.image:['explicit-attachment']`. Profile-local model metadata
+retains its independent verified image gate. The existing authenticated
+`POST /conversations/:id/attachments/ocr` path sends the trusted image through
+this transport and returns Markdown. Its existing image/model/path checks and
+90-second inference deadline remain in force. It has no new browser abort API;
+the processor accepts caller-owned AbortSignal independently.
+
+Settings → Memory uses the shared browser-safe role policy through the pure
+`processorProfileChoices` projection in a focused lazy `memoryProcessorSelect.jsx`
+control (6 KiB budget, keeping Settings at 80 KiB). Unsupported profiles are excluded from
+new choices. An existing unsupported selection stays visible and disabled,
+with an error and an instruction to select another profile; it is never silently
+replaced. Restored/programmatic CoCo Memory selections are still rejected by the
+adapter before spawn, and the actual Memory notes route reports that the note
+was not saved. The remaining global/workspace/import selection boundaries are
+C41; the individual KB conversion/digestion/dreaming, Workspace Context and
+Routine service certifications are C37–C40 and remain pending.
+
+Focused normal tests: `test/cortexShots.test.ts`, `test/processorProfiles.test.ts`,
+`test/memoryProcessorSelect.test.ts` (rendered choices, disabled saved selection,
+explicit user change and empty eligible catalog),
+the CoCo restored-selection case in `test/memoryMcp.test.ts`, and the existing
+backend/turn/interaction/attachment/runtime/protocol/process suites. The opt-in
+`scripts/probe-cortex-processors.ts` records native sequential continuity,
+headless question failure, actual OCR HTTP output, unsupported model rejection,
+cancellation after a native image prompt and fresh execution afterward. This
+is an isolated HTTP fixture, not full native browser/PM2/Windows/Linux acceptance.
 
 ## Durable chat and managed MCP (P5)
 
@@ -23,11 +110,11 @@ and an empty model list. `getMetadata({cliProfile})` discovers this profile's
 live catalog through an ephemeral `CortexSessions` lease. Discovery failure
 returns an empty catalog, never another profile's models or raw native errors.
 Discovery is still not authentication evidence. Chat advertises thinking,
-tools, questions, plans and plan revision. Steering, agents, goals and all three
-one-shot roles are false. Active-turn resume is unsupported; saved-session
+tools, questions, plans and plan revision. Steering, agents, goals and restricted
+one-shot work are false; tool-enabled/sequential roles are true under P6 above.
+Active-turn resume is unsupported; saved-session
 resume is supported. Titles use the inherited deterministic fallback; summaries
-return the supplied fallback without inference. Processor methods remain the
-base class's explicit unsupported behavior until P6.
+return the supplied fallback without inference.
 
 ### Chat ownership and instructions
 
@@ -478,10 +565,10 @@ remains their compatibility re-export facade. Existing upload/OCR and KB
 ingestion callers keep their current media checks through that path. A missing
 explicit model must not silently select a different media model.
 
-This phase adds the shared policy but does not wire it into every processor/UI
-selector. Such enforcement remains in P6/P7; no CoCo adapter is available to
-bypass the gates meanwhile. The strict native zero-tool boundary is unverified,
-so future CoCo metadata must explicitly deny `restrictedText` until certified.
+The shared policy now drives the Memory selector. Enforcement across the other
+processor/UI selectors remains C41/P7; CoCo's adapter independently rejects
+restricted calls before startup. The strict native zero-tool boundary is
+unverified, so CoCo metadata explicitly denies `restrictedText` until certified.
 Unknown Snowflake pricing and unsupported native goals/subagents remain outside
 this foundation; token/media/goal capabilities are not inferred from model names.
 
@@ -659,8 +746,8 @@ drains asynchronous artifact work, classifies the final result and emits one
 the iterator aborts unfinished work. Pre-start abort sends no prompt; abort
 during setup closes the transport; active-prompt abort uses native cancellation.
 The bridge does not acquire/release leases, persist external sessions, inject
-system instructions/MCP, register an adapter, or implement processor roles.
-P5 owns those chat responsibilities; processor roles remain P6.
+system instructions/MCP, register an adapter, or own processor leases.
+P5 owns chat orchestration; `cortexShots.ts` owns P6 processor leases.
 `allowTools:false` only denies reverse
 permissions; it does not establish a tool-free native session.
 

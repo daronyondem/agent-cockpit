@@ -1720,7 +1720,14 @@ verbatim; credentials/unknown fields are rejected. Setup account identities
 strip `configDir`/`SNOWFLAKE_HOME`, while explicit profile home metadata remains
 unverified for runtime isolation. See [the complete CoCo contract](spec-cortex-code.md)
 for validation, defaults, migration, capability fields and current availability.
-There is no registered CoCo execution/auth/update adapter yet.
+CoCo is registered for durable chat and tool-enabled one-shot/sequential work,
+with shared authentication setup; installation/update integration remains pending.
+Its one-shot capabilities are restrictedText:false, toolEnabled:true and
+sequential:true, with explicit image transport and independently gated models.
+The internal `RunOneShotAttachment` declaration lives in `src/types/backends.ts`
+and is re-exported by the base adapter: `{path:string, kind:ModelInputModality,
+mimeType?:string, name?:string}`. It describes trusted server files for processor
+requests and adds no persisted credential or conversation fields.
 
 ```json
 {

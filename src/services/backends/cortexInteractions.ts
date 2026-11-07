@@ -19,7 +19,8 @@ export class CortexInteractions {
   private ordinal = 0;
   private generation = crypto.randomUUID();
 
-  constructor(private client: CortexAcpClient, private sessionId: string, private emit: (event: StreamEvent) => void, private allowTools: boolean) {}
+  constructor(private client: CortexAcpClient, private sessionId: string, private emit: (event: StreamEvent) => void, private allowTools: boolean,
+    private onInteractionRequired?: () => void) {}
 
   get pendingId(): string | null { return this.client.isClosed ? null : this.pending[0]?.id || null; }
 
@@ -39,7 +40,7 @@ export class CortexInteractions {
       typeof option.optionId === 'string' && Boolean(option.optionId.trim()) && typeof option.name === 'string' && Boolean(option.name.trim()) && typeof option.kind === 'string'
         ? [{ id: option.optionId, name: option.name, kind: option.kind,
           ...(typeof option.description === 'string' ? { description: option.description } : {}), freeForm: cortexRecord(option._meta).freeForm === true }] : []) : [];
-    const deny = () => { this.client.respond(message.id!, { outcome: { outcome: 'cancelled' } }); return true; };
+    const deny = () => { this.client.respond(message.id!, { outcome: { outcome: 'cancelled' } }); this.onInteractionRequired?.(); return true; };
     if (!this.allowTools || !options.length || !Array.isArray(params.options) || options.length !== params.options.length
       || new Set(options.map(option => option.id)).size !== options.length || typeof call.toolCallId !== 'string' || typeof call.title !== 'string') return deny();
     const question = Number.isInteger(meta.questionIndex) && Number.isInteger(meta.totalQuestions)
@@ -57,6 +58,7 @@ export class CortexInteractions {
       this.client.respond(message.id, { outcome: { outcome: 'selected', optionId: allow.id } });
       return true;
     }
+    if (this.onInteractionRequired) return deny();
     this.pending.push({ message, id: `cortex-decision:${this.generation}:${++this.ordinal}`,
       kind: plan ? 'plan' : 'question', title: call.title, options, plan: this.plan });
     if (this.pending.length === 1) this.present();

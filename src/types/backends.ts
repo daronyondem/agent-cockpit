@@ -27,6 +27,14 @@ export interface BackendOneShotCapabilities {
 
 export type ModelInputModality = 'text' | 'image' | 'audio' | 'pdf' | 'video';
 
+/** Trusted server-owned file supplied to a background processor. */
+export interface RunOneShotAttachment {
+  path: string;
+  kind: ModelInputModality;
+  mimeType?: string;
+  name?: string;
+}
+
 export type ModelOutputModality = 'text' | 'image' | 'audio' | 'pdf' | 'video';
 
 export type OneShotMediaTransport = 'explicit-attachment' | 'native-file-tool';

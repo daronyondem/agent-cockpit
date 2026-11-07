@@ -79,6 +79,8 @@ test('context snapshots never bill tokens; final cache categories are separate a
 });
 
 test('diff and embedded resource content stays bounded in outcomes, and normal text boundaries preserve tool order', () => {
+  expect(cortexToolText([{ type: 'image', data: 'PRIVATE opaque data' },
+    { type: 'content', content: { type: 'resource_link', uri: 'https://PRIVATE.invalid' } }, null])).toBe('');
   expect(cortexToolText([{ type: 'diff', path: 'a.txt', oldText: 'before', newText: 'after' },
     { type: 'content', content: { type: 'resource', resource: { uri: 'memory://note', text: 'Resource body' } } },
     { type: 'content', content: { type: 'resource_link', uri: 'https://example.test', name: 'Reference' } },

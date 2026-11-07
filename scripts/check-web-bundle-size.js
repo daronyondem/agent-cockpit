@@ -19,6 +19,7 @@ const DEFAULT_BUDGETS = {
     'kbBrowser.js': 115 * KIB,
     'workspaceSettings.js': 95 * KIB,
     'settingsScreen.js': 80 * KIB,
+    'memoryProcessorSelect.js': 6 * KIB,
     'settingsMigrationTab.js': 20 * KIB,
     'cortexSetup.js': 8 * KIB,
     'dialog.js': 60 * KIB,

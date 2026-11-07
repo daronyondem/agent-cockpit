@@ -7,6 +7,7 @@ import { useToasts } from '../toast.jsx';
 import { CliUpdateStore } from '../cliUpdateStore.js';
 import { cliConfigDirField } from './cliProfileConfigDir.js';
 const CortexSetup = React.lazy(() => import('../cortexSetup.jsx').then(mod => ({ default: mod.CortexSetup })));
+const MemoryProcessorSelect = React.lazy(() => import('./memoryProcessorSelect.jsx'));
 
 const MigrationTab = React.lazy(() => import('./settingsMigrationTab.jsx').then(mod => ({ default: mod.MigrationTab })));
 const ArchivedWorkspacesPanel = React.lazy(() => import('./archivedWorkspaces.jsx').then(mod => ({ default: mod.ArchivedWorkspacesPanel })));
@@ -1691,10 +1692,10 @@ function SettingsMemoryTab({ settings, backends, profileBackends, loadProfileBac
         </div>
       </div>
       <Field label="Memory CLI profile">
-        <select value={selectedProfile ? selectedProfile.id : ''} onChange={(e) => onProfileChange(e.target.value)}>
-          {profiles.length === 0 ? <option value="">No CLI profiles available</option> : null}
-          {profiles.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
-        </select>
+        <React.Suspense fallback={<select disabled><option>Loading profiles…</option></select>}>
+          <MemoryProcessorSelect profiles={profiles} selectedId={selectedProfileId}
+            metadataForProfile={profile => backendForProfile(backends, profileBackends, profile)} onChange={onProfileChange}/>
+        </React.Suspense>
       </Field>
       {models.length ? (
         <Field label="Memory model">

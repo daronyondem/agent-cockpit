@@ -1,10 +1,10 @@
-import type { CortexTurnOptions, StreamEvent } from '../../types';
+import type { CortexTurnOptions, ErrorEvent, StreamEvent } from '../../types';
 import { CortexRuntime } from './cortexRuntime';
 import { cortexRecord } from './cortexProtocol';
 import { CortexEventDecoder } from './cortexEvents';
 import { CortexInteractions } from './cortexInteractions';
 import { configureCortex } from './cortexModels';
-import { cortexPromptContent } from './cortexAttachments';
+import { cortexPromptContent, cortexProcessorContent } from './cortexAttachments';
 import { CortexArtifacts } from './cortexArtifacts';
 import { cortexRuntimeError, cortexTerminalError } from './cortexErrors';
 
@@ -16,10 +16,16 @@ export class CortexTurn {
   private aborted = false;
   private started = false;
   private prompting = false;
+  private interactionRequired = false;
   private interactions: CortexInteractions;
 
   constructor(private runtime: CortexRuntime, private options: CortexTurnOptions) {
-    this.interactions = new CortexInteractions(runtime.client, runtime.sessionId || '', event => this.emit(event), options.allowTools);
+    this.interactions = new CortexInteractions(runtime.client, runtime.sessionId || '', event => this.emit(event), options.allowTools,
+      options.headless ? () => {
+        if (this.interactionRequired) return;
+        this.interactionRequired = true;
+        void runtime.cancel().catch(() => {}); // The lease owner still awaits runtime teardown.
+      } : undefined);
   }
 
   get pendingId(): string | null { return this.interactions.pendingId; }
@@ -57,8 +63,10 @@ export class CortexTurn {
     try {
       if (this.aborted) { this.emit({ type: 'error', error: 'Cortex turn cancelled', source: 'abort' }); return; }
       const model = await configureCortex(this.runtime, this.options);
-      const content = await cortexPromptContent(this.options.text, this.options.attachments || [], this.options.attachmentRoot,
-        model, this.runtime.version, cortexRecord(cortexRecord(this.runtime.init.agentCapabilities).promptCapabilities).image === true);
+      const image = cortexRecord(cortexRecord(this.runtime.init.agentCapabilities).promptCapabilities).image === true;
+      const content = this.options.headless
+        ? await cortexProcessorContent(this.options.text, this.options.processorAttachments || [], model, this.runtime.version, image)
+        : await cortexPromptContent(this.options.text, this.options.attachments || [], this.options.attachmentRoot, model, this.runtime.version, image);
       if (this.aborted) { this.emit({ type: 'error', error: 'Cortex turn cancelled', source: 'abort' }); return; }
       unsubscribe = this.runtime.subscribe(message => {
         if (message.id !== undefined) return this.interactions.handle(message);
@@ -70,7 +78,7 @@ export class CortexTurn {
       const result = cortexRecord(await this.runtime.prompt(content, this.options.timeoutMs));
       await artifactWork;
       const usage = decoder.usage.complete(result.usage, model);
-      const error = cortexTerminalError(this.aborted ? { ...result, stopReason: 'cancelled' } : result, decoder.finalText, this.runtime.version);
+      const error = this.interactionError() || cortexTerminalError(this.aborted ? { ...result, stopReason: 'cancelled' } : result, decoder.finalText, this.runtime.version);
       if (!error) {
         for (const event of decoder.finishText()) this.emit(event);
         for (const event of await artifacts.deliver(decoder.deliveries)) this.emit(event);
@@ -81,7 +89,7 @@ export class CortexTurn {
       if (!usage && result.stopReason !== 'cancelled' && !error) this.emit({ type: 'error', error: 'Cortex did not report complete token usage for this turn.', terminal: false, source: 'backend' });
     } catch (error) {
       await artifactWork;
-      this.emit(this.aborted ? { type: 'error', error: 'Cortex turn cancelled', source: 'abort' } : cortexRuntimeError(error));
+      this.emit(this.interactionError() || (this.aborted ? { type: 'error', error: 'Cortex turn cancelled', source: 'abort' } : cortexRuntimeError(error)));
     } finally {
       unsubscribe?.();
       this.interactions.cancel();
@@ -89,5 +97,9 @@ export class CortexTurn {
       this.ended = true;
       this.wake?.();
     }
+  }
+
+  private interactionError(): ErrorEvent | null {
+    return this.interactionRequired ? { type: 'error', error: 'Cortex background work requires a human decision. Run this task in chat.', source: 'backend' } : null;
   }
 }

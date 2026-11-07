@@ -5,6 +5,13 @@ without adding a mobile runtime choice or UI flow. No PWA metadata, assets or
 administration behavior changes. See [CoCo foundations](spec-cortex-code.md);
 native mobile chat acceptance remains a later phase.
 
+P6 C33/C34/C36 adds server-side tool-enabled sequential execution and verified
+PNG OCR through the existing endpoint. No new PWA settings, assets, metadata or
+administrative screen is added. Mobile consumers retain the shared profile-local
+model/media checks; full native mobile acceptance and remaining selection parity
+are C41/P7. Memory processor selection is a desktop administrative control;
+the backend rejects unsupported CoCo restricted calls regardless of client.
+
 [← Back to index](SPEC.md)
 
 Grok Build uses the shared mobile profile/model/effort, interaction, tool/Agent,

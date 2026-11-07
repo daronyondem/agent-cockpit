@@ -1,6 +1,6 @@
 # Cortex Code (CoCo) harness implementation plan
 
-**Status:** P0–P3 and P5 complete; P4 C21–C25 setup implemented, C26 actual remote-browser acceptance pending. P6 processor execution is next.
+**Status:** P0–P3 and P5 complete; P4 C21–C25 setup implemented, C26 actual remote-browser acceptance pending. P6 C33/C34/C36 complete; workflow certification C37–C41 is next. C35 remains conditional on G1.
 **Created:** 2026-11-05.
 **Planning baseline:** Agent Cockpit `0.4.166`, revision `11d14825e955f6c83364c3917558b4d3068a4bac`, plus the uncommitted CoCo research/guidance documents.
 **Native compatibility baseline:** Cortex Code `1.2.35`, distribution `1.2.35+191333.f82de3d91715`, macOS arm64.
@@ -34,8 +34,8 @@ Planning assumptions:
 - Deliver core chat before optional parity work. Unverified features remain
   explicitly unavailable; do not emulate native goals or silently reroute work
   to a different profile to make a selector appear functional.
-- C01–C25 and C27–C32 are complete as recorded below. C26 and P6–P9 remain
-  open and do not describe shipped support.
+- C01–C25, C27–C34 and C36 are complete as recorded below. C26, conditional
+  C35 and C37–C59 remain open and do not describe shipped support.
 
 Track work as follows:
 
@@ -806,17 +806,17 @@ Desktop/mobile changes retain decision generations; PWA metadata is unchanged.
 
 ### P6 — Background workflows and processor eligibility
 
-- [ ] C33 — Implement tool-enabled `runOneShot` and native `runSessionShot`
+- [x] C33 — Implement tool-enabled `runOneShot` and native `runSessionShot`
   with per-call/session cleanup, deadline/abort and headless interaction policy.
   Verify sequential nonce/gleaning continuity and no concurrent-session reuse.
-- [ ] C34 — Enforce restricted-path rejection before spawn/prompt while G1 is
+- [x] C34 — Enforce restricted-path rejection before spawn/prompt while G1 is
   open, deterministic title/summary fallback and Memory selector exclusion.
   Verify programmatic callers cannot bypass the UI gate.
 - [ ] C35 — If G1 passes, implement restricted execution and enable only the
   verified roles. Verify zero definitions/operations across native/deferred MCP,
   hooks/skills/commands/slashes and sequential prompts; run actual governance,
   extraction and consolidation before selecting CoCo for Memory.
-- [ ] C36 — Certify image one-shot transport/model gates and attachment OCR.
+- [x] C36 — Certify image one-shot transport/model gates and attachment OCR.
   Verify a real image answer/OCR, cancellation and unsupported-model rejection.
 - [ ] C37 — Certify KB image/PDF/DOCX/PPTX conversion via existing pipelines.
   Verify rendered-page transport, conversion records, retries, reuse and no
@@ -833,6 +833,44 @@ Desktop/mobile changes retain decision generations; PWA metadata is unchanged.
 - [ ] C41 — Apply eligibility at all global/workspace processor overrides and
   restore/import boundaries. Verify unsupported saved selections produce useful
   errors and never silently switch harness or enable unsafe tools.
+
+P6 C33/C34/C36 evidence (November 6, 2026; changes following `478d80b`):
+
+- `cortexShots.ts` owns unique tool-enabled ephemeral sessions, native sequential
+  continuity, one overall startup/turn deadline, AbortSignal and reusable
+  shutdown draining. Questions/plans fail headlessly; interrupted work is never
+  replayed or retried by the adapter. Processor files reuse the existing PNG
+  byte/model/version limits through trusted server paths outside cwd.
+- Focused tests cover concurrent isolation, sequential prompts without replay,
+  startup/active cancellation/deadline/shutdown, fresh post-update jobs, private
+  error withholding, native question/plan decisions, unsupported media and
+  model rejection before prompt. The actual Memory notes route rejects a saved
+  CoCo processor without startup or fallback note. The pure Memory-selector
+  projection excludes unsupported choices and preserves a disabled saved one.
+- Opt-in `CORTEX_PROCESSOR_PROBE=1 CORTEX_TEST_CONNECTION=<saved-name> npx tsx
+  scripts/probe-cortex-processors.ts` passed with native 1.2.35/macOS arm64/Node
+  26.0.0, exit 0. Private evidence directory:
+  `cockpit-cortex-processors-8Vg2wG` under the system temp directory (final repeat
+  after shutdown-error draining coverage; the earlier `lD74CG` report also passed). Exact nonce
+  recall, actual native headless question, HTTP OCR of a synthetic PNG,
+  Auto-image rejection, cancellation after native image submission and a fresh
+  exact-response process all passed. Shared terminal auth was retained.
+- Earlier probe runs remain failures in their private reports: the first
+  sequential stage failed; a diagnostic repeat confirmed exact nonce recall but
+  a strict acknowledgment mismatch. A subsequent run reached OCR but exceeded the HTTP
+  test helper's 15-second timeout. The native probe now permits acknowledgment
+  punctuation and uses an explicit 150-second HTTP deadline for the existing
+  90-second OCR inference. No adapter retry or auth reset was added.
+- C35 remains gated: no new zero-tool mechanism was demonstrated. C37–C40 need
+  actual individual service/database/materialized-output certification; C41
+  still needs the other global/workspace/import selection boundaries. Primitive
+  and OCR success does not mark those tasks complete. C26 and full native
+  browser/PM2/Windows/Linux acceptance remain open.
+- Final checks passed: full 156-suite/2,797-test coverage run, focused new
+  rendered selector and budget tests, backend/web/mobile typechecks, zero-warning
+  lint, maintainability, 189-route spec drift and 92-ADR lint. Desktop/mobile
+  builds passed after the suite; desktop JS is 906.2 KiB/910 KiB. The Memory
+  control is lazy-loaded under its own 6 KiB limit, preserving Settings at 80 KiB.
 
 ### P7 — Desktop and mobile
 
@@ -1024,6 +1062,7 @@ At implementation time update only the relevant current specifications:
 | 2026-11-06 | P1 C04–C07 complete; 52 tasks remain unchecked | Profile/capability foundation change | No new native CLI claims | 135 suites / 2,604 tests passed; backend/web/mobile typechecks; no runtime/UI execution registration |
 | 2026-11-06 | P2 C08–C12 complete; 47 tasks remain unchecked | Dedicated native runtime foundation change, following `869ee8a` | CoCo 1.2.35 / macOS arm64 / Node 26.0.0 | 138 suites / 2,651 tests passed, including 47 P2 tests; real runtime smoke passed all scenarios; no adapter/UI registration; P3 event mapping next |
 | 2026-11-06 | P3 C13–C20 complete; 39 tasks remain unchecked | Internal turn mapping change, following `549f111` | CoCo 1.2.35 / macOS arm64 / Node 26.0.0 | 144 suites / 2,681 tests passed, including 30 P3 tests; real event/config/question/revised-plan/PNG/delivery/missing-auth probe passed; generic upload/queue/ledger/artifact route integration; P4 auth setup next |
+| 2026-11-06 | P6 C33/C34/C36 complete; 25 tasks remain unchecked | Ephemeral processor/OCR change following `478d80b` | CoCo 1.2.35 / macOS arm64 / Node 26.0.0 | 156 suites / 2,797 tests passed; final V8 88.41% lines, 75.92% branches, 93.76% functions; native sequential/headless/OCR/model-gate/image-cancel/fresh-process probe passed; C26, conditional C35 and C37–C59 remain open |
 
 ## 13. References
 
