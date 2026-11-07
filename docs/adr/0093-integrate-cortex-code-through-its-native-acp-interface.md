@@ -49,6 +49,14 @@ affects:
   - src/services/backends/cortexPlugin.ts
   - src/services/backends/cortexShots.ts
   - scripts/probe-cortex-processors.ts
+  - scripts/probe-cortex-kb.ts
+  - src/services/backends/base.ts
+  - src/services/knowledgeBase/ingestion/pageConversion.ts
+  - src/services/knowledgeBase/handlers/pdf.ts
+  - src/services/knowledgeBase/handlers/docx.ts
+  - src/services/knowledgeBase/handlers/pptx.ts
+  - src/services/knowledgeBase/handlers/passthrough.ts
+  - src/services/knowledgeBase/dream.ts
   - web/AgentCockpitWeb/src/screens/processorProfiles.ts
   - web/AgentCockpitWeb/src/screens/memoryProcessorSelect.jsx
   - src/contracts/streams.ts
@@ -121,6 +129,17 @@ work. Headless questions/plans fail rather than invent human decisions. Explicit
 server image paths reuse the same version/model/byte validation as chat uploads.
 Keep Memory unavailable while G1 remains open and preserve unsupported saved
 selections visibly instead of silently replacing their harness.
+
+Service wrappers must also honor native execution ownership. Add server-only
+adapter policies for automatic one-shot retry and required processor image
+format, retaining legacy defaults. CoCo opts out of retrying thrown, empty or
+invalid results because the native process may already have performed tool work;
+classifying an error as transport/auth does not prove that a retry is safe.
+Preserve pending synthesis work on invalid output. Prepare PNG siblings in the
+existing ingestion helper so common Office/JPEG inputs use verified native PNG
+transport while originals and conversion records remain intact. Avoid harness
+checks or CoCo protocol imports in KB services and avoid changing shared user
+Office installations/profiles or Snowflake auth to make tests pass.
 
 Pending question/plan replies use `sendInput` and exact reverse RPC ownership,
 including ID 0. Carry a fresh opaque decision generation through REST/WS and

@@ -1,6 +1,6 @@
 # Cortex Code (CoCo) harness implementation plan
 
-**Status:** P0–P3 and P5 complete; P4 C21–C25 setup implemented, C26 actual remote-browser acceptance pending. P6 C33/C34/C36 complete; workflow certification C37–C41 is next. C35 remains conditional on G1.
+**Status:** P0–P3 and P5 complete; P4 C21–C25 setup implemented, C26 actual remote-browser acceptance pending. P6 C33/C34/C36–C38 complete; Context/Routine/remaining selection certification C39–C41 is next. C35 remains conditional on G1.
 **Created:** 2026-11-05.
 **Planning baseline:** Agent Cockpit `0.4.166`, revision `11d14825e955f6c83364c3917558b4d3068a4bac`, plus the uncommitted CoCo research/guidance documents.
 **Native compatibility baseline:** Cortex Code `1.2.35`, distribution `1.2.35+191333.f82de3d91715`, macOS arm64.
@@ -34,8 +34,8 @@ Planning assumptions:
 - Deliver core chat before optional parity work. Unverified features remain
   explicitly unavailable; do not emulate native goals or silently reroute work
   to a different profile to make a selector appear functional.
-- C01–C25, C27–C34 and C36 are complete as recorded below. C26, conditional
-  C35 and C37–C59 remain open and do not describe shipped support.
+- C01–C25, C27–C34 and C36–C38 are complete as recorded below. C26, conditional
+  C35 and C39–C59 remain open and do not describe shipped support.
 
 Track work as follows:
 
@@ -818,10 +818,10 @@ Desktop/mobile changes retain decision generations; PWA metadata is unchanged.
   extraction and consolidation before selecting CoCo for Memory.
 - [x] C36 — Certify image one-shot transport/model gates and attachment OCR.
   Verify a real image answer/OCR, cancellation and unsupported-model rejection.
-- [ ] C37 — Certify KB image/PDF/DOCX/PPTX conversion via existing pipelines.
+- [x] C37 — Certify KB image/PDF/DOCX/PPTX conversion via existing pipelines.
   Verify rendered-page transport, conversion records, retries, reuse and no
   Pandoc/LibreOffice installation regression.
-- [ ] C38 — Certify actual KB digestion/gleaning/glossary and dreaming/search/
+- [x] C38 — Certify actual KB digestion/gleaning/glossary and dreaming/search/
   synthesis operations with isolated databases. Verify structured output parsing,
   cancellation, usage and safe behavior of existing retry policies.
 - [ ] C39 — Certify Workspace Context scan/maintenance and active Memory inbox
@@ -861,7 +861,7 @@ P6 C33/C34/C36 evidence (November 6, 2026; changes following `478d80b`):
   test helper's 15-second timeout. The native probe now permits acknowledgment
   punctuation and uses an explicit 150-second HTTP deadline for the existing
   90-second OCR inference. No adapter retry or auth reset was added.
-- C35 remains gated: no new zero-tool mechanism was demonstrated. C37–C40 need
+- At this initial processor checkpoint C35 remained gated and C37–C40 needed
   actual individual service/database/materialized-output certification; C41
   still needs the other global/workspace/import selection boundaries. Primitive
   and OCR success does not mark those tasks complete. C26 and full native
@@ -871,6 +871,40 @@ P6 C33/C34/C36 evidence (November 6, 2026; changes following `478d80b`):
   lint, maintainability, 189-route spec drift and 92-ADR lint. Desktop/mobile
   builds passed after the suite; desktop JS is 906.2 KiB/910 KiB. The Memory
   control is lazy-loaded under its own 6 KiB limit, preserving Settings at 80 KiB.
+
+P6 C37/C38 evidence (November 6, 2026; changes following `f7d6d07`):
+
+- Added server-only adapter policies for service-owned automatic retry and
+  required processor image format, retaining legacy defaults. CoCo disables
+  automatic retries. KB conversion wrappers run once on failed/empty CoCo
+  output; handlers preserve image-only/original recovery with accurate zero
+  retries. Dreaming rejects empty/invalid results before applying operations or
+  clearing pending entries. Other harnesses retain their existing retry behavior.
+- All visual handlers prepare PNG siblings for CoCo, including small JPEGs and
+  embedded Office images, with no upscaling or original-byte replacement.
+  Native model/version/PNG limits remain enforced. Tests cover conversion
+  records/reuse, original bytes, Auto model refusal without a model fallback,
+  headless interaction/shutdown failure without resend, legacy retries, all
+  four handlers' actual retry counts and pending synthesis retention.
+- `CORTEX_KB_PROBE=1 CORTEX_TEST_CONNECTION=<saved-name> npx tsx
+  scripts/probe-cortex-kb.ts` passed with exit 0 on CoCo 1.2.35/macOS arm64/
+  Node 26.0.0, Pandoc 3.9.0.2 and LibreOffice 26.2.3.2. Private report:
+  `cockpit-cortex-kb-XyBPEJ/report.json` under system temp. Each JPEG/PDF/DOCX/
+  PPTX used one native image prompt and preserved/reused conversion records.
+  The earlier `simoDC` probe also passed conversion/digestion/cold-start synthesis
+  but did not exercise native search; it is not evidence for that later gate.
+- Real digestion/gleaning shared one native session. Real dreaming/re-dreaming
+  persisted SQLite topics, run history and Markdown; glossary CRUD/expansion,
+  real local Ollama nomic-embed-text vectors (768 dimensions), PGLite vector
+  search and native `search_entries`, `search_topics`, `get_topic` calls passed.
+  The run made eleven native prompts: ten successful calls with complete final
+  counters and one intentionally interrupted digest. The interrupted raw stayed
+  failed with no entries or resend, and fresh exact-response inference succeeded.
+  Shared Snowflake auth and existing Office installations were retained.
+- The probe has a ten-minute external completion deadline and closes native
+  runtimes and PGLite/SQLite before deleting fixture data. Normal tests use a
+  deterministic CoCo process fixture; no native browser, PM2 restart, Windows
+  or Linux claim is made. C26, G1/conditional C35 and C39–C59 remain open.
 
 ### P7 — Desktop and mobile
 
@@ -1063,6 +1097,7 @@ At implementation time update only the relevant current specifications:
 | 2026-11-06 | P2 C08–C12 complete; 47 tasks remain unchecked | Dedicated native runtime foundation change, following `869ee8a` | CoCo 1.2.35 / macOS arm64 / Node 26.0.0 | 138 suites / 2,651 tests passed, including 47 P2 tests; real runtime smoke passed all scenarios; no adapter/UI registration; P3 event mapping next |
 | 2026-11-06 | P3 C13–C20 complete; 39 tasks remain unchecked | Internal turn mapping change, following `549f111` | CoCo 1.2.35 / macOS arm64 / Node 26.0.0 | 144 suites / 2,681 tests passed, including 30 P3 tests; real event/config/question/revised-plan/PNG/delivery/missing-auth probe passed; generic upload/queue/ledger/artifact route integration; P4 auth setup next |
 | 2026-11-06 | P6 C33/C34/C36 complete; 25 tasks remain unchecked | Ephemeral processor/OCR change following `478d80b` | CoCo 1.2.35 / macOS arm64 / Node 26.0.0 | 156 suites / 2,797 tests passed; final V8 88.41% lines, 75.92% branches, 93.76% functions; native sequential/headless/OCR/model-gate/image-cancel/fresh-process probe passed; C26, conditional C35 and C37–C59 remain open |
+| 2026-11-06 | P6 C37/C38 complete; 23 tasks remain unchecked | KB workflow certification change following `f7d6d07` | CoCo 1.2.35 / macOS arm64 / Node 26.0.0 / Pandoc 3.9.0.2 / LibreOffice 26.2.3.2 | 158 suites / 2,814 tests passed; V8 88.46% lines, 76.01% branches, 93.74% functions; backend/web/mobile typechecks, lint, maintainability, spec drift, ADR lint, web/mobile builds and budget passed. Native conversion/reuse, digestion/gleaning, synthesis/re-dream, glossary/real embeddings/KB MCP and interrupt/fresh-process checks passed. Shared auth retained; C26, conditional C35 and C39–C59 remain open |
 
 ## 13. References
 

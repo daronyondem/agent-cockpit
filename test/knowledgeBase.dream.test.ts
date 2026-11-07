@@ -1028,6 +1028,28 @@ describe('KbDreamService', () => {
 
   // ── Parse-failure retry + debug logging ───────────────────────────────
 
+  test.each(['CLI cancellation', 'empty output', 'parse warning', 'schema warning'])('a no-retry harness preserves pending entries after %s', async failure => {
+    Object.assign(mockAdapter, { allowAutomaticOneShotRetry: false });
+    mockDb.listNeedsSynthesisEntryIds.mockReturnValue(['entry-1']); mockDb.listTopicSummaries.mockReturnValue([]);
+    if (failure === 'CLI cancellation') mockAdapter.runOneShot.mockRejectedValueOnce(new Error('Cortex background work cancelled.'));
+    else if (failure === 'empty output') mockAdapter.runOneShot.mockResolvedValueOnce('  ');
+    else {
+      mockAdapter.runOneShot.mockResolvedValueOnce('malformed response');
+      (dreamOpsMod.parseDreamOutput as jest.Mock).mockReturnValueOnce({ operations: [], warnings: [
+        failure === 'parse warning' ? 'JSON parse error' : 'Missing or non-array "operations" field',
+      ] });
+    }
+    const mkdir = jest.spyOn(fs, 'mkdirSync').mockImplementation(() => undefined);
+    const write = jest.spyOn(fs, 'writeFileSync').mockImplementation(() => undefined);
+    try {
+      const result = await service.dream('ws-hash');
+      expect(mockAdapter.runOneShot).toHaveBeenCalledTimes(1);
+      expect(result.processedEntries).toBe(0); expect(result.skippedBatches).toBe(1);
+      expect(result.errors).not.toEqual([]); expect(mockDb.clearNeedsSynthesis).not.toHaveBeenCalled();
+      if (failure.includes('warning')) expect(write.mock.calls.some(call => String(call[1]).includes('Attempts: 1'))).toBe(true);
+    } finally { mkdir.mockRestore(); write.mockRestore(); }
+  });
+
   test('retries CLI once when parser reports a JSON parse failure', async () => {
     mockDb.listNeedsSynthesisEntryIds.mockReturnValue(['entry-1']);
     mockDb.listTopicSummaries.mockReturnValue([]);

@@ -1340,7 +1340,8 @@ export class KbDreamService {
   ): Promise<string | null> {
     try {
       return await adapter.runOneShot(prompt, options);
-    } catch {
+    } catch (error) {
+      if (adapter.allowAutomaticOneShotRetry === false) throw error;
       // Retry once.
       try {
         return await adapter.runOneShot(prompt, options);
@@ -1366,8 +1367,15 @@ export class KbDreamService {
     phase: string,
   ): Promise<T | null> {
     const first = await this._runCliWithRetry(adapter, prompt, options);
+    if (adapter.allowAutomaticOneShotRetry === false && !first?.trim()) {
+      throw new Error('Dreaming CLI returned empty output; automatic retry is disabled for this harness.');
+    }
     if (!first) return null;
     const parsedFirst = parse(first);
+    if (adapter.allowAutomaticOneShotRetry === false && parsedFirst.warnings.length > 0) {
+      this._writeParseFailureLog(hash, phase, [first]);
+      throw new Error('Dreaming CLI output failed validation; automatic retry is disabled for this harness.');
+    }
     if (!hasParseFailure(parsedFirst.warnings)) return parsedFirst;
 
     // Parse failed — one more CLI attempt.

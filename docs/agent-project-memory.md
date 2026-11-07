@@ -211,17 +211,23 @@ tool is unavailable.
   desktop/mobile replies. Real CoCo 1.2.35/macOS app probes passed native Memory/KB
   discovery, actual shims, separate Claude Memory governance/search, SQLite/PGLite
   keyword access, idle/adapter-restart nonce recall and persisted native delivery.
-  Current MCP tokens have no TTL; native semantic embedding availability was not
-  tested. P6 C33/C34/C36 now enables tool-enabled ephemeral/native sequential
+  Current MCP tokens have no TTL. P6 C33/C34/C36 now enables tool-enabled ephemeral/native sequential
   execution in `cortexShots.ts` and verified PNG OCR. Use one overall deadline,
   drain cancellation/shutdown, never retry/replay interrupted work, and fail
   headless questions/plans instead of inventing answers. Native 1.2.35/macOS
   processor/OCR/cancel/fresh-process acceptance passed with shared login intact.
   Strict tool-free processors, goals, agents and steering remain gated. Memory
   selections must exclude CoCo, retaining an unsupported saved choice visibly
-  without silently choosing another harness. C37–C41 individual workflow/remaining
-  selection certification and full native client/OS-process-restart/platform
-  acceptance remain later work.
+  without silently choosing another harness. P6 C37/C38 KB certification passed
+  actual JPEG/PDF/DOCX/PPTX conversion, same-session digestion/gleaning,
+  dreaming/re-dreaming, glossary-expanded search with real Ollama/PGLite and
+  native KB MCP calls, interruption without retry, and fresh authenticated
+  inference. Keep adapter retry/image policies in the server facade: CoCo
+  disables automatic one-shot retries and requires original-preserving PNG
+  sidecars; invalid/empty synthesis must retain pending entries. Run
+  `scripts/probe-cortex-kb.ts` for native KB drift. C39–C41 Context/Routines and
+  remaining selection certification, plus full native client/OS-process-restart/
+  platform acceptance, remain later work.
   See the current CoCo spec and progress tracker.
 - Fresh installs should be provider-neutral. Do not imply Claude Code is
   configured when the user has not installed or authenticated it.

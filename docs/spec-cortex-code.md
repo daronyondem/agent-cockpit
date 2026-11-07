@@ -4,12 +4,13 @@
 
 **Implemented scope:** P1 profiles, P2 transport/runtime, and P3 internal
 events/interactions/models/usage/attachments/artifacts, P4 connection/auth
-setup, P5 durable chat/managed MCP, and P6 C33/C34/C36 background execution,
+setup, P5 durable chat/managed MCP, and P6 C33/C34/C36–C38 background/KB execution,
 November 6, 2026.
 Native acceptance baseline is CoCo 1.2.35, macOS arm64.
 **Runtime status:** `CortexCodeAdapter` is registered in `server.ts` for chat.
 CoCo setup/authentication, durable chat, tool-enabled ephemeral execution and
-verified PNG OCR are available. Individual KB/Context/Routine workflow certification,
+verified PNG OCR and native KB conversion/digestion/dreaming are available.
+Individual Context/Routine workflow certification,
 the remaining processor selection boundaries, full desktop/mobile acceptance
 and CLI installation/update support remain pending.
 The actual remote-browser setup
@@ -89,8 +90,7 @@ with an error and an instruction to select another profile; it is never silently
 replaced. Restored/programmatic CoCo Memory selections are still rejected by the
 adapter before spawn, and the actual Memory notes route reports that the note
 was not saved. The remaining global/workspace/import selection boundaries are
-C41; the individual KB conversion/digestion/dreaming, Workspace Context and
-Routine service certifications are C37–C40 and remain pending.
+C41; Workspace Context and Routine service certification remains C39–C40.
 
 Focused normal tests: `test/cortexShots.test.ts`, `test/processorProfiles.test.ts`,
 `test/memoryProcessorSelect.test.ts` (rendered choices, disabled saved selection,
@@ -101,6 +101,89 @@ backend/turn/interaction/attachment/runtime/protocol/process suites. The opt-in
 headless question failure, actual OCR HTTP output, unsupported model rejection,
 cancellation after a native image prompt and fresh execution afterward. This
 is an isolated HTTP fixture, not full native browser/PM2/Windows/Linux acceptance.
+
+## Knowledge Base workflows (P6 C37/C38)
+
+`BaseBackendAdapter` exposes two server-only execution policies. The getter
+`allowAutomaticOneShotRetry:boolean` defaults to true for existing harnesses;
+CoCo overrides it to false. `oneShotImageFormat:'png'|undefined` defaults to
+undefined; CoCo requires PNG. These are runtime policies, not settings,
+browser metadata or persisted credentials. They do not change the independent
+role/model/version media gates. The public facade delegates native work to the
+existing CoCo session/turn modules; KB code imports no CoCo/Grok/Kiro adapters.
+
+All four visual ingestion handlers pass the selected adapter's required format
+to `ensureAiReadyImage(srcPath,destPath,format?)`. A decoded non-PNG source is
+written as a `.ai.png` sibling when PNG is required, including when its long
+edge is already at or below 2576 pixels. Scaling is capped at 1, so small images
+are not enlarged. Large inputs still scale proportionally to the existing cap.
+The returned file is used for both the explicit native attachment and Markdown
+media link. Originals remain byte-preserved and both files are recorded in
+`mediaFiles`. Decode failure returns the original path; the adapter's byte/model/
+version gates still reject unsupported input. No new native JPEG support is
+advertised for chat or direct one-shot attachments.
+
+PDF pages and rasterized PPTX slides retain the existing unpdf/LibreOffice PNG
+pipeline and text/layout classification. DOCX retains Pandoc extraction and the
+100-pixel decorative-image filter, then prepares eligible figures. Standalone
+JPEG uploads and embedded Office JPEGs can therefore use CoCo's verified PNG
+transport. Existing harnesses keep their original format/downscaling behavior.
+The standalone-image metadata field `aiImagePrepared:true` marks a prepared
+CoCo sibling (format normalization and/or scaling); legacy preparation retains
+`downscaled:true`. No DB migration or conversion-record rewrite is performed.
+Deduplication still returns the original raw ID, preserves converted timestamps/
+bytes and adds locations without starting another conversion.
+
+`convertImageToMarkdown` makes one attempt for a no-retry adapter and at most two
+for existing retry-enabled adapters. Both thrown failures and empty output obey
+this policy. Successful first attempts record `aiRetries:0`. A failed CoCo
+conversion falls back through the existing handler behavior with `aiRetries:0`,
+an image link/original media retained, and `without retry` notes where that
+handler emits notes. Existing retry-enabled failures continue recording 1 and
+`after retry`. Touched handler failure logs use the backend logger.
+
+Digestion uses its existing selected profile/model/effort, chunk planning and
+frontmatter/Markdown parser. Gleaning calls native `runSessionShot` for the
+initial extraction and follow-up in one ephemeral session. Entries, provenance,
+SQLite state and PGLite embeddings are committed through the existing services.
+Interrupted native digestion records the raw as failed, creates no entries for
+the interrupted initial chunk and never automatically resends it. Explicit
+future user retries retain the existing service behavior.
+
+Dreaming and re-dreaming keep their existing operations validators, transactional
+application, topic Markdown materialization, run history, retrieval and KB MCP
+session lifetimes. For no-retry adapters, thrown execution errors are rethrown
+after the first call. Empty/whitespace output or any parser validation warning
+fails the batch before operations are applied or `needs_synthesis` is cleared.
+Validation failures retain one raw-response debug record under `_dream_debug`;
+empty/execution failures are reported without a second call. Pending entries
+remain available for a later explicit run. Other adapters keep the previous
+throw/JSON parse retry behavior and structural-warning behavior. Dream stop
+controls remain cooperative at existing batch/phase boundaries; no new stop API
+or automatic restart is introduced.
+
+Glossary authoring remains deterministic CRUD/query expansion, not automatic
+CoCo extraction. The existing glossary expansion and token-scoped search MCP
+operate over the same SQLite/PGLite data. Native acceptance used real local
+Ollama `nomic-embed-text` embeddings (768 dimensions), verified vector search,
+glossary-expanded entry search, and observed native `search_entries`,
+`search_topics` and `get_topic` calls. Successful native prompts reported complete
+token counters; intentionally interrupted prompts are excluded from that
+assertion. The string-only processor API still adds no billing ledger or
+invented Snowflake price.
+
+`scripts/probe-cortex-kb.ts` is opt-in and uses a private temporary HTTP/KB
+fixture with a ten-minute external completion deadline. It generates JPEG,
+PDF, DOCX and PPTX inputs with native Pandoc/LibreOffice, verifies conversion/
+records/reuse/original preservation, digests with gleaning, materializes topics,
+checks glossary and real embeddings/search/MCP, re-dreams, interrupts an actual
+digest after prompt submission and verifies fresh inference afterward. The
+managed MCP plugin uses a fixture-only loopback endpoint and bearer token.
+Teardown drains native jobs and closes PGLite/SQLite before removing fixtures.
+Normal terminal auth and shared Office profiles/installations remain intact.
+This certifies macOS arm64 on CoCo 1.2.35, Pandoc 3.9.0.2 and LibreOffice 26.2.3.2;
+it is not full native browser/PM2/Windows/Linux acceptance. C26, conditional C35,
+C39–C41 and later client/install/platform gates remain open.
 
 ## Durable chat and managed MCP (P5)
 

@@ -12,6 +12,11 @@ model/media checks; full native mobile acceptance and remaining selection parity
 are C41/P7. Memory processor selection is a desktop administrative control;
 the backend rejects unsupported CoCo restricted calls regardless of client.
 
+P6 C37/C38 adds server-side KB conversion/digestion/dreaming certification.
+Prepared CoCo PNG siblings use the existing KB media/Markdown routes; originals
+remain available. No PWA UI, metadata, asset source or administration changes
+are required. Native mobile/browser compatibility remains a separate gate.
+
 [← Back to index](SPEC.md)
 
 Grok Build uses the shared mobile profile/model/effort, interaction, tool/Agent,

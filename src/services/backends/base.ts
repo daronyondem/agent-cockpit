@@ -72,6 +72,12 @@ export class BaseBackendAdapter {
     this.workingDir = options.workingDir || null;
   }
 
+  /** Execution policy for service-owned retries, including malformed output. */
+  get allowAutomaticOneShotRetry(): boolean { return true; }
+
+  /** A processor may require a prepared raster format; originals stay intact. */
+  get oneShotImageFormat(): 'png' | undefined { return undefined; }
+
   get metadata(): BackendMetadata {
     throw new Error('BaseBackendAdapter.metadata must be implemented by subclass');
   }

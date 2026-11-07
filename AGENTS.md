@@ -222,8 +222,20 @@ root boundary. Review `test/cortexShots.test.ts`, `test/processorProfiles.test.t
 `test/memoryProcessorSelect.test.ts` and the restored CoCo Memory case in
 `test/memoryMcp.test.ts`. Run opt-in
 `scripts/probe-cortex-processors.ts` for native sequential/headless/OCR/cancel
-drift. C37–C41 workflow/selection certification and full client/platform acceptance
+drift. C39–C41 workflow/selection certification and full client/platform acceptance
 remain separate; a successful primitive or OCR run does not close those gates.
+
+P6 C37/C38 certifies native KB workflows through `scripts/probe-cortex-kb.ts`
+(opt-in, isolated SQLite/PGLite/HTTP fixture, real Ollama/Pandoc/LibreOffice,
+shared terminal auth). `BaseBackendAdapter.allowAutomaticOneShotRetry` defaults
+to true; CoCo overrides false. KB conversion/dreaming wrappers must honor it for
+execution errors and malformed output; never mark invalid CoCo synthesis batches
+processed or automatically resend interrupted tool work. Processor image format
+policy is `oneShotImageFormat` (CoCo: png); prepare `.ai.png` siblings in the KB
+image helper while preserving original bytes/media records and native image
+gates. Review `test/cortexKbIntegration.test.ts`, the page-conversion/handler/
+dreaming suites and CoCo backend tests. Native workflow success does not certify
+Windows/Linux, full browser/PM2 acceptance, C26, or strict Memory execution.
 
 # Server Management
 

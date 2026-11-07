@@ -52,6 +52,15 @@ class StubAdapter extends BaseBackendAdapter {
 const IMAGE_PATH = '/tmp/raw-abc/pages/page-0042.png';
 
 describe('convertImageToMarkdown', () => {
+  test.each(['failure', 'empty'])('a harness that forbids retries runs once on %s', async outcome => {
+    const adapter = new StubAdapter(async () => {
+      if (outcome === 'failure') throw new Error('Cortex background work cancelled.');
+      return '  ';
+    });
+    Object.defineProperty(adapter, 'allowAutomaticOneShotRetry', { value: false });
+    await expect(convertImageToMarkdown(IMAGE_PATH, { adapter })).rejects.toThrow(outcome === 'failure' ? 'cancelled' : 'empty output');
+    expect(adapter.calls).toHaveLength(1);
+  });
   test('returns markdown with retried=false on first success', async () => {
     const adapter = new StubAdapter(async () => '# Page 42\n\nHello world.');
 
@@ -177,6 +186,19 @@ describe('ensureAiReadyImage', () => {
   });
   afterEach(async () => {
     await fsp.rm(workDir, { recursive: true, force: true }).catch(() => undefined);
+  });
+
+  test('a required PNG sidecar normalizes a small JPEG without resizing or modifying its original', async () => {
+    const source = path.join(workDir, 'figure.jpg'); const dest = source + '.ai.png';
+    const bytes = napiCanvas.createCanvas(480, 320).toBuffer('image/jpeg');
+    await fsp.writeFile(source, bytes);
+    expect(await ensureAiReadyImage(source, dest)).toBe(source);
+    expect(await ensureAiReadyImage(source, dest, 'png')).toBe(dest);
+    expect((await fsp.readFile(dest)).subarray(0, 8)).toEqual(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]));
+    const image = await napiCanvas.loadImage(dest);
+    expect([image.width, image.height]).toEqual([480, 320]);
+    expect(await fsp.readFile(source)).toEqual(bytes);
+    expect(await ensureAiReadyImage(dest, dest + '.extra.png', 'png')).toBe(dest);
   });
 
   test('writes a downscaled PNG sibling and returns its path when long edge exceeds the cap', async () => {

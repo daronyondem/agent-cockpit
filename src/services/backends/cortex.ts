@@ -29,6 +29,9 @@ export class CortexCodeAdapter extends BaseBackendAdapter {
   private sessions: CortexSessions;
   private shots: CortexShots;
 
+  get allowAutomaticOneShotRetry(): boolean { return false; }
+  get oneShotImageFormat(): 'png' { return 'png'; }
+
   private ensureIdleTimer(): void {
     if (this.idleTimer) return;
     this.idleTimer = setInterval(() => {

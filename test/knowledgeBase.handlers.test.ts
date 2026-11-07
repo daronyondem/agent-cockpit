@@ -230,18 +230,14 @@ describe('pdfHandler', () => {
     }
   });
 
-  test('falls back to image-only when the Ingestion CLI fails twice', async () => {
+  test.each([true, false])('PDF failure preserves image-only output with automatic retry %s', async allowAutomaticOneShotRetry => {
     const spy = jest.spyOn(pdfSignalsModule, 'extractPageSignals').mockResolvedValue({
       extractedText: '',
       extractedChars: 0,
       figureCount: 1,
       tableLikely: false,
     });
-    const stubAdapter = {
-      async runOneShot() {
-        throw new Error('CLI exploded');
-      },
-    } as any;
+    const stubAdapter = { allowAutomaticOneShotRetry, runOneShot: jest.fn().mockRejectedValue(new Error('CLI exploded')) } as any;
 
     try {
       const buffer = readFixture('sample.pdf');
@@ -252,7 +248,9 @@ describe('pdfHandler', () => {
         outDir,
         ingestionAdapter: stubAdapter,
       });
-      expect(result.text).toMatch(/^> source: image-only \| note: AI conversion failed after retry$/m);
+      expect(result.text).toContain(`AI conversion failed ${allowAutomaticOneShotRetry ? 'after' : 'without'} retry`);
+      expect(stubAdapter.runOneShot).toHaveBeenCalledTimes(allowAutomaticOneShotRetry ? 2 : 1);
+      expect((result.metadata?.pages as Array<{ aiRetries: number }>)[0].aiRetries).toBe(allowAutomaticOneShotRetry ? 1 : 0);
       expect(result.text).toMatch(/!\[Page 1\]\(pages\/page-0001\.png\)/);
       const sc = result.metadata?.sourceCounts as Record<string, number>;
       expect(sc['image-only']).toBe(1);
@@ -557,16 +555,12 @@ describe('docxHandler', () => {
     expect(images[0].source).toBe('artificial-intelligence');
   });
 
-  test('falls back to bare link when AI description fails twice', async () => {
+  test.each([true, false])('DOCX failure preserves the original link with automatic retry %s', async allowAutomaticOneShotRetry => {
     stubPandocOneImage(
       400,
       'Intro.\n\n![chart](media/media/image1.png)\n',
     );
-    const stubAdapter = {
-      async runOneShot() {
-        throw new Error('CLI exploded');
-      },
-    } as any;
+    const stubAdapter = { allowAutomaticOneShotRetry, runOneShot: jest.fn().mockRejectedValue(new Error('CLI exploded')) } as any;
 
     const result = await docxHandler({
       buffer: Buffer.from([0x50, 0x4b, 0x03, 0x04]),
@@ -582,6 +576,8 @@ describe('docxHandler', () => {
     expect(sc['artificial-intelligence']).toBeUndefined();
     expect(result.text).toContain('![chart](media/image1.png)');
     expect(result.text).not.toContain('Image description (source:');
+    expect(stubAdapter.runOneShot).toHaveBeenCalledTimes(allowAutomaticOneShotRetry ? 2 : 1);
+    expect((result.metadata?.images as Array<{ aiRetries: number }>)[0].aiRetries).toBe(allowAutomaticOneShotRetry ? 1 : 0);
   });
 
   test('returns empty mediaFiles when pandoc does not produce any media', async () => {
@@ -1013,16 +1009,12 @@ describe('pptxHandler', () => {
     }
   });
 
-  test('falls back to image-only with notes preserved when AI fails twice', async () => {
+  test.each([true, false])('PPTX failure preserves notes and images with automatic retry %s', async allowAutomaticOneShotRetry => {
     const signalsSpy = jest
       .spyOn(pptxSignalsModule, 'extractSlideSignals')
       .mockReturnValue({ figureCount: 1, tableLikely: false });
     const rasterSpy = stubRasterizer(2);
-    const stubAdapter = {
-      async runOneShot() {
-        throw new Error('CLI exploded');
-      },
-    } as any;
+    const stubAdapter = { allowAutomaticOneShotRetry, runOneShot: jest.fn().mockRejectedValue(new Error('CLI exploded')) } as any;
 
     try {
       const buffer = readFixture('sample.pptx');
@@ -1035,9 +1027,7 @@ describe('pptxHandler', () => {
         convertSlidesToImages: true,
         ingestionAdapter: stubAdapter,
       });
-      expect(result.text).toMatch(
-        /^> source: image-only \| figures: 1 \| table-likely: false \| note: AI conversion failed after retry$/m,
-      );
+      expect(result.text).toContain(`AI conversion failed ${allowAutomaticOneShotRetry ? 'after' : 'without'} retry`);
       // Image link survives.
       expect(result.text).toMatch(/!\[Slide 1\]\(slides\/slide-001\.png\)/);
       // Speaker notes survive.
@@ -1051,7 +1041,8 @@ describe('pptxHandler', () => {
         aiRetries: number;
       }>;
       expect(slidesMeta[0].source).toBe('image-only');
-      expect(slidesMeta[0].aiRetries).toBe(1);
+      expect(slidesMeta[0].aiRetries).toBe(allowAutomaticOneShotRetry ? 1 : 0);
+      expect(stubAdapter.runOneShot).toHaveBeenCalledTimes(allowAutomaticOneShotRetry ? 4 : 2);
     } finally {
       signalsSpy.mockRestore();
       rasterSpy.mockRestore();
@@ -1161,13 +1152,9 @@ describe('passthroughHandler', () => {
     expect(typeof result.metadata?.aiCallDurationMs).toBe('number');
   });
 
-  test('falls back to source: image-only when AI conversion fails after retry', async () => {
+  test.each([true, false])('image failure records actual retries with automatic retry %s', async allowAutomaticOneShotRetry => {
     const png = makePng(60, 60);
-    const stubAdapter = {
-      async runOneShot() {
-        throw new Error('CLI exploded');
-      },
-    } as any;
+    const stubAdapter = { allowAutomaticOneShotRetry, runOneShot: jest.fn().mockRejectedValue(new Error('CLI exploded')) } as any;
     const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => undefined);
     try {
       const result = await passthroughHandler({
@@ -1177,10 +1164,11 @@ describe('passthroughHandler', () => {
         outDir,
         ingestionAdapter: stubAdapter,
       });
-      expect(result.text).toMatch(/^> source: image-only \| note: AI conversion failed after retry$/m);
+      expect(result.text).toContain(`AI conversion failed ${allowAutomaticOneShotRetry ? 'after' : 'without'} retry`);
       expect(result.text).toContain('![broken.png](media/broken.png)');
       expect(result.metadata?.source).toBe('image-only');
-      expect(result.metadata?.aiRetries).toBe(1);
+      expect(result.metadata?.aiRetries).toBe(allowAutomaticOneShotRetry ? 1 : 0);
+      expect(stubAdapter.runOneShot).toHaveBeenCalledTimes(allowAutomaticOneShotRetry ? 2 : 1);
     } finally {
       warnSpy.mockRestore();
     }

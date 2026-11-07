@@ -20,6 +20,7 @@
 // See `docs/design-kb-ingestion-hybrid.md` §4 for the full design.
 
 import path from 'path';
+import { logger } from '../../../utils/logger';
 import { promises as fsp } from 'fs';
 import {
   renderPageAsImage,
@@ -106,7 +107,7 @@ export const pdfHandler: Handler = async ({
       renderedPageNumbers.push(pageNumber);
       const sidecarAbs = absImagePath + '.ai.png';
       const sidecarRel = rel + '.ai.png';
-      const resolved = await ensureAiReadyImage(absImagePath, sidecarAbs);
+      const resolved = await ensureAiReadyImage(absImagePath, sidecarAbs, ingestionAdapter?.oneShotImageFormat);
       if (resolved !== absImagePath) {
         aiAbsPath = sidecarAbs;
         aiRel = sidecarRel;
@@ -206,7 +207,8 @@ export const pdfHandler: Handler = async ({
       });
       pageBodies.push(buildSection(pageNumber, 'artificial-intelligence', signals, aiMarkdown, aiRel));
     } else {
-      console.warn(`[kb/pdf] AI conversion failed for page ${pageNumber} of "${filename}": ${aiError}`);
+      logger.warn('KB PDF image conversion failed', { filename, pageNumber, error: aiError });
+      const retries = ingestionAdapter.allowAutomaticOneShotRetry === false ? 0 : 1;
       pageRecords.push({
         pageNumber,
         source: 'image-only',
@@ -214,11 +216,11 @@ export const pdfHandler: Handler = async ({
         tableLikely: signals.tableLikely,
         extractedChars: signals.extractedChars,
         aiCallDurationMs,
-        aiRetries: 1,
+        aiRetries: retries,
       });
       pageBodies.push(
         `## Page ${pageNumber}\n` +
-        `> source: image-only | note: AI conversion failed after retry\n\n` +
+        `> source: image-only | note: AI conversion failed ${retries ? 'after' : 'without'} retry\n\n` +
         `![Page ${pageNumber}](${aiRel})`,
       );
     }

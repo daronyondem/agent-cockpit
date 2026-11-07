@@ -59,6 +59,8 @@ describe('Cortex chat adapter ownership and recovery', () => {
     .map(message => (message.params?.prompt as Array<{ text?: string }>).map(block => block.text || '').join('\n'));
 
   test('exports profile-local catalogs, conservative roles and deterministic processor fallbacks', async () => {
+    expect(adapter.allowAutomaticOneShotRetry).toBe(false);
+    expect(adapter.oneShotImageFormat).toBe('png');
     expect(adapter.metadata.capabilities).toMatchObject({ stdinInput: false, agents: false, goals: false,
       oneShot: { restrictedText: false, toolEnabled: true, sequential: true } });
     expect(adapter.metadata.resumeCapabilities).toMatchObject({ activeTurnResume: 'unsupported', sessionResume: 'supported' });

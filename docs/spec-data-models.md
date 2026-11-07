@@ -1729,6 +1729,14 @@ and is re-exported by the base adapter: `{path:string, kind:ModelInputModality,
 mimeType?:string, name?:string}`. It describes trusted server files for processor
 requests and adds no persisted credential or conversation fields.
 
+CoCo KB visual preparation preserves original media and adds a `.ai.png`
+sibling to the existing converted `mediaFiles` list. Standalone-image metadata
+uses `aiImagePrepared:true` for this path; existing legacy `downscaled:true`
+records remain valid. Per-image/page/slide `aiRetries` records 0 for CoCo
+failures because its automatic retry policy is disabled; failure annotations
+say `without retry` where present. No SQLite schema or stored-record migration
+is introduced. See [KB workflows](spec-cortex-code.md#knowledge-base-workflows-p6-c37c38).
+
 ```json
 {
   "theme": "system",
