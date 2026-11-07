@@ -187,6 +187,14 @@ there is no filesystem transaction or rollback. Memory deletion is a separate
 server-owned step after successful completion and action-block validation.
 This does not enable CoCo for the restricted Memory governance/extraction roles.
 
+Global and workspace override settings preserve explicit unavailable profile
+IDs through normalization/import. Runtime resolution fails on that exact ID;
+it does not substitute the legacy backend mirror or default profile. Resolution
+errors now record a failed run and release ownership. Registered adapters pass
+the shared `toolEnabled` role preflight before execution. Both Context selectors
+retain unavailable saved choices visibly; activating an override preserves an
+unresolved global selection. See [CoCo C41](spec-cortex-code.md#processor-selection-boundaries-p6-c41).
+
 If source planning finds no source files for a scan or no markdown files for a
 maintenance pass, the service records a completed zero-file run with a concise
 summary and does not invoke the processor. Zero-file scan completions still

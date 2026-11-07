@@ -254,6 +254,13 @@ Cockpit performs explicit installation. No new manifest schema, API, browser
 frame or mobile flow is added. Deterministic and native certification commands
 are described in [the testing spec](spec-testing.md#cortex-native-routines-p6-c40).
 
+Routine execution also applies the shared `toolEnabled` role preflight to the
+resolved registered adapter before native work. Explicit missing/disabled/
+incomplete manifest profiles fail through existing runtime resolution rather
+than using the default profile. The editor retains an unavailable saved profile
+ID visibly and excludes unsupported new choices; clearing it to Default CLI
+Profile is an explicit user action. See [selection boundaries](spec-cortex-code.md#processor-selection-boundaries-p6-c41).
+
 ## Scheduling
 
 `RoutinesScheduler` ticks every 60 seconds. It lists active workspaces through

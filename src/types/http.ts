@@ -1,6 +1,7 @@
 // ── HTTP Types ───────────────────────────────────────────────────────
 
 import type { Request, Response, NextFunction, Express } from 'express';
+import type {} from 'express-session';
 
 declare module 'express-session' {
   interface SessionData {

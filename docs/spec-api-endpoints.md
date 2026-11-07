@@ -905,3 +905,14 @@ See Section 4.6 (`CodexPlanUsageService`) for the spawn / RPC / kill semantics.
 | `500` | Server error | `{ error: err.message }` |
 
 Unauthenticated requests to `/api/*` return `401 { error: "Not authenticated" }` as JSON so the client can react without trying to parse an HTML login page. All other unauthenticated requests redirect to `/auth/login`.
+
+## Processor role validation
+
+Existing processor endpoints also enforce registered static one-shot roles
+before invocation. CoCo restricted Memory requests fail without saving a note
+or enabling tools; attachment OCR returns 400 when the tool-enabled role is
+unsupported, before discovery. Context profile-resolution failures persist a
+failed run instead of leaving running state. Explicit saved processor IDs are
+retained through settings/import even when unavailable, so runtime errors refer
+to the requested selection rather than a fallback harness. No endpoint or wire
+shape is added. See [CoCo C41](spec-cortex-code.md#processor-selection-boundaries-p6-c41).

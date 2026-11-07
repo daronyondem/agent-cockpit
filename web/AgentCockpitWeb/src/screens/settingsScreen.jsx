@@ -1,3 +1,4 @@
+import { processorProfileForSetting as profileForSetting } from './processorProfiles';
 import React from 'react';
 import { AgentApi } from '../api.js';
 import { Ico } from '../icons.jsx';
@@ -7,7 +8,12 @@ import { useToasts } from '../toast.jsx';
 import { CliUpdateStore } from '../cliUpdateStore.js';
 import { cliConfigDirField } from './cliProfileConfigDir.js';
 const CortexSetup = React.lazy(() => import('../cortexSetup.jsx').then(mod => ({ default: mod.CortexSetup })));
-const MemoryProcessorSelect = React.lazy(() => import('./memoryProcessorSelect.jsx'));
+const LazyProcessorProfileSelect = React.lazy(() => import('./memoryProcessorSelect.jsx').then(mod => ({ default: mod.ProcessorProfileSelect })));
+function ProcessorProfileSelect(props){
+  return <React.Suspense fallback={<select disabled><option>Loading profiles…</option></select>}>
+    <LazyProcessorProfileSelect {...props}/>
+  </React.Suspense>;
+}
 
 const MigrationTab = React.lazy(() => import('./settingsMigrationTab.jsx').then(mod => ({ default: mod.MigrationTab })));
 const ArchivedWorkspacesPanel = React.lazy(() => import('./archivedWorkspaces.jsx').then(mod => ({ default: mod.ArchivedWorkspacesPanel })));
@@ -41,10 +47,6 @@ const CLI_HARNESS_OPTIONS = [
   { id: 'opencode', label: 'OpenCode' },
   { id: 'grok-build', label: 'Grok Build' },
 ];
-
-function cliHarnessForBackend(backendId){
-  return backendId === 'claude-code-interactive' ? 'claude-code' : backendId;
-}
 
 function backendIdForProfile(profile){
   if (!profile) return null;
@@ -321,20 +323,6 @@ function activeCliProfiles(settings){
   return Array.isArray(settings && settings.cliProfiles)
     ? settings.cliProfiles.filter(p => p && !p.disabled)
     : [];
-}
-function profileForBackend(profiles, backendId){
-  if (!backendId) return null;
-  const harness = cliHarnessForBackend(backendId);
-  return profiles.find(p => backendIdForProfile(p) === backendId)
-    || profiles.find(p => p.id === 'server-configured-' + harness)
-    || profiles.find(p => p.harness === harness)
-    || null;
-}
-function profileForSetting(profiles, profileId, backendId, fallbackBackend){
-  return (profileId ? profiles.find(p => p.id === profileId) : null)
-    || profileForBackend(profiles, backendId)
-    || profileForBackend(profiles, fallbackBackend)
-    || null;
 }
 function defaultEffortFor(levels){
   if (!levels || !levels.length) return undefined;
@@ -646,6 +634,7 @@ function GeneralTab({ settings, backends, profileBackends, loadProfileBackend, o
       {models.length ? (
         <Field label="Default model">
           <select value={modelId} onChange={(e) => onModelChange(e.target.value)}>
+            {modelId && !models.some(m => m.id === modelId) ? <option value={modelId} disabled>{modelId} (unavailable)</option> : null}
             {models.map(m => <option key={m.id} value={m.id}>{modelDisplayLabel(m)}</option>)}
           </select>
         </Field>
@@ -1614,13 +1603,9 @@ function CliProfilesTab({ settings, backends, onPatch, onSave, saving, onValidat
 
 function SettingsMemoryTab({ settings, backends, profileBackends, loadProfileBackend, onPatch }){
   const mem = settings.memory || {};
-  const profiles = activeCliProfiles(settings);
+  const profiles = (settings.cliProfiles || []).filter(Boolean);
   const fallbackBackend = settings.defaultBackend || '';
-  const selectedProfile = profiles.find(p => p.id === mem.cliProfileId)
-    || profileForBackend(profiles, mem.cliBackend)
-    || profiles.find(p => p.id === settings.defaultCliProfileId)
-    || profileForBackend(profiles, fallbackBackend)
-    || null;
+  const selectedProfile = profileForSetting(profiles, mem.cliProfileId, mem.cliBackend, fallbackBackend, settings.defaultCliProfileId);
   const selectedProfileId = selectedProfile ? selectedProfile.id : null;
   React.useEffect(() => {
     if (selectedProfileId && loadProfileBackend) loadProfileBackend(selectedProfileId);
@@ -1692,14 +1677,13 @@ function SettingsMemoryTab({ settings, backends, profileBackends, loadProfileBac
         </div>
       </div>
       <Field label="Memory CLI profile">
-        <React.Suspense fallback={<select disabled><option>Loading profiles…</option></select>}>
-          <MemoryProcessorSelect profiles={profiles} selectedId={selectedProfileId}
-            metadataForProfile={profile => backendForProfile(backends, profileBackends, profile)} onChange={onProfileChange}/>
-        </React.Suspense>
+        <ProcessorProfileSelect role="restrictedText" label="Memory" profiles={profiles} selectedId={mem.cliProfileId || selectedProfileId}
+          metadataForProfile={profile => backendForProfile(backends, profileBackends, profile)} onChange={onProfileChange}/>
       </Field>
       {models.length ? (
         <Field label="Memory model">
           <select value={modelId} onChange={(e) => onModelChange(e.target.value)}>
+            {modelId && !models.some(m => m.id === modelId) ? <option value={modelId} disabled>{modelId} (unavailable)</option> : null}
             {models.map(m => <option key={m.id} value={m.id}>{modelDisplayLabel(m)}</option>)}
           </select>
         </Field>
@@ -1721,7 +1705,7 @@ function SettingsMemoryTab({ settings, backends, profileBackends, loadProfileBac
 
 function SettingsKbTab({ settings, backends, profileBackends, loadProfileBackend, onPatch }){
   const kb = settings.knowledgeBase || {};
-  const profiles = activeCliProfiles(settings);
+  const profiles = (settings.cliProfiles || []).filter(Boolean);
   const fallbackBackend = settings.defaultBackend || '';
 
   // Ingestion picks (vision-capable CLI for AI-assisted page/slide/image conversion)
@@ -1748,7 +1732,7 @@ function SettingsKbTab({ settings, backends, profileBackends, loadProfileBackend
   const igEffort = kb.ingestionCliEffort || defaultEffortFor(igEfforts) || '';
 
   // Digestion picks
-  const dgProfile = profileForSetting(profiles, kb.digestionCliProfileId, kb.digestionCliBackend, fallbackBackend);
+  const dgProfile = profileForSetting(profiles, kb.digestionCliProfileId, kb.digestionCliBackend, fallbackBackend, settings.defaultCliProfileId);
   const dgModels = dgProfile
     ? modelsForProfile(backends, profileBackends, dgProfile)
     : modelsForBackend(backends, fallbackBackend);
@@ -1759,7 +1743,7 @@ function SettingsKbTab({ settings, backends, profileBackends, loadProfileBackend
   const dgEffort = kb.digestionCliEffort || defaultEffortFor(dgEfforts) || '';
 
   // Dreaming picks
-  const drProfile = profileForSetting(profiles, kb.dreamingCliProfileId, kb.dreamingCliBackend, fallbackBackend);
+  const drProfile = profileForSetting(profiles, kb.dreamingCliProfileId, kb.dreamingCliBackend, fallbackBackend, settings.defaultCliProfileId);
   const drModels = drProfile
     ? modelsForProfile(backends, profileBackends, drProfile)
     : modelsForBackend(backends, fallbackBackend);
@@ -1885,14 +1869,8 @@ function SettingsKbTab({ settings, backends, profileBackends, loadProfileBackend
         flagged content falls back to image-only references.
       </p>
       <Field label="Ingestion CLI profile">
-        <select value={igProfile ? igProfile.id : ''} onChange={(e) => onIgProfile(e.target.value)}>
-          <option value="">— None (skip AI conversion) —</option>
-          {igProfileOptions.map(p => (
-            <option key={p.id} value={p.id} disabled={igProfileUnsupported && igProfile && p.id === igProfile.id}>
-              {p.name}{igProfileUnsupported && igProfile && p.id === igProfile.id ? ' (not image-capable)' : ''}
-            </option>
-          ))}
-        </select>
+        <ProcessorProfileSelect profiles={igProfileOptions} selectedId={kb.ingestionCliProfileId || (igProfile && igProfile.id)} label="KB image conversion" emptyLabel="— None (skip AI conversion) —"
+          metadataForProfile={profile => backendForProfile(backends, profileBackends, profile)} onChange={onIgProfile}/>
       </Field>
       {igProfileUnsupported ? (
         <div className="settings-warning u-err">
@@ -1927,14 +1905,13 @@ function SettingsKbTab({ settings, backends, profileBackends, loadProfileBackend
 
       <div className="settings-section-title">Digestion</div>
       <Field label="Digestion CLI profile">
-        <select value={dgProfile ? dgProfile.id : ''} onChange={(e) => onDgProfile(e.target.value)}>
-          {profiles.length === 0 ? <option value="">No CLI profiles available</option> : null}
-          {profiles.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
-        </select>
+        <ProcessorProfileSelect profiles={profiles} selectedId={kb.digestionCliProfileId || (dgProfile && dgProfile.id)} label="KB digestion" sequential={gleaningEnabled}
+          metadataForProfile={profile => backendForProfile(backends, profileBackends, profile)} onChange={onDgProfile}/>
       </Field>
       {dgModels.length ? (
         <Field label="Digestion model">
           <select value={dgModel} onChange={(e) => onDgModel(e.target.value)}>
+            {dgModel && !dgModels.some(m => m.id === dgModel) ? <option value={dgModel} disabled>{dgModel} (unavailable)</option> : null}
             {dgModels.map(m => <option key={m.id} value={m.id}>{modelDisplayLabel(m)}</option>)}
           </select>
         </Field>
@@ -1951,14 +1928,13 @@ function SettingsKbTab({ settings, backends, profileBackends, loadProfileBackend
 
       <div className="settings-section-title">Dreaming</div>
       <Field label="Dreaming CLI profile">
-        <select value={drProfile ? drProfile.id : ''} onChange={(e) => onDrProfile(e.target.value)}>
-          {profiles.length === 0 ? <option value="">No CLI profiles available</option> : null}
-          {profiles.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
-        </select>
+        <ProcessorProfileSelect profiles={profiles} selectedId={kb.dreamingCliProfileId || (drProfile && drProfile.id)} label="KB dreaming"
+          metadataForProfile={profile => backendForProfile(backends, profileBackends, profile)} onChange={onDrProfile}/>
       </Field>
       {drModels.length ? (
         <Field label="Dreaming model">
           <select value={drModel} onChange={(e) => onDrModel(e.target.value)}>
+            {drModel && !drModels.some(m => m.id === drModel) ? <option value={drModel} disabled>{drModel} (unavailable)</option> : null}
             {drModels.map(m => <option key={m.id} value={m.id}>{modelDisplayLabel(m)}</option>)}
           </select>
         </Field>
@@ -2008,9 +1984,9 @@ function SettingsKbTab({ settings, backends, profileBackends, loadProfileBackend
 
 function SettingsWorkspaceContextTab({ settings, backends, profileBackends, loadProfileBackend, onPatch }){
   const workspaceContext = settings.workspaceContext || {};
-  const profiles = activeCliProfiles(settings);
+  const profiles = (settings.cliProfiles || []).filter(Boolean);
   const fallbackBackend = settings.defaultBackend || '';
-  const selectedProfile = profileForSetting(profiles, workspaceContext.cliProfileId, workspaceContext.cliBackend, fallbackBackend);
+  const selectedProfile = profileForSetting(profiles, workspaceContext.cliProfileId, workspaceContext.cliBackend, fallbackBackend, settings.defaultCliProfileId);
   const selectedProfileId = selectedProfile ? selectedProfile.id : null;
   React.useEffect(() => {
     if (selectedProfileId && loadProfileBackend) loadProfileBackend(selectedProfileId);
@@ -2078,14 +2054,13 @@ function SettingsWorkspaceContextTab({ settings, backends, profileBackends, load
 
       <div className="settings-section-title">Processor</div>
       <Field label="Workspace Context CLI profile">
-        <select value={selectedProfile ? selectedProfile.id : ''} onChange={(e) => onProfileChange(e.target.value)}>
-          {profiles.length === 0 ? <option value="">No CLI profiles available</option> : null}
-          {profiles.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
-        </select>
+        <ProcessorProfileSelect profiles={profiles} selectedId={workspaceContext.cliProfileId || selectedProfileId} label="Workspace Context"
+          metadataForProfile={profile => backendForProfile(backends, profileBackends, profile)} onChange={onProfileChange}/>
       </Field>
       {models.length ? (
         <Field label="Workspace Context model">
           <select value={modelId} onChange={(e) => onModelChange(e.target.value)}>
+            {modelId && !models.some(m => m.id === modelId) ? <option value={modelId} disabled>{modelId} (unavailable)</option> : null}
             {models.map(m => <option key={m.id} value={m.id}>{modelDisplayLabel(m)}</option>)}
           </select>
         </Field>

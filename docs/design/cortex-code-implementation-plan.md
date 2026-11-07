@@ -1,6 +1,6 @@
 # Cortex Code (CoCo) harness implementation plan
 
-**Status:** P0–P3 and P5 complete; P4 C21–C25 setup implemented, C26 actual remote-browser acceptance pending. P6 C33/C34/C36–C40 complete; remaining selection certification C41 is next. C35 remains conditional on G1.
+**Status:** P0–P3 and P5 complete; P4 C21–C25 setup implemented, C26 actual remote-browser acceptance pending. P6 C33/C34/C36–C41 complete; P7 desktop/mobile acceptance is next. C35 remains conditional on G1.
 **Created:** 2026-11-05.
 **Planning baseline:** Agent Cockpit `0.4.166`, revision `11d14825e955f6c83364c3917558b4d3068a4bac`, plus the uncommitted CoCo research/guidance documents.
 **Native compatibility baseline:** Cortex Code `1.2.35`, distribution `1.2.35+191333.f82de3d91715`, macOS arm64.
@@ -34,8 +34,8 @@ Planning assumptions:
 - Deliver core chat before optional parity work. Unverified features remain
   explicitly unavailable; do not emulate native goals or silently reroute work
   to a different profile to make a selector appear functional.
-- C01–C25, C27–C34 and C36–C40 are complete as recorded below. C26, conditional
-  C35 and C41–C59 remain open and do not describe shipped support.
+- C01–C25, C27–C34 and C36–C41 are complete as recorded below. C26, conditional
+  C35 and C42–C59 remain open and do not describe shipped support.
 
 Track work as follows:
 
@@ -830,7 +830,7 @@ Desktop/mobile changes retain decision generations; PWA metadata is unchanged.
 - [x] C40 — Certify Routine proposals, manual/scheduled runs, output/history,
   timeout and opt-in instructions. Verify disabled workspaces remain passive and
   outreach contract through a stub without sending a real message.
-- [ ] C41 — Apply eligibility at all global/workspace processor overrides and
+- [x] C41 — Apply eligibility at all global/workspace processor overrides and
   restore/import boundaries. Verify unsupported saved selections produce useful
   errors and never silently switch harness or enable unsafe tools.
 
@@ -979,6 +979,49 @@ P6 C40 evidence (November 7, 2026; changes following `17071bf`):
   zero-warning lint, maintainability, 189-route drift, 92-ADR lint and rebuilt
   web/mobile assets/budget passed. C26, G1/conditional C35, C41–C59 and full
   browser/PM2/platform acceptance remain open. C41 selection boundaries are next.
+
+P6 C41 evidence (November 7, 2026; changes following `be4bbed`):
+
+- Fixed normalization that discarded missing/disabled processor IDs and could
+  thereby resolve a legacy backend/default instead. Global Memory/KB/Context and
+  workspace Context overrides now retain explicit missing/disabled/incomplete
+  IDs through reads, saves, restored JSON and real full-bundle export/import.
+  Existing unset/default-chat/backend-only legacy behavior remains intact.
+- Shared browser-safe role policy now checks disabled/configuration/metadata
+  identity for UI choices and preflights static registered roles in Memory's
+  note/extraction/consolidation/draft paths, KB conversion/digestion/dreaming,
+  attachment OCR, Context and Routines. Gleaning additionally checks sequential
+  support; image/model gates stay independent. No native tool restriction is
+  relaxed and no alternate adapter is selected. Context persists profile
+  resolution failures correctly; re-dream validates before wiping synthesis.
+- Shared pure profile projection and lazy controls replace fallback-prone
+  selectors across global/workspace roles. Saved unavailable profiles and missing
+  IDs stay visible/disabled; stale metadata is rejected, restored text models
+  retain disabled rows, override activation preserves unresolved global identity,
+  and only explicit eligible user changes emit settings patches. The shared
+  projection keeps large screen modules within their existing bundle limits.
+- Focused tests exercise actual service/HTTP/persistence/import boundaries,
+  failed state and no fallback/invocation, all restricted Memory paths,
+  destructive re-dream preservation, rendered selection behavior and direct
+  configuration/identity/role contract cases. The initial coverage run passed
+  all 2,850 tests but missed the unchanged function floor (93.79% vs 93.8%);
+  direct contract coverage was added rather than lowering the gate.
+- Final frozen-source coverage passed 161 suites/2,851 tests: 88.58%
+  statements/lines, 76.48% branches and 93.81% functions. The branch floor rises
+  to 76.4%; other floors stay unchanged. An intermediate run while source imports
+  changed passed its tests but produced inconsistent V8 counts; only the final
+  frozen-source result is used. Backend/web/mobile typechecks, zero-warning lint,
+  maintainability, spec drift, ADR lint and rebuilt web/mobile assets passed.
+  Sharing the Settings loading wrapper resolved a small bundle overrun without
+  changing limits; final total JS is 909.1 KiB / 910 KiB.
+- Existing `CORTEX_PROCESSOR_PROBE=1 CORTEX_TEST_CONNECTION=<saved-name> npx tsx
+  scripts/probe-cortex-processors.ts` passed exit 0 on CoCo 1.2.35/macOS arm64/
+  Node 26.0.0: native sequential continuity, headless question, HTTP OCR/model
+  rejection, image cancellation and fresh exact inference. Private report:
+  `cockpit-cortex-processors-YeAnIZ/report.json` under system temp. Shared auth
+  remains intact. This policy work does not create a new native protocol suite
+  or close C26/G1/conditional C35/full browser/PM2/platform gates. P7 C42–C46
+  desktop/mobile acceptance is next.
 
 ### P7 — Desktop and mobile
 
@@ -1174,6 +1217,7 @@ At implementation time update only the relevant current specifications:
 | 2026-11-06 | P6 C37/C38 complete; 23 tasks remain unchecked | KB workflow certification change following `f7d6d07` | CoCo 1.2.35 / macOS arm64 / Node 26.0.0 / Pandoc 3.9.0.2 / LibreOffice 26.2.3.2 | 158 suites / 2,814 tests passed; V8 88.46% lines, 76.01% branches, 93.74% functions; backend/web/mobile typechecks, lint, maintainability, spec drift, ADR lint, web/mobile builds and budget passed. Native conversion/reuse, digestion/gleaning, synthesis/re-dream, glossary/real embeddings/KB MCP and interrupt/fresh-process checks passed. Shared auth retained; C26, conditional C35 and C39–C59 remain open |
 | 2026-11-07 | P6 C39 complete; 22 tasks remain unchecked | Context workflow certification change following `c76bb63` | CoCo 1.2.35 / macOS arm64 / Node 26.0.0 | 159 suites / 2,824 tests passed; V8 88.49% lines, 76.13% branches, 93.8% functions; native scan/upload/config/maintenance/Memory/retention/schedules/stop/fresh inference passed. Required checks and rebuilt web/mobile assets/budget passed; shared auth retained. C26, conditional C35 and C40–C59 remain open |
 | 2026-11-07 | P6 C40 complete; 21 tasks remain unchecked | Routine workflow certification change following `17071bf` | CoCo 1.2.35 / macOS arm64 / Node 26.0.0 | 160 suites / 2,833 tests passed; V8 88.54% lines, 76.34% branches, 93.8% functions; native chat/proposal/install/manual/scheduled files/state/stub outreach/retention/real minute-timeout/fresh inference passed. Required checks and rebuilt web/mobile assets/budget passed; shared auth retained. C26, conditional C35 and C41–C59 remain open |
+| 2026-11-07 | P6 C41 complete; 20 tasks remain unchecked | Processor-selection boundaries change following `be4bbed` | CoCo 1.2.35 / macOS arm64 / Node 26.0.0 | 161 suites / 2,851 tests passed; V8 88.58% lines, 76.48% branches, 93.81% functions; exact selection persistence/import, role preflights, failed-state ownership and rendered controls passed. Native sequential/headless/OCR/cancel/fresh-inference probe passed with shared auth. Required checks and rebuilt web/mobile assets/budget passed; C26, conditional C35 and C42–C59 remain open; P7 desktop/mobile acceptance next |
 
 ## 13. References
 

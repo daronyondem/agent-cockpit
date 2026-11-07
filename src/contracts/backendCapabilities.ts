@@ -4,6 +4,7 @@ import type {
   ModelOption,
   OneShotMediaTransport,
 } from './responses';
+import { parseCortexCodeProfileConfig } from './cliProfiles';
 
 /** Only the browser-safe metadata fields needed by selection checks. */
 export type BackendCapabilityMetadata = Pick<BrowserBackendMetadata, 'id' | 'label' | 'capabilities' | 'models'>;
@@ -16,7 +17,30 @@ export type BackendRoleRequest =
 export type BackendRoleEligibility =
   | { ok: true }
   | { ok: false; reason: 'backend-unavailable' | 'unsupported-role' | 'unsupported-sequential'
-      | 'missing-backend-transport' | 'missing-model' | 'missing-model-modality'; message: string };
+      | 'missing-backend-transport' | 'missing-model' | 'missing-model-modality'
+      | 'profile-disabled' | 'profile-unconfigured'; message: string };
+
+export function checkProcessorProfileEligibility(
+  profile: { id: string; disabled?: boolean; harness?: string; protocol?: string; cortexCode?: unknown },
+  metadata: BackendCapabilityMetadata | null | undefined,
+  request: Extract<BackendRoleRequest, { role: 'restrictedText' | 'toolEnabled' }>,
+): BackendRoleEligibility {
+  if (profile.disabled) return { ok: false, reason: 'profile-disabled', message: 'Selected CLI profile is disabled.' };
+  if (profile.harness === 'cortex-code' || metadata?.id === 'cortex-code') {
+    try { parseCortexCodeProfileConfig(profile.cortexCode); }
+    catch { return { ok: false, reason: 'profile-unconfigured', message: 'Configure a named Snowflake connection for this CLI profile.' }; }
+  }
+  const backendId = profile.harness === 'claude-code' && profile.protocol === 'interactive' ? 'claude-code-interactive' : profile.harness;
+  if (backendId && metadata?.id !== backendId) return { ok: false, reason: 'backend-unavailable', message: 'CLI profile metadata is unavailable or out of date.' };
+  return checkBackendRoleEligibility(metadata, request);
+}
+
+/** Cheap service preflight: static registered capabilities, without CLI discovery. */
+export function requireBackendRole(metadata: BackendCapabilityMetadata, request: BackendRoleRequest): void {
+  const result = checkBackendRoleEligibility(metadata, request);
+  if (!result.ok) throw new Error(request.role === 'restrictedText'
+    ? `${metadata.label} cannot run without tools. Select another Memory profile.` : result.message);
+}
 
 /** Selection eligibility; callers must still resolve a registered runtime and enforce its policy. */
 export function checkBackendRoleEligibility(
@@ -26,7 +50,8 @@ export function checkBackendRoleEligibility(
   if (!metadata) return { ok: false, reason: 'backend-unavailable', message: 'Selected backend is unavailable.' };
   const capabilities = metadata.capabilities;
   const unavailable = (): BackendRoleEligibility => ({ ok: false, reason: 'unsupported-role',
-    message: `${metadata.label} does not support ${request.role}.` });
+    message: `${metadata.label} does not support ${request.role === 'toolEnabled' ? 'tool-enabled background work'
+      : request.role === 'restrictedText' ? 'tool-free processors' : request.role}.` });
   switch (request.role) {
     case 'chat': return { ok: true };
     case 'questionReply': return capabilities?.userQuestions === true ? { ok: true } : unavailable();

@@ -27,6 +27,12 @@ proposals, manual/scheduled runs, files/history and timeout. It adds no mobile
 UI, routes, frames, assets or manifest changes. Full mobile Routine/proposal
 interaction acceptance remains part of the later client gates.
 
+C41 processor preflights and preserved global/workspace settings also apply to
+mobile/programmatic callers. Unsupported profiles fail before execution without
+relaxing tool restrictions or falling back to another harness. No mobile
+settings screen, wire shape, PWA asset source or manifest change is required;
+full native mobile acceptance remains separate.
+
 [← Back to index](SPEC.md)
 
 Grok Build uses the shared mobile profile/model/effort, interaction, tool/Agent,

@@ -446,11 +446,22 @@ describe('POST /mcp/memory/notes', () => {
       const response = await makeRequest('POST', '/mcp/memory/notes', { content: 'Remember this fixture rule' }, { 'x-memory-token': session.token });
       expect(response.status).toBe(502);
       expect(response.body.message).toContain('Memory note was not saved');
-      expect(response.body.message).toContain('zero-tool');
+      expect(response.body.message).toContain('without tools');
       expect(start).not.toHaveBeenCalled();
       expect(stubCli._oneShotCalls).toHaveLength(0);
       expect((await service.getWorkspaceMemory(conversation.workspaceId))?.files || []).toEqual([]);
       expect((await service.getSettings()).memory?.cliProfileId).toBe('cortex-memory');
+      const first = await service.addMemoryNoteEntry(conversation.workspaceId, { content: '# First fixture rule', source: 'memory-note', filenameHint: 'first' });
+      const second = await service.addMemoryNoteEntry(conversation.workspaceId, { content: '# Second fixture rule', source: 'memory-note', filenameHint: 'second' });
+      const oneShot = jest.spyOn(adapter, 'runOneShot');
+      expect(await memoryMcp.extractMemoryFromSession({ workspaceHash: conversation.workspaceId, conversationId: conversation.id,
+        messages: [{ role: 'user', content: 'A new durable fixture rule.' }] })).toBe(0);
+      await expect(memoryMcp.proposeMemoryConsolidation(conversation.workspaceId)).rejects.toThrow('without tools');
+      await expect(memoryMcp.draftMemoryConsolidation(conversation.workspaceId, { action: {
+        action: 'merge_candidates', filenames: [first, second], reason: 'Fixture duplicates',
+      } })).rejects.toThrow('without tools');
+      expect(oneShot).not.toHaveBeenCalled(); expect(start).not.toHaveBeenCalled();
+      expect((await service.getWorkspaceMemory(conversation.workspaceId))?.files).toHaveLength(2);
     } finally { adapter.shutdown(); await adapter.stopping; }
   });
 

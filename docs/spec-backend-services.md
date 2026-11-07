@@ -2128,3 +2128,16 @@ Fetches and caches the OpenAI Codex (ChatGPT) account snapshot — plan tier (Pl
 - `'codex RPC timed out waiting for <method>'` — a per-RPC deadline fired; the app-server process was killed.
 - Any RPC error message verbatim (e.g. `'auth required'`, `'invalid params'`).
 - Any network/TLS error verbatim if `codex` itself fails to reach OpenAI's account API.
+
+## Processor selection preflight (CoCo C41)
+
+Global Memory/KB/Context and workspace Context selections preserve explicit
+missing/disabled/incomplete IDs on normalization. Runtime resolution never
+substitutes another profile for that ID. Shared browser-safe capability policy
+in `src/contracts/backendCapabilities.ts` supplies service preflights over
+registered static metadata, without model discovery: restricted Memory roles,
+tool-enabled conversion/OCR/digestion/dreaming/Context/Routines, and sequential
+gleaning. Ingestion clears a rejected adapter before image-only recovery;
+Context records resolution errors as failed runs; re-dream validates selection
+before wiping synthesis. Defaults for unset selections and legacy adapters
+remain unchanged. See [the exact contract](spec-cortex-code.md#processor-selection-boundaries-p6-c41).

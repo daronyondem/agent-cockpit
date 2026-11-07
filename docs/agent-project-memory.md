@@ -240,9 +240,17 @@ tool is unavailable.
   `scripts/probe-cortex-routines.ts` for native drift; review
   `test/cortexRoutinesIntegration.test.ts` and Routine service/route suites.
   Preserve partial files and await timeout/shutdown cleanup before releasing
-  ownership; compatibility probes must inject an outreach stub. C41 remaining
-  selection certification and full native client/OS-process-restart/platform
-  acceptance remain later work.
+  ownership; compatibility probes must inject an outreach stub. C41 now preserves
+  explicit processor IDs across save/read/restore/full-bundle import, including
+  missing/disabled/incomplete profiles. Runtime resolution must fail that exact
+  choice instead of erasing it into a backend/default fallback. Shared browser-safe
+  role policy checks configuration/metadata identity for selectors and preflights
+  static registered roles before discovery/invocation; retain native adapter guards.
+  Context resolution failures record failed state; validate re-dream processors
+  before wiping synthesis. Shared frontend projections retain unavailable choices
+  as disabled rows and emit only explicit eligible changes. Unset/legacy/default-
+  chat behavior stays unchanged. The native processor/OCR/cancel/fresh probe passed;
+  P7 full clients, C26, strict zero-tool Memory and platform acceptance remain open.
   See the current CoCo spec and progress tracker.
 - Fresh installs should be provider-neutral. Do not imply Claude Code is
   configured when the user has not installed or authenticated it.

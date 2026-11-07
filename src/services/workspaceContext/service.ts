@@ -1,8 +1,8 @@
+import { requireBackendRole } from '../../contracts/backendCapabilities';
 import crypto from 'crypto';
 import fs from 'fs';
 import fsp from 'fs/promises';
 import path from 'path';
-import type { RunOneShotOptions } from '../backends/base';
 import type { BackendRegistry } from '../backends/registry';
 import type { CliProfileRuntime } from '../cliProfiles';
 import type {
@@ -100,10 +100,6 @@ interface ResolvedWorkspaceContextProcessor {
   runtime: CliProfileRuntime;
   model?: string;
   effort?: EffortLevel;
-}
-
-interface WorkspaceContextProcessorAdapter {
-  runOneShot(prompt: string, opts?: RunOneShotOptions): Promise<string>;
 }
 
 interface SourcePlan {
@@ -442,29 +438,30 @@ export class WorkspaceContextService {
       return this.recordNoSourceRun(hash, source, active, await this.getState(hash));
     }
 
-    const processor = await this.resolveProcessor(hash);
-    const adapter = this.backendRegistry?.get(processor.runtime.backendId) as WorkspaceContextProcessorAdapter | null | undefined;
-    if (!adapter || typeof adapter.runOneShot !== 'function') {
-      const completedAt = this.now().toISOString();
-      const failedRun: WorkspaceContextRunRecord = {
-        ...runningRun,
-        status: 'failed',
-        completedAt,
-        summary: 'Workspace Context processor is unavailable.',
-        errorMessage: 'Workspace Context processor is unavailable.',
-      };
-      active.run = failedRun;
-      await this.recordRun(hash, failedRun, await this.getState(hash));
-      return emptyResult(hash, source, 'processor-unavailable');
-    }
-
-    runningRun = {
-      ...runningRun,
-      summary: 'Workspace Context processor is reading sources and updating markdown.',
-    };
-    await this.updateActiveRun(hash, active, runningRun, await this.getState(hash));
-
     try {
+      const processor = await this.resolveProcessor(hash);
+      const adapter = this.backendRegistry?.get(processor.runtime.backendId);
+      if (!adapter || typeof adapter.runOneShot !== 'function') {
+        const completedAt = this.now().toISOString();
+        const failedRun: WorkspaceContextRunRecord = {
+          ...runningRun,
+          status: 'failed',
+          completedAt,
+          summary: 'Workspace Context processor is unavailable.',
+          errorMessage: 'Workspace Context processor is unavailable.',
+        };
+        active.run = failedRun;
+        await this.recordRun(hash, failedRun, await this.getState(hash));
+        return emptyResult(hash, source, 'processor-unavailable');
+      }
+
+      runningRun = {
+        ...runningRun,
+        summary: 'Workspace Context processor is reading sources and updating markdown.',
+      };
+      await this.updateActiveRun(hash, active, runningRun, await this.getState(hash));
+
+      requireBackendRole(adapter.metadata, { role: 'toolEnabled' });
       throwIfStopped(active.abortController.signal);
       const prompt = source === 'maintenance'
         ? this.buildMaintenancePrompt(hash, workspacePath, plan)

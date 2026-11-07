@@ -23,6 +23,7 @@
 //
 // Post-dream: regenerate markdown, detect god nodes, emit WS frames.
 
+import { requireBackendRole } from '../../contracts/backendCapabilities';
 import type {
   KbStateUpdateEvent,
   McpServerConfig,
@@ -538,6 +539,8 @@ export class KbDreamService {
 
       // Issue a KB Search MCP session for the duration of this dream run.
       const mcpSession = this.kbSearchMcp.issueKbSearchSession(hash, hash);
+      const settings = await this.chatService.getSettings();
+      const { adapter, runtime } = await this._resolveCli(settings);
       if (mode === 'full-rebuild') {
         db.wipeSynthesis();
         db.markAllNeedsSynthesis();
@@ -551,8 +554,6 @@ export class KbDreamService {
         }
       }
 
-      const settings = await this.chatService.getSettings();
-      const { adapter, runtime } = await this._resolveCli(settings);
       const baseRunOptions = this._buildRunOptions(hash, settings, runtime);
       const runOptionsWithMcp = { ...baseRunOptions, mcpServers: mcpSession.mcpServers };
       const concurrency = settings.knowledgeBase?.cliConcurrency ?? DEFAULT_CONCURRENCY;
@@ -1427,6 +1428,7 @@ export class KbDreamService {
     if (!adapter) {
       throw new Error(`Dreaming CLI backend "${runtime.backendId}" is not registered for profile "${runtime.cliProfileId || runtime.backendId}".`);
     }
+    requireBackendRole(adapter.metadata, { role: 'toolEnabled' });
     return { adapter, runtime };
   }
 

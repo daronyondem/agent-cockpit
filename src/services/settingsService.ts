@@ -387,7 +387,7 @@ export class SettingsService {
     backend: string | undefined,
   ): { profileId?: string; backend?: string } {
     const selected = profileId
-      ? profiles.find((profile) => profile.id === profileId && !profile.disabled)
+      ? profiles.find((profile) => profile.id === profileId)
       : undefined;
     if (selected) {
       return {
@@ -397,7 +397,7 @@ export class SettingsService {
     }
 
     if (profileId && !selected) {
-      return { backend };
+      return { profileId, backend };
     }
 
     const harness = cliHarnessForBackend(backend);

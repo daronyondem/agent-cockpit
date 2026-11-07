@@ -1,5 +1,5 @@
 import {
-  checkBackendRoleEligibility, type BackendCapabilityMetadata, type BackendRoleRequest,
+  checkBackendRoleEligibility, checkProcessorProfileEligibility, type BackendCapabilityMetadata, type BackendRoleRequest,
 } from '../src/contracts/backendCapabilities';
 
 function metadata(overrides: Partial<BackendCapabilityMetadata> = {}): BackendCapabilityMetadata {
@@ -8,6 +8,21 @@ function metadata(overrides: Partial<BackendCapabilityMetadata> = {}): BackendCa
 }
 
 describe('shared backend role eligibility', () => {
+  test('profile eligibility separates configuration, metadata identity and independently gated processor roles', () => {
+    const profile = { id: 'cortex', harness: 'cortex-code', cortexCode: { connection: 'fixture' } };
+    const configured = metadata({ capabilities: { oneShot: { restrictedText: false, toolEnabled: true, sequential: true } } });
+    expect(checkProcessorProfileEligibility(profile, configured, { role: 'toolEnabled', sequential: true })).toEqual({ ok: true });
+    expect(checkProcessorProfileEligibility(profile, configured, { role: 'restrictedText' })).toMatchObject({ ok: false, reason: 'unsupported-role' });
+    expect(checkProcessorProfileEligibility({ ...profile, disabled: true }, configured, { role: 'toolEnabled' })).toMatchObject({ ok: false, reason: 'profile-disabled' });
+    expect(checkProcessorProfileEligibility({ ...profile, cortexCode: undefined }, configured, { role: 'toolEnabled' })).toMatchObject({ ok: false, reason: 'profile-unconfigured' });
+    expect(checkProcessorProfileEligibility({ ...profile, cortexCode: { connection: 'PRIVATE\nVALUE' } }, configured, { role: 'toolEnabled' })).toEqual({ ok: false,
+      reason: 'profile-unconfigured', message: 'Configure a named Snowflake connection for this CLI profile.' });
+    expect(checkProcessorProfileEligibility(profile, metadata({ id: 'claude-code' }), { role: 'restrictedText' })).toMatchObject({ ok: false, reason: 'backend-unavailable' });
+    expect(checkProcessorProfileEligibility(profile, undefined, { role: 'toolEnabled' })).toMatchObject({ ok: false, reason: 'backend-unavailable' });
+    expect(checkProcessorProfileEligibility({ id: 'interactive', harness: 'claude-code', protocol: 'interactive' },
+      metadata({ id: 'claude-code-interactive', capabilities: {} }), { role: 'toolEnabled' })).toEqual({ ok: true });
+  });
+
   test('requires actual metadata and does not advertise an unavailable backend', () => {
     expect(checkBackendRoleEligibility(undefined, { role: 'chat' })).toMatchObject({ ok: false, reason: 'backend-unavailable' });
     expect(checkBackendRoleEligibility(metadata(), { role: 'chat' })).toEqual({ ok: true });

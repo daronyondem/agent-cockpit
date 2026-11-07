@@ -1,3 +1,4 @@
+import { checkBackendRoleEligibility } from '../../contracts/backendCapabilities';
 import express from 'express';
 import fs from 'fs';
 import path from 'path';
@@ -231,6 +232,8 @@ export function createUploadRouter(opts: UploadRoutesOptions): express.Router {
     if (!adapter) {
       return res.status(500).json({ error: `Backend not registered: ${backendId}` });
     }
+    const eligibility = checkBackendRoleEligibility(adapter.metadata, { role: 'toolEnabled' });
+    if (!eligibility.ok) return res.status(400).json({ error: eligibility.message });
     const metadata = await adapter.getMetadata({ cliProfile: runtime.profile });
     const mediaCheck = checkOneShotMediaInput(metadata, conv.model || undefined, 'image');
     if (!mediaCheck.ok) {

@@ -17,6 +17,14 @@ affects:
   - src/types/backends.ts
   - src/services/cliProfiles.ts
   - src/services/settingsService.ts
+  - src/services/chat/workspaceFeatureSettingsStore.ts
+  - src/services/workspaceContext/service.ts
+  - src/services/routines/service.ts
+  - src/services/memoryMcp/index.ts
+  - src/services/knowledgeBase/ingestion.ts
+  - src/services/knowledgeBase/digest.ts
+  - src/routes/chat/uploadRoutes.ts
+  - src/types/http.ts
   - src/services/backends/mediaCapabilities.ts
   - src/types/cortex.ts
   - src/services/backends/cortexProtocol.ts
@@ -129,6 +137,18 @@ work. Headless questions/plans fail rather than invent human decisions. Explicit
 server image paths reuse the same version/model/byte validation as chat uploads.
 Keep Memory unavailable while G1 remains open and preserve unsupported saved
 selections visibly instead of silently replacing their harness.
+
+Preserve explicit processor profile IDs across normalization, restore and import,
+including missing/disabled/incomplete selections. Reject the alternative of
+dropping an invalid ID and allowing a backend mirror/default to select another
+account or harness. Keep defaults only for unset or backend-only legacy choices.
+Use the shared browser-safe capability policy at UI and registered-service
+boundaries, with cheap static role preflights before discovery or invocation;
+keep adapter-native guards as a second boundary. Failed profile resolution must
+leave operational state useful and must precede destructive synthesis rebuild.
+Do not rewrite import bundles or erase credentials/configuration to implement
+eligibility. Preserve unavailable UI selections as disabled rows requiring an
+explicit user choice, with shared projection outside large screen entrypoints.
 
 Service wrappers must also honor native execution ownership. Add server-only
 adapter policies for automatic one-shot retry and required processor image

@@ -222,8 +222,8 @@ root boundary. Review `test/cortexShots.test.ts`, `test/processorProfiles.test.t
 `test/memoryProcessorSelect.test.ts` and the restored CoCo Memory case in
 `test/memoryMcp.test.ts`. Run opt-in
 `scripts/probe-cortex-processors.ts` for native sequential/headless/OCR/cancel
-drift. C41 selection certification and full client/platform acceptance
-remain separate; a successful primitive or OCR run does not close those gates.
+drift. Full client/platform acceptance remains separate; a successful primitive
+or OCR run does not close that gate.
 
 P6 C37/C38 certifies native KB workflows through `scripts/probe-cortex-kb.ts`
 (opt-in, isolated SQLite/PGLite/HTTP fixture, real Ollama/Pandoc/LibreOffice,
@@ -260,6 +260,20 @@ outreach disabled in compatibility probes. The native probe exercises the real
 one-minute manifest deadline; deterministic tests fire the registered timer.
 This does not certify a new stop API, full browser/PM2/platform acceptance,
 C26, or strict CoCo Memory processing.
+
+P6 C41 processor selection policy is shared in
+`src/contracts/backendCapabilities.ts`. Preserve explicit processor profile IDs
+through global/workspace normalization, restore and import even when missing,
+disabled or incomplete; never erase them into a backend/default fallback.
+Preflight registered static roles before discovery/invocation (restricted Memory,
+tool-enabled workflows and sequential gleaning), while retaining native adapter
+guards. Resolve/validate re-dream processors before wiping synthesis, and record
+Context resolution failures as failed runs. Frontend projections/controls in
+`screens/processorProfiles.ts` and `memoryProcessorSelect.jsx` retain unavailable
+saved choices and require explicit changes. Review
+`test/cortexProcessorSelection.test.ts`, the projection/rendered selector tests,
+Memory/dreaming suites and full-bundle import coverage when changing these rules.
+Unset defaults/legacy migrations and strict zero-tool Memory gates remain intact.
 
 # Server Management
 

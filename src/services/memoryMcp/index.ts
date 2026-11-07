@@ -35,6 +35,7 @@
 //     and dedupe notes.  It's invoked server-side for each note so the
 //     main chat CLI doesn't need to understand the memory file layout.
 
+import { requireBackendRole } from '../../contracts/backendCapabilities';
 import express from 'express';
 import crypto from 'crypto';
 import path from 'path';
@@ -1452,6 +1453,7 @@ export function createMemoryMcpServer({
       let rawOutput: string;
       try {
         const workingDir = await resolveMemoryProcessorWorkingDir(chatService, session.conversationId);
+        requireBackendRole(adapter.metadata, { role: 'restrictedText' });
         rawOutput = await adapter.runOneShot(prompt, {
           model: settings.memory?.cliModel,
           effort: settings.memory?.cliEffort,
@@ -1693,6 +1695,7 @@ export function createMemoryMcpServer({
       let rawOutput: string;
       try {
         const workingDir = await resolveMemoryProcessorWorkingDir(chatService, conversationId);
+        requireBackendRole(adapter.metadata, { role: 'restrictedText' });
         rawOutput = await adapter.runOneShot(prompt, {
           model: settings.memory?.cliModel,
           effort: settings.memory?.cliEffort,
@@ -1799,6 +1802,7 @@ export function createMemoryMcpServer({
 
     let rawOutput: string;
     try {
+      requireBackendRole(adapter.metadata, { role: 'restrictedText' });
       rawOutput = await adapter.runOneShot(buildMemoryConsolidationPrompt({ entries }), {
         model: settings.memory?.cliModel,
         effort: settings.memory?.cliEffort,
@@ -1866,6 +1870,7 @@ export function createMemoryMcpServer({
 
     let rawOutput: string;
     try {
+      requireBackendRole(adapter.metadata, { role: 'restrictedText' });
       rawOutput = await adapter.runOneShot(buildMemoryConsolidationDraftPrompt({
         action: args.action,
         entries: sourceFiles,

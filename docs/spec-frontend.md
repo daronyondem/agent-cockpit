@@ -386,12 +386,21 @@ Settings → Memory excludes CoCo from new processor choices through
 policy. An unsupported saved profile remains visible as a disabled option with
 its reason and an instruction to select another profile. Rendering does not
 rewrite the saved setting or choose another harness. The control lazy-loads
-`screens/memoryProcessorSelect.jsx` when the Memory tab renders, with a disabled
+`screens/memoryProcessorSelect.jsx` when a processor control renders, with a disabled
 loading select as its Suspense fallback. This keeps the shared selection policy
 out of the 80 KiB Settings entry chunk; the control has its own 6 KiB JS budget.
 Tool-enabled sequential
-execution and verified PNG OCR are backend capabilities; remaining processor
-selectors and full native browser acceptance stay in C41/P7.
+execution and verified PNG OCR are backend capabilities. C41 extends the same
+control as named `ProcessorProfileSelect` to global KB ingestion/digestion/
+dreaming/Context and workspace Context/Routine selections. Shared pure
+`processorProfileForSetting` resolves explicit IDs exactly; disabled/incomplete
+profiles remain visible when selected, missing IDs have disabled placeholders,
+and role/configuration/stale-metadata gates exclude unsupported new choices.
+Only explicit eligible changes are emitted. Gleaning checks sequential support;
+ingestion keeps separate image/model gates. Missing saved text models receive a
+disabled option rather than appearing to select the first model. Workspace
+override activation preserves unresolved global identity. Full native browser
+acceptance remains P7. See [the C41 contract](spec-cortex-code.md#processor-selection-boundaries-p6-c41).
 
 Welcome's CLI panel and Settings → CLI Profiles lazy-load the shared focused
 `cortexSetup.jsx`/CSS component. Its explicit expansion loads native connection

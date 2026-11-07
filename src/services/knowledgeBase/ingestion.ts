@@ -28,6 +28,7 @@
 // that the caller wires up to whatever WS plumbing exists (see `chat.ts`
 // for the active-stream broadcast pattern used by `memory_update`).
 
+import { requireBackendRole } from '../../contracts/backendCapabilities';
 import path from 'path';
 import crypto from 'crypto';
 import { promises as fsp } from 'fs';
@@ -845,6 +846,7 @@ export class KbIngestionService {
           ingestionAdapter = this.backendRegistry.get(ingestionRuntime.backendId) ?? undefined;
           ingestionBackendRegistered = !!ingestionAdapter;
           if (ingestionAdapter) {
+            requireBackendRole(ingestionAdapter.metadata, { role: 'toolEnabled' });
             const metadata = await ingestionAdapter.getMetadata({ cliProfile: ingestionRuntime.profile });
             const mediaCheck = checkOneShotMediaInput(metadata, settings.knowledgeBase?.ingestionCliModel, 'image');
             if (!mediaCheck.ok) {
@@ -859,6 +861,7 @@ export class KbIngestionService {
             }
           }
         } catch (err: unknown) {
+          ingestionAdapter = undefined;
           kbIngestionLog.warn('Configured Ingestion CLI profile could not be prepared; skipping AI conversion for this raw.', {
             error: (err as Error).message,
             rawId,

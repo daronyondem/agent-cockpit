@@ -914,6 +914,14 @@ describe('KbDreamService', () => {
     expect(service.isStopRequested('ws-hash')).toBe(false);
   });
 
+  test('a rejected processor role cannot wipe synthesis during a full rebuild', async () => {
+    Object.assign(mockAdapter.metadata, { capabilities: { oneShot: { toolEnabled: false } } });
+    const result = await service.redream('ws-hash');
+    expect(result.errors).toEqual([expect.stringMatching(/tool-enabled/)]);
+    expect(mockDb.wipeSynthesis).not.toHaveBeenCalled(); expect(mockDb.markAllNeedsSynthesis).not.toHaveBeenCalled();
+    expect(mockAdapter.runOneShot).not.toHaveBeenCalled();
+  });
+
   test('requestStop returns false when no run is in progress', () => {
     expect(service.requestStop('ws-hash')).toBe(false);
     expect(service.isStopRequested('ws-hash')).toBe(false);

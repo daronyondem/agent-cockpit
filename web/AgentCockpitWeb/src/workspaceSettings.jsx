@@ -1,3 +1,4 @@
+import { processorProfileForSetting as workspaceProfileForSetting } from './screens/processorProfiles';
 import React from 'react';
 import { marked } from 'marked';
 import DOMPurify from 'dompurify';
@@ -8,6 +9,7 @@ import { Tip } from './tooltip.jsx';
 import { useDialog } from './dialog.jsx';
 import { useToasts } from './toast.jsx';
 import { FolderPicker } from './folderPicker.jsx';
+const ProcessorProfileSelect = React.lazy(() => import('./screens/memoryProcessorSelect.jsx').then(mod => ({ default: mod.ProcessorProfileSelect })));
 
 /* ---------- WorkspaceSettingsPage — per-workspace settings screen. ---------- */
 /* Opens from the gear button in the sidebar workspace action buttons.
@@ -347,36 +349,11 @@ const MEMORY_STATUS_LABELS = {
 };
 const MEMORY_ALL_STATUSES = 'active,redacted,superseded,deleted';
 
-function activeWorkspaceCliProfiles(settings){
-  return Array.isArray(settings && settings.cliProfiles)
-    ? settings.cliProfiles.filter(p => p && !p.disabled)
-    : [];
-}
-
-function cliHarnessForBackend(backendId){
-  return backendId === 'claude-code-interactive' ? 'claude-code' : backendId;
-}
 
 function workspaceBackendIdForProfile(profile){
   if (!profile) return null;
   if (profile.harness === 'claude-code' && profile.protocol === 'interactive') return 'claude-code-interactive';
   return profile.harness;
-}
-
-function workspaceProfileForBackend(profiles, backendId){
-  if (!backendId) return null;
-  const harness = cliHarnessForBackend(backendId);
-  return profiles.find(p => workspaceBackendIdForProfile(p) === backendId)
-    || profiles.find(p => p.id === 'server-configured-' + harness)
-    || profiles.find(p => p.harness === harness)
-    || null;
-}
-
-function workspaceProfileForSetting(profiles, profileId, backendId, fallbackBackend){
-  return (profileId ? profiles.find(p => p.id === profileId) : null)
-    || workspaceProfileForBackend(profiles, backendId)
-    || workspaceProfileForBackend(profiles, fallbackBackend)
-    || null;
 }
 
 function workspaceBackendForProfile(backends, profileBackends, profile){
@@ -1581,6 +1558,8 @@ export function WorkspaceSettingsPage({ hash, label, initialTab, initialWorkspac
             telegramConnect={routineTelegramConnect}
             telegramConnectBusy={routineTelegramConnectBusy}
             globalSettings={globalSettings}
+            backends={backends}
+            profileBackends={profileBackends}
             onSelect={selectRoutine}
             onRefresh={() => refreshRoutines(routineSelectedId)}
             onPatchDraft={patchRoutineDraft}
@@ -2250,6 +2229,8 @@ function RoutinesTab({
   telegramConnect,
   telegramConnectBusy,
   globalSettings,
+  backends,
+  profileBackends,
   onSelect,
   onRefresh,
   onPatchDraft,
@@ -2270,7 +2251,7 @@ function RoutinesTab({
   onOpenSettings,
 }){
   const routines = Array.isArray(data && data.routines) ? data.routines : [];
-  const profiles = activeWorkspaceCliProfiles(globalSettings);
+  const profiles = ((globalSettings && globalSettings.cliProfiles) || []).filter(Boolean);
   const routineRuns = React.useMemo(() => {
     const runs = Array.isArray(detail && detail.runs) ? detail.runs : [];
     const lastRun = detail && detail.lastRun;
@@ -2530,10 +2511,10 @@ function RoutinesTab({
                 <div className="ws-wc-section-title">Harness</div>
                 <label className="ws-wc-field">
                   <span>CLI profile</span>
-                  <select value={draft.cliProfileId} onChange={(e) => onPatchDraft({ cliProfileId: e.target.value })}>
-                    <option value="">Default CLI Profile</option>
-                    {profiles.map(profile => <option key={profile.id} value={profile.id}>{profile.name}</option>)}
-                  </select>
+                  <React.Suspense fallback={<select disabled><option>Loading profiles…</option></select>}>
+                    <ProcessorProfileSelect profiles={profiles} selectedId={draft.cliProfileId} label="Routines" emptyLabel="Default CLI Profile"
+                      metadataForProfile={profile => workspaceBackendForProfile(backends, profileBackends, profile)} onChange={id => onPatchDraft({ cliProfileId: id })}/>
+                  </React.Suspense>
                 </label>
                 <div className="ws-wc-field">
                   <span>Notification</span>
@@ -2721,12 +2702,12 @@ function WorkspaceContextTab({
   const toast = useToasts();
   const ctx = settings || { processorMode: 'global' };
   const globalContext = (globalSettings && globalSettings.workspaceContext) || {};
-  const profiles = activeWorkspaceCliProfiles(globalSettings);
+  const profiles = ((globalSettings && globalSettings.cliProfiles) || []).filter(Boolean);
   const fallbackBackend = globalContext.cliBackend || (globalSettings && globalSettings.defaultBackend) || '';
   const mode = ctx.processorMode === 'override' ? 'override' : 'global';
-  const globalProfile = workspaceProfileForSetting(profiles, globalContext.cliProfileId, globalContext.cliBackend, fallbackBackend);
+  const globalProfile = workspaceProfileForSetting(profiles, globalContext.cliProfileId, globalContext.cliBackend, fallbackBackend, globalSettings && globalSettings.defaultCliProfileId);
   const selectedProfile = mode === 'override'
-    ? workspaceProfileForSetting(profiles, ctx.cliProfileId, ctx.cliBackend, fallbackBackend)
+    ? workspaceProfileForSetting(profiles, ctx.cliProfileId, ctx.cliBackend, (globalSettings && globalSettings.defaultBackend), globalSettings && globalSettings.defaultCliProfileId)
     : globalProfile;
   const selectedProfileId = selectedProfile ? selectedProfile.id : null;
   const [workspaceContextSection, setWorkspaceContextSection] = React.useState(() => normalizeWorkspaceContextSection(initialSection));
@@ -2783,7 +2764,7 @@ function WorkspaceContextTab({
   const globalMaintenanceInterval = Number.isFinite(globalContext.maintenanceIntervalHours) ? globalContext.maintenanceIntervalHours : 24;
   const statusText = !enabled ? 'Disabled' : runningRun ? 'Running' : failedRun ? 'Error' : 'Enabled';
   const statusClass = statusText.toLowerCase();
-  const globalProcessorProfile = globalProfile ? globalProfile.name : (fallbackBackend || 'Default profile');
+  const globalProcessorProfile = globalProfile ? globalProfile.name : (globalContext.cliProfileId || fallbackBackend || 'Default profile');
   const runPageCount = Math.max(1, Math.ceil(runs.length / WORKSPACE_CONTEXT_RUNS_PAGE_SIZE));
   const safeRunPage = Math.min(runPage, runPageCount - 1);
   const visibleRuns = runs.slice(
@@ -2839,7 +2820,8 @@ function WorkspaceContextTab({
       const e = workspaceEffortLevelsForProfile(backends, profileBackends, selectedProfile, newModel);
       onPatch({ processorMode: 'override', cliProfileId: selectedProfile.id, cliBackend: workspaceBackendIdForProfile(selectedProfile), cliModel: newModel, cliEffort: workspaceDefaultEffort(e) });
     } else {
-      onPatch({ processorMode: 'override' });
+      onPatch({ processorMode: 'override', cliProfileId: globalContext.cliProfileId, cliBackend: globalContext.cliBackend,
+        cliModel: globalContext.cliModel, cliEffort: globalContext.cliEffort });
     }
   }
 
@@ -3128,15 +3110,16 @@ function WorkspaceContextTab({
                 <>
                   <label className="ws-wc-field">
                     <span>CLI profile</span>
-                    <select value={selectedProfile ? selectedProfile.id : ''} onChange={(e) => onProfileChange(e.target.value)}>
-                      {profiles.length === 0 ? <option value="">No CLI profiles available</option> : null}
-                      {profiles.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
-                    </select>
+                    <React.Suspense fallback={<select disabled><option>Loading profiles…</option></select>}>
+                      <ProcessorProfileSelect profiles={profiles} selectedId={ctx.cliProfileId || selectedProfileId} label="Workspace Context"
+                        metadataForProfile={profile => workspaceBackendForProfile(backends, profileBackends, profile)} onChange={onProfileChange}/>
+                    </React.Suspense>
                   </label>
                   {models.length ? (
                     <label className="ws-wc-field">
                       <span>Model</span>
                       <select value={modelId} onChange={(e) => onModelChange(e.target.value)}>
+                        {modelId && !models.some(m => m.id === modelId) ? <option value={modelId} disabled>{modelId} (unavailable)</option> : null}
                         {models.map(m => <option key={m.id} value={m.id}>{modelDisplayLabel(m)}</option>)}
                       </select>
                     </label>

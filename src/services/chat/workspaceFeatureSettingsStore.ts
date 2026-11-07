@@ -60,11 +60,14 @@ export function normalizeWorkspaceContextWorkspaceSettings(
 
   const cliProfileId = typeof raw.cliProfileId === 'string' ? raw.cliProfileId.trim() : '';
   const selectedProfile = cliProfileId
-    ? profiles.find((profile) => profile.id === cliProfileId && !profile.disabled)
+    ? profiles.find((profile) => profile.id === cliProfileId)
     : undefined;
   if (selectedProfile) {
     settings.cliProfileId = selectedProfile.id;
     settings.cliBackend = backendForCliProfile(selectedProfile, typeof raw.cliBackend === 'string' ? raw.cliBackend : undefined);
+  } else if (cliProfileId) {
+    settings.cliProfileId = cliProfileId;
+    if (typeof raw.cliBackend === 'string' && cliHarnessForBackend(raw.cliBackend)) settings.cliBackend = raw.cliBackend;
   } else if (typeof raw.cliBackend === 'string' && cliHarnessForBackend(raw.cliBackend)) {
     settings.cliBackend = raw.cliBackend;
   }

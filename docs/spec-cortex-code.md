@@ -4,13 +4,13 @@
 
 **Implemented scope:** P1 profiles, P2 transport/runtime, and P3 internal
 events/interactions/models/usage/attachments/artifacts, P4 connection/auth
-setup, P5 durable chat/managed MCP, and P6 C33/C34/C36–C40 background/KB/Context/Routine execution,
+setup, P5 durable chat/managed MCP, and P6 C33/C34/C36–C41 background workflows and processor selection,
 November 7, 2026.
 Native acceptance baseline is CoCo 1.2.35, macOS arm64.
 **Runtime status:** `CortexCodeAdapter` is registered in `server.ts` for chat.
 CoCo setup/authentication, durable chat, tool-enabled ephemeral execution and
 verified PNG OCR, native KB conversion/digestion/dreaming, Workspace Context
-and Routine workflows are available. Remaining processor selection boundaries, full desktop/mobile acceptance
+and Routine workflows are available. Full desktop/mobile acceptance
 and CLI installation/update support remain pending.
 The actual remote-browser setup
 through Cockpit is still an open acceptance gate (C26).
@@ -88,8 +88,8 @@ new choices. An existing unsupported selection stays visible and disabled,
 with an error and an instruction to select another profile; it is never silently
 replaced. Restored/programmatic CoCo Memory selections are still rejected by the
 adapter before spawn, and the actual Memory notes route reports that the note
-was not saved. The remaining global/workspace/import selection boundaries are
-C41; individual KB, Workspace Context and Routine service certification is complete.
+was not saved. C41 now also applies shared service preflights and selection
+preservation across global/workspace/import boundaries, as specified below.
 
 Focused normal tests: `test/cortexShots.test.ts`, `test/processorProfiles.test.ts`,
 `test/memoryProcessorSelect.test.ts` (rendered choices, disabled saved selection,
@@ -181,8 +181,8 @@ managed MCP plugin uses a fixture-only loopback endpoint and bearer token.
 Teardown drains native jobs and closes PGLite/SQLite before removing fixtures.
 Normal terminal auth and shared Office profiles/installations remain intact.
 This certifies macOS arm64 on CoCo 1.2.35, Pandoc 3.9.0.2 and LibreOffice 26.2.3.2;
-it is not full native browser/PM2/Windows/Linux acceptance. C26, conditional C35,
-C41 and later client/install/platform gates remain open.
+it is not full native browser/PM2/Windows/Linux acceptance. C26, conditional C35
+and later client/install/platform gates remain open.
 
 ## Workspace Context workflows (P6 C39)
 
@@ -234,7 +234,7 @@ cancellation without resend/deletion and fresh exact-response inference. Six
 native prompts comprise five successful complete-usage responses and one
 intentional interruption. Shared terminal auth remains intact. No new endpoint,
 persisted schema, MCP service, client flow or pricing ledger is added. Full
-browser/PM2/Windows/Linux, C26, conditional C35, C41 and later acceptance
+browser/PM2/Windows/Linux, C26, conditional C35 and later acceptance
 remain separate.
 
 ## Routine workflows (P6 C40)
@@ -283,7 +283,66 @@ responses and one intentionally timed-out run; fresh exact-response inference
 succeeded afterward. All notification delivery was replaced by an injected stub
 on fixture-owned routes with synthetic credentials; no real message was sent.
 Shared terminal auth remained intact. Full browser/PM2/Windows/Linux acceptance,
-C26, G1/conditional C35, C41 and later gates remain independent.
+C26, G1/conditional C35 and later gates remain independent.
+
+## Processor selection boundaries (P6 C41)
+
+Explicit processor profile IDs are durable selections, including missing,
+disabled and incomplete profiles. Settings normalization preserves IDs for
+Memory, KB ingestion/digestion/dreaming and global Workspace Context; workspace
+Context override normalization does the same. Known profiles align the legacy
+backend mirror with their harness/protocol even when disabled. A missing ID
+retains its saved backend mirror but runtime resolution checks the explicit ID
+first and fails. It never treats that mirror or the default profile as a
+replacement. Raw restored JSON and full-bundle imports follow the same read/
+save normalization. No storage migration or import rewrite is introduced.
+Unset processor selections and backend-only legacy migrations keep their
+existing documented defaults; chat/default-profile promotion rules are unchanged.
+
+Browser-safe `src/contracts/backendCapabilities.ts` owns the shared policy:
+
+- `checkProcessorProfileEligibility(profile,metadata,request)` rejects disabled
+  profiles, incomplete CoCo connection configuration, unavailable/mismatched
+  metadata and unsupported processor/sequential roles. Configuration and static
+  role support do not establish installation, authentication or current models.
+- `requireBackendRole(metadata,request)` performs a cheap service preflight
+  over registered static metadata without invoking model discovery. Legacy
+  backends without explicit `oneShot` flags keep existing role behavior;
+  explicit denials and CoCo's independently gated roles are enforced.
+- Memory note governance, extraction, consolidation proposals and rewrite drafts
+  require `restrictedText`. CoCo is rejected before `runOneShot` or native
+  startup; no tool flag is relaxed. Notes report that the note was not saved;
+  best-effort extraction returns zero; consolidation errors remain visible.
+- KB conversion/OCR, digestion, dreaming, Context and Routines require
+  `toolEnabled`; gleaning additionally requires `sequential`. Ingestion rejects
+  unsupported roles before discovery and keeps image-only recovery without
+  another harness. OCR returns a 400 role error. Other services preserve their
+  existing failed-run/raw/error reporting and never choose another adapter.
+  Context now records profile-resolution errors as failed runs and releases
+  ownership. Re-dream resolves/validates its processor before wiping synthesis.
+
+The shared frontend projection `processorProfileForSetting` resolves an explicit
+ID exactly, then only when unset considers the legacy backend/default profile.
+Global Memory/KB/Context and workspace Context/Routine controls use the same lazy
+`ProcessorProfileSelect` exported from `memoryProcessorSelect.jsx`. It excludes
+unsupported new choices, retains an unavailable saved choice as a disabled row,
+renders a missing-ID placeholder and a useful error, and performs no automatic
+patch. Disabled options cannot trigger a change even through a synthetic event.
+Memory retains its tool-free explanation. Tool controls validate configuration,
+registered metadata identity and role; KB ingestion retains its additional
+image/model gate and gleaning uses the sequential gate. Text model controls
+retain a disabled option for a saved model missing from a nonempty catalog.
+Explicitly switching profiles may still reset model/effort to that profile's
+defaults. Workspace override activation preserves an unresolved global ID.
+The focused UI projection is shared to preserve existing bundle budgets.
+
+Focused tests cover actual service/HTTP boundaries, read/save/restore/full-bundle
+import, disabled/missing/incomplete selections, no fallback or adapter invocation,
+Memory rejection across all restricted paths, redream preservation, rendered
+choices and explicit user changes. The existing native processor probe also
+passes with CoCo 1.2.35/macOS arm64: restricted rejection, sequential continuity,
+headless question failure, HTTP OCR/model gate, cancellation and fresh inference.
+Strict zero-tool Memory, C26 and full native browser/PM2/platform gates stay open.
 
 ## Durable chat and managed MCP (P5)
 
@@ -748,8 +807,8 @@ remains their compatibility re-export facade. Existing upload/OCR and KB
 ingestion callers keep their current media checks through that path. A missing
 explicit model must not silently select a different media model.
 
-The shared policy now drives the Memory selector. Enforcement across the other
-processor/UI selectors remains C41/P7; CoCo's adapter independently rejects
+The shared policy drives the processor selectors and service preflights under
+C41; full client acceptance remains P7. CoCo's adapter independently rejects
 restricted calls before startup. The strict native zero-tool boundary is
 unverified, so CoCo metadata explicitly denies `restrictedText` until certified.
 Unknown Snowflake pricing and unsupported native goals/subagents remain outside
