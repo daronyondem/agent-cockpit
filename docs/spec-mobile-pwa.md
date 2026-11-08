@@ -359,3 +359,9 @@ with synthetic browser-local callbacks, separately from native saved-auth/fresh
 inference. C43–C46 retain the native mobile chat matrix for unchanged production
 source. This does not certify physical iOS/Android/Safari clipboard behavior,
 C26's human remote-browser OAuth, or another native platform.
+
+
+P8 C48 adds optional CoCo detection/installation to desktop Welcome, including
+narrow desktop viewports. The mobile PWA has no installation/admin screen;
+its source, manifest, service-worker and metadata remain unchanged. Existing
+mobile chat/attachment/auth ownership contracts are unaffected.

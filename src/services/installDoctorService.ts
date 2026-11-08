@@ -5,7 +5,8 @@ import { promisify } from 'util';
 import type { InstallDoctorAction, InstallDoctorActionResult, InstallDoctorCheck, InstallDoctorCheckStatus, InstallDoctorStatus, InstallStatus, UpdateStatus } from '../types';
 import type { InstallStateService } from './installStateService';
 import type { UpdateService } from './updateService';
-import { windowsCliCommandCandidates, windowsCmdCommandLine } from './cliCommandResolver';
+import { resolveCliCommandForRuntime, windowsCliCommandCandidates, windowsCmdCommandLine } from './cliCommandResolver';
+import { cortexInstallCommand, CORTEX_INSTALL_DOCS } from './cortexInstallation';
 import { ensureWindowsCliToolWrappersForInstall } from './windowsCliToolWrappers';
 import { persistWindowsUserPathEntry, prependProcessPathEntry } from './windowsUserPath';
 import { detectLibreOffice, resetLibreOfficeDetection, type LibreOfficeStatus } from './knowledgeBase/libreOffice';
@@ -246,6 +247,7 @@ export class InstallDoctorService {
     const grok = resolveGrokCliRuntime();
     checks.push(await this.checkCommand('grok-cli', 'Grok Build CLI', [grok.command, ...(grok.argsPrefix || []), '--no-auto-update', '--version'], false,
       'Grok Build CLI responded.', 'Install Grok Build with npm i -g @xai-official/grok, then run grok login --device-auth. Refresh checks after installation.', this.actionsForCheck('grok-cli', homebrewAvailable, install)));
+    checks.push(await this.checkCortex());
     checks.push(await this.checkPandoc(homebrewAvailable));
     checks.push(await this.checkLibreOffice(homebrewAvailable));
     checks.push(this.checkUpdateChannel(install));
@@ -321,11 +323,16 @@ export class InstallDoctorService {
       }
 
       this.invalidateDetectionForAction(actionId);
+      const doctor = await this.getStatus();
+      if (actionId === 'cortex-cli:official-install' && doctor.checks.find(item => item.id === 'cortex-cli')?.status !== 'ok') {
+        return { success: false, action: definition.action, steps, doctor,
+          error: 'The Cortex Code installer finished, but the CLI did not pass refreshed version detection. Review the install output and refresh checks.' };
+      }
       return {
         success: true,
         action: definition.action,
         steps,
-        doctor: await this.getStatus(),
+        doctor,
       };
     } finally {
       this.installInProgress.delete(actionId);
@@ -339,6 +346,20 @@ export class InstallDoctorService {
       return check('node', 'Node.js', 'ok', true, `Node.js ${version} is running.`);
     }
     return check('node', 'Node.js', 'error', true, `Node.js ${version} is too old.`, undefined, NODE_REMEDIATION);
+  }
+
+  private async checkCortex(): Promise<InstallDoctorCheck> {
+    const actions = this.actionsForCheck('cortex-cli', false);
+    if (!cortexInstallCommand()) return check('cortex-cli', 'Cortex Code (CoCo) CLI', 'warning', false,
+      'Cortex Code runtime is not certified on this platform.', undefined, 'See the official installation guidance. Native platform acceptance is pending.', actions);
+    const runtime = resolveCliCommandForRuntime('cortex-code', 'cortex');
+    const result = await this.commandRunner(runtime.command, ['--version'], { cwd: this.appRoot, timeoutMs: 5_000 });
+    if (result.ok && /\bCortex Code v\d+\.\d+\.\d+/.test(result.stdout)) {
+      return check('cortex-cli', 'Cortex Code (CoCo) CLI', 'ok', false, 'Cortex Code CLI responded. Login has not been checked.', firstLine(result.stdout));
+    }
+    return check('cortex-cli', 'Cortex Code (CoCo) CLI', 'warning', false, 'Cortex Code CLI is not ready.',
+      result.error || firstLine(result.stderr) || firstLine(result.stdout),
+      'Install Cortex Code only if you want to use CoCo. Use the official standalone installer, then refresh checks and use Cortex Code setup to check or authenticate your terminal login.', actions);
   }
 
   private async checkCommand(id: string, label: string, commandAndArgs: string[], required: boolean, okSummary: string, remediation: string, installActions?: InstallDoctorAction[]): Promise<InstallDoctorCheck> {
@@ -522,6 +543,7 @@ export class InstallDoctorService {
       { action: { id: 'kiro-cli:docs', kind: 'link', label: 'Open docs', href: 'https://kiro.dev/docs/cli/installation/' } },
       { action: { id: 'grok-cli:npm-install', kind: 'command', label: 'Install Grok Build', description: 'Installs the official Grok Build CLI.', command: grokNpmInstall }, command: grokNpmInstall },
       { action: { id: 'grok-cli:docs', kind: 'link', label: 'Open docs', href: 'https://docs.x.ai/build/overview' } },
+      { action: { id: 'cortex-cli:docs', kind: 'link', label: 'Open docs', href: CORTEX_INSTALL_DOCS } },
       { action: { id: 'pandoc:official-download', kind: 'link', label: 'Open installer', href: 'https://pandoc.org/installing.html' } },
       { action: { id: 'libreoffice:official-download', kind: 'link', label: 'Open download', href: 'https://www.libreoffice.org/download/download-libreoffice/' } },
       {
@@ -530,6 +552,13 @@ export class InstallDoctorService {
         handler: () => this.addLibreOfficeToPath(),
       },
     ];
+
+    const cortexCommand = cortexInstallCommand();
+    if (cortexCommand) definitions.push({
+      action: { id: 'cortex-cli:official-install', kind: 'command', label: 'Install Cortex Code',
+        description: 'Installs the latest stable standalone CoCo CLI in ~/.local/bin using the official Snowflake installer. CoCo may add shell completions. Login is checked separately.', command: cortexCommand },
+      command: cortexCommand,
+    });
 
     if (process.platform !== 'win32') {
       definitions.push({

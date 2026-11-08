@@ -7,6 +7,10 @@ supersedes: []
 superseded-by: null
 tags: [backends, profiles, protocol, authentication]
 affects:
+  - src/services/cortexInstallation.ts
+  - src/services/installDoctorService.ts
+  - web/AgentCockpitWeb/src/welcomeScreen.jsx
+  - scripts/probe-cortex-install.ts
   - mobile/AgentCockpitPWA/src/styles/mobile/sessions.css
   - mobile/AgentCockpitPWA/src/mobileConversationModals.tsx
   - mobile/AgentCockpitPWA/src/usePendingAttachments.ts
@@ -294,6 +298,14 @@ default promotion disabled until its runtime adapter is registered. Lazy-load
 the setup component on Welcome/Settings; retain the 260 KiB entrypoint budget
 and give the new chunk its own 8 KiB limit. Raise the aggregate JS allowance
 from 900 to 910 KiB for the added setup/API functionality.
+
+P8 C48 keeps optional installation policy in `cortexInstallation.ts`, using the
+reviewed official standalone distribution rather than assuming npm. The doctor
+and Welcome share runtime executable discovery; install success requires a fresh
+version response, independently of authentication. Automated POSIX actions skip
+installer prompts; native first-run completions remain native behavior. Windows
+has documentation only pending real launch/installer evidence. CLI Update and
+platform certification remain separate gates.
 
 ## Alternatives Considered
 

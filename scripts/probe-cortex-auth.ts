@@ -64,6 +64,8 @@ async function main(): Promise<void> {
     page.setDefaultTimeout(45_000);
     results.stage = 'welcome';
     await page.goto(`${baseUrl}/v2/?welcome=1`);
+    await page.getByText('Cortex Code CLI responded. Login has not been checked.', { exact: true }).waitFor();
+    results.welcomeExecutableDetectionSeparateFromLogin = true;
     // A fresh fixture starts at Welcome; no production user data is used.
     const panel = page.getByRole('region', { name: 'Cortex Code setup' });
     await page.getByRole('button', { name: 'Cortex Code (CoCo) setup', exact: true }).click();

@@ -362,8 +362,8 @@ box is hidden for CoCo so it cannot start a job without presenting the native
 generation-owned redirect UI. Explicit isolated homes and custom commands use
 terminal authentication and are not verified by a successful shared setup check.
 The setup panel explains manual installation when the CLI is unavailable and
-names unavailable goals/agents/steering/restricted Memory. Native installation/
-doctor actions and update management remain P8; no action is falsely advertised.
+names unavailable goals/agents/steering/restricted Memory. Optional installation/doctor actions are specified in P8 C48 below; CLI Update
+management remains C49.
 Metadata supplies an inline blue snowflake-shaped icon to both clients.
 
 Desktop model/effort discovery uses the saved profile. The shared
@@ -1468,3 +1468,52 @@ Desktop/mobile share the pure role contract; P4 adds setup controls and P5
 retains opaque decision IDs in both clients. P5 changes no PWA metadata or
 service-worker policy. Existing frontend typechecks must remain valid.
 Native CLI compatibility suites are not replaced by these foundation tests.
+
+## Optional installation and detection (P8 C48)
+
+`src/services/cortexInstallation.ts` owns the official distribution command and
+platform action policy. Install Doctor exposes optional `cortex-cli` alongside
+other harnesses; Welcome includes the check and preserves the dedicated CoCo
+setup panel. Detection resolves `cortex` using the shared POSIX runtime resolver
+and invokes `--version` on every refresh, including `~/.local/bin` when absent
+from PATH. A responding Cortex version is executable evidence only, never a
+successful login or compatibility certification. Profile command overrides
+remain runtime/profile configuration; the doctor checks the normal installation.
+
+On macOS arm64/x64 and Linux x64, `cortex-cli:official-install` downloads the
+[official Snowflake installer](https://ai.snowflake.com/static/cc-scripts/install.sh)
+to a temporary file before executing it. It forces stable channel,
+`NON_INTERACTIVE=1` and `SKIP_PATH_PROMPT=1`, removes the script on exit, uses the
+normal user home independently of `SNOWFLAKE_HOME`, and inherits the existing
+doctor ten-minute deadline/active-chat/install exclusion. Installer success must
+also pass refreshed Cortex detection. No npm package, Homebrew prerequisite,
+shell interpolation of user paths, or global PATH mutation is introduced.
+
+The reviewed installer verifies its package manifest SHA-256, stores versioned
+distributions under `~/.local/share/cortex` and activates `~/.local/bin/cortex`.
+It chooses latest stable and exposes no version pin. At review it served
+`1.2.35+191333.f82de3d91715`; a future release needs independent drift evidence.
+Skipping installer PATH configuration does not suppress CoCo's native first-run
+completion setup: help/version creates logs and can append shell-completion
+configuration. The action description discloses this. Native acceptance checks
+existing profile content remains intact, no installer PATH line is added, and
+no connection/credentials are created.
+
+Other platforms expose `cortex-cli:docs` only and report native runtime
+acceptance pending. The reviewed Windows official script uses a versioned
+`%LOCALAPPDATA%\cortex` installation and a `bin\cortex.cmd` shim, with an
+interactive PATH prompt. This review does not certify native Windows launch or
+justify an unattended Windows action. Linux action policy is unit-tested;
+Ubuntu native acceptance remains C52. The mobile PWA gains no admin flow or
+metadata change; narrow desktop browsers use the existing Welcome controls.
+
+`test/cortexInstallation.test.ts` covers optional detection/refresh, supported
+and unsupported action policy, install/failed-postcheck/native-error paths,
+active/concurrent exclusion, download failure/temp cleanup, and runtime discovery
+plus explicit spaced commands independently of the auth home.
+`test/cortexWelcomeInstallation.test.ts` renders install/refreshed detection and
+failure behavior without adding generic authentication controls.
+`scripts/probe-cortex-install.ts` is an opt-in real macOS disposable installation
+check; it does not invoke login/inference, install a full Cockpit package, or
+close C49–C53/C26. The saved-auth browser probe additionally checks the new
+Welcome executable status separately from its fresh inference evidence.

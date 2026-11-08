@@ -151,6 +151,19 @@ tool is unavailable.
 - Windows self-update should avoid Unix-only assumptions such as `sh`, `nohup`,
   `tar`, `shasum`, symlink `current`, or junction dependencies.
 
+## Optional CLI Installations
+
+- CoCo optional Install Doctor/Welcome policy is owned by
+  `src/services/cortexInstallation.ts`: use the official standalone installer,
+  stable/noninteractive/skip-PATH invocation and fresh version detection after
+  installation. Detect normal `~/.local/bin` without restart or PATH mutation;
+  never equate executable detection with login. Native help/version creates logs
+  and may add shell completions, preserving existing profile content. The opt-in
+  `scripts/probe-cortex-install.ts` verifies disposable macOS installation and
+  spaced home/app/override paths without touching terminal auth. Windows remains
+  docs-only; Linux policy tests do not certify native Linux. Updates and full
+  platform acceptance remain separate gates.
+
 ## Mobile PWA
 
 - Mobile direction is PWA-only. Native iOS/Expo work was evaluated but the

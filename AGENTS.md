@@ -358,6 +358,18 @@ transient transfer state. Run full Jest before rebuilding assets/browser probes.
 Use the native URL's textbox role/accessible name in browser checks; exact HTML
 label text can include the textarea value and falsely report absence.
 
+P8 C48 optional install policy belongs to `src/services/cortexInstallation.ts`;
+Install Doctor/Welcome use fresh shared-runtime discovery and require a responding
+Cortex version after official standalone installation. Never treat it as login
+proof or assume an npm package. Keep stable/noninteractive/skip-PATH invocation,
+download-before-execute/temp cleanup, and disclose native shell-completion setup.
+Review `test/cortexInstallation.test.ts` and
+`test/cortexWelcomeInstallation.test.ts`; run opt-in
+`scripts/probe-cortex-install.ts` for disposable macOS installation with spaced
+home/app/override paths. Preserve existing macOS installer/release/update suites.
+Windows stays documentation-only; Linux action policy is not native acceptance.
+C49 update management and C51–C53 platform evidence remain separate.
+
 # Server Management
 
 NEVER run `node server.js` directly. This causes orphan processes and port conflicts.

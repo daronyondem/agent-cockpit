@@ -144,7 +144,7 @@ export function WelcomeScreen({ onDone, onOpenSettings, onNewConversation }){
 
   const checks = doctor && Array.isArray(doctor.checks) ? doctor.checks : [];
   const requiredChecks = checks.filter(item => item.required);
-  const cliChecks = checks.filter(item => ['claude-cli', 'codex-cli', 'kiro-cli', 'grok-cli'].includes(item.id));
+  const cliChecks = checks.filter(item => ['claude-cli', 'codex-cli', 'kiro-cli', 'grok-cli', 'cortex-cli'].includes(item.id));
   const optionalChecks = checks.filter(item => ['pandoc', 'libreoffice', 'mobile-build'].includes(item.id));
   const installLine = install
     ? `${install.channel || 'dev'} channel · ${install.source || 'unknown'} · ${install.version || 'unversioned'}`

@@ -920,3 +920,34 @@ seconds to drain, with a thirty-second command bound. Native C26 human handoff,
 physical browsers, native platform certification and C54 suite packaging remain
 independent. Run full Jest first, rebuild both production clients, then run the
 browser probe; do not let asset-mutating tests run concurrently.
+
+
+### CoCo optional standalone installation (P8 C48)
+
+`test/cortexInstallation.test.ts` verifies optional detection, refresh without
+PATH changes, official standalone/platform action policy, successful/failing
+install/postcheck paths, download failure/temp cleanup, active/concurrent
+exclusion, spaced paths/explicit commands and executable/auth-home separation.
+`test/cortexWelcomeInstallation.test.ts` renders official actions, refreshed
+status and failure recovery while retaining dedicated CoCo authentication.
+Existing doctor/macOS installer/release-package/update suites remain regression
+gates. No new endpoint/body or PWA setup surface is introduced.
+
+Run `CORTEX_INSTALL_PROBE=1 npx tsx scripts/probe-cortex-install.ts` on macOS for
+a real official installation in a disposable child-process HOME/app/command path
+with spaces. It strips user-local PATH entries, invokes the production doctor
+action, requires 1.2.35 native version detection and automatic/explicit runtime
+launch, checks auth-home separation and absence of credentials, and removes its
+installed distribution. Native logs/completions are permitted; existing shell
+profile bytes must remain a prefix and no installer PATH line may be added.
+Reports stay in the private temporary fixture. This uses an injected install
+state and optional-tool detectors; it is not a full package install, auth/chat
+or PM2 acceptance and does not certify Linux/Windows. The saved-auth PM2 browser
+probe now also waits for Welcome's separate executable-only status. C49 update
+management, C51–C53 platform acceptance and C26 remain independent.
+
+
+C48 measured V8 coverage: 173 suites / 2,941 tests passed; 88.62% statements/lines,
+76.69% branches and 93.82% functions. Floors rise to 88.62 statements/lines and
+76.65 branches, retaining 93.8 functions. Existing macOS installer/release/update
+regressions pass; rebuilt desktop/mobile assets retain the 914 KiB JS budget.

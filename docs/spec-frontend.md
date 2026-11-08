@@ -522,3 +522,11 @@ charts and daily totals include caches. Context absence is distinct from zero.
 No pricing formulas or persistence formats change. C45's shared summary markup
 keeps Settings within its existing 80 KiB chunk budget; total JS grows from 913
 to 914 KiB (measure the production build with `npm run web:budget`).
+
+
+Welcome includes the optional `cortex-cli` doctor row, official install/docs
+buttons and refreshed detection/failure output. CoCo authentication remains in
+its dedicated lazy setup panel; the generic per-row account controls stay absent.
+The detected row explicitly says login has not been checked. Installation uses
+the existing narrow-browser button layout. See
+[C48](spec-cortex-code.md#optional-installation-and-detection-p8-c48).

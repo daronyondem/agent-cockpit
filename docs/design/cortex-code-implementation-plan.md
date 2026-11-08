@@ -1,6 +1,6 @@
 # Cortex Code (CoCo) harness implementation plan
 
-**Status:** P0–P3, P5 and P7 complete. P4 C21–C25 setup implemented; C26 actual remote-browser acceptance remains pending. P6 C33/C34/C36–C41 complete; C35 remains conditional on G1. P8 C48 optional installation/doctor integration is next.
+**Status:** P0–P3, P5 and P7 complete. P4 C21–C25 setup implemented; C26 actual remote-browser acceptance remains pending. P6 C33/C34/C36–C41 complete; C35 remains conditional on G1. P8 C48 optional installation/doctor integration is complete; C49 native update management is next.
 **Created:** 2026-11-05.
 **Planning baseline:** Agent Cockpit `0.4.166`, revision `11d14825e955f6c83364c3917558b4d3068a4bac`, plus the uncommitted CoCo research/guidance documents.
 **Native compatibility baseline:** Cortex Code `1.2.35`, distribution `1.2.35+191333.f82de3d91715`, macOS arm64.
@@ -1340,9 +1340,16 @@ P7 C47 evidence (November 7 local / November 8 UTC, 2026; changes following
 
 ### P8 — Installation, updates, migration, and platforms
 
-- [ ] C48 — Add optional CoCo Install Doctor/Welcome detection/actions using
+- [x] C48 — Add optional CoCo Install Doctor/Welcome detection/actions using
   reviewed official distributions. Verify runtime discovery immediately after
   install, paths with spaces and command overrides; do not assume an npm package.
+  Completed: reviewed Snowflake standalone POSIX installer and Windows packaging;
+  optional shared-runtime discovery/Welcome action with fresh version postcheck.
+  Real macOS 1.2.35 disposable installation passed with spaced home/app/explicit
+  command paths, auth-home independence and distribution removal. Installer PATH
+  prompts are disabled; native logs/completion setup is disclosed and preserves
+  existing shell content. Focused doctor/Welcome and macOS installer/release/update
+  regressions pass. Native Windows/Linux, updates and C26 stay separate.
 - [ ] C49 — Verify actual native update/version commands and noninteractive
   behavior; add CLI Update support only for proven installation methods. Verify
   reusable runtime shutdown, executable/auth-home separation and error recovery.
@@ -1517,6 +1524,8 @@ At implementation time update only the relevant current specifications:
 | 2026-11-07 | P7 C45 complete; 16 tasks remain unchecked | Usage display and persistence following `8c59b14` | CoCo 1.2.35 / macOS arm64 / Node 26.0.0 | 168 suites / 2907 tests passed; V8 88.57% lines, 76.53% branches, 93.82% functions. Native production desktop/mobile context/token/cache/n/a costs, reload, isolated PM2 restart and exact daily ledger reconciliation passed. Existing harness price rendering and mixed Usage totals covered. Memory saved. C26, conditional C35 and C46–C59 remain open; C46 next. |
 | 2026-11-07 | P7 C46 complete; 15 tasks remain unchecked | Native mobile media/history/recovery following `6f937af` | CoCo 1.2.35 / macOS arm64 / Node 26.0.0 | Native profile/model/effort, PNG/text/OCR/cache, thinking/tools/replay, explicit immutable artifact preview/download, reset/read-only history and Stop/fresh inference passed; C43/C44 rechecks passed. Full V8 171 suites / 2,924 tests and 29 focused mobile tests after the final frontend fix. Floors 88.6/76.6/93.8; standard checks/builds/budget pass; Memory saved. C26, conditional C35 and C47–C59 remain open. |
 | 2026-11-07 | P7 C47 complete; 14 tasks remain unchecked | Consolidated client/responsive-auth checks following `e601749` | CoCo 1.2.35 / macOS arm64 / Node 26.0.0 | Full V8 171 suites / 2,928 tests; native saved-auth and fresh desktop inference plus six separate synthetic Welcome/Settings clipboard/lifecycle/storage cases at 1280/390/320 px passed. Typechecks, zero-warning lint, architecture/spec/ADR checks, rebuilt assets and unchanged budget pass; Memory saved. C26, conditional C35 and C48–C59 remain open. |
+
+| 2026-11-07 | P8 C48 complete; 13 tasks remain unchecked | Optional standalone installation/doctor/Welcome support following `20620d8` | CoCo 1.2.35 / macOS arm64 / Node 26.0.0 | Real disposable official installation, immediate discovery without PATH changes, spaced home/app/command override and auth-home separation passed (`cockpit cortex install V2PgNg`). Native saved-auth/Welcome detection/fresh desktop inference and six responsive synthetic handoff cases passed (`cockpit-cortex-auth-ui-9RMnWK`). Full V8 173 suites / 2,941 tests; 88.62% lines, 76.69% branches, 93.82% functions. Floors raised to 88.62/76.65/93.8. macOS installer/release/update regressions, types/lint/architecture/spec/ADR, rebuilt assets and unchanged bundle limits pass; Memory saved. C26, conditional C35 and C49–C59 remain open; C49 is next. |
 
 ## 13. References
 

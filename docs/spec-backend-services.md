@@ -1604,6 +1604,16 @@ the V2 welcome flow, and future Settings health panels. It is constructed in
 Tests can inject a command runner and optional-tool detectors so doctor coverage
 does not execute real local CLIs.
 
+CoCo adds optional `cortex-cli` via the shared POSIX runtime resolver and a fresh
+`--version` check, including `~/.local/bin` without requiring a restart/PATH edit.
+`cortexInstallation.ts` owns the reviewed official standalone installer command
+and macOS arm64/x64/Linux x64 action policy. `cortex-cli:official-install` downloads
+before execution, disables installer prompts and requires refreshed version
+detection after exit zero. Other platforms expose documentation only. Native
+first-run shell completions may be added; installation/version success is never
+authentication. See [C48](spec-cortex-code.md#optional-installation-and-detection-p8-c48).
+
+
 `getStatus()` returns:
 
 ```ts
@@ -1636,7 +1646,7 @@ Required checks currently cover Node.js 22+, npm, local PM2, writable
 `public/v2-built/index.html`. Optional/warning checks cover app-directory
 writability for future updates, platform user-session startup registration,
 the mobile PWA build shell, Claude Code CLI, Codex CLI, Kiro CLI, Grok Build
-CLI, Pandoc, LibreOffice, and install/update channel metadata. The Grok Build
+CLI, Cortex Code CLI, Pandoc, LibreOffice, and install/update channel metadata. The Grok Build
 probe resolves `grok` through `resolveGrokCliRuntime()` and runs
 `grok --no-auto-update --version`, so native installs under `~/.grok/bin`
 (`%USERPROFILE%\.grok\bin\grok.exe` on Windows) are detected without a `PATH`
