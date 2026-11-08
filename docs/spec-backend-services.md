@@ -933,6 +933,20 @@ operations from racing with live CLI writes, but it does not freeze every
 settings or browser request in the process. The manifest checksum pass is the
 final source of truth for what was actually staged.
 
+CoCo-specific passive checks and runtime exclusions belong to
+`src/services/cortexMigration.ts`. CoCo profiles add a manifest/preview warning
+about external executable/Snowflake homes. Post-import checks use the production
+runtime resolver and safe native connection reader, but never execute imported
+commands or initiate login/inference. Even present dependencies return an
+unchecked-auth warning directing the user to CLI Profiles → Check login.
+Disabled profiles are skipped; shared setup and custom home semantics match
+runtime execution. Reserved CoCo plugin/login/verification temporary directory
+segments are excluded on export and rejected on import, including empty ZIP
+directories and checksum-valid manifest files. The full-root schema, integrity
+checks, backup and REPLACE guards are unchanged. See
+[CoCo C50](spec-cortex-code.md#p8-c50--full-data-root-migration) for exact paths,
+portability limits and fixture coverage.
+
 ## 4.2 Backend Adapter System
 
 The CLI backend layer uses a **pluggable adapter pattern**. New CLI tools can be added without modifying routes, chat service, or frontend.

@@ -179,6 +179,19 @@ tool is unavailable.
   The auth browser runner's `CORTEX_UPDATE_UI_PROBE=1` mode checks update rows
   independently; its scope must never be reported as a full auth-suite pass.
 
+- CoCo C50 migration policy lives in `src/services/cortexMigration.ts`.
+  Preserve full-root bundles, checksums, backup and REPLACE; retain durable
+  profiles/processor choices and absolute paths without implicit remapping.
+  Exclude reserved native plugin/login/verification temp folder segments on
+  export and reject them on import, including empty directories. OAuth jobs
+  remain memory-only. Passive post-import checks use the runtime resolver and
+  safe selected-connection reader with shared/custom home semantics; never
+  execute imported commands or start login/inference. Present files are not
+  authentication evidence; direct users to CLI Profiles Check login. External
+  executable/native homes are not implicitly bundled. C26, strict Memory,
+  C49 auth-repeat observation and native platform/cross-machine acceptance remain
+  separate. Durable note: `notes/note_2026-11-08T10-04-02-798Z_cortex-code-c50-migration.md`.
+
 ## Mobile PWA
 
 - Mobile direction is PWA-only. Native iOS/Expo work was evaluated but the

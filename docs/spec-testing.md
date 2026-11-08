@@ -87,8 +87,10 @@ Test HTTP servers that are contacted through `127.0.0.1` bind explicitly to `127
 | `test/mediaCapabilities.test.ts` | Shared one-shot media gate helper coverage: accepts only when backend metadata exposes a transport for the requested modality and the selected/default model reports that input modality as `true`, uses the default model when no explicit model is selected, fails when backend transport is absent, fails when the selected model reports no image input, and fails closed for stale explicit model ids instead of falling back to the default model. |
 | `test/chatContracts.test.ts` | Chat contract helper coverage: browser-safe service-tier input normalization, Claude Code mode input normalization for create/send payloads including clear and invalid values, conversation/stream mutation payload normalization including message-pin payload validation, queue update runtime validation, attachment payload validation, OCR attachment payload validation including optional profile/backend runtime hints, settings payload object validation, explorer save payloads, KB enablement/auto-digest/glossary/embedding/folder payloads, memory enabled payloads, Workspace Context enablement/settings payloads, shared object/array/clamped-number validation helpers, and shared `ContractValidationError` detection. |
 | `test/processStream.golden.test.ts` | Direct `processStream` golden traces that bypass the Express/WebSocket test harness: ordered mixed text/thinking/tool/outcome/artifact streams emit the expected browser frame sequence and persist ordered `contentBlocks`; result-only streams synthesize a final text block; and successful plan-file tool outcomes withhold `planContent` from the Write frame while emitting a synthetic `ExitPlanMode` approval frame with the stored plan content. |
+| `test/cortexMigration.test.ts` | CoCo passive destination dependencies, no imported command execution, effective shared/custom Snowflake home, missing/incomplete configuration, sanitized malformed/missing/symlink TOML, Windows runtime policy and reserved native temp paths. |
+| `test/cortexDataMigration.test.ts` | Full-root CoCo profile/settings/chat/queue/media/usage/Memory/Context/Routine preservation, default and unavailable processor IDs, byte integrity and normalized reads, replacement backup, external-home preservation, stale absolute-home warning, native runtime path/empty-directory rejection and tampered CoCo settings rejection. |
 | `test/dataMigrationService.test.ts` | DataMigrationService coverage: export bundle manifest/checksum generation including Memory/KB/Workspace Context/Workspace Routines feature metadata, runtime-file exclusions, PGLite empty runtime directory preservation/repair, checksum mismatch rejection during staged import verification, undeclared data-entry rejection before activation, uncompressed bundle limit rejection, staging cleanup on failure, pending import application with active data-root replacement plus backup preservation and upload cleanup, double-pending import rejection, failed startup import marker handling so retries do not loop forever, and post-import checks for workspace storage/current paths, Memory, KB SQLite `schema_version`, PGLite vectors, embedding warnings, Workspace Context, and Workspace Routines data presence. |
-| `test/chat.dataMigration.test.ts` | Data migration route coverage: export job start/status/download flow, chunked import upload start/chunk/finish preview flow, legacy multipart preview upload and destructive `REPLACE` confirmation flow, pending marker creation on successful restart scheduling, missing-upload client error behavior, status/checks response shapes, active-turn/restart failure behavior, and restart-failure cancellation so a later unrelated restart does not apply a stale import. |
+| `test/chat.dataMigration.test.ts` | Data migration route coverage: export job start/status/download flow, chunked import upload start/chunk/finish preview flow, legacy multipart preview upload and destructive `REPLACE` confirmation flow with CoCo dependency warnings and unchanged staged profile bytes, pending marker creation on successful restart scheduling, missing-upload client error behavior, status/checks response shapes, active-turn/restart failure behavior, and restart-failure cancellation so a later unrelated restart does not apply a stale import. |
 | `test/chat.worktreeIsolation.test.ts` | Workspace worktree-isolation coverage: non-Git/unconfirmed/dirty-base/missing-origin enablement blockers; workspace-scoped active-stream toggle blocking; migration of existing conversations, including archived conversations, to dedicated worktrees; bulk-toggle session reset side effects including backend `onSessionReset` cleanup; new-conversation worktree creation after enablement; stream sends, OCR, goals, memory capture, delivered workspace-file previews, and conversation Git status/diff running from the conversation execution directory; session reset fetching latest `origin/main` and moving to a fresh session branch; dirty reset/delete blockers; nested workspace subdirectory mapping into worktrees; disablement dirty-blocker aggregation; and clean disablement removing worktrees while returning conversations to shared-folder execution. |
 | `test/config.test.ts` | Config data-root coverage: default `AGENT_COCKPIT_DATA_DIR` stays at `<cwd>/data`, `AUTH_DATA_DIR` derives from `<data-root>/auth`, and explicit `AUTH_DATA_DIR` overrides only auth storage. |
 | `test/installStateService.test.ts` | Install manifest coverage: missing manifest infers dev/main, corrupt manifests fall back with `stateSource: "corrupt"`, legacy manifests normalize to schema version 1, writes persist normalized `install.json` including Node runtime and startup metadata, preserves POSIX startup kinds, and `markWelcomeCompleted()` stamps `welcomeCompletedAt`. |
@@ -1001,3 +1003,37 @@ fresh-process verification also passed. Both failed reports are retained;
 no auth code/retry policy or credentials were changed. This is an outstanding
 native auth compatibility observation for C26/C54, independently of C49 update
 execution/status evidence; do not count either full repeat as passed.
+
+
+### CoCo full data-root migration (P8 C50)
+
+Focused verification:
+
+```sh
+npm test -- test/cortexMigration.test.ts test/cortexDataMigration.test.ts test/dataMigrationService.test.ts test/chat.dataMigration.test.ts test/cortexAuth.test.ts test/cortexPlugin.test.ts --runInBand
+```
+
+The 46 focused tests cover passive destination checks, runtime exclusions and
+import rejection (including manifest-only and empty-directory entries), settings
+integrity, CoCo shared/custom/disabled profiles, defaults and unavailable
+processor IDs, durable data, backup replacement, unchanged external native files,
+stale absolute homes, checksum tampering and the existing REPLACE route guard.
+The executable fixture would write a sentinel if run; migration checks leave it
+absent. No normal data root, native connection, credential store or installation
+is modified. Existing Memory/KB/PGLite/Ollama/Pandoc/LibreOffice coverage remains
+in the full suite. No CoCo native inference/browser probe is required for this
+passive policy; cross-machine credential validity, C26 human OAuth and full
+macOS/Linux/Windows acceptance remain independent gates. The C49 cached-login
+repeat observation remains open.
+
+Mobile impact: unchanged storage/contracts preserve profile/model/effort,
+queue/media/usage data. Mobile has no migration administration UI. Both client
+types/builds and the existing desktop migration projections remain applicable;
+there is no new PWA metadata, asset-source or native mobile behavior.
+
+C50 full V8 baseline: 177 suites / 2,973 tests passed (three suites / 20 native
+opt-in tests skipped), 88.67% statements/lines (55,980/63,128), 76.90% branches
+(13,280/17,269), 93.87% functions (2,850/3,036). Floors raised to 88.66%
+statements/lines, 76.85% branches and 93.86% functions. Backend/web/mobile types,
+zero-warning lint, maintainability, 189-route spec drift and 92-ADR validation
+pass. Rebuild both client assets after the full suite, before any browser probe.

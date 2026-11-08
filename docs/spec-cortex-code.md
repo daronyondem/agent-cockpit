@@ -1603,3 +1603,70 @@ intact. C49 full auth repeats recorded one generic verification failure and one
 cached-login-job timeout after successful fresh inference; standalone exact
 fresh inference passed. Failed evidence is retained and remains a C26/C54
 compatibility observation, not a successful full auth recertification.
+
+
+## P8 C50 — Full data-root migration
+
+`src/services/cortexMigration.ts` owns CoCo-specific migration dependency checks
+and temporary-path policy. `DataMigrationService` retains its existing full-root
+manifest schema (1), checksums, size bounds, restart-time replacement and sibling
+backup. Import does not merge, rebase absolute paths, install a CLI, start login,
+restore a pending native turn, or resend a prompt. Exact `REPLACE` route handling
+and restart-failure cancellation are unchanged.
+
+Settings, shared/custom/disabled CoCo profiles, named connection references,
+explicit executable/config/env paths, default profile/model/effort, unavailable
+processor IDs, conversations, transcripts, queues, uploaded media, usage, Memory,
+KB SQLite/PGLite, Context and Routine data remain ordinary durable bundle content.
+Files under an explicitly in-root Snowflake home are included by the full-root
+contract. An absolute profile home may still point to the source machine after
+restore; the user must correct it explicitly. Native session IDs remain durable
+metadata, while native session history outside the root is not copied. Existing
+missing-session recovery remains subject to its verified signature and never
+retries auth/transport failures.
+
+CoCo profiles add a manifest/preview warning: executables and Snowflake homes
+outside the root are not included; restore those dependencies and run **Check
+login** in CLI Profiles. There is no credential collection or implicit native
+home export. Active OAuth jobs, URLs, states and codes live in service memory
+and have no serialized migration representation. The real temporary directories
+use reserved names `agent-cockpit-cortex-plugin-<six alphanumeric characters>`,
+`cockpit-cortex-login-<six alphanumeric characters>` and
+`cockpit-cortex-auth-<six alphanumeric characters>`. Export excludes any such
+path segment, including when TMPDIR is inside the root. Import rejects these
+segments in both archive entries (including empty directories) and manifest
+files before staging/activation, even if their checksums are valid. It does not
+silently discard declared files or weaken manifest validation. Ordinary files
+such as `cortex-auth.json` or auth documentation are preserved.
+
+Post-import checks are passive. Enabled CoCo profiles validate connection
+configuration, resolve the executable with the production runtime resolver, and
+read the selected native connection from the effective `SNOWFLAKE_HOME` using
+`CortexConnections`. Setup profiles use shared terminal state; custom profiles
+retain configDir/env semantics. Disabled profiles remain skipped; missing
+configuration, executable/runtime, missing/unreadable/invalid/symlink TOML and
+missing selected connections produce actionable warnings. Parser contents,
+accounts and credentials are never returned. Even present executable/connection
+files produce a warning that authentication has **not** been checked, with an
+explicit Check login action. The migration checks never execute imported
+commands, run version/catalog/ACP probes, start OAuth or spend inference tokens.
+Only the dedicated fresh exact-response verification can establish login.
+Existing workspace/Memory/KB/PGLite/Ollama/Pandoc/LibreOffice checks are retained.
+
+Desktop Settings uses the existing manifest warnings and migration-check rows;
+there are no new endpoints or response fields. Mobile PWA remains chat-only
+without data-administration controls; its restored chat/queue/media/selection
+storage formats and metadata are unchanged. No client source or PWA metadata
+change is needed. Full client/native/platform acceptance remains C51–C55;
+C26, strict Memory and the C49 auth-repeat observation stay open.
+
+`test/cortexMigration.test.ts` verifies passive executable/connection checks,
+shared/custom home resolution, missing dependencies, sanitized native parse
+failures, Windows fail-closed policy and reserved-path matching.
+`test/cortexDataMigration.test.ts` exercises full-root export/preview/stage/apply,
+byte-preserved durable files, normalized profile/selection reads, destination
+backup, external-file preservation, missing old absolute homes, runtime archive
+rejection and tampered CoCo settings. `test/chat.dataMigration.test.ts` verifies
+CoCo preview warnings and staged bytes through the existing REPLACE route.
+These disposable fixtures do not mutate normal data/auth or certify native
+cross-machine credentials. Existing migration and auth/plugin suites also apply.

@@ -18,6 +18,7 @@ import { checkOllamaHealth, type EmbeddingConfig } from './knowledgeBase/embeddi
 import { detectLibreOffice } from './knowledgeBase/libreOffice';
 import { detectPandoc } from './knowledgeBase/pandoc';
 import { logger } from '../utils/logger';
+import { checkCortexMigrationProfile, CORTEX_MIGRATION_WARNING, isCortexMigrationRuntimePath } from './cortexMigration';
 
 const log = logger.child({ module: 'data-migration' });
 
@@ -674,6 +675,9 @@ export class DataMigrationService {
     if (this.authDataDir && !authIncluded) {
       warnings.push('AUTH_DATA_DIR is outside AGENT_COCKPIT_DATA_DIR and is not included in this export.');
     }
+    const settings = readJsonIfExists(path.join(this.dataRoot, 'chat', 'settings.json')) as Settings | null;
+    if (Array.isArray(settings?.cliProfiles) && (settings.cliProfiles as PersistedCliProfile[])
+      .some(profile => (profile.harness || profile.vendor) === 'cortex-code')) warnings.push(CORTEX_MIGRATION_WARNING);
 
     return {
       schemaVersion: DATA_EXPORT_SCHEMA_VERSION,
@@ -800,7 +804,7 @@ export class DataMigrationService {
     const settings = readJsonIfExists(settingsPath) as Settings | null;
     const profiles = Array.isArray(settings?.cliProfiles) ? settings.cliProfiles as PersistedCliProfile[] : [];
     if (profiles.length === 0) return [skipped('No CLI profiles configured')];
-    return profiles.map(profile => checkCliProfile(profile, this.dataRoot));
+    return Promise.all(profiles.map(profile => checkCliProfile(profile, this.dataRoot)));
   }
 }
 
@@ -872,6 +876,9 @@ function validateZipEntryName(name: string): void {
   if (normalized !== MANIFEST_PATH && !normalized.startsWith(DATA_PREFIX)) {
     throw new Error(`Unexpected import entry path: ${name}`);
   }
+  if (normalized.startsWith(DATA_PREFIX) && isCortexMigrationRuntimePath(normalized.slice(DATA_PREFIX.length))) {
+    throw new Error('Import bundle contains transient Cortex Code runtime data. Create a new export without native temporary folders.');
+  }
 }
 
 function validateDataRelativePath(relativePath: string): void {
@@ -881,6 +888,9 @@ function validateDataRelativePath(relativePath: string): void {
   }
   if (normalized.split('/').includes('..')) {
     throw new Error(`Unsafe import manifest path: ${relativePath}`);
+  }
+  if (isCortexMigrationRuntimePath(normalized)) {
+    throw new Error('Import manifest contains transient Cortex Code runtime data. Create a new export without native temporary folders.');
   }
 }
 
@@ -1236,6 +1246,7 @@ function exportExclusion(relativePath: string, entry: fs.Dirent): string | null 
   const normalized = toPosix(relativePath);
   const parts = normalized.split('/');
   const basename = parts[parts.length - 1];
+  if (isCortexMigrationRuntimePath(normalized)) return normalized;
   if (normalized === 'sessions' || normalized.startsWith('sessions/')) return 'sessions/';
   if (normalized === 'chat/stream-jobs.json') return 'chat/stream-jobs.json';
   if (basename === '.DS_Store') return '.DS_Store';
@@ -1413,11 +1424,12 @@ async function checkEmbedding(config: EmbeddingConfig): Promise<CheckStatus> {
     : warn(`Ollama embedding check failed for ${label}: ${result.error || 'unknown error'}`);
 }
 
-function checkCliProfile(profile: PersistedCliProfile, dataRoot: string): CheckStatus {
+async function checkCliProfile(profile: PersistedCliProfile, dataRoot: string): Promise<CheckStatus> {
   const harness = profile.harness || profile.vendor;
   const label = `${profile.name || profile.id} (${harness || 'unknown harness'})`;
   if (profile.disabled) return skipped(`${label} is disabled`);
   if (!harness) return warn(`${label} is missing CLI harness; reconfigure this profile.`);
+  if (harness === 'cortex-code') return checkCortexMigrationProfile({ ...profile, harness }, dataRoot);
   if (harness === 'kiro') return warn(`${label} uses system Kiro CLI auth outside Agent Cockpit; recheck on this machine.`);
   if (harness === 'grok-build' && !profile.configDir && profile.id.startsWith('setup-grok-build-account')) {
     return warn(`${label} uses system Grok Build auth outside Agent Cockpit; run Check login on this machine.`);

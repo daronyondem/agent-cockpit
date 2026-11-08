@@ -492,6 +492,14 @@ mode.
 | POST | `/migration/import/confirm` | Yes | Body `{ uploadId: string, confirmation: "REPLACE" }`. Rejects invalid confirmation, rejects missing/invalid uploaded bundles with `400`, rejects active/preparing chat turns or another pending import with `409`, streams the uploaded bundle into `<dataRoot>.migration/staging/<importId>/data`, rejects undeclared data entries before writing them, removes excluded runtime files from staging, recreates required empty PGLite runtime directories for any staged `knowledge/vectors/PG_VERSION`, verifies every staged file against manifest size and SHA-256, writes `pending-import.json`, and calls `UpdateService.restart()`. A successful response is `DataImportConfirmResponse` with `{ ok:true, pending:true, importId, backupPath, restart, message }`; the browser shows a restart overlay and reloads. If restart fails, the route cancels the pending import so an unrelated later restart cannot apply it, and returns `409 { ok:false, pending:false, importId, backupPath, restart, error }`. |
 | GET | `/migration/checks?deep=true` | — | Runs post-import checks and returns `{ checkedAt, summary, checks }`. Checks cover workspace storage folders, missing `currentPath` directories that may need remapping, Memory folders, KB SQLite `state.db` with `schema_version` metadata, PGLite vector directories and required empty runtime subdirectories, stale `postmaster.pid`, CLI profile auth/config hints, Pandoc, and LibreOffice. Shallow checks report Ollama embedding availability as skipped; `?deep=true` additionally calls the configured Ollama host for each workspace KB embedding config. |
 
+CoCo migration uses the same routes and schema. Its manifest/preview warns that
+external executable and Snowflake homes are not bundled. Reserved native
+plugin/login/verification temporary folders are excluded on export and rejected
+on import. Post-import CLI rows passively check the profile's executable and
+selected connection, return an unchecked-auth warning even when present, and
+direct users to Check login. They never execute an imported command or perform
+login/inference. See [CoCo migration policy](spec-cortex-code.md#p8-c50--full-data-root-migration).
+
 ## 3.10 Usage Statistics
 
 | Method | Path | CSRF | Description |

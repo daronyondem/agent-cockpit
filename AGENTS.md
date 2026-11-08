@@ -387,6 +387,18 @@ versions and native Windows/Linux remain manual until certified. Use
 `CORTEX_UPDATE_UI_PROBE=1 npx tsx scripts/probe-cortex-auth.ts` for independent
 update-row acceptance; its explicit scope is never a full auth-suite pass.
 
+P8 C50 CoCo migration policy belongs to `src/services/cortexMigration.ts`.
+Keep full-root bundles/checksums/backup/REPLACE unchanged. Exclude reserved native
+plugin/login/verification temp folders on export and reject them on import,
+including empty directories. OAuth jobs remain memory-only. Post-import checks
+must be passive: resolve the runtime and safely inspect the selected connection,
+never execute imported commands or start login/inference. Present files are not
+auth proof; direct users to Check login. Keep shared/custom home semantics and
+stale absolute paths explicit; never rewrite profile/processor choices during
+import. Review `test/cortexMigration.test.ts`, `test/cortexDataMigration.test.ts`
+and existing migration/route suites. Native cross-machine credentials, C26 and
+C51–C55 acceptance remain separate.
+
 # Server Management
 
 NEVER run `node server.js` directly. This causes orphan processes and port conflicts.

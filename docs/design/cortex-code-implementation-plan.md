@@ -1361,9 +1361,19 @@ P7 C47 evidence (November 7 local / November 8 UTC, 2026; changes following
   passed. Synthetic older-build/missing-target controls are separate from old-CLI
   or authentication evidence. Other layouts/versions and Windows/Linux remain
   manual; C50 migration and C51–C53 full platform acceptance stay independent.
-- [ ] C50 — Preserve full data-root migration semantics; exclude runtime
+- [x] C50 — Preserve full data-root migration semantics; exclude runtime
   plugins/auth jobs and check restored connection/auth/executable dependencies.
   Verify checksum/backup/exact `REPLACE` behavior remains unchanged.
+  Completed: focused passive CoCo dependency checks and manifest/preview warning;
+  reserved native plugin/login/verification folders excluded on export and
+  rejected in archive/manifest imports, including empty directories. Full-root
+  profile/default/processor/chat/media/usage/data round trips, external-home
+  preservation, stale absolute-home warnings, backup, checksum tampering and
+  REPLACE route behavior pass. Imported commands are never executed by checks;
+  auth jobs stay memory-only and login requires dedicated fresh verification.
+  Full V8: 177 suites / 2,973 tests; no normal data/auth/installation mutation.
+  C26, strict Memory, C49 auth-repeat observation and native platforms remain
+  separate. C51 is next; 11 unchecked tasks remain including conditional C35.
 - [ ] C51 — Run macOS native install/update/auth/chat/cleanup evidence;
   preserve symlink activation, PM2/current-user startup and existing installer/
   updater compatibility tests.

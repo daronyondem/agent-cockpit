@@ -7,6 +7,8 @@ supersedes: []
 superseded-by: null
 tags: [backends, profiles, protocol, authentication]
 affects:
+  - src/services/cortexMigration.ts
+  - src/services/dataMigrationService.ts
   - src/services/cortexUpdates.ts
   - src/services/cliUpdateService.ts
   - src/routes/chat/statusRoutes.ts
@@ -319,6 +321,13 @@ participate. Success and native failure invalidate caches and await CoCo drainin
 no native attempt is automatically retried. The native fixture uses synthetic
 build/target controls with the genuine CLI; platform/auth evidence remains
 separate.
+
+P8 C50 retains full data-root bundles under ADR-0074. CoCo migration policy is
+owned by `cortexMigration.ts`: external native homes are not implicitly copied,
+reserved plugin/login/verification temp directories never restore, and passive
+dependency checks cannot establish auth or execute an imported command. Durable
+profile/selection/chat state retains its format; users explicitly repair stale
+absolute homes and verify login through the dedicated flow.
 
 ## Alternatives Considered
 
