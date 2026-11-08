@@ -208,6 +208,86 @@ describe('Cortex chat adapter ownership and recovery', () => {
     expect(fixtures[0].writes.some(message => message.method === 'session/cancel')).toBe(false);
   });
 
+  async function suspendedAbortedOwner() {
+    hold = true;
+    const first = adapter.sendMessage('interrupted work', options);
+    const old = first.stream[Symbol.asyncIterator]();
+    for (;;) {
+      const event = await old.next(); expect(event.done).not.toBe(true);
+      if (event.value?.type === 'backend_runtime') break;
+    }
+    const pendingEvent = old.next();
+    while (!fixtures[0].writes.some(message => message.method === 'session/prompt')) await new Promise(resolve => setImmediate(resolve));
+    fixtures[0].notification({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'in progress' } }, 'native-1');
+    await pendingEvent; // Simulate a slow/detached HTTP consumer holding the yield.
+    let drained!: () => void;
+    const gate = new Promise<void>(resolve => { drained = resolve; });
+    const close = fixtures[0].client.close.bind(fixtures[0].client);
+    jest.spyOn(fixtures[0].client, 'close').mockImplementation(() => gate.then(() => close()));
+    first.abort();
+    return { old, drained };
+  }
+
+  test('an explicit send after Stop waits for native drain even while the old stream consumer is suspended', async () => {
+    const { old, drained } = await suspendedAbortedOwner();
+    try {
+      const second = adapter.sendMessage('explicit next turn', { ...options, isNewSession: false, externalSessionId: 'native-1' });
+      const next = second.stream[Symbol.asyncIterator](); const starting = next.next();
+      await new Promise(resolve => setImmediate(resolve)); expect(fixtures).toHaveLength(1);
+      hold = false; drained(); await starting;
+      await old.return?.(undefined);
+      expect(() => adapter.sendMessage('overlap newer owner', options)).toThrow('already active');
+      const remaining: StreamEvent[] = []; for await (const event of { [Symbol.asyncIterator]: () => next }) remaining.push(event);
+      expect(remaining.some(event => event.type === 'result')).toBe(true);
+      expect(fixtures).toHaveLength(2);
+      expect(promptText(fixtures[0])).toHaveLength(1);
+      expect(promptText(fixtures[1])).toHaveLength(1);
+      expect(promptText(fixtures[1])[0]).toContain('explicit next turn');
+    } finally { drained(); await old.return?.(undefined); }
+  });
+
+  test('another Stop while waiting retains the original drain and never launches the cancelled prompt', async () => {
+    const { old, drained } = await suspendedAbortedOwner();
+    const resumed = { ...options, isNewSession: false, externalSessionId: 'native-1' };
+    const second = adapter.sendMessage('cancel this waiting turn', resumed);
+    const waiting = second.stream[Symbol.asyncIterator](); const waitingStart = waiting.next();
+    second.abort();
+    try {
+      const third = adapter.sendMessage('third explicit turn', resumed);
+      const latest = third.stream[Symbol.asyncIterator](); const starting = latest.next();
+      await new Promise(resolve => setImmediate(resolve)); expect(fixtures).toHaveLength(1);
+      hold = false; drained(); await starting; await waitingStart; await old.return?.(undefined);
+      for await (const _event of { [Symbol.asyncIterator]: () => latest }) { /* finish explicit work */ }
+      expect(fixtures).toHaveLength(2);
+      expect(promptText(fixtures[1])).toHaveLength(1);
+      expect(promptText(fixtures[1])[0]).toContain('third explicit turn');
+    } finally { drained(); await old.return?.(undefined); await waiting.return?.(undefined); }
+  });
+
+  test('failed aborted-owner cleanup reports an error without starting or resending work', async () => {
+    const { old, drained } = await suspendedAbortedOwner();
+    jest.spyOn(sessions, 'reset').mockRejectedValueOnce(new Error('fixture cleanup failure'));
+    try {
+      const events = await collect(adapter.sendMessage('must not start', options));
+      expect(events.some(event => event.type === 'error')).toBe(true);
+      expect(events.filter(event => event.type === 'done')).toHaveLength(1);
+      expect(fixtures).toHaveLength(1); expect(promptText(fixtures[0])).toHaveLength(1);
+    } finally { drained(); await old.return?.(undefined); }
+  });
+
+  test.each(['reset', 'shutdown'])('%s waits for a detached aborted-owner drain and cancels its waiting successor', async operation => {
+    const { old, drained } = await suspendedAbortedOwner();
+    const waiting = adapter.sendMessage('must never start', options);
+    if (operation === 'reset') adapter.onSessionReset('conversation'); else adapter.shutdown();
+    let stopped = false; void adapter.stopping.then(() => { stopped = true; });
+    try {
+      await new Promise(resolve => setImmediate(resolve)); expect(stopped).toBe(false);
+      drained(); await adapter.stopping; await old.return?.(undefined);
+      expect(await collect(waiting)).toEqual([{ type: 'done' }]);
+      expect(fixtures).toHaveLength(1); expect(promptText(fixtures[0])).toHaveLength(1);
+    } finally { drained(); await old.return?.(undefined); await adapter.stopping; }
+  });
+
   test('abort before startup, concurrent sends and resets cannot launch or reuse an old owner', async () => {
     const first = adapter.sendMessage('cancel before consumption', options);
     expect(() => adapter.sendMessage('overlap', options)).toThrow('already active');

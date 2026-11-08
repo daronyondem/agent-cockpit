@@ -436,6 +436,33 @@ credential-store behavior and new-login acceptance remain separate C52 gates;
 the prepared runner alone does not certify them or enable managed Linux updates.
 See `docs/research/cortex-code-linux-acceptance.md`.
 
+C54 consolidated native commands are `CORTEX_CODE_E2E=1 npm run e2e:cortex-code`
+and `CORTEX_CODE_E2E=1 npm run e2e:cortex-code-ui`. Use `-- --list` without
+opt-in to inspect their catalogs; `-- --probe <id>` is a selected-scope run.
+The shared runner pins retained 1.2.35, serializes ownership with a temporary
+lock, isolates PM2/TMPDIR, supervises probe descendants and never retries failed
+work. Keep the fixture root directly under `/tmp`: deep system-temp paths exceed
+macOS tsx/PM2 socket limits. Track the private daemon separately from the probe's
+ancestry and drain it without starting a replacement for stale PID files.
+Share only `compatibility-report.json`; raw logs/native fixtures stay
+private. Never remove an active lock or automatically clear a stale one without
+checking its recorded owner and fixture cleanup. Freeze source during full V8
+coverage collection; changing it can mix coverage mappings. Run full Jest before UI probes;
+the UI runner rebuilds both clients. Its macOS catalog does not close C26,
+strict Memory, Ubuntu/Windows, complete workflows or physical mobile gates.
+Review `test/cortexCompatRunner.test.ts`, `test/cortexCompatProcess.test.ts` and
+the consolidated-runner section in `docs/spec-testing.md` when changing it.
+
+C54's native mobile run exposed Stop finishing its HTTP finalizer before the
+CoCo stream consumer released its turn. CoCo may accept a new explicit turn
+behind an aborted owner, but it must await native reset/drain, retain earlier
+drains across another Stop, and never start a cancelled waiting prompt or clear
+a newer owner from an older iterator. Healthy overlapping turns still reject;
+cleanup failures do not start work. Keep the focused backend regression tests
+and native queue/mobile probes aligned with this admission rule. Track pending
+reset/drain promises independently of session-map entries, and include them and
+previous cleanup in reset/shutdown completion even when no consumer is active.
+
 # Server Management
 
 NEVER run `node server.js` directly. This causes orphan processes and port conflicts.

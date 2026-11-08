@@ -1416,12 +1416,24 @@ P7 C47 evidence (November 7 local / November 8 UTC, 2026; changes following
 
 ### P9 — Compatibility suites, parity research, and release
 
-- [ ] C54 — Add opt-in native runner(s), proposed `npm run e2e:cortex-code`
+- [x] C54 — Add opt-in native runner(s), `npm run e2e:cortex-code`
   and `npm run e2e:cortex-code-ui`, with CLI/OS/Node/revision/dirty-state reports,
   bounded external deadlines, sanitized artifacts and owned fixture cleanup.
   Retain C49 auth failures and C51 native activation drift/isolated-HOME null
   verification observations; clean later repeats do not establish their cause.
   Bind CLI version checks and startup to the same retained executable.
+  Completed with explicit opt-in, catalog/subset scope, shared owner lock,
+  private short /tmp/PM2 roots, external deadlines, bounded private logs,
+  metadata-only reports and identity-checked process/daemon draining. Native
+  macOS 26.5 arm64 / Node 26 / CoCo 1.2.35 backend 3/3 and full UI 5/5 passed.
+  The new runner's initial socket-path failure and a mobile Stop/new-send race
+  remain failed evidence. CoCo now drains aborted predecessors independently
+  of old consumers, preserves repeated-Stop fences and awaits detached drains
+  in reset/shutdown. Final queue/mobile subset (2/2, selected 2/5) passed after
+  the lifecycle guard, alongside 180 suites / 3,002 tests and required gates.
+  Branch coverage floor raised; activation/executable snapshots are unchanged.
+  C26, conditional C35, Ubuntu/Windows and full workflows remain independent.
+  Nine tasks remain; C55 is next while C52/C53 await native environments.
 - [ ] C55 — Add real Cockpit workflow fixtures for core and each enabled
   processor. Browser fixture server must be isolated and PM2-managed; preserve
   normal server data/auth. Separate missing-auth fixtures from real-account runs.

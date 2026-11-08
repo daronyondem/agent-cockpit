@@ -1182,3 +1182,162 @@ suites / 20 tests skipped). V8 measures 88.72% statements/lines (56,017/63,137),
 additional POSIX doctor test executes a recording shell executable through the
 actual default command runner, asserting passive argv, no login claim and
 nonzero-exit warning. The platform is mocked; no native Linux execution occurred.
+
+
+### CoCo consolidated compatibility runners (P9 C54)
+
+The opt-in commands wrap existing probes without turning their evidence into a
+claim about a broader platform, a human OAuth handoff or unsupported roles:
+
+```sh
+npm run e2e:cortex-code -- --list
+npm run e2e:cortex-code-ui -- --list
+CORTEX_CODE_E2E=1 npm run e2e:cortex-code
+CORTEX_CODE_E2E=1 npm run e2e:cortex-code-ui
+CORTEX_CODE_E2E=1 npm run e2e:cortex-code-ui -- --probe auth
+```
+
+`--help`/`--list` are read-only and require no native CLI or credentials. Other
+arguments are repeated `--probe <id>` pairs; unknown/missing/duplicate names are
+rejected. Selections run in catalog order. An explicit subset is reported as
+selected catalog probes, including omitted IDs; it never counts as a full
+catalog pass. Native runs require CORTEX_CODE_E2E=1, macOS, a regular user and
+non-fake native mode. CORTEX_TEST_CONNECTION optionally chooses a saved name;
+otherwise the connection reader selects its first entry privately. Optional
+CORTEX_TEST_COMMAND chooses the retained executable. The runner requires the
+versioned official 1.2.35 distribution, resolves its realpath before the passive
+version query, and passes that same file to every probe. The model is fixed to
+claude-sonnet-4-6. Inherited update-UI-only mode is removed, so it cannot turn
+full auth into a synthetic/passive check. Native root/ACP argument boundaries
+remain unchanged.
+
+| Command | Default catalog, in order | External per-probe deadlines |
+|---|---|---|
+| e2e:cortex-code | runtime, events, processors | 8, 15, 12 minutes |
+| e2e:cortex-code-ui | auth, interactions, queue, usage, mobile | 12, 12, 10, 12, 15 minutes |
+
+Backend and UI wrapper deadlines are 40 and 70 minutes. The UI runner first
+builds production web/mobile assets (two-minute deadline each). It does not run
+Jest: finish asset-mutating full Jest before starting it. The default catalog
+excludes installer/updater downloads, packaged platform installation, the
+research phase-0 restriction probe and the full workflow fixtures (C55).
+Those dedicated probes remain independently opt-in. Processor primitives are
+not complete KB/Context/Routine or strict Memory acceptance.
+
+Ownership/report logic lives in scripts/run-cortex-code-compat.ts, report
+validation/catalogs in scripts/cortexCompatReports.ts, and process supervision
+in scripts/cortexCompatProcess.ts. The two npm entrypoints remain thin. Both
+commands reserve the same agent-cockpit-cortex-e2e.lock in the user's temporary
+directory before native work/builds. It records PID and an opaque owner nonce;
+competing runs fail without removing another lock. Normal completion removes
+only its exact lock value. A crash can leave it behind: inspect the recorded
+owner and fixture/native/PM2 cleanup before manually removing it. Never infer
+permission to resend interrupted work from lock age or a missing PID alone.
+
+Each run creates a mode-0700 root directly under /tmp, private PM2 home and per-job TMPDIR.
+The short root is required for macOS tsx/PM2 Unix socket path limits; the
+user-temporary lock location remains shared by both commands.
+HOME/SNOWFLAKE_HOME remain the normal terminal values for shared credentials;
+no logout or account-isolation certification is attempted. Browser fixture
+servers remain PM2-managed. Each probe runs as a detached owned process with
+an external deadline, cancellation handler and eight-MiB private output limit.
+The supervisor uses CortexProcessScope plus captured PID/birth identities,
+and separately discovers the private PM2 daemon by its PID file and matching
+God Daemon command/home so a detached or reused daemon is not lost from ownership,
+awaits shutdown, verifies observed descendants have gone, and identity-checks
+any additional cleanup. SIGINT/SIGTERM abort the active work; failure, timeout,
+invalid evidence or failed cleanup stops the sequence without automatic retry.
+Cleanup remains outside the cancelled work signal and PM2 kill has a separate
+30-second bound. Each job drains private PM2 before verifying observed
+processes. A dead/reused private PID file is removed without spawning a daemon
+or signalling unrelated work; an unobservable/invalid owner cannot pass.
+The normal activation and retained executable snapshot must
+remain unchanged; drift fails the run without silently restoring/certifying a
+new native version.
+
+Shareable compatibility-report.json includes start/end, suite, selected/omitted
+IDs, scope, CLI version/full distribution, OS/kernel/architecture/Node,
+revision/dirty state, each job's exit/deadline/cancellation/log-limit/observed
+process cleanup outcomes and validated native pass metadata. A report file
+must be a regular non-symlink file of at most one MiB in exactly one expected
+probe directory. Native version/OS/architecture/Node/revision must match;
+missing/false pass or deadlineExceeded:true fails. Processor version metadata
+may live under results.cliVersion. Only the fixed projected metadata/outcomes
+enter the wrapper report; raw native keys, text, diagnostic errors, credentials,
+connection/account/OAuth values and arbitrary result payloads are not copied.
+Raw stdout/stderr, failure detail and native fixture directories are private
+and must not be shared as an artifact bundle. Share only the wrapper JSON.
+
+The report retains three historical observations independently of a later pass:
+C49 saved-auth verification failure/cached-job timeout; C51 native activation
+drift to 1.2.37 with unproven originating process; and isolated HOME with shared
+SNOWFLAKE_HOME returning null auth. A clean rerun establishes neither root
+cause nor supported isolation. C26, conditional C35, native Ubuntu/Windows,
+complete workflows and physical mobile devices remain pending gates in every
+report. C49's independent update-row-only mode remains outside the auth catalog.
+
+Focused tests: test/cortexCompatRunner.test.ts covers catalog/argument scope,
+metadata validation, absent/duplicate/symlink/oversize/malformed reports,
+secret-bearing report projection, read-only listing, opt-in and competing lock.
+test/cortexCompatProcess.test.ts exercises real POSIX child processes for private
+output, timeout with detached SIGTERM-resistant descendants, unrelated process
+preservation, no replay, cancellation, spawn failure, bounded output, stale/reused
+PM2 PID files and an independently detached private daemon. The lock fixture
+also opens a real Unix socket at the nested tsx-shaped path to catch path-limit
+regressions. These
+supervision fixtures are not authenticated native evidence; run the commands
+with the actual retained CLI for that evidence. Mobile client source/contracts remain unchanged; CoCo server admission after
+Stop now waits safely for the native drain, verified by the existing mobile probe.
+
+
+C54 runner development retained an initial UI failure at PM2 fixture startup:
+the former nested system-temp path exceeded the macOS tsx socket limit (EINVAL).
+No auth check ran. The root moved to /tmp, and cleanup stopped invoking PM2 for
+already-dead/stale daemon PID files. This diagnosed runner path failure does not
+explain the distinct historical C49 authentication failures. The failed report
+remains failed; corrected native evidence must be recorded separately. Run
+from a developer checkout with locked root/mobile dependencies and Playwright
+Chromium, since processor probes use test/helpers; these are not production
+setup commands.
+
+
+C54 also retained a native mobile abort-recovery failure after successful auth,
+interactions, queues, usage, media, history and descendant cleanup: the next
+explicit HTTP message hit the still-active CoCo owner and its response timed
+out. The dedicated backend regression suspends the old stream consumer and
+blocks native close to reproduce it. CoCo admission now waits for the aborted
+owner's reset/drain before executing the explicit follow-up, retains that fence
+through another Stop and rejects starting work after cleanup failure. Old
+iterator cleanup cannot delete a newer owner. See test/cortexBackend.test.ts;
+rerun native queue/mobile and interaction probes when this behavior changes.
+No native prompt is retried and the shared HTTP terminal finalizer is unchanged.
+
+
+The follow-up lifecycle regression holds an old native close while its session
+entry has already been removed: both reset and shutdown must remain pending and
+cancel the waiting successor. The adapter tracks direct reset promises outside
+the session map and includes them/previous stopping in lifecycle completion.
+Tests assert no extra native client/prompt, not merely the returned error text.
+
+
+C54 acceptance: macOS 26.5 / Darwin 25.5.0 arm64, Node 26.0.0 and retained
+CoCo 1.2.35+191333.f82de3d91715. Backend catalog 3/3 passed in
+cockpit-cortex-backend-compat-P5CRXI; full UI catalog 5/5 passed in
+cockpit-cortex-ui-compat-0UtAeo, including the previously failing explicit
+post-Stop send. After final detached-drain lifecycle tracking, the affected
+queue/mobile subset passed 2/2 (selected 2/5, with auth/interactions/usage omitted)
+in cockpit-cortex-ui-compat-9uvXrT. Each directory retains its private
+compatibility-report.json. Reports record revision 0cb97bb with dirty state;
+these are working-tree validation, not a public release artifact or a new OS
+login. They confirm observed process cleanup, private PM2 drain and unchanged
+normal activation/retained executable. No failed report counts toward a pass.
+
+Final frozen full V8: 180 suites / 3,002 tests pass; 3 opt-in native suites /
+20 tests skipped. Statements/lines 88.72% (56,033/63,153), branches 76.95%
+(13,319/17,307), functions 93.94% (2,853/3,037). Branch floor raised from 76.90%
+to 76.92%; statements/lines retain 88.70% and functions 93.90%. The 74-test
+focused backend/turn/runtime/shots/integration/queue set also passed. Finish
+full Jest with frozen source before rebuilding clients/browser checks; mixed
+source versions previously inflated V8 mappings and are not acceptance data.
+Backend/web/mobile/tool types, zero-warning lint, maintainability, API spec
+and ADR checks pass. Both client assets and bundle budget remain verified.

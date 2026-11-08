@@ -10,12 +10,13 @@ import { buildNativeSessionRecovery, buildSessionRecoveryEvent, createRecoverySn
 import { logger } from '../../utils/logger';
 import { CortexShots } from './cortexShots';
 
-interface ActiveTurn { aborted: boolean; turn?: CortexTurn }
+interface ActiveTurn { aborted: boolean; turn?: CortexTurn; draining?: Promise<void> }
 const log = logger.child({ module: 'cortex-code' });
 
 /** Chat and processor facade; native goals, steering and restricted work stay gated. */
 export class CortexCodeAdapter extends BaseBackendAdapter {
   private active = new Map<string, ActiveTurn>();
+  private drains = new Set<Promise<void>>();
   private instructed = new WeakSet<CortexRuntime>();
   private idleTimer?: NodeJS.Timeout;
   stopping: Promise<void> = Promise.resolve();
@@ -67,27 +68,41 @@ export class CortexCodeAdapter extends BaseBackendAdapter {
       throw new CortexInputError('Cortex chat requires a profile, workspace identity and working directory.');
     }
     const id = options.conversationId || options.sessionId;
-    if (this.active.has(id)) throw new CortexInputError('Cortex conversation is already active.');
-    const owner: ActiveTurn = { aborted: false };
+    const previous = this.active.get(id);
+    if (previous && !previous.aborted) throw new CortexInputError('Cortex conversation is already active.');
+    // HTTP Stop may finish before its stream consumer unwinds. Drain that lease
+    // independently; the next explicit turn must not depend on consumer progress.
+    const draining = previous ? this.drainAbortedOwner(id, previous) : undefined;
+    const owner: ActiveTurn = { aborted: false, draining };
     this.active.set(id, owner);
     const abort = () => {
       if (this.active.get(id) !== owner) return;
       owner.aborted = true;
       if (owner.turn) void owner.turn.abort();
-      else if (this.active.get(id) === owner) void this.sessions.reset(id);
+      else void this.drainAbortedOwner(id, owner);
     };
-    return { stream: this.stream(id, owner, message, options), abort,
+    return { stream: this.stream(id, owner, message, options, draining), abort,
       sendInput: (text, decisionId) => this.active.get(id) === owner && !owner.aborted
         && Boolean(decisionId && owner.turn?.input(text, decisionId)) };
   }
 
-  private async *stream(id: string, owner: ActiveTurn, message: string, options: SendMessageOptions): AsyncGenerator<StreamEvent> {
+  private drainAbortedOwner(id: string, owner: ActiveTurn): Promise<void> {
+    const reset = this.sessions.reset(id);
+    this.drains.add(reset);
+    void reset.finally(() => { this.drains.delete(reset); }).catch(() => {});
+    owner.draining = owner.draining ? Promise.all([owner.draining, reset]).then(() => {}) : reset;
+    void owner.draining.catch(() => {}); // A later stream reports cleanup failures.
+    return owner.draining;
+  }
+
+  private async *stream(id: string, owner: ActiveTurn, message: string, options: SendMessageOptions, draining?: Promise<void>): AsyncGenerator<StreamEvent> {
     let runtime: CortexRuntime | undefined;
     let delegated = false;
     const current = () => !owner.aborted && this.active.get(id) === owner;
     const session = { profile: options.cliProfile!, workspaceId: options.workspaceId!, cwd: options.workingDir!,
       contextKey: crypto.createHash('sha256').update(options.systemPrompt).digest('hex'), mcpServers: options.mcpServers };
     try {
+      await draining;
       if (!current()) return;
       let recovery: ReturnType<typeof buildNativeSessionRecovery> | undefined;
       try {
@@ -140,7 +155,8 @@ export class CortexCodeAdapter extends BaseBackendAdapter {
     const owner = this.active.get(conversationId);
     if (owner) { owner.aborted = true; void owner.turn?.abort(); }
     this.active.delete(conversationId);
-    this.stopping = this.sessions.reset(conversationId).catch(() => log.warn('Cortex reset cleanup failed'));
+    this.stopping = Promise.all([this.stopping, owner?.draining, this.sessions.reset(conversationId)])
+      .then(() => {}).catch(() => log.warn('Cortex reset cleanup failed'));
   }
 
   shutdown(): void {
@@ -149,7 +165,7 @@ export class CortexCodeAdapter extends BaseBackendAdapter {
     for (const owner of this.active.values()) { owner.aborted = true; void owner.turn?.abort(); }
     this.active.clear();
     // A later send recreates idle supervision after a CLI update.
-    this.stopping = Promise.allSettled([this.shots.shutdown(), this.sessions.shutdown()]).then(results => {
+    this.stopping = Promise.allSettled([this.stopping, this.shots.shutdown(), this.sessions.shutdown(), ...this.drains]).then(results => {
       if (results.some(result => result.status === 'rejected')) log.warn('Cortex shutdown cleanup failed');
     });
   }

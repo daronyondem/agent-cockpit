@@ -959,7 +959,11 @@ native update suppression. Runtime launches pin the captured executable realpath
 for version/ACP/login consistency; the flag alone is not installation containment.
 Profile command storage and updater activation discovery remain unchanged. Aborted
 CoCo turns drain/close their runtime before terminal done; subsequent explicit
-turns load the saved session in a fresh process without replay. Stale abort
+turns load the saved session in a fresh process without replay. A new explicit
+send behind an aborted owner waits for its reset/drain even if HTTP Stop has
+already finalized and the old iterator is suspended. Repeated Stop retains
+earlier drain promises; cancelled waiting prompts and failed cleanup never
+start work. Healthy overlapping owners still reject. Stale abort
 handles cannot affect newer owners. ACP keeps its native `acp serve` prefix;
 1.2.35 does not accept that root option in ACP dispatch. Explicit updates remain
 `update <target>`. See [C51 macOS acceptance](spec-cortex-code.md#p8-c51--macos-native-acceptance-and-passive-version-checks).

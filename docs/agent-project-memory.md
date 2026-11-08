@@ -233,6 +233,22 @@ tool is unavailable.
   `docs/research/cortex-code-linux-acceptance.md`. Durable note:
   `notes/note_2026-11-08T12-29-23-920Z_cortex-code-c52-linux.md`.
 
+- CoCo C54 compatibility commands are `CORTEX_CODE_E2E=1 npm run
+  e2e:cortex-code` and `e2e:cortex-code-ui`; `-- --list` is read-only and a
+  `--probe` run is explicitly scoped. Pin retained 1.2.35, keep roots directly
+  under `/tmp` for macOS socket limits, isolate PM2/TMPDIR and share only the
+  projected `compatibility-report.json`. Track the private daemon independently
+  of probe ancestry; stale/reused PID files must not start another daemon or
+  signal unrelated work. Preserve deadlines, identity cleanup and no retry.
+  Native mobile exposed HTTP Stop completing before CoCo released its owner:
+  explicit follow-ups must await predecessor reset/drain, preserve that fence
+  across another Stop, and never start cancelled waiting prompts. Track direct
+  reset promises outside session entries and await them/previous stopping in
+  reset/shutdown. Freeze source for V8 coverage and finish full Jest before
+  rebuilding/browser probes. C49/C51 observations retain unknown causes; human
+  OAuth, strict Memory, platforms and complete workflows remain separate.
+  Durable note: `notes/note_2026-11-08T18-35-14-712Z_cortex-code-c54-compatibility.md`.
+
 ## Mobile PWA
 
 - Mobile direction is PWA-only. Native iOS/Expo work was evaluated but the

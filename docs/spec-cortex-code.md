@@ -1805,3 +1805,66 @@ runner. Existing install/update probes stay macOS-only, managed Linux updates
 remain disabled, and no capability/version gate changes. This preparation
 introduces no product endpoints, client storage, UI/PWA metadata or mobile
 behavior; packaged mobile assets are smoke-checked only. C52 remains open.
+
+
+## P9 C54 — Consolidated native compatibility commands
+
+The npm e2e:cortex-code and e2e:cortex-code-ui commands consolidate the existing
+macOS runtime/events/processor and auth/interaction/queue/usage/mobile probes.
+Native execution is opt-in through CORTEX_CODE_E2E=1; read-only --list/--help
+needs no authentication. Repeated --probe selections are explicitly scoped,
+with selected and omitted IDs in the final report. No installer/update action,
+platform certification, strict Memory enablement or C55 workflow completeness
+is implied by their default catalogs.
+
+The thin entrypoints delegate to scripts/run-cortex-code-compat.ts. Catalog and
+native report validation belong to cortexCompatReports.ts; bounded child/output/
+identity cleanup belongs to cortexCompatProcess.ts. The runner captures the
+retained official 1.2.35 executable realpath for both version and launch, uses
+shared terminal credential homes, private PM2/TMPDIR, serial ownership, total
+and per-probe deadlines, and no retry. UI work rebuilds production assets only
+after the caller has completed full Jest. A failed/missing/mismatched report,
+timeout, cancellation, output overflow, retained executable/activation change
+or failed cleanup cannot count as a pass. Native protocol shapes, profile storage, endpoints, browser contracts and
+capability gates are unchanged. CoCo chat admission after Stop is specified below.
+
+Only a validated fixed projection of native metadata/outcomes enters the
+shareable compatibility-report.json. Raw logs, errors, account/connection/OAuth
+material and native fixture folders remain private. Historical C49 auth failures
+and C51 activation drift/isolated-HOME null auth remain observations with no
+claimed root cause. [Testing specification](spec-testing.md#coco-consolidated-compatibility-runners-p9-c54)
+defines exact catalogs, controls, deadlines, report validation and cleanup.
+C26, C35, Ubuntu/Windows, complete workflows and physical mobile are independent.
+
+
+C54 native mobile recovery exposed a separate chat admission race: HTTP Stop
+can finish its terminal finalizer/detach the route before the old CoCo stream
+iterator unwinds and removes its active lease. A new explicit message then hit
+Cortex conversation is already active despite the route reporting idle.
+CortexCodeAdapter now rejects only a healthy active owner. Behind an aborted
+owner it reserves the new owner synchronously, resets/disposes the predecessor
+and awaits that drain before acquiring a new runtime. The private ActiveTurn
+draining promise retains previous drains across repeated Stop/new-send cycles.
+The new stream checks its current owner after waiting; cancelled waiting turns
+never invoke native prompts. Failed cleanup emits a terminal error/done without
+starting work. A delayed old iterator's release/removal remains identity-checked
+and cannot clear the newer lease. Existing saved-session load behavior and
+single explicit prompt attempt remain unchanged; interrupted work is not replayed.
+
+This is scoped to CoCo adapter admission. Shared HTTP finalizer timing,
+request/response frames, client queue suspension and default runtime cancellation
+are unchanged. Deterministic backend tests suspend the old consumer and hold
+native close, then verify immediate explicit admission with deferred execution,
+repeat-Stop drain inheritance, newer-owner exclusion and failure without resend.
+The native mobile history/Stop-recovery failure is retained independently from
+C49 auth observations and the earlier runner socket-path failure.
+
+
+Pending reset promises are also tracked independently in the adapter's private
+drains set, removed on settlement. Reset completion includes the previous
+stopping promise, the current owner's inherited drain and the new reset.
+Shutdown completion includes previous stopping, ephemeral shutdown, session
+shutdown and every outstanding direct reset promise. Thus removal from the
+session map or absence of an active consumer cannot make shutdown finish while
+an old native lease is still draining. The lifecycle tests hold native close,
+verify reset/shutdown remain pending, and ensure waiting successors never start.
