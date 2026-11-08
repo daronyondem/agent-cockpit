@@ -131,7 +131,7 @@
 .session-viewer-screen {
   inset: 0;
   position: absolute;
-  z-index: 25;
+  z-index: 10;
 }
 
 .session-viewer-nav {

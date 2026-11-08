@@ -673,11 +673,12 @@ export class ChatService {
    * backend, model, and a requested effort. If the backend/model pair doesn't
    * support the requested level, the result falls back to `high` when
    * available, then the first supported level, or clears if nothing matches.
+   * CoCo retains valid requested effort for its profile-local native validation.
    */
   private _effectiveEffort(backend: string, model: string | undefined, requested: EffortLevel | undefined): EffortLevel | undefined {
     const adapter = this._backendRegistry?.get(backend);
     const modelOption = adapter?.metadata.models?.find(m => m.id === model);
-    return effectiveEffort(model, requested, modelOption);
+    return effectiveEffort(model, requested, modelOption, backend);
   }
 
   private _effectiveServiceTier(backend: string, requested: ServiceTier | undefined): ServiceTier | undefined {

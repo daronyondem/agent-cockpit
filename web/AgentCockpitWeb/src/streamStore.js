@@ -1232,7 +1232,8 @@ import { reduceStreamFrame } from './stream/streamFrameReducer.ts';
 
   /* Compose the outgoing content string from a QueuedMessage. Wire format is
      unchanged — we still append `[Uploaded files: <abs paths>]` so Claude
-     reads the files from disk. The typed chips are a UI concern only. */
+     reads the files from disk. Explicit filename references also let native
+     media adapters receive trusted uploads without parsing this text. */
   function composeWireContent(qm){
     const text = typeof qm.content === 'string' ? qm.content : '';
     const atts = Array.isArray(qm.attachments) ? qm.attachments : [];
@@ -1322,6 +1323,7 @@ import { reduceStreamFrame } from './stream/streamFrameReducer.ts';
     try {
       /** @type {SendMessageRequest} */
       const body = { content };
+      if (attachmentsMeta.length) body.attachments = attachmentsMeta.map(({ name }) => ({ name }));
       if (sendCliProfileId) body.cliProfileId = sendCliProfileId;
       if (sendBackend) body.backend = sendBackend;
       if (sendModel)   body.model   = sendModel;
@@ -1630,6 +1632,8 @@ import { reduceStreamFrame } from './stream/streamFrameReducer.ts';
       const { markdown, recoveryMessage } = await AgentApi.conv.ocrAttachment(convId, entry.result.path, {
         cliProfileId: selectedCliProfileId,
         backend: selectedBackend,
+        model: s.composerModel || undefined,
+        effort: s.composerEffort || undefined,
       });
       update(convId, cur => ({
         ...cur,
@@ -2128,6 +2132,7 @@ import { reduceStreamFrame } from './stream/streamFrameReducer.ts';
 
     try {
       const body = { content };
+      if (originalHead.attachments && originalHead.attachments.length) body.attachments = originalHead.attachments.map(({ name }) => ({ name }));
       if (sendCliProfileId) body.cliProfileId = sendCliProfileId;
       if (sendBackend) body.backend = sendBackend;
       if (sendModel)   body.model   = sendModel;

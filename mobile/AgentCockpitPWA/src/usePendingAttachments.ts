@@ -1,7 +1,7 @@
-import { useRef, useState, type Dispatch, type RefObject, type SetStateAction } from 'react';
+import { useEffect, useRef, useState, type Dispatch, type RefObject, type SetStateAction } from 'react';
 import { applyConversationRuntimeSelection } from './appModel';
 import type { AgentCockpitAPI } from './api';
-import type { Conversation, Message, PendingAttachment } from './types';
+import type { Conversation, EffortLevel, Message, PendingAttachment } from './types';
 
 type UsePendingAttachmentsOptions = {
   activeConversation: Conversation | null;
@@ -9,6 +9,8 @@ type UsePendingAttachmentsOptions = {
   clientRef: RefObject<AgentCockpitAPI>;
   selectedBackend: string | undefined;
   selectedCliProfileId: string | undefined;
+  selectedModel: string | undefined;
+  selectedEffort: EffortLevel | undefined;
   setActiveConversation: Dispatch<SetStateAction<Conversation | null>>;
   applyServerMessage: (conversationID: string, message: Message | null | undefined) => void;
   appendToDraft: (text: string) => void;
@@ -17,6 +19,10 @@ type UsePendingAttachmentsOptions = {
 export function usePendingAttachments(options: UsePendingAttachmentsOptions) {
   const attachInputRef = useRef<HTMLInputElement | null>(null);
   const [pendingAttachments, setPendingAttachments] = useState<PendingAttachment[]>([]);
+  const currentOptions = useRef(options); currentOptions.current = options;
+  const currentAttachments = useRef(pendingAttachments); currentAttachments.current = pendingAttachments;
+  const ocrJobs = useRef(new Map<string, symbol>());
+  useEffect(() => { const jobs = ocrJobs.current; return () => { jobs.clear(); }; }, []);
   const hasUploadingAttachments = pendingAttachments.some((attachment) => attachment.status === 'uploading');
 
   async function handleAttachmentFiles(files: FileList | null) {
@@ -54,6 +60,7 @@ export function usePendingAttachments(options: UsePendingAttachmentsOptions) {
   }
 
   async function removePendingAttachment(id: string) {
+    ocrJobs.current.delete(id);
     const conversation = options.activeConversation;
     const attachment = pendingAttachments.find((item) => item.id === id);
     attachment?.xhr?.abort();
@@ -67,13 +74,18 @@ export function usePendingAttachments(options: UsePendingAttachmentsOptions) {
     const conversation = options.activeConversation;
     const attachment = pendingAttachments.find((item) => item.id === id);
     const path = attachment?.result?.path;
-    if (!conversation || !attachment || !path) {
+    if (!conversation || !attachment || !path || ocrJobs.current.has(id)) {
       return;
     }
     if (attachment.ocrMarkdown) {
       options.appendToDraft(attachment.ocrMarkdown);
       return;
     }
+    const job = Symbol(); ocrJobs.current.set(id, job);
+    const ownsResult = () => ocrJobs.current.get(id) === job
+      && options.activeConversationRef.current?.id === conversation.id
+      && options.activeConversationRef.current?.currentSessionId === conversation.currentSessionId
+      && currentAttachments.current.some(item => item.id === id);
     setPendingAttachments((current) =>
       current.map((item) => (item.id === id ? { ...item, ocrStatus: 'running', ocrError: undefined } : item)),
     );
@@ -81,9 +93,18 @@ export function usePendingAttachments(options: UsePendingAttachmentsOptions) {
       const ocrResponse = await options.clientRef.current.ocrAttachment(conversation.id, path, {
         backend: options.selectedBackend,
         cliProfileId: options.selectedCliProfileId,
+        model: options.selectedModel,
+        effort: options.selectedEffort,
       });
+      if (!ownsResult()) return;
       const markdown = ocrResponse.markdown || '';
       options.applyServerMessage(conversation.id, ocrResponse.recoveryMessage);
+      setPendingAttachments((current) =>
+        current.map((item) => (item.id === id ? { ...item, ocrStatus: 'done', ocrMarkdown: markdown } : item)),
+      );
+      const latest = currentOptions.current;
+      if (latest.selectedCliProfileId !== options.selectedCliProfileId || latest.selectedBackend !== options.selectedBackend
+        || latest.selectedModel !== options.selectedModel || latest.selectedEffort !== options.selectedEffort) return;
       options.setActiveConversation((current) => {
         if (!current || current.id !== conversation.id) return current;
         const next = applyConversationRuntimeSelection(current, {
@@ -93,15 +114,15 @@ export function usePendingAttachments(options: UsePendingAttachmentsOptions) {
         options.activeConversationRef.current = next;
         return next;
       });
-      setPendingAttachments((current) =>
-        current.map((item) => (item.id === id ? { ...item, ocrStatus: 'done', ocrMarkdown: markdown } : item)),
-      );
-      options.appendToDraft(markdown);
+      latest.appendToDraft(markdown);
     } catch (error) {
+      if (!ownsResult()) return;
       const message = error instanceof Error ? error.message : 'OCR failed.';
       setPendingAttachments((current) =>
         current.map((item) => (item.id === id ? { ...item, ocrStatus: 'error', ocrError: message } : item)),
       );
+    } finally {
+      if (ocrJobs.current.get(id) === job) ocrJobs.current.delete(id);
     }
   }
 

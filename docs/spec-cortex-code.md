@@ -534,6 +534,64 @@ fresh storage restoration and reconnect without double accounting. The opt-in
 CoCo, two prompts per client, fresh pages, isolated PM2 restart and reconciled
 ledger counters. This does not close C26, strict Memory, C46/C47 or platform gates.
 
+## Mobile chat acceptance and OCR selection (P7 C46)
+
+The current mobile PWA uses the registered CoCo profile/model/effort metadata,
+shared capability/goal gates, interaction/queue pipeline and normal persisted
+message/artifact/session contracts. No mobile administration is added. Native
+coverage is split into the C43 decision, C44 queue/abort, C45 usage and new
+`scripts/probe-cortex-mobile.ts` media/history flows; see testing for the precise
+native version/platform/browser reports and remaining gates.
+
+CoCo effort storage uses the focused `conversationPolicy.effectiveEffort` rule:
+for a named model, preserve an explicit recognized EffortLevel even when the
+static adapter models list is empty. CoCo discovers support per profile; native
+`configureCortex` remains the authority before inference. Do not clear a saved
+selection merely because static metadata has no model, fetch native catalogs
+under the index lock, invent a static CoCo catalog, or change other harnesses'
+existing supported-level normalization. Invalid enum values remain unset. The
+CoCo integration test verifies low then medium native config RPCs and fresh
+storage restoration; the mobile selection test retains saved medium while
+profile discovery is pending/fails.
+
+C46 corrects composer OCR selection before the first chat send. Both clients
+send optional model/effort fields from their composer; the upload contract
+validates them and the route applies image eligibility to the chosen invocation
+model, then passes model/effort to the existing tool-enabled one-shot. Omitted
+fields retain saved-conversation fallback. Do not mutate stored chat model/effort
+or relax the verified PNG/model/version, profile-lock or upload-root boundaries.
+Auto remains unverified image input even when it resolves to an image model.
+
+Immediate and queued chat sends include explicit upload filename references in
+`contracts/streams.ts`. The stream route resolves actual path/kind/size through
+`chat/attachments.ts` under the conversation upload root before turn acceptance;
+missing, nested, symlink and cross-conversation references fail without inference
+or user-message persistence. Client paths/kinds are not trusted. CoCo receives
+the metadata plus root and retains its native PNG/model/version/byte gates.
+Existing uploaded-file prose stays available to disk tools/history; text alone
+never produces an ACP image block. HTTP-to-native integration checks the actual
+PNG base64 block and proves prose-only paths stay text.
+
+Mobile `usePendingAttachments.ts` owns synchronous per-attachment OCR jobs and
+current attachment/options refs. Accept a completion only for the same job,
+conversation, current session and still-pending attachment. Clear/removal, reset,
+navigation and unmount invalidate automatic draft insertion. A changed runtime
+selection can retain a successful OCR cache for explicit insertion, but cannot
+be overwritten by the older request or trigger automatic insertion. Preserve a
+newer draft and require explicit retry after failure; do not invent server-side
+cancellation when merely ignoring a late client response.
+
+The native mobile probe uses real PNG/text uploads and OCR, checks body model/
+effort/profile, cached reuse and rejection of Auto image input. It checks native
+thinking/tool rendering and replay during a bounded Bash fixture. A dedicated
+image/text turn confirms both uploaded contents before the CSV fixture exists;
+the next turn requires explicit FILE_DELIVERY. The probe mutates the original
+and verifies the durable preview and actual downloaded bytes. Reset exposes a
+read-only old session retaining the artifact; a stopped descendant exits without
+its final output and fresh inference never reruns it. Unsupported Goal requests
+return 400 while the UI hides Goal/Fast/Ultracode. This does not enable goals,
+agents, steering, strict Memory or another platform/physical mobile browser.
+
 ## Durable chat and managed MCP (P5)
 
 `src/services/backends/cortex.ts` is the registered public adapter facade.

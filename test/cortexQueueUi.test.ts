@@ -59,6 +59,19 @@ test('a pre-completion mobile handler drains with current state once and preserv
   } finally { await f.close(); }
 });
 
+test.each([false, true])('mobile sends explicit upload references from the message snapshot (queued=%s)', async queued => {
+  const f = await fixture(false);
+  const attachment = { name: 'image.png', path: '/fixture/image.png', kind: 'image' };
+  try {
+    if (queued) await act(async () => f.view.setConversation({ ...f.view.conversation, messageQueue: [{ content: 'queued image', attachments: [attachment] }] }));
+    else await act(async () => f.view.setAttachments([{ id: 'uploaded', status: 'done', result: attachment }]));
+    await act(async () => { if (queued) await f.view.drainNextQueuedMessage(f.view.conversation); else await f.view.sendDraft(); });
+    expect(f.api.sendMessage).toHaveBeenCalledTimes(1);
+    expect(f.api.sendMessage.mock.calls[0][1]).toMatchObject({ attachments: [{ name: 'image.png' }] });
+    expect((f.api.sendMessage.mock.calls[0][1] as any).content).toContain('[Uploaded files: /fixture/image.png]');
+  } finally { await f.close(); }
+});
+
 test.each(['question', 'switch'])('a mobile %s arriving during queue removal restores the queue without sending', async mode => {
   const f = await fixture(false), saved = deferred(); f.api.saveQueue.mockImplementationOnce(() => saved.promise);
   try {

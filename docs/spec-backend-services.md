@@ -2151,3 +2151,30 @@ gleaning. Ingestion clears a rejected adapter before image-only recovery;
 Context records resolution errors as failed runs; re-dream validates selection
 before wiping synthesis. Defaults for unset selections and legacy adapters
 remain unchanged. See [the exact contract](spec-cortex-code.md#processor-selection-boundaries-p6-c41).
+
+### CoCo profile-local effort and OCR selection (P7 C46)
+
+`chat/attachments.ts` resolves explicit `contracts/streams.ts` upload filename
+references to server-owned metadata before the stream route accepts a turn.
+Resolve only regular files directly under the real conversation upload root;
+reject missing files, nested paths and symlinks without persisting a message or
+starting a CLI. Pass metadata/root to adapters, retain their own media gates,
+and never parse prose for native image paths. Immediate/queued clients send
+references alongside the existing uploaded-file wire text. The focused resolver
+and HTTP/native CoCo tests cover containment and actual PNG blocks.
+
+`chat/conversationPolicy.ts` preserves a recognized requested EffortLevel for
+CoCo with a named model because the adapter's static model list is intentionally
+empty; profile-local native configuration validates actual support before
+inference. `ChatService` passes backend identity into the pure policy for create,
+model updates and effort updates. Other harnesses keep their supported-level
+fallback/downgrade behavior. Do not introduce native discovery inside workspace
+index locks. Storage formats and public facade signatures stay unchanged.
+
+`contracts/uploads.ts` adds optional model/effort invocation overrides to OCR.
+The upload route validates shape/effort enum, applies image eligibility to the
+chosen model, and calls the existing tool-enabled one-shot with those values;
+omission falls back to saved conversation selection. Neither override mutates
+stored chat model/effort or enables an unverified CoCo media model/version.
+Desktop and mobile pass current composer values. Profile locking/repair,
+conversation-owned path checks and processor retry/deadline policies stay intact.

@@ -328,6 +328,27 @@ opt-in `scripts/probe-cortex-usage.ts` for native client/reload/isolated PM2
 restart evidence. Run browser probes separately from asset-mutating full Jest;
 this scoped acceptance does not close C26, strict Memory, C46/C47 or platforms.
 
+P7 C46 mobile attachment ownership belongs to `usePendingAttachments.ts`.
+Chat uploads travel as explicit filename references in `contracts/streams.ts`;
+resolve server-owned metadata under the conversation upload root in
+`chat/attachments.ts` before accepting a turn. Never derive native media from
+paths in prose, trust client paths/kinds, or admit symlink/cross-conversation files.
+Both clients must retain these references for queued as well as immediate sends.
+Keep selected OCR model/effort invocation-only in `contracts/uploads.ts` and the
+upload route; preserve the stored chat selection and native media gates. Bind
+late OCR to job/conversation/session/attachment identity and preserve current
+drafts/selections; require explicit retry after failure. CoCo named-model effort
+storage belongs to `chat/conversationPolicy.ts`: retain valid explicit values
+without inventing a static catalog or loading native metadata under index locks;
+native configuration validates profile-local support. Review the focused mobile
+attachment/selection, contract/route/store/policy and CoCo integration tests.
+Keep `test/chatAttachmentResolution.test.ts` aligned with the upload boundary.
+Run opt-in `scripts/probe-cortex-mobile.ts` for native media/history/recovery and
+the interaction probe for decision regressions. This browser/macOS evidence does
+not certify physical mobile platforms, C26, strict Memory or Windows/Linux.
+Dismiss the Conversation actions sheet when opening session history and keep
+the read-only viewer below preview modals; retain real pointer checks in the probe.
+
 # Server Management
 
 NEVER run `node server.js` directly. This causes orphan processes and port conflicts.

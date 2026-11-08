@@ -9,6 +9,7 @@ import { StreamJobSupervisor, type PendingMessageSend } from '../../services/str
 import type { MemoryMcpServer } from '../../services/memoryMcp';
 import type { KbSearchMcpServer } from '../../services/kbSearchMcp';
 import { validateConversationInputRequest, validateSendMessageRequest } from '../../contracts/streams';
+import { resolveConversationAttachments } from '../../services/chat/attachments';
 import { isContractValidationError } from '../../contracts/validation';
 import type {
   ActiveStreamEntry,
@@ -186,6 +187,14 @@ export function createStreamRouter(opts: StreamRoutesOptions): express.Router {
     let executionDir = conversationExecutionDir(conv);
     if (hasInFlightTurn(convId)) {
       return res.status(409).json({ error: 'Conversation is already streaming' });
+    }
+
+    const attachmentRoot = path.join(chatService.artifactsDir, convId);
+    let attachments: Awaited<ReturnType<typeof resolveConversationAttachments>>;
+    try {
+      attachments = await resolveConversationAttachments(attachmentRoot, body.attachments || []);
+    } catch (err) {
+      return res.status(400).json({ error: (err as Error).message });
     }
 
     let jobHandedOff = false;
@@ -408,6 +417,7 @@ export function createStreamRouter(opts: StreamRoutesOptions): express.Router {
       ? (refreshedConv?.serviceTier || undefined)
       : (conv.serviceTier || undefined);
     const sendResult = adapter.sendMessage(cliMessage, {
+      ...(attachments.length ? { attachments, attachmentRoot } : {}),
       sessionId: conv.currentSessionId,
       conversationId: convId,
       workspaceId: workspaceIdForSend || undefined,

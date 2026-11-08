@@ -1650,6 +1650,22 @@ describe('DELETE /conversations/:id/upload/:filename', () => {
 // ── POST /conversations/:id/attachments/ocr ─────────────────────────────────
 
 describe('POST /conversations/:id/attachments/ocr', () => {
+  test('uses selected OCR model/effort without changing the stored chat selection', async () => {
+    const conv = await env.chatService.createConversation('OCR selection', undefined, 'claude-code', 'stale-model', 'high');
+    const artifactDir = path.join(env.chatService.artifactsDir, conv.id); fs.mkdirSync(artifactDir, { recursive: true });
+    const imagePath = path.join(artifactDir, 'selection.png'); fs.writeFileSync(imagePath, 'fixture');
+    const before = await env.chatService.getConversation(conv.id);
+    env.mockBackend.setOneShotImpl(async () => 'SELECTED OCR');
+    const endpoint = `/api/chat/conversations/${conv.id}/attachments/ocr`;
+    const result = await env.request('POST', endpoint, { path: imagePath, model: 'sonnet', effort: 'low' });
+    expect(result.status).toBe(200);
+    expect(env.mockBackend._oneShotCalls[0].options).toMatchObject({ model: 'sonnet', effort: 'low' });
+    expect(await env.chatService.getConversation(conv.id)).toMatchObject({ model: before!.model, effort: before!.effort });
+    expect((await env.request('POST', endpoint, { path: imagePath, model: 'unverified' })).status).toBe(400);
+    expect((await env.request('POST', endpoint, { path: imagePath, effort: 'invalid' })).status).toBe(400);
+    expect(env.mockBackend._oneShotCalls).toHaveLength(1);
+  });
+
   test('returns markdown from the backend runOneShot', async () => {
     const conv = await env.chatService.createConversation('Test');
     const artifactDir = path.join(env.chatService.artifactsDir, conv.id);

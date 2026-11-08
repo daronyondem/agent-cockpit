@@ -239,6 +239,7 @@ export function useSendPipeline(options: UseSendPipelineOptions) {
       });
       const response = await options.clientRef.current.sendMessage(conversation.id, {
         content,
+        ...(message.attachments?.length ? { attachments: message.attachments.map(({ name }) => ({ name })) } : {}),
         backend: options.selectedBackend,
         cliProfileId: options.selectedCliProfileId,
         model: options.selectedModel,

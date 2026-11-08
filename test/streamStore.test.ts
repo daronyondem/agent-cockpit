@@ -566,6 +566,16 @@ test('send() posts selected CLI profile with its harness backend', async () => {
   });
 });
 
+test('send() forwards uploaded filename references alongside the existing wire text', async () => {
+  localStorage.setItem('ac:v2:draft:c1', JSON.stringify({ text: 'image', attachments: [{ name: 'safe.png', path: '/uploads/c1/safe.png', kind: 'image' }] }));
+  const Store = (window as any).StreamStore, api = (global as any).AgentApi;
+  api.fetch.mockResolvedValueOnce(makeResponse({ id: 'c1', backend: 'cortex-code', messages: [], messageQueue: [] }));
+  await Store.load('c1'); api.fetch.mockReset();
+  api.fetch.mockResolvedValueOnce(makeResponse({ userMessage: null }));
+  await Store.send('c1', 'image');
+  expect(api.fetch.mock.calls[0][1].body).toMatchObject({ content: 'image\n\n[Uploaded files: /uploads/c1/safe.png]', attachments: [{ name: 'safe.png' }] });
+});
+
 test('reset() replaces stale composer profile selections with the reset conversation profile', async () => {
   const Store = (window as any).StreamStore;
   const api = (global as any).AgentApi;
@@ -688,6 +698,8 @@ test('ocrAttachment() posts the selected replacement profile and updates convers
   await Store.load('c1');
   Store.setComposerCliProfile('c1', 'profile-claude-replacement', 'claude-code');
   const attachmentId = Store.getState('c1').pendingAttachments[0].id;
+  Store.setComposerModel('c1', 'sonnet');
+  Store.setComposerEffort('c1', 'low');
 
   const markdown = await Store.ocrAttachment('c1', attachmentId);
 
@@ -698,6 +710,8 @@ test('ocrAttachment() posts the selected replacement profile and updates convers
     {
       cliProfileId: 'profile-claude-replacement',
       backend: 'claude-code',
+      model: 'sonnet',
+      effort: 'low',
     },
   );
   expect(Store.getState('c1').conv).toMatchObject({
@@ -1238,6 +1252,7 @@ describe('queue', () => {
 
     const state = Store.getState('c1');
     expect(state.queue).toEqual([{ content: 'queued text', attachments: [attachment] }]);
+    expect(api.fetch.mock.calls.find((call: any[]) => call[0] === 'conversations/c1/message' && call[1]?.body?.content?.includes('queued text'))[1].body.attachments).toEqual([{ name: 'x.png' }]);
     expect(state.streaming).toBe(true);
     expect(state.uiState).toBe('streaming');
     expect(state.streamError).toBeNull();

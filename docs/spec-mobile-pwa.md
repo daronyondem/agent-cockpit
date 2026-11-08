@@ -10,7 +10,8 @@ desktop catalog ownership and the backend-supplied CoCo icon. Mobile receives
 the icon through existing metadata. No PWA administration screen, endpoint,
 manifest, service worker, asset source or protocol change is introduced. The
 desktop's profile-catalog hook is not imported by mobile; broader native mobile
-model/usage/media acceptance remains C45–C47, including C46.
+model/usage/media acceptance is recorded under C45/C46 below; C47 keeps
+consolidated responsive-client checks separate.
 
 P7 C43 applies shared revision capability policy to mobile/desktop plan cards.
 The mobile send pipeline synchronously prevents duplicate/stale submissions,
@@ -215,7 +216,7 @@ The PWA currently covers:
 - Attachment upload from browser file picker with progress and cancel. DNG uploads are normalized by the server into a generated `<original>.dng.preview.jpg` JPEG sidecar capped to a 2576 px long edge; the returned attachment chip/path is the JPEG preview (`kind: image`), while the original RAW file stays in the conversation artifacts directory and is not shown as a separate attachment. HEIC/HEIF has no special server conversion here; if Safari supplies JPEG bytes they use the normal JPEG path, otherwise unsupported uploads fail through the normal upload-error chip state.
 - Delete completed pending uploads via `DELETE /api/chat/conversations/:id/upload/:filename`. Deleting a generated DNG preview attachment also removes the paired original DNG on the server.
 - Pending plan/question cards retain optional `decisionId` from `tool_activity.id`. `ApiClient.sendInput(conversationID,text,streamActive,decisionId?)` echoes it in the shared request contract. CoCo requires the exact current decision generation; a 409 keeps the interaction/error visible and does not create a new user message. Newer interactions received while the response is pending remain intact. No PWA manifest or service-worker policy changes accompany this field.
-- Image OCR insertion through `POST /api/chat/conversations/:id/attachments/ocr` with the selected `cliProfileId` and `backend`; the server rejects OCR when the selected profile/backend cannot transport one-shot image input or the selected/default model does not report `model.capabilities.input.image`. When OCR repairs a missing stored conversation profile to the selected profile, the response includes a persisted Agent Cockpit system `recoveryMessage`; the PWA applies it through the same server-message upsert path used by stream events before inserting the returned Markdown into the draft.
+- Image OCR insertion through `POST /api/chat/conversations/:id/attachments/ocr` with the selected `cliProfileId`, `backend`, `model` and `effort`; the server rejects OCR when the selected profile/backend cannot transport one-shot image input or the selected/default model does not report `model.capabilities.input.image`. When OCR repairs a missing stored conversation profile to the selected profile, the response includes a persisted Agent Cockpit system `recoveryMessage`; the PWA applies it through the same server-message upsert path used by stream events before inserting the returned Markdown into the draft.
 - Send/queue wire-content composition by appending `[Uploaded files: <paths>]`.
 - User-message uploaded-file marker stripping and file card rendering.
 - Assistant `<!-- FILE_DELIVERY:/absolute/path -->` marker stripping and file card rendering. Only assistant markers create delivered-file references; a marker quoted in a user prompt does not advertise a file before the harness creates it. Delivered files use `GET /api/chat/conversations/:id/workspace-file` for previews/downloads so worktree-isolated conversations read from their execution checkout instead of the canonical base checkout.
@@ -288,3 +289,61 @@ and rounded-up estimates stay intact for other harnesses. Build mobile assets;
 no PWA manifest, identity, auth, service worker or offline policy changes.
 Rendered tests live in `test/cortexUsageUi.test.ts`; the isolated native
 `scripts/probe-cortex-usage.ts` verifies display, reload and PM2 restart counters.
+
+### CoCo mobile acceptance and OCR ownership (P7 C46)
+
+Native CoCo 1.2.35/macOS Chromium acceptance passed; see the tracker and testing
+specification for exact reports, failures and physical/platform limits.
+
+The send pipeline carries explicit `{name}` upload references from each message's
+attachment snapshot, including persisted queue entries, alongside the existing
+uploaded-file wire text. The server resolves filenames within the conversation's
+uploads; paths/kinds supplied by clients or pasted into prose cannot create native
+media. Native CoCo still validates PNG bytes, model, version and limits.
+
+`usePendingAttachments.ts` sends the current Run Settings model/effort as well
+as profile/backend to OCR. This matters before the first chat message, when the
+saved conversation can still use Auto while the composer has selected a verified
+image model. The route validates those optional invocation overrides and keeps
+the stored chat model/effort unchanged. Existing clients omitting them retain
+saved-selection fallback. Profile repair/locking and image byte/model gates stay
+unchanged; CoCo PNG support is still limited to Sonnet 4.6/CLI 1.2.35.
+
+The hook reserves a per-attachment OCR job synchronously, suppressing duplicate
+requests before React renders. It tracks current options/attachments and binds
+results to conversation, currentSessionId, attachment and job identity. Removal,
+clear/send, reset, navigation and unmount cannot insert late text or recovery
+messages into another draft/session. A model/effort/profile change may cache a
+still-owned successful result, but does not insert it automatically or overwrite
+the newer runtime selection. Explicit Insert OCR uses the cached Markdown;
+failures retain the image/draft and allow an explicit retry. Completing OCR uses
+the latest draft appender, preserving edits made during the request. Suppressing
+a stale response does not claim cancellation of the server's bounded OCR job.
+
+`test/cortexMobileAttachments.test.ts` covers deferred completion, duplicate
+calls, cached insertion, navigation/reset/removal/clear/model/unmount ownership,
+failure and explicit retry. Route/contract and desktop store tests cover selected
+model/effort, legacy omission, invalid/unverified selection and unchanged stored
+chat values. The opt-in `scripts/probe-cortex-mobile.ts` uses real CoCo through
+production Chromium assets at 390×844 in an isolated PM2/data/workspace fixture:
+profile/model/effort selection and locking, unsupported Goal/Speed/Mode controls,
+PNG/text upload, native OCR/cache, image and text chat, thinking/tools, socket
+replay, explicit durable artifacts, actual download bytes after original-file
+mutation, reset/read-only history, descendant Stop cleanup and fresh inference
+without retrying interrupted work. Python fixtures are syntax-checked before
+native execution. Native C43/C44/C45 probes provide the separate decision,
+queue and usage portions of the acceptance matrix. This is browser acceptance
+with a native macOS CLI, not physical iOS/Android/Safari/share-sheet certification.
+
+Rebuild ignored mobile output after source changes. No PWA manifest, identity,
+service-worker/offline cache policy, administration screen or public asset source
+change accompanies C46. C26, strict Memory, C47 and platform gates stay separate.
+
+The read-only session screen stays above chat and below modal backdrops (z-index
+10 and 20 respectively). Artifact preview dialogs opened from history remain
+visible and their Close controls receive pointer input; the native probe clicks
+them without forcing or bypassing hit testing. The read-only viewer itself has
+no composer, while the underlying current-chat screen can remain mounted.
+Selecting Sessions first dismisses the Conversation actions sheet, so it cannot
+remain mounted and intercept input after the session list closes. The rendered
+selection/history test verifies that transition before native pointer checks.

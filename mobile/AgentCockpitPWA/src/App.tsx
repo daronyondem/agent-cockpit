@@ -122,6 +122,8 @@ export default function App() {
     clientRef,
     selectedBackend,
     selectedCliProfileId,
+    selectedModel,
+    selectedEffort,
     setActiveConversation,
     applyServerMessage,
     appendToDraft,

@@ -1,6 +1,7 @@
 import fs from 'fs/promises';
 import path from 'path';
 import { execFileSync } from 'child_process';
+import { createCanvas } from '@napi-rs/canvas';
 import type { CliProfile } from '../src/types';
 import { CortexCodeAdapter } from '../src/services/backends/cortex';
 import { CortexSessions } from '../src/services/backends/cortexSessions';
@@ -29,16 +30,47 @@ posix('Cortex durable Cockpit chat integration', () => {
   });
   afterEach(async () => { adapter.shutdown(); await adapter.stopping; await destroyChatRouterEnv(env); });
   const conversation = () => env.chatService.createConversation('Cortex fixture', env.tmpDir, 'cortex-code', 'claude-sonnet-4-6', 'low', profile.id);
-  async function send(id: string, content: string) {
+  async function send(id: string, content: string, attachments?: Array<{ name: string }>) {
     env.wsFns.clearBuffer(id);
     const ws = await env.connectWs(id); const reading = env.readWsEvents(ws, 10_000);
-    const response = await env.request('POST', `/api/chat/conversations/${id}/message`, { content });
+    const response = await env.request('POST', `/api/chat/conversations/${id}/message`, { content, attachments });
     expect(response.status).toBe(200);
     const events = await reading;
     expect(events.filter(event => event.type === 'done')).toHaveLength(1);
     return events;
   }
   const calls = async () => (await fs.readFile(trace, 'utf8').catch(() => '')).trim().split('\n').filter(Boolean).map(line => JSON.parse(line));
+
+  test('explicit uploaded PNG references reach native image blocks while prose paths stay text', async () => {
+    const conv = await conversation(), root = path.join(env.chatService.artifactsDir, conv.id);
+    await fs.mkdir(root, { recursive: true });
+    const bytes = createCanvas(2, 2).toBuffer('image/png'); await fs.writeFile(path.join(root, 'image.png'), bytes);
+    await fs.writeFile(path.join(root, 'notes.txt'), 'synthetic notes');
+    await send(conv.id, 'read uploads', [{ name: 'image.png' }, { name: 'notes.txt' }]);
+    await send(conv.id, `[Uploaded files: ${path.join(root, 'image.png')}]`);
+    const prompts = (await calls()).filter(call => call.method === 'session/prompt');
+    expect(prompts[0].params.prompt).toContainEqual({ type: 'image', mimeType: 'image/png', data: bytes.toString('base64') });
+    expect(JSON.stringify(prompts[0].params.prompt)).toContain('Attached file for native tools:');
+    expect(prompts[1].params.prompt.every((block: any) => block.type === 'text')).toBe(true);
+    const before = (await env.chatService.getConversation(conv.id))!.messages.length;
+    for (const name of ['missing.png', '../image.png']) {
+      expect((await env.request('POST', `/api/chat/conversations/${conv.id}/message`, { content: 'invalid', attachments: [{ name }] })).status).toBe(400);
+    }
+    expect((await env.chatService.getConversation(conv.id))!.messages).toHaveLength(before);
+    expect((await calls()).filter(call => call.method === 'session/prompt')).toHaveLength(2);
+  });
+
+  test('profile-discovered effort survives storage and reaches native configuration on successive turns', async () => {
+    const conv = await conversation(); expect(conv.effort).toBe('low');
+    await send(conv.id, 'first effort');
+    await env.chatService.updateConversationEffort(conv.id, 'medium');
+    await send(conv.id, 'second effort');
+    expect((await env.chatService.getConversation(conv.id))!.effort).toBe('medium');
+    const levels = (await calls()).filter(call => call.method === 'session/set_config_option' && call.params.configId === 'thought_level').map(call => call.params.value);
+    expect(levels).toEqual(['low', 'medium']);
+    const restored = new ChatService(env.tmpDir, { defaultWorkspace: env.tmpDir, backendRegistry: env.backendRegistry }); await restored.initialize();
+    expect((await restored.getConversation(conv.id))!.effort).toBe('medium');
+  });
 
   test('profile metadata, durable sessions, idle reload and restart retain context and apply usage once', async () => {
     const metadata = await env.request('GET', `/api/chat/cli-profiles/${profile.id}/metadata`);

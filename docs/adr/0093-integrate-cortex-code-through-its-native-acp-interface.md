@@ -7,6 +7,13 @@ supersedes: []
 superseded-by: null
 tags: [backends, profiles, protocol, authentication]
 affects:
+  - mobile/AgentCockpitPWA/src/styles/mobile/sessions.css
+  - mobile/AgentCockpitPWA/src/mobileConversationModals.tsx
+  - mobile/AgentCockpitPWA/src/usePendingAttachments.ts
+  - mobile/AgentCockpitPWA/src/useRunSelection.ts
+  - src/contracts/uploads.ts
+  - src/services/chat/conversationPolicy.ts
+  - scripts/probe-cortex-mobile.ts
   - src/contracts/usagePresentation.ts
   - web/AgentCockpitWeb/src/chat/cortexUsage.jsx
   - web/AgentCockpitWeb/src/screens/usageStats.js
@@ -85,6 +92,7 @@ affects:
   - src/services/knowledgeBase/dream.ts
   - web/AgentCockpitWeb/src/screens/processorProfiles.ts
   - web/AgentCockpitWeb/src/screens/memoryProcessorSelect.jsx
+  - src/services/chat/attachments.ts
   - src/contracts/streams.ts
   - src/routes/chat/streamRoutes.ts
   - scripts/probe-cortex-chat.ts
@@ -249,6 +257,19 @@ Preserve native token/cache categories and context snapshots separately. Use
 Anthropic/OpenAI prices from a CoCo model ID. Classify version-tested native
 terminal error signatures without treating every failed tool or quoted `Error:`
 string as a failed turn. Unknown failures remain visible.
+
+Pass explicit upload filenames through the shared stream contract and resolve
+server metadata inside the conversation upload root before accepting a turn.
+Do not infer native media from prose or trust client paths/kinds. Queued and
+immediate sends carry the same references, with native media gates retained.
+
+Keep mobile OCR completion tied to the current job/conversation/session and
+attachment, with current model/effort passed as invocation-only overrides. A late
+result must not modify another draft or replace a newer selection. Preserve valid
+CoCo effort in conversation storage despite an empty static catalog; actual
+native profile configuration owns support validation. Static absence is not
+unsupported-model evidence and must not silently reset a user's choice. Retain
+existing other-harness normalization and avoid catalog I/O under index locks.
 
 Share display-only token totals/unavailable-cost policy through browser-safe
 contracts, while provider calculators retain pricing ownership. Explicitly show

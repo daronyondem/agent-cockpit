@@ -299,6 +299,25 @@ tool is unavailable.
   incomplete. Preserve existing harness pricing/rounding. Run native browser
   probes separately from asset-mutating full Jest, then rebuild both clients.
   C26, strict Memory, C46/C47 and platform gates remain independent.
+- P7 C46 current mobile acceptance passes CoCo 1.2.35/macOS arm64 through
+  production Chromium assets in isolated PM2 fixtures. Carry explicit upload
+  filename references in shared stream contracts for immediate and queued sends;
+  resolve server metadata inside the conversation upload root in
+  `chat/attachments.ts` before accepting a turn. Never infer native image input
+  from prose or trust client paths/kinds; reject symlink/cross-conversation files.
+  Keep native PNG/model/version/byte gates. OCR model/effort overrides are
+  invocation-only. Mobile `usePendingAttachments.ts` binds late completion to
+  job/conversation/session/attachment identity and preserves newer drafts/runtime
+  choices. Preserve valid CoCo named-model effort through an empty static catalog;
+  native profile configuration validates support. Dismiss the Conversation actions
+  sheet before opening Sessions and keep read-only history below preview modals.
+  The native probe independently checks image/text chat, OCR/cache, thinking/tools,
+  socket replay, explicit durable artifact/history preview/download, descendant
+  Stop cleanup and fresh inference without replay. C43/C44 native rechecks pass;
+  C45 supplies separate usage/restart evidence. Run browser probes apart from
+  asset-mutating full Jest and rebuild assets afterward. C26, conditional strict
+  Memory, C47 and physical/mobile/platform gates remain independent. The detailed
+  implementation tracker records failed attempts and exact verification scope.
 - Fresh installs should be provider-neutral. Do not imply Claude Code is
   configured when the user has not installed or authenticated it.
 - CLI profiles are scoped per conversation where applicable and can support

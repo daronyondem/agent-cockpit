@@ -8,7 +8,7 @@
 
 **Framework:** Jest 30.x — run with `npm test`. The script is `node --experimental-vm-modules node_modules/.bin/jest` because the KB handler tests import `unpdf` (ESM-only, wraps `pdfjs-dist`) and Jest's VM needs the flag to allow runtime `import()` calls. `jest.config.js` uses `ts-jest` for TypeScript and also transforms JS/JSX with `allowJs: true`, `module: CommonJS`, and `jsx: react-jsx` so tests can import the V2 frontend ES modules directly instead of evaluating browser globals. Default Jest execution is capped at `maxWorkers: '50%'` so process-spawning suites still run in parallel without stampeding local or CI machines, and the global per-test timeout is 30 seconds so widened harness-specific timeouts can surface their route/process-specific errors before Jest's generic timeout.
 
-**Coverage gate:** Run `npm run test:coverage` for backend coverage. The script keeps plain `npm test` unchanged for fast local iteration and runs Jest with `--coverage --runInBand`; serial execution keeps the full-suite coverage gate stable on local machines where parallel workers can exceed short route-test timeouts. `jest.config.js` collects coverage from `src/**/*.ts` and `server.ts`, excludes declaration-only `src/types/**` and `*.d.ts` files, writes reports under `coverage/`, and uses V8 coverage with `text-summary` plus `lcov` reporters. The global threshold floor is statements/lines 88.5%, branches 76.4%, and functions 93.8%, last raised with CoCo processor-selection coverage. The November 7 local / November 8 UTC, 2026 C45 V8 baseline is statements/lines 88.57%, branches 76.53%, and functions 93.82% (168 passing suites, 2,907 passing tests; three opt-in suites and 20 tests skipped), measured on macOS. C45 is predominantly frontend coverage; existing floors remain unchanged. When meaningful tests land, raise the thresholds toward the new baseline in the same PR. Do not lower thresholds to merge a regression; either add behavior coverage, make a narrow intentional exclusion in `jest.config.js`, or document the explicit exception in the PR.
+**Coverage gate:** Run `npm run test:coverage` for backend coverage. The script keeps plain `npm test` unchanged for fast local iteration and runs Jest with `--coverage --runInBand`; serial execution keeps the full-suite coverage gate stable on local machines where parallel workers can exceed short route-test timeouts. `jest.config.js` collects coverage from `src/**/*.ts` and `server.ts`, excludes declaration-only `src/types/**` and `*.d.ts` files, writes reports under `coverage/`, and uses V8 coverage with `text-summary` plus `lcov` reporters. The global threshold floor is statements/lines 88.6%, branches 76.6%, and functions 93.8%, last raised with CoCo mobile/upload coverage. The November 7 local / November 8 UTC, 2026 C46 V8 baseline is statements/lines 88.60%, branches 76.60%, and functions 93.82% (171 passing suites, 2,924 passing tests; three opt-in suites and 20 tests skipped), measured on macOS. The statement/line and branch floors were raised after this measured run; the function floor remains unchanged. When meaningful tests land, raise the thresholds toward the new baseline in the same PR. Do not lower thresholds to merge a regression; either add behavior coverage, make a narrow intentional exclusion in `jest.config.js`, or document the explicit exception in the PR.
 
 Shared chat route tests use `test/helpers/chatEnv.ts` for isolated Express/WebSocket servers and scratch data directories. Teardown waits for active streams, the session finalizer queue, and any in-flight durable stream-job registry mutation to become idle before closing the server and removing the scratch directory, so background finalizer/job writes cannot race temp-directory cleanup.
 
@@ -31,6 +31,9 @@ Test HTTP servers that are contacted through `127.0.0.1` bind explicitly to `127
 | `test/cortexProtocol.test.ts` | Dedicated strict CoCo JSONL framing/IDs/reverse ownership, limits, failures, deadlines and private diagnostics. |
 | `test/cortexRuntime.test.ts` | Deterministic executable fixture: exact argv/env/version, profile fingerprints, session replay, cancellation, catalog scope, startup/reset/idle/reusable registry lifecycle. |
 | `test/cortexProcess.test.ts` | POSIX detached-child cleanup after root exit, unrelated process preservation, identity reuse, bounded stop and enumeration failure. |
+| `test/cortexMobileAttachments.test.ts` | Selected OCR model/effort, synchronous duplicate exclusion, deferred ownership across navigation/reset/removal/clear/model/unmount, cached insertion, failure and explicit retry. |
+| `test/cortexMobileSelection.test.ts` | Saved CoCo model/effort through pending/failed profile discovery, locked profile, unsupported goal capability, and dismissal of the Conversation actions sheet before opening session history. |
+| `test/chatAttachmentResolution.test.ts` | Explicit upload references derive real server metadata; missing, nested, traversal, non-file and symlink references are rejected. CoCo HTTP integration verifies actual PNG blocks and prose-only paths staying text; desktop and mobile tests cover immediate and queued references. |
 | `test/cortexUsageUi.test.ts` | Rendered CoCo desktop/mobile context, token/cache and unknown-cost display; existing harness price regression; shared projection and mixed ledger aggregation. |
 | `test/cortexEvents.test.ts` | Native text/thinking/tool/diff/resource mapping, ownership, fragmented errors/delivery markers, failure classification and token/context counters. |
 | `test/cortexModels.test.ts` | Dynamic configOptions, model/effort/mode selection, auto reset, invalid selections, stale catalogs, profile separation and pinned image evidence. |
@@ -335,6 +338,44 @@ The six P3 Jest suites contain 30 tests. They include existing conversation
 upload/queue/artifact/preview/download and ledger storage without registering a
 CortexCodeAdapter. Whole app/native UI acceptance is separate; normalization
 fixtures do not certify a processor role or native image generation.
+
+## Cortex mobile media/history acceptance (P7 C46)
+
+Run after building web/mobile, separately from asset-mutating full Jest:
+
+```sh
+CORTEX_MOBILE_PROBE=1 CORTEX_TEST_CONNECTION=<saved-connection> \
+  npx tsx scripts/probe-cortex-mobile.ts
+```
+
+The opt-in macOS/CoCo 1.2.35 runner starts only an isolated PM2/data/workspace
+fixture, uses shared terminal auth and production Chromium assets at 390×844.
+It selects a different configured profile, Sonnet 4.6/medium, checks hidden
+Goal/Fast/Ultracode and rejects a valid unsupported Goal request. It uploads real
+PNG/text files, rejects Auto image OCR before inference, runs native OCR with
+selected model/effort (while stored chat still says Auto), and verifies cache
+reuse without another native request. A dedicated native chat turn reads the
+image/text before the CSV fixture exists. A second turn reviews and runs a
+syntax-checked bounded Python gate, renders thinking/tools, survives
+socket replay, and delivers an explicit artifact. Changing the source CSV must
+not change the preview or actual downloaded bytes. The runner reloads, checks
+profile locking, resets and reads old session/artifact history (including actual
+preview-dialog Close clicks above the read-only screen), then Stops a
+bounded descendant and verifies its final file is absent and only one attempt
+ran. A fresh reply proves recovery without prompt/tool replay. The ten-minute
+external deadline closes Chromium; PM2 allows twenty seconds for cleanup.
+Reports contain CLI/OS/Node/revision/dirty and sanitized flags; failure text and
+screenshots remain in private temp directories. Model refusal ends a fixture
+gate check promptly rather than being retried by the application.
+
+C46's matrix also uses the real C43 interaction probe for questions, free text,
+revision/rejection/approval and stale IDs, C44 for queue semantics, and C45 for
+usage/restart/ledger. None certifies physical iOS/Android/Safari, native Web Share,
+Windows/Linux, C26's human setup handoff, or strict Memory. New deterministic
+attachment/selection suites and extended contract/route/store/policy/CoCo
+integration tests cover the associated selection and late-response fixes. The
+integration trace requires low then medium native effort configuration and fresh
+storage restoration; other harness effort normalization remains covered.
 
 ## Cortex usage display and persistence (P7 C45)
 

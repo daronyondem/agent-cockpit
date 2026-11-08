@@ -2540,3 +2540,16 @@ in [CoCo P4](spec-cortex-code.md#shared-connection-and-authentication-setup-p4).
 user and all native credentials stay in the native TOML file. Request validators
 and browser-safe handoff declarations live in `src/contracts/cortexAuth.ts`.
 These API objects are not a persisted settings/history schema.
+
+CoCo C46 selection clarification: conversation `effort` still uses the existing
+EffortLevel scalar and JSON storage. A named CoCo model retains recognized saved
+effort while static/profile catalog discovery is unavailable; native runtime
+configuration validates support. Other harnesses keep existing normalization.
+OCR's optional model/effort request fields are invocation-only overrides and do
+not add persisted fields or modify the saved chat selection. No migration is
+required.
+
+Chat request upload references are optional `{name}` objects in the browser-safe
+stream contract. Actual attachment paths/kinds/sizes come from the server upload
+directory. Existing message wire text and persisted queued AttachmentMeta objects
+are unchanged; this adds no on-disk schema or migration.
