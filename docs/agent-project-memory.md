@@ -318,6 +318,19 @@ tool is unavailable.
   asset-mutating full Jest and rebuild assets afterward. C26, conditional strict
   Memory, C47 and physical/mobile/platform gates remain independent. The detailed
   implementation tracker records failed attempts and exact verification scope.
+- P7 C47 consolidates the current desktop/mobile regression, type/build/budget
+  evidence and expands `scripts/probe-cortex-auth.ts`. Keep native saved-auth/
+  fresh inference separate from browser-local synthetic callbacks. The latter
+  verify Welcome/Settings clipboard/lifecycle/storage at 1280/390/320 px; they
+  never authenticate Snowflake or close C26's human handoff. Native URL textarea
+  checks must use textbox role/accessible name because exact HTML label text can
+  include its value and falsely report absence. Preserve complete transfer,
+  pending/terminal/reload clearing and no persistent storage/history; active UI
+  memory and user clipboard are transient transfer state. Clear fixture clipboard,
+  bound external runtime and PM2 cleanup, and keep browser probes apart from full
+  asset-mutating Jest, rebuilding assets afterward. No production API/runtime or
+  PWA administration/metadata/offline behavior change was required for C47.
+  C26, conditional strict Memory and C48–C59 remain open; C48 is next.
 - Fresh installs should be provider-neutral. Do not imply Claude Code is
   configured when the user has not installed or authenticated it.
 - CLI profiles are scoped per conversation where applicable and can support

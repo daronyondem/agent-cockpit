@@ -349,6 +349,15 @@ not certify physical mobile platforms, C26, strict Memory or Windows/Linux.
 Dismiss the Conversation actions sheet when opening session history and keep
 the read-only viewer below preview modals; retain real pointer checks in the probe.
 
+P7 C47 extends `scripts/probe-cortex-auth.ts` with synthetic clipboard/lifecycle
+checks on responsive Welcome/Settings. Keep synthetic callbacks browser-local,
+report them separately from native fresh inference, and retain C26 as the human
+handoff gate. Check complete URL/redirect transfer, terminal/reload clearing and
+no persistent browser storage/history; active UI memory and clipboard are
+transient transfer state. Run full Jest before rebuilding assets/browser probes.
+Use the native URL's textbox role/accessible name in browser checks; exact HTML
+label text can include the textarea value and falsely report absence.
+
 # Server Management
 
 NEVER run `node server.js` directly. This causes orphan processes and port conflicts.

@@ -1,6 +1,6 @@
 # Cortex Code (CoCo) harness implementation plan
 
-**Status:** P0–P3 and P5 complete; P4 C21–C25 setup implemented, C26 actual remote-browser acceptance pending. P6 C33/C34/C36–C41 complete; P7 C42 desktop profile/catalog, C43 decisions, C44 queue/abort/reconnect, C45 usage display and C46 current mobile acceptance complete; C47 consolidated client/responsive-auth acceptance is next. C35 remains conditional on G1.
+**Status:** P0–P3, P5 and P7 complete. P4 C21–C25 setup implemented; C26 actual remote-browser acceptance remains pending. P6 C33/C34/C36–C41 complete; C35 remains conditional on G1. P8 C48 optional installation/doctor integration is next.
 **Created:** 2026-11-05.
 **Planning baseline:** Agent Cockpit `0.4.166`, revision `11d14825e955f6c83364c3917558b4d3068a4bac`, plus the uncommitted CoCo research/guidance documents.
 **Native compatibility baseline:** Cortex Code `1.2.35`, distribution `1.2.35+191333.f82de3d91715`, macOS arm64.
@@ -34,8 +34,8 @@ Planning assumptions:
 - Deliver core chat before optional parity work. Unverified features remain
   explicitly unavailable; do not emulate native goals or silently reroute work
   to a different profile to make a selector appear functional.
-- C01–C25, C27–C34 and C36–C46 are implemented as recorded below. C26, conditional
-  C35 and C47–C59 remain open and do not describe shipped support.
+- C01–C25, C27–C34 and C36–C47 are implemented as recorded below. C26, conditional
+  C35 and C48–C59 remain open and do not describe shipped support.
 
 Track work as follows:
 
@@ -1041,7 +1041,7 @@ P6 C41 evidence (November 7, 2026; changes following `be4bbed`):
   thinking/tools/questions/revised plans, uploads/OCR where enabled, artifacts,
   abort/history/reconnect and unsupported goals. Evaluate PWA metadata/build
   impact; no new mobile administration is required for parity with current scope.
-- [ ] C47 — Run desktop/mobile behavior tests, typechecks, production builds
+- [x] C47 — Run desktop/mobile behavior tests, typechecks, production builds
   and web bundle budget. Check auth URL/redirect copy-paste on narrow screens
   through the responsive setup page without storing secrets in browser state.
 
@@ -1290,6 +1290,54 @@ P7 C46 evidence (November 7 local / November 8 UTC, 2026; changes following
   or mobile administration change is required. C26, conditional C35 and
   C47–C59 remain open (15 tasks); C47 is next.
 
+P7 C47 evidence (November 7 local / November 8 UTC, 2026; changes following
+`e601749`):
+
+- All desktop/mobile behavior tests pass in the full 171-suite / 2,928-test V8
+  run (3 suites / 20 tests skipped). Coverage is 88.60% statements/lines, 76.61%
+  branches and 93.82% functions; existing 88.6/76.6/93.8 floors remain appropriate
+  for this frontend/test-only increment. Backend/web/mobile and probe typechecks,
+  zero-warning lint, maintainability, 189-route spec drift and 92-ADR lint pass.
+  Web/mobile production assets were rebuilt after full Jest; budget is unchanged
+  at JS 913.8/914 KiB and CSS 202.3/230 KiB. Browser checks ran separately from
+  asset-mutating tests.
+- Expanded `scripts/probe-cortex-auth.ts` passes real CoCo 1.2.35/macOS arm64/
+  Node 26 in an isolated PM2/data/workspace fixture with normal terminal auth.
+  Private report: `cockpit-cortex-auth-ui-OEUzaR/report.json` under system temp.
+  Actual remote API access is rejected with 401. Native saved-auth fresh inference,
+  cached auth jobs, cancel/drain/retry, profile/default/model/effort controls and
+  a fresh desktop browser reply pass. Shared login is retained; no logout or
+  production restart occurred.
+- Separate browser-local synthetic callbacks pass on Welcome and Settings at
+  1280, 390 and 320 px widths. The production component copies the entire long
+  native URL using the clipboard and pastes/posts the exact encoded loopback URL.
+  Live forms and controls fit. Held submissions clear input immediately; success,
+  cancellation, rejected redirects and terminal failed/expiry snapshots clear the
+  appropriate handoff state. Reload recovers only the active server-owned URL,
+  never an unsent redirect. No handoff strings enter local/session storage,
+  cookies, history or settings; isolated desktop contexts create no IndexedDB or
+  Cache Storage. Fixture clipboard contents are cleared. Narrow screenshots were
+  visually checked. Active UI/React memory and user clipboard remain necessary
+  transient transfer state. Synthetic values never reach native auth/Snowflake;
+  backend timeout/ownership behavior remains covered by the actual auth suites.
+- New rendered component cases verify full URL focus selection, exact untruncated
+  generation-bound submission, pending input clearing and failed/cancelled poll
+  cleanup. The earlier `cockpit-cortex-auth-ui-c1CXNx` run passed native checks
+  but failed an exact HTML-label query: the textarea value is included in label
+  text. The corrected textbox-role/accessible-name query passes all six cases
+  and fixes the older absence check's potential false negative. That failed run
+  is not acceptance evidence. No application runtime/API/persistence change was
+  needed; the standard responsive panel remains the mobile setup path.
+- C43–C46 retain their separate native decisions, queue/reconnect/abort, usage/
+  restart/ledger and mobile media/history evidence for unchanged production
+  source. C47 does not package the C54 suite, certify physical iOS/Android/Safari,
+  establish account isolation, or close C26's human handoff, strict Memory or
+  Windows/Linux/platform gates. No PWA administration, manifest, identity,
+  service-worker/offline or public asset-source change is required.
+- Durable Memory saved successfully and its project mirror is updated; no local
+  fallback was used. Temporary PM2 fixtures are removed. C26, conditional C35
+  and C48–C59 remain open (14 tasks); C48 is next.
+
 ### P8 — Installation, updates, migration, and platforms
 
 - [ ] C48 — Add optional CoCo Install Doctor/Welcome detection/actions using
@@ -1468,6 +1516,7 @@ At implementation time update only the relevant current specifications:
 | 2026-11-07 | P7 C44 complete; 17 tasks remain unchecked | Queued input/abort/reconnect ownership following `fa75997` | CoCo 1.2.35 / macOS arm64 / Node 26.0.0 | 167 suites / 2,896 tests passed; V8 88.58% lines, 76.51% branches, 93.81% functions. Native production desktop/mobile questions/queue/reconnect/abort/descendant drain/persisted queue resume and existing plan interactions passed. Stop pauses before cancellation; queued work and drafts/uploads retain ownership without prompt replay. Standard checks and rebuilt assets/budget passed; Memory saved. C26, conditional C35 and C46–C59 remain open |
 | 2026-11-07 | P7 C45 complete; 16 tasks remain unchecked | Usage display and persistence following `8c59b14` | CoCo 1.2.35 / macOS arm64 / Node 26.0.0 | 168 suites / 2907 tests passed; V8 88.57% lines, 76.53% branches, 93.82% functions. Native production desktop/mobile context/token/cache/n/a costs, reload, isolated PM2 restart and exact daily ledger reconciliation passed. Existing harness price rendering and mixed Usage totals covered. Memory saved. C26, conditional C35 and C46–C59 remain open; C46 next. |
 | 2026-11-07 | P7 C46 complete; 15 tasks remain unchecked | Native mobile media/history/recovery following `6f937af` | CoCo 1.2.35 / macOS arm64 / Node 26.0.0 | Native profile/model/effort, PNG/text/OCR/cache, thinking/tools/replay, explicit immutable artifact preview/download, reset/read-only history and Stop/fresh inference passed; C43/C44 rechecks passed. Full V8 171 suites / 2,924 tests and 29 focused mobile tests after the final frontend fix. Floors 88.6/76.6/93.8; standard checks/builds/budget pass; Memory saved. C26, conditional C35 and C47–C59 remain open. |
+| 2026-11-07 | P7 C47 complete; 14 tasks remain unchecked | Consolidated client/responsive-auth checks following `e601749` | CoCo 1.2.35 / macOS arm64 / Node 26.0.0 | Full V8 171 suites / 2,928 tests; native saved-auth and fresh desktop inference plus six separate synthetic Welcome/Settings clipboard/lifecycle/storage cases at 1280/390/320 px passed. Typechecks, zero-warning lint, architecture/spec/ADR checks, rebuilt assets and unchanged budget pass; Memory saved. C26, conditional C35 and C48–C59 remain open. |
 
 ## 13. References
 

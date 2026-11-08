@@ -592,6 +592,24 @@ its final output and fresh inference never reruns it. Unsupported Goal requests
 return 400 while the UI hides Goal/Fast/Ultracode. This does not enable goals,
 agents, steering, strict Memory or another platform/physical mobile browser.
 
+## Client verification and responsive setup (P7 C47)
+
+Current desktop/mobile behavior is verified through the focused rendered suites,
+full regression/coverage run, backend/web/mobile typechecks, production builds and
+the existing bundle budget. C43–C46 retain their distinct native interaction,
+queue, usage and mobile media/history evidence. C47 adds complete URL/redirect
+copy/paste and lifecycle checks to `scripts/probe-cortex-auth.ts` at desktop and
+narrow viewport sizes on both Welcome and Settings.
+
+The runner separates fresh authenticated native inference from synthetic browser
+auth responses. The latter establish browser mechanics only: complete clipboard
+transfer, live layout, pending/terminal clearing, reload recovery from the active
+server job, and no handoff material in persistent browser storage/history or
+settings. Active component memory and the user's clipboard are necessary for
+the handoff; they are not a persistent credential store. Do not treat synthetic
+callbacks or saved login as C26's human remote-browser acceptance. No new mobile
+administration, PWA manifest, service-worker/offline or auth protocol is introduced.
+
 ## Durable chat and managed MCP (P5)
 
 `src/services/backends/cortex.ts` is the registered public adapter facade.

@@ -347,3 +347,15 @@ no composer, while the underlying current-chat screen can remain mounted.
 Selecting Sessions first dismisses the Conversation actions sheet, so it cannot
 remain mounted and intercept input after the session list closes. The rendered
 selection/history test verifies that transition before native pointer checks.
+
+### Consolidated client and responsive setup verification (P7 C47)
+
+The full desktop/mobile behavior suite, types and production builds pass. The
+standard desktop Welcome/Settings setup remains the narrow-browser setup path;
+no PWA administration, source asset, manifest, identity or offline/service-worker
+change is introduced. The auth probe checks 1280/390/320 px clipboard transfer,
+transient clearing/reload recovery and no persistent browser handoff material
+with synthetic browser-local callbacks, separately from native saved-auth/fresh
+inference. C43–C46 retain the native mobile chat matrix for unchanged production
+source. This does not certify physical iOS/Android/Safari clipboard behavior,
+C26's human remote-browser OAuth, or another native platform.

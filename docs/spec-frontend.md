@@ -452,8 +452,12 @@ summaries and any live job. It supports create-only OAuth connections, named
 selection, paid minimal Check login, Authenticate, Cancel, a selectable native
 URL/deadline and complete remote redirect submission. The panel polls once per
 second, recovers active jobs after reload, ignores older update timestamps,
-clears pasted redirect fields and removes terminal handoff URLs. No OAuth data
-is stored in localStorage or settings. Settings merges only the returned setup
+clears pasted redirect fields and removes terminal handoff URLs. No CoCo handoff data
+is stored in local/session storage, cookies, browser history or settings. The
+C47 browser matrix verifies complete clipboard transfer, live form fit and
+terminal/reload clearing on Welcome and Settings at 1280/390/320 px; active
+component memory and clipboard are transient transfer state. Synthetic callback
+checks are separate from native inference and C26 human OAuth. Settings merges only the returned setup
 profile into its current draft. Setup leaves defaults unchanged. See
 [CoCo P4](spec-cortex-code.md#shared-connection-and-authentication-setup-p4) for
 all transport/state rules. The mobile PWA gains no administrative setup flow;

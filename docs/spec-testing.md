@@ -8,7 +8,7 @@
 
 **Framework:** Jest 30.x — run with `npm test`. The script is `node --experimental-vm-modules node_modules/.bin/jest` because the KB handler tests import `unpdf` (ESM-only, wraps `pdfjs-dist`) and Jest's VM needs the flag to allow runtime `import()` calls. `jest.config.js` uses `ts-jest` for TypeScript and also transforms JS/JSX with `allowJs: true`, `module: CommonJS`, and `jsx: react-jsx` so tests can import the V2 frontend ES modules directly instead of evaluating browser globals. Default Jest execution is capped at `maxWorkers: '50%'` so process-spawning suites still run in parallel without stampeding local or CI machines, and the global per-test timeout is 30 seconds so widened harness-specific timeouts can surface their route/process-specific errors before Jest's generic timeout.
 
-**Coverage gate:** Run `npm run test:coverage` for backend coverage. The script keeps plain `npm test` unchanged for fast local iteration and runs Jest with `--coverage --runInBand`; serial execution keeps the full-suite coverage gate stable on local machines where parallel workers can exceed short route-test timeouts. `jest.config.js` collects coverage from `src/**/*.ts` and `server.ts`, excludes declaration-only `src/types/**` and `*.d.ts` files, writes reports under `coverage/`, and uses V8 coverage with `text-summary` plus `lcov` reporters. The global threshold floor is statements/lines 88.6%, branches 76.6%, and functions 93.8%, last raised with CoCo mobile/upload coverage. The November 7 local / November 8 UTC, 2026 C46 V8 baseline is statements/lines 88.60%, branches 76.60%, and functions 93.82% (171 passing suites, 2,924 passing tests; three opt-in suites and 20 tests skipped), measured on macOS. The statement/line and branch floors were raised after this measured run; the function floor remains unchanged. When meaningful tests land, raise the thresholds toward the new baseline in the same PR. Do not lower thresholds to merge a regression; either add behavior coverage, make a narrow intentional exclusion in `jest.config.js`, or document the explicit exception in the PR.
+**Coverage gate:** Run `npm run test:coverage` for backend coverage. The script keeps plain `npm test` unchanged for fast local iteration and runs Jest with `--coverage --runInBand`; serial execution keeps the full-suite coverage gate stable on local machines where parallel workers can exceed short route-test timeouts. `jest.config.js` collects coverage from `src/**/*.ts` and `server.ts`, excludes declaration-only `src/types/**` and `*.d.ts` files, writes reports under `coverage/`, and uses V8 coverage with `text-summary` plus `lcov` reporters. The global threshold floor is statements/lines 88.6%, branches 76.6%, and functions 93.8%, last raised with CoCo mobile/upload coverage. The November 7 local / November 8 UTC, 2026 C47 V8 baseline is statements/lines 88.60%, branches 76.61%, and functions 93.82% (171 passing suites, 2,928 passing tests; three opt-in suites and 20 tests skipped), measured on macOS. The floors were raised with C46; this frontend/test-only C47 increment leaves them unchanged. When meaningful tests land, raise the thresholds toward the new baseline in the same PR. Do not lower thresholds to merge a regression; either add behavior coverage, make a narrow intentional exclusion in `jest.config.js`, or document the explicit exception in the PR.
 
 Shared chat route tests use `test/helpers/chatEnv.ts` for isolated Express/WebSocket servers and scratch data directories. Teardown waits for active streams, the session finalizer queue, and any in-flight durable stream-job registry mutation to become idle before closing the server and removing the scratch directory, so background finalizer/job writes cannot race temp-directory cleanup.
 
@@ -870,7 +870,9 @@ Focused suites:
   server shutdown draining.
 - `test/cortexSetupUi.test.ts`: rendered React controls for create/check,
   transient redirect submission, polling/completion/cancel and reload recovery
-  without persisting secrets. The test module loader accepts optional globals
+  without persisting secrets, full native-URL focus selection, exact untruncated
+  redirect submission, immediate input clearing while a request is pending, and
+  removal on failed/cancelled polls. The test module loader accepts optional globals
   to exercise browser timers directly.
 
 Existing CLI auth/service/profile suites remain regression gates. Auth/runtime
@@ -896,3 +898,25 @@ full Jest suites that replace ignored production assets; rebuild those assets
 first. Native first-run PTY onboarding was separately exercised with temporary
 connection metadata and existing credentials; this does not certify isolated
 OS-keychain auth or a new remote-browser callback.
+
+P7 C47 extends this runner with a separate synthetic browser-handoff matrix on
+Welcome and Settings at 1280, 390 and 320 px widths. Only that browser context
+intercepts auth endpoints; synthetic codes never reach native auth or Snowflake.
+Real native saved-auth inference and the synthetic matrix have separate report
+fields. The matrix uses Chromium clipboard copy/paste to preserve the complete
+long native URL and encoded loopback redirect. It checks live form/control fit,
+immediate clearing during a held submission, success/cancel/rejection and
+terminal failed/expiry snapshots,
+recovery of a server-owned URL after reload with an empty unsent redirect, and
+absence of handoff values in local/session storage, cookies or history. Isolated
+desktop contexts must create no IndexedDB or Cache Storage. Clipboard contents
+are intentionally transient transfer state and are cleared during fixture cleanup;
+no claim is made that plaintext never exists in active UI/React memory. Reports
+contain only synthetic flags, viewport sizes and counts; screenshots/errors remain
+private. Backend expiry timers remain covered by the focused auth suites. Use
+the textbox role/accessible name for the native URL: exact HTML label text can
+include the textarea value. A ten-minute external deadline closes Chromium and PM2 gets twenty
+seconds to drain, with a thirty-second command bound. Native C26 human handoff,
+physical browsers, native platform certification and C54 suite packaging remain
+independent. Run full Jest first, rebuild both production clients, then run the
+browser probe; do not let asset-mutating tests run concurrently.

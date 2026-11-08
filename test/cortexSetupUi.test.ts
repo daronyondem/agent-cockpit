@@ -26,6 +26,7 @@ describe('Cortex shared setup controls', () => {
   }); };
   beforeEach(async () => {
     (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true; jest.useFakeTimers(); jest.clearAllMocks();
+    window.localStorage.clear(); window.sessionStorage.clear();
     api.cortexConnections.mockResolvedValue({ connections: [{ name: 'fixture', manualOAuth: true, browserTimeoutMs: 600000 }], job: null });
     container = document.createElement('div'); document.body.append(container); root = createRoot(container);
     await act(async () => { root.render(createElement(CortexSetup, {})); });
@@ -69,5 +70,38 @@ describe('Cortex shared setup controls', () => {
     await click('Cancel Cortex login'); await act(async () => { resolve({ job: running }); });
     expect(container.querySelector('textarea')).toBeNull(); expect(container.textContent).toContain('Authentication cancelled.');
     expect(button('Authenticate Cortex').disabled).toBe(false);
+  });
+
+  test('selects the entire native URL and submits the complete redirect once while clearing its pending input', async () => {
+    const authorizationUrl = `${running.cortex.authorizationUrl}&code_challenge=${'x'.repeat(300)}&redirect_uri=http%3A%2F%2F127.0.0.1%3A54321%2F`;
+    api.cortexConnections.mockResolvedValue({ connections: [{ name: 'fixture' }], job: { ...running, cortex: { ...running.cortex, authorizationUrl } } });
+    await click('Cortex Code (CoCo) setup');
+    const url = container.querySelector('textarea')!;
+    await act(async () => url.focus());
+    expect(url.value.slice(url.selectionStart, url.selectionEnd)).toBe(authorizationUrl);
+    const redirect = 'http://127.0.0.1:54321/?code=PRIVATE_CODE&state=PRIVATE_STATE&iss=https%3A%2F%2Ffixture.snowflakecomputing.com%2Foauth';
+    await type('Complete redirect URL', redirect);
+    let finish!: (value: unknown) => void;
+    api.submitCortexRedirect.mockImplementation(() => new Promise(resolve => { finish = resolve; }));
+    await act(async () => { container.querySelector('form')!.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true })); });
+    expect(input('Complete redirect URL').value).toBe('');
+    expect(input('Complete redirect URL').disabled).toBe(true);
+    expect(api.submitCortexRedirect).toHaveBeenCalledTimes(1);
+    expect(api.submitCortexRedirect).toHaveBeenCalledWith('job', 'generation', redirect);
+    await act(async () => finish({ job: { ...running, updatedAt: '2026-11-06T00:00:01.000Z', cortex: { phase: 'verifying', generation: 'generation' } } }));
+    expect(container.querySelector('textarea')).toBeNull();
+    for (const storage of [window.localStorage, window.sessionStorage]) expect(JSON.stringify(storage)).not.toMatch(/PRIVATE_STATE|PRIVATE_CODE/);
+    expect(JSON.stringify(window.history.state)).not.toMatch(/PRIVATE_STATE|PRIVATE_CODE/);
+  });
+
+  test.each(['failed', 'cancelled'])('a polled %s handoff clears a still-typed redirect and the native URL', async status => {
+    api.cortexConnections.mockResolvedValue({ connections: [{ name: 'fixture' }], job: running });
+    await click('Cortex Code (CoCo) setup'); await type('Complete redirect URL', 'http://127.0.0.1:54321/?code=PRIVATE_CODE');
+    api.getCliProfileAuthJob.mockResolvedValue({ job: { ...running, status, updatedAt: '2026-11-06T00:00:02.000Z', cortex: undefined, error: 'Login expired or cancelled.' } });
+    await act(async () => { await jest.advanceTimersByTimeAsync(1000); });
+    expect(container.querySelector('textarea')).toBeNull(); expect(container.innerHTML).not.toMatch(/PRIVATE_STATE|PRIVATE_CODE/);
+    api.startSetupCliAuth.mockResolvedValue({ profile, job: { ...running, id: 'new-job', cortex: { ...running.cortex, generation: 'new-generation' } } });
+    await click('Authenticate Cortex'); expect(input('Complete redirect URL').value).toBe('');
+    for (const storage of [window.localStorage, window.sessionStorage]) expect(JSON.stringify(storage)).not.toMatch(/PRIVATE_STATE|PRIVATE_CODE/);
   });
 });

@@ -5,9 +5,9 @@ import os from 'os';
 import path from 'path';
 import net from 'net';
 import { spawnSync } from 'child_process';
-import { chromium } from '@playwright/test';
+import { chromium, expect as baseExpect, type Browser } from '@playwright/test';
 import { cortexVersion, resolveCortexRuntime } from '../src/services/backends/cortexRuntime';
-import type { CliProfile } from '../src/types';
+import type { CliAuthJobSnapshot, CliProfile } from '../src/types';
 
 /** Saved-login/UI evidence; a human remote OAuth handoff is a separate gate. */
 async function main(): Promise<void> {
@@ -38,12 +38,13 @@ async function main(): Promise<void> {
     env: { NODE_ENV: 'test', PORT: port, BASE_PATH: '', AGENT_COCKPIT_DATA_DIR: data, AUTH_DATA_DIR: path.join(data, 'auth'),
       DEFAULT_WORKSPACE: workspace, SESSION_SECRET: crypto.randomBytes(32).toString('hex'), WEB_BUILD_MODE: 'skip' },
   }] })};\n`, { mode: 0o600 });
-  const pm2 = (args: string[]) => spawnSync(process.execPath, [path.join(cwd, 'node_modules/pm2/bin/pm2'), ...args], { cwd, stdio: 'ignore' });
+  const pm2 = (args: string[]) => spawnSync(process.execPath, [path.join(cwd, 'node_modules/pm2/bin/pm2'), ...args], { cwd, stdio: 'ignore', timeout: 30000 });
   const results: Record<string, unknown> = { remoteBrowserOAuth: 'pending-human-handoff' };
   const report = { startedAt: now, platform: process.platform, arch: process.arch, node: process.version, cliVersion: version,
     revision: spawnSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' }).stdout.trim(),
     dirty: Boolean(spawnSync('git', ['status', '--porcelain'], { encoding: 'utf8' }).stdout.trim()), results };
   let browser: Awaited<ReturnType<typeof chromium.launch>> | undefined;
+  const deadline = setTimeout(() => { results.deadlineExceeded = true; void browser?.close(); }, 10 * 60_000);
   try {
     assert.equal(pm2(['start', config, '--only', app]).status, 0, 'PM2 fixture start failed');
     const baseUrl = `http://127.0.0.1:${port}`;
@@ -85,7 +86,7 @@ async function main(): Promise<void> {
     await panel.getByRole('status').filter({ hasText: 'credentials and inference access verified from a fresh process' }).waitFor({ timeout: 120_000 });
     results.cachedAuthJob = true;
     results.stage = 'cancel-retry';
-    assert.equal(await panel.getByLabel('Native login URL', { exact: true }).count(), 0, 'Saved login must not fabricate an OAuth handoff');
+    assert.equal(await panel.getByRole('textbox', { name: 'Native login URL', exact: true }).count(), 0, 'Saved login must not fabricate an OAuth handoff');
     // Cancel during fresh-process startup, then retry after native cleanup.
     await panel.getByRole('button', { name: 'Authenticate Cortex', exact: true }).click();
     await panel.getByRole('button', { name: 'Cancel Cortex login', exact: true }).click();
@@ -149,15 +150,139 @@ async function main(): Promise<void> {
     const persisted = await fs.readFile(path.join(data, 'chat/settings.json'), 'utf8');
     assert.equal(/code_challenge|redirectUrl|authorizationUrl|oauth\/authorize/.test(persisted), false, 'Handoff secrets must never enter settings');
     results.noPersistedHandoff = true;
+    results.stage = 'synthetic-responsive-handoff';
+    results.responsiveHandoff = await verifyResponsiveHandoff(browser, baseUrl, root);
+    assert.equal(/C47_SYNTHETIC|code_challenge|redirectUrl|authorizationUrl|oauth\/authorize/.test(await fs.readFile(path.join(data, 'chat/settings.json'), 'utf8')), false,
+      'Synthetic handoff material must never enter server settings');
+    results.passed = true;
     process.stdout.write('PASS native saved auth, UI jobs, responsive setup/profile editing, desktop catalogs/controls and fresh inference\n');
   } catch (error) {
     await fs.writeFile(path.join(root, 'failure.txt'), error instanceof Error ? error.stack || error.message : 'Probe failed', { mode: 0o600 });
     throw error;
   } finally {
+    clearTimeout(deadline);
     await browser?.close(); pm2(['delete', app]);
     await fs.writeFile(path.join(root, 'report.json'), JSON.stringify({ ...report, finishedAt: new Date().toISOString() }, null, 2), { mode: 0o600 });
     process.stdout.write(`Sanitized Cortex auth report: ${path.join(root, 'report.json')}\n`);
   }
+}
+
+/** Browser mechanics only: never send these synthetic codes to Snowflake/native auth. */
+async function verifyResponsiveHandoff(browser: Browser, baseUrl: string, root: string): Promise<unknown[]> {
+  const expect = baseExpect.configure({ timeout: 15000 });
+  const results: unknown[] = [];
+  for (const surface of ['welcome', 'settings']) for (const width of [1280, 390, 320]) {
+    const context = await browser.newContext({ viewport: { width, height: 900 }, permissions: ['clipboard-read', 'clipboard-write'] });
+    const page = await context.newPage(); page.setDefaultTimeout(15000);
+    const jobs = new Map<string, CliAuthJobSnapshot>();
+    const secrets: string[] = []; let active: CliAuthJobSnapshot | undefined, sequence = 0, submitted = 0;
+    let releaseRedirect = () => {}; let rejectRedirect = false;
+    const nextTime = () => new Date(Date.now() + ++sequence).toISOString();
+    const terminal = (status: 'succeeded' | 'cancelled' | 'failed') => {
+      assert.ok(active); active.status = status; active.updatedAt = nextTime(); active.cortex = undefined;
+      active.events = [{ at: active.updatedAt, type: 'info', text: `Synthetic handoff ${status}` }];
+    };
+    await page.route('**/api/chat/cli-profiles/**', async route => {
+      const request = route.request(), url = new URL(request.url());
+      const respond = (body: unknown, status = 200) => route.fulfill({ status, contentType: 'application/json', headers: { 'Cache-Control': 'no-store' }, body: JSON.stringify(body) });
+      if (url.pathname.endsWith('/cortex-code/connections') && request.method() === 'GET') {
+        return respond({ connections: [{ name: 'c47-fixture', manualOAuth: true, browserTimeoutMs: 600000 }], job: active?.status === 'running' ? active : null });
+      }
+      if (url.pathname.endsWith('/setup-auth/cortex-code/start')) {
+        const now = nextTime(), secret = `C47_SYNTHETIC_${crypto.randomBytes(16).toString('hex')}`;
+        const login = new URL('https://fixture.snowflakecomputing.com/oauth/authorize');
+        login.search = new URLSearchParams({ response_type: 'code', client_id: 'fixture-' + 'x'.repeat(128), scope: 'refresh_token session:role-any',
+          redirect_uri: 'http://127.0.0.1:54321/', state: secret, code_challenge: 'x'.repeat(43), code_challenge_method: 'S256' }).toString();
+        active = { id: `cortex-auth-fixture-${sequence}`, profileId: 'setup-cortex-code-account', profileName: 'Fixture', harness: 'cortex-code',
+          status: 'running', startedAt: now, updatedAt: now, command: 'cortex', args: [], events: [],
+          cortex: { phase: 'waiting-for-browser', generation: crypto.randomUUID(), connection: 'c47-fixture', authorizationUrl: login.href, expiresAt: new Date(Date.now() + 600000).toISOString() } };
+        jobs.set(active.id, active); secrets.push(secret, login.href, active.cortex!.generation);
+        return respond({ profile: { id: active.profileId, harness: 'cortex-code', authMode: 'account', cortexCode: { connection: 'c47-fixture' } }, job: active });
+      }
+      const match = url.pathname.match(/\/auth-jobs\/([^/]+)(?:\/(redirect|cancel))?$/);
+      if (match) {
+        const job = jobs.get(match[1]); assert.ok(job, 'Browser requested an unowned synthetic job');
+        if (match[2] === 'redirect') {
+          const body = request.postDataJSON(); assert.equal(body.generation, job.cortex?.generation);
+          assert.equal(body.redirectUrl, secrets.at(-1), 'Redirect bytes changed during browser copy/paste'); submitted++;
+          if (rejectRedirect) return respond({ error: 'This login handoff is no longer active.' }, 400);
+          await new Promise<void>(resolve => { releaseRedirect = resolve; });
+          job.updatedAt = nextTime(); job.cortex = { ...job.cortex!, phase: 'verifying', authorizationUrl: undefined };
+          return respond({ job });
+        }
+        if (match[2] === 'cancel') terminal('cancelled');
+        return respond({ job });
+      }
+      if (url.pathname.endsWith('/metadata')) return respond({ profileId: url.pathname.split('/').at(-2), backend: { id: 'cortex-code', label: 'CoCo', models: [], capabilities: { goals: false } } });
+      return route.continue();
+    });
+    const panel = page.getByRole('region', { name: 'Cortex Code setup' });
+    const open = async () => { await page.goto(`${baseUrl}/v2/?welcome=1`);
+      if (surface === 'settings') await page.getByRole('button', { name: 'CLI Profiles', exact: true }).click();
+      await panel.getByRole('button', { name: 'Cortex Code (CoCo) setup', exact: true }).click(); };
+    const cleanStorage = async () => {
+      const snapshot = await page.evaluate(async () => ({ local: Object.entries(localStorage), session: Object.entries(sessionStorage),
+        history: history.state, url: location.href, databases: await indexedDB.databases(), caches: await caches.keys() }));
+      const saved = JSON.stringify({ snapshot, cookies: await context.cookies() });
+      assert.ok(secrets.every(secret => !saved.includes(secret)), 'Handoff material reached persistent browser storage/history');
+      assert.equal(snapshot.databases.length, 0, 'Unexpected database in the isolated desktop setup context');
+      assert.equal(snapshot.caches.length, 0, 'Unexpected Cache Storage in the isolated desktop setup context');
+    };
+    const pasteRedirect = async () => {
+      assert.ok(active?.cortex?.authorizationUrl);
+      const url = panel.getByRole('textbox', { name: 'Native login URL', exact: true });
+      await url.focus(); await page.keyboard.press('ControlOrMeta+C');
+      assert.equal(await page.evaluate(() => navigator.clipboard.readText()), active.cortex.authorizationUrl, 'Native URL copy was truncated');
+      const login = new URL(active.cortex.authorizationUrl), redirect = new URL('http://127.0.0.1:54321/');
+      redirect.search = new URLSearchParams({ code: crypto.randomBytes(20).toString('hex'), state: login.searchParams.get('state')!, iss: 'https://fixture.snowflakecomputing.com/oauth' }).toString();
+      secrets.push(redirect.searchParams.get('code')!, redirect.href);
+      await page.evaluate(value => navigator.clipboard.writeText(value), redirect.href);
+      const field = panel.getByLabel('Complete redirect URL', { exact: true }); await field.focus(); await page.keyboard.press('ControlOrMeta+V');
+      await expect(field).toHaveValue(redirect.href); await cleanStorage();
+      assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), 'Live handoff overflows the viewport');
+      for (const control of [url, field, panel.getByRole('button', { name: 'Submit redirect', exact: true })]) {
+        const box = await control.boundingBox(); assert.ok(box && box.x >= 0 && box.x + box.width <= width + 1, 'Handoff control extends outside the viewport');
+      }
+    };
+    try {
+      await open(); await panel.getByRole('button', { name: 'Authenticate Cortex', exact: true }).click();
+      await pasteRedirect();
+      await page.screenshot({ path: path.join(root, `handoff-${surface}-${width}-active.png`), fullPage: true });
+      // A reload may recover the server-owned URL, but never the unsent local redirect.
+      await open(); await expect(panel.getByLabel('Complete redirect URL', { exact: true })).toHaveValue('');
+      await pasteRedirect();
+      await panel.getByRole('button', { name: 'Submit redirect', exact: true }).click();
+      await expect(panel.getByLabel('Complete redirect URL', { exact: true })).toHaveValue('');
+      await expect.poll(() => submitted).toBe(1); await cleanStorage(); releaseRedirect();
+      await expect(panel.getByRole('textbox', { name: 'Native login URL', exact: true })).toHaveCount(0);
+      terminal('succeeded'); await expect(panel.getByRole('status')).toHaveText('Synthetic handoff succeeded');
+      await panel.getByRole('button', { name: 'Authenticate Cortex', exact: true }).click(); await pasteRedirect();
+      await panel.getByRole('button', { name: 'Cancel Cortex login', exact: true }).click();
+      await expect(panel.getByRole('textbox', { name: 'Native login URL', exact: true })).toHaveCount(0);
+      await expect(panel.getByLabel('Complete redirect URL', { exact: true })).toHaveCount(0);
+      await panel.getByRole('button', { name: 'Authenticate Cortex', exact: true }).click(); await pasteRedirect();
+      rejectRedirect = true; await panel.getByRole('button', { name: 'Submit redirect', exact: true }).click();
+      await expect(panel.getByRole('alert')).toHaveText('This login handoff is no longer active.');
+      await expect(panel.getByLabel('Complete redirect URL', { exact: true })).toHaveValue('');
+      await panel.getByLabel('Complete redirect URL', { exact: true }).fill(secrets.at(-1)!);
+      terminal('failed'); await expect(panel.getByRole('textbox', { name: 'Native login URL', exact: true })).toHaveCount(0);
+      await expect(panel.getByLabel('Complete redirect URL', { exact: true })).toHaveCount(0);
+      await cleanStorage(); await open(); await expect(panel.getByRole('textbox', { name: 'Native login URL', exact: true })).toHaveCount(0);
+      assert.equal(submitted, 2, 'A redirect was submitted more than once per explicit click');
+      assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), 'Setup overflows the viewport');
+      await cleanStorage(); await page.screenshot({ path: path.join(root, `handoff-${surface}-${width}.png`), fullPage: true });
+      results.push({ surface, width, synthetic: true, completeClipboardRoundTrip: true, transientRedirect: true, serverJobRecovery: true,
+        successCancelErrorTimeout: true, noStoredSecrets: true, submissions: submitted });
+    } catch (error) {
+      await page.screenshot({ path: path.join(root, 'handoff-failure.png'), fullPage: true }).catch(() => {});
+      await fs.writeFile(path.join(root, 'handoff-ui.json'), JSON.stringify({ textareas: await panel.locator('textarea').count(),
+        exactRole: await panel.getByRole('textbox', { name: 'Native login URL', exact: true }).count(), partialLabel: await panel.getByLabel('Native login URL').count(),
+        status: await panel.getByRole('status').textContent() }), { mode: 0o600 }).catch(() => {});
+      throw error;
+    }
+    finally { releaseRedirect(); await page.evaluate(() => navigator.clipboard.writeText('')).catch(() => {}); await context.close(); }
+  }
+  return results;
 }
 
 main().catch(() => { process.stderr.write('Cortex auth probe failed; inspect the private fixture report.\n'); process.exitCode = 1; });
