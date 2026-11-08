@@ -1,6 +1,7 @@
 import express from 'express';
 import { csrfGuard } from '../../middleware/csrf';
 import type { BackendRegistry } from '../../services/backends/registry';
+import { CortexCodeAdapter } from '../../services/backends/cortex';
 import type { ChatService } from '../../services/chatService';
 import type { ClaudePlanUsageService } from '../../services/claudePlanUsageService';
 import type { CliUpdateService } from '../../services/cliUpdateService';
@@ -205,7 +206,11 @@ export function createChatStatusRouter(opts: ChatStatusRoutesOptions): express.R
       const result = await cliUpdateService.triggerUpdate(param(req, 'id'), {
         loadSettings: () => chatService.getSettings(),
         hasActiveStreams: hasAnyInFlightTurn,
-        onUpdated: () => backendRegistry.shutdownAll(),
+        onUpdated: async () => {
+          backendRegistry.shutdownAll();
+          const cortex = backendRegistry.get('cortex-code');
+          if (cortex instanceof CortexCodeAdapter) await cortex.stopping;
+        },
       });
       if (result.success) {
         res.json(result);

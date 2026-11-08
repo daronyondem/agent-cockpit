@@ -96,15 +96,16 @@ describe('CliUpdateService', () => {
     expect(mockExecFileFn).not.toHaveBeenCalled();
   });
 
-  test('keeps CoCo profile foundations out of update targets until its updater is implemented', async () => {
+  test('includes CoCo as a visible updater target without invoking another harness', async () => {
     const service = new CliUpdateService(tmpDir);
+    mockExecFile(() => new Error('not found'));
     const status = await service.checkNow(async () => ({
-      theme: 'system', sendBehavior: 'enter', systemPrompt: '', defaultBackend: 'cortex-code',
+      theme: 'system', sendBehavior: 'enter', systemPrompt: '',
       cliProfiles: [{ id: 'coco-work', name: 'CoCo', harness: 'cortex-code', authMode: 'server-configured',
-        cortexCode: { connection: 'work' }, createdAt: '2026-11-06', updatedAt: '2026-11-06' }],
+        command: path.join(tmpDir, 'missing-cortex'), cortexCode: { connection: 'work' }, createdAt: '', updatedAt: '' }],
     }));
-    expect(status.items).toEqual([]);
-    expect(mockExecFileFn).not.toHaveBeenCalled();
+    expect(status.items).toEqual([expect.objectContaining({ harness: 'cortex-code', installMethod: 'missing', updateSupported: false })]);
+    expect(mockExecFileFn.mock.calls.map(call => call[0])).toEqual([path.join(tmpDir, 'missing-cortex')]);
   });
 
   test('checks a global npm Codex installation and marks updates available', async () => {

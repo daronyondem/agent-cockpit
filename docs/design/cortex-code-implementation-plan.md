@@ -1,6 +1,6 @@
 # Cortex Code (CoCo) harness implementation plan
 
-**Status:** P0–P3, P5 and P7 complete. P4 C21–C25 setup implemented; C26 actual remote-browser acceptance remains pending. P6 C33/C34/C36–C41 complete; C35 remains conditional on G1. P8 C48 optional installation/doctor integration is complete; C49 native update management is next.
+**Status:** P0–P3, P5 and P7 complete. P4 C21–C25 setup implemented; C26 actual remote-browser acceptance remains pending. P6 C33/C34/C36–C41 complete; C35 remains conditional on G1. P8 C48/C49 optional installation/doctor and native update management are complete; C50 migration verification is next.
 **Created:** 2026-11-05.
 **Planning baseline:** Agent Cockpit `0.4.166`, revision `11d14825e955f6c83364c3917558b4d3068a4bac`, plus the uncommitted CoCo research/guidance documents.
 **Native compatibility baseline:** Cortex Code `1.2.35`, distribution `1.2.35+191333.f82de3d91715`, macOS arm64.
@@ -1350,9 +1350,17 @@ P7 C47 evidence (November 7 local / November 8 UTC, 2026; changes following
   prompts are disabled; native logs/completion setup is disclosed and preserves
   existing shell content. Focused doctor/Welcome and macOS installer/release/update
   regressions pass. Native Windows/Linux, updates and C26 stay separate.
-- [ ] C49 — Verify actual native update/version commands and noninteractive
+- [x] C49 — Verify actual native update/version commands and noninteractive
   behavior; add CLI Update support only for proven installation methods. Verify
   reusable runtime shutdown, executable/auth-home separation and error recovery.
+  Completed: focused CoCo updater policy, full stable metadata/target pinning and
+  official macOS 1.2.35 activation gates. Profile auth/channel/secrets are excluded
+  from updater env; duplicate/preflight/new-chat guards, awaited runtime draining,
+  failed-attempt invalidation/no retry and fresh version postcheck are covered.
+  Real disposable native download/checksum/activation/reuse/failure/explicit retry
+  passed. Synthetic older-build/missing-target controls are separate from old-CLI
+  or authentication evidence. Other layouts/versions and Windows/Linux remain
+  manual; C50 migration and C51–C53 full platform acceptance stay independent.
 - [ ] C50 — Preserve full data-root migration semantics; exclude runtime
   plugins/auth jobs and check restored connection/auth/executable dependencies.
   Verify checksum/backup/exact `REPLACE` behavior remains unchanged.
@@ -1526,6 +1534,8 @@ At implementation time update only the relevant current specifications:
 | 2026-11-07 | P7 C47 complete; 14 tasks remain unchecked | Consolidated client/responsive-auth checks following `e601749` | CoCo 1.2.35 / macOS arm64 / Node 26.0.0 | Full V8 171 suites / 2,928 tests; native saved-auth and fresh desktop inference plus six separate synthetic Welcome/Settings clipboard/lifecycle/storage cases at 1280/390/320 px passed. Typechecks, zero-warning lint, architecture/spec/ADR checks, rebuilt assets and unchanged budget pass; Memory saved. C26, conditional C35 and C48–C59 remain open. |
 
 | 2026-11-07 | P8 C48 complete; 13 tasks remain unchecked | Optional standalone installation/doctor/Welcome support following `20620d8` | CoCo 1.2.35 / macOS arm64 / Node 26.0.0 | Real disposable official installation, immediate discovery without PATH changes, spaced home/app/command override and auth-home separation passed (`cockpit cortex install V2PgNg`). Native saved-auth/Welcome detection/fresh desktop inference and six responsive synthetic handoff cases passed (`cockpit-cortex-auth-ui-9RMnWK`). Full V8 173 suites / 2,941 tests; 88.62% lines, 76.69% branches, 93.82% functions. Floors raised to 88.62/76.65/93.8. macOS installer/release/update regressions, types/lint/architecture/spec/ADR, rebuilt assets and unchanged bundle limits pass; Memory saved. C26, conditional C35 and C49–C59 remain open; C49 is next. |
+
+| 2026-11-08 | P8 C49 complete; 12 tasks remain unchecked | Version-gated native updates following `327de77` | CoCo 1.2.35 / macOS arm64 / Node 26.0.0 | Full V8 175 suites / 2,956 tests; 88.66% lines, 76.83% branches, 93.86% functions; floors raised to 88.65/76.8/93.85. Disposable native download/checksum/activation/draining/reuse/failure/explicit retry passed (`cockpit cortex updates x0xwAe`), with synthetic build/target controls disclosed. Independent PM2 update-row acceptance passed at 1280/390/320 px (`cockpit-cortex-auth-ui-M6gFEs`), without mutation/auth. Required types/lint/architecture/spec/ADR/build/budget and macOS regressions pass; Memory saved. Full auth repeats failed generic verification (`zVw71N`) and cached-login waiting after successful fresh inference (`mdl3Fa`); standalone fresh verification passed. Failed evidence is retained, not counted as full auth recertification. C26/C54 retain that observation. C26, conditional C35 and C50–C59 remain open; C50 is next. |
 
 ## 13. References
 

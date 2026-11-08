@@ -11,10 +11,11 @@ import type { CliAuthJobSnapshot, CliProfile } from '../src/types';
 
 /** Saved-login/UI evidence; a human remote OAuth handoff is a separate gate. */
 async function main(): Promise<void> {
-  assert.equal(process.env.CORTEX_AUTH_PROBE, '1', 'Set CORTEX_AUTH_PROBE=1 for real inference');
+  const updatesUiOnly = process.env.CORTEX_UPDATE_UI_PROBE === '1';
+  assert.ok(updatesUiOnly || process.env.CORTEX_AUTH_PROBE === '1', 'Set CORTEX_AUTH_PROBE=1 for real inference or CORTEX_UPDATE_UI_PROBE=1 for update status only');
   assert.equal(process.platform, 'darwin', 'This probe certifies macOS only');
   assert.notEqual(process.env.CORTEX_ACP_TEST_MODE, '1', 'Fake mode is not native evidence');
-  const connection = process.env.CORTEX_TEST_CONNECTION;
+  const connection = process.env.CORTEX_TEST_CONNECTION || (updatesUiOnly ? 'fixture' : undefined);
   assert.ok(connection, 'Select an authenticated native Snowflake connection');
   const cwd = process.cwd();
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'cockpit-cortex-auth-ui-')); await fs.chmod(root, 0o700);
@@ -39,7 +40,7 @@ async function main(): Promise<void> {
       DEFAULT_WORKSPACE: workspace, SESSION_SECRET: crypto.randomBytes(32).toString('hex'), WEB_BUILD_MODE: 'skip' },
   }] })};\n`, { mode: 0o600 });
   const pm2 = (args: string[]) => spawnSync(process.execPath, [path.join(cwd, 'node_modules/pm2/bin/pm2'), ...args], { cwd, stdio: 'ignore', timeout: 30000 });
-  const results: Record<string, unknown> = { remoteBrowserOAuth: 'pending-human-handoff' };
+  const results: Record<string, unknown> = { scope: updatesUiOnly ? 'updates-ui-only' : 'auth-and-responsive-ui', remoteBrowserOAuth: 'pending-human-handoff' };
   const report = { startedAt: now, platform: process.platform, arch: process.arch, node: process.version, cliVersion: version,
     revision: spawnSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' }).stdout.trim(),
     dirty: Boolean(spawnSync('git', ['status', '--porcelain'], { encoding: 'utf8' }).stdout.trim()), results };
@@ -66,6 +67,20 @@ async function main(): Promise<void> {
     await page.goto(`${baseUrl}/v2/?welcome=1`);
     await page.getByText('Cortex Code CLI responded. Login has not been checked.', { exact: true }).waitFor();
     results.welcomeExecutableDetectionSeparateFromLogin = true;
+    if (updatesUiOnly) {
+      results.stage = 'desktop-update-status';
+      await page.getByRole('button', { name: 'CLI Profiles', exact: true }).click();
+      await verifyUpdateRow(page);
+      for (const width of [1280, 390, 320]) {
+        await page.setViewportSize({ width, height: 900 });
+        assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), 'CLI Updates overflow the viewport');
+      }
+      results.desktopCortexUpdateStatus = true;
+      results.noUpdateOrAuthenticationAttempted = true;
+      results.passed = true;
+      process.stdout.write('PASS Cortex CLI Update status at 1280/390/320 px; no update or authentication attempted\n');
+      return;
+    }
     // A fresh fixture starts at Welcome; no production user data is used.
     const panel = page.getByRole('region', { name: 'Cortex Code setup' });
     await page.getByRole('button', { name: 'Cortex Code (CoCo) setup', exact: true }).click();
@@ -104,6 +119,10 @@ async function main(): Promise<void> {
     await page.setViewportSize({ width: 1280, height: 900 });
     results.stage = 'desktop-default-selection';
     await page.getByRole('button', { name: 'CLI Profiles', exact: true }).click();
+    if (!process.env.CORTEX_TEST_COMMAND) {
+      await verifyUpdateRow(page);
+      results.desktopCortexUpdateStatus = true; // Never update the normal installation in this probe.
+    }
     const card = page.locator('.cli-card').first();
     if (await card.locator('.cli-card-head').getAttribute('aria-expanded') !== 'true') await card.locator('.cli-card-head').click();
     assert.equal(await card.getByLabel(/^Harness/).inputValue(), 'cortex-code');
@@ -167,6 +186,13 @@ async function main(): Promise<void> {
     await fs.writeFile(path.join(root, 'report.json'), JSON.stringify({ ...report, finishedAt: new Date().toISOString() }, null, 2), { mode: 0o600 });
     process.stdout.write(`Sanitized Cortex auth report: ${path.join(root, 'report.json')}\n`);
   }
+}
+
+async function verifyUpdateRow(page: import('@playwright/test').Page): Promise<void> {
+  const row = page.locator('.cli-update-row').filter({ hasText: 'Cortex Code (CoCo)' });
+  await row.getByText('self-update', { exact: true }).waitFor();
+  await baseExpect(row).toContainText('1.2.35+');
+  await baseExpect(row.getByRole('button', { name: 'Run updater', exact: true })).toBeEnabled();
 }
 
 /** Browser mechanics only: never send these synthetic codes to Snowflake/native auth. */

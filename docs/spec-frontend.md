@@ -530,3 +530,12 @@ its dedicated lazy setup panel; the generic per-row account controls stay absent
 The detected row explicitly says login has not been checked. Installation uses
 the existing narrow-browser button layout. See
 [C48](spec-cortex-code.md#optional-installation-and-detection-p8-c48).
+
+
+The existing desktop CLI Updates panel also renders CoCo C49 targets, full build
+versions, native `self-update`, manual/network errors and compatibility caution.
+Update/Run updater uses the existing API/store/dialog behavior. No new generic
+login control or frontend source change is required. The native auth browser
+probe checks the normal installation's row/button without running that updater;
+actual update execution uses a disposable native fixture. Mobile PWA has no
+server-admin update flow.

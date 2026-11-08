@@ -7,6 +7,10 @@ supersedes: []
 superseded-by: null
 tags: [backends, profiles, protocol, authentication]
 affects:
+  - src/services/cortexUpdates.ts
+  - src/services/cliUpdateService.ts
+  - src/routes/chat/statusRoutes.ts
+  - scripts/probe-cortex-updates.ts
   - src/services/cortexInstallation.ts
   - src/services/installDoctorService.ts
   - web/AgentCockpitWeb/src/welcomeScreen.jsx
@@ -304,8 +308,17 @@ reviewed official standalone distribution rather than assuming npm. The doctor
 and Welcome share runtime executable discovery; install success requires a fresh
 version response, independently of authentication. Automated POSIX actions skip
 installer prompts; native first-run completions remain native behavior. Windows
-has documentation only pending real launch/installer evidence. CLI Update and
-platform certification remain separate gates.
+has documentation only pending real launch/installer evidence. CLI Update uses the separately version-tested C49 path below; platform
+certification remains independent.
+
+P8 C49 keeps provider-specific updater discovery/projection in `cortexUpdates.ts`
+and reuses CLI Update orchestration. Only the proven macOS native 1.2.35
+activation is actionable; checks read stable metadata without invoking an updater,
+then explicit updates pin the full distribution. Profile auth state does not
+participate. Success and native failure invalidate caches and await CoCo draining;
+no native attempt is automatically retried. The native fixture uses synthetic
+build/target controls with the genuine CLI; platform/auth evidence remains
+separate.
 
 ## Alternatives Considered
 

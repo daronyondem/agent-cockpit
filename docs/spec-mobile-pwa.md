@@ -365,3 +365,9 @@ P8 C48 adds optional CoCo detection/installation to desktop Welcome, including
 narrow desktop viewports. The mobile PWA has no installation/admin screen;
 its source, manifest, service-worker and metadata remain unchanged. Existing
 mobile chat/attachment/auth ownership contracts are unaffected.
+
+
+P8 C49 CLI Update remains desktop server administration. CoCo update/runtime
+cleanup is shared backend behavior; the PWA adds no update control, route/body,
+manifest, service-worker or source asset change. Mobile chat uses fresh runtimes
+after the existing reusable backend shutdown; interrupted tool work is not replayed.

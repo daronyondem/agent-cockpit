@@ -363,7 +363,7 @@ generation-owned redirect UI. Explicit isolated homes and custom commands use
 terminal authentication and are not verified by a successful shared setup check.
 The setup panel explains manual installation when the CLI is unavailable and
 names unavailable goals/agents/steering/restricted Memory. Optional installation/doctor actions are specified in P8 C48 below; CLI Update
-management remains C49.
+management is specified in P8 C49 below.
 Metadata supplies an inline blue snowflake-shaped icon to both clients.
 
 Desktop model/effort discovery uses the saved profile. The shared
@@ -1013,8 +1013,7 @@ selection and unrelated env values. P4 setup uses this shared terminal authentic
 Explicit non-setup profiles retain their configured home metadata; this slice
 does not certify account isolation. CoCo auth routes/jobs and
 Welcome connection selection are specified in P4 above. CLI Update label/command
-maps recognize the expanded type, but CoCo is excluded from update targets and
-no CoCo executable is launched by CLI Update.
+maps recognize CoCo; P8 C49 below registers its version-gated native update target.
 
 ## Shared execution and interaction capabilities
 
@@ -1517,3 +1516,90 @@ failure behavior without adding generic authentication controls.
 check; it does not invoke login/inference, install a full Cockpit package, or
 close C49–C53/C26. The saved-auth browser probe additionally checks the new
 Welcome executable status separately from its fresh inference evidence.
+
+
+## Native CLI updates (P8 C49)
+
+`src/services/cortexUpdates.ts` owns CoCo update runtime discovery, official
+installation recognition, stable distribution checks and status projection.
+`CliUpdateService` includes enabled CoCo profiles and the legacy default target.
+It pins an absolute executable using the shared resolver, honoring the command
+and optional profile PATH. Updates inherit the server terminal environment plus
+`CORTEX_CHANNEL=stable`; profile configDir, HOME/SNOWFLAKE_HOME/channel overrides
+and secrets are excluded. Profiles using the same pinned executable share one
+update target regardless of auth home or PATH. This does not change chat/auth
+profile environments or establish account isolation.
+
+An actionable installation currently requires macOS arm64/x64, the normal
+`~/.local/bin/cortex` symlink, an executable whose realpath is exactly
+`~/.local/share/cortex/<distribution>/cortex`, matching `cortex-version.txt`, and
+a fresh native `Cortex Code v1.2.35` version response. Full distribution versions
+use `major.minor.patch+HHMMSS.githash`. Wrappers, copied/version-pinned binaries,
+custom aliases, foreign symlinks, mismatched metadata, other platforms and
+unverified updater versions remain visible but manual. Missing executables
+remain non-actionable. Discovery does not invoke ACP or authenticate.
+
+Passive checks read the reviewed 1.2.35 distribution source
+`https://sfc-repo.snowflakecomputing.com/cortex-code-cli/a4643c4278/stable_version.txt`
+through a ten-second bounded fetch and validate the full version format. They
+never call `cortex update` (which mutates), invent `--check`/`--json` or assume an
+npm package. `currentVersion` includes verified distribution metadata;
+`latestVersion` is the full stable value, and differing full values indicate a
+stable target is available, including builds sharing the same patch version.
+Network/metadata failures retain the known local version and disable execution.
+A stable release outside 1.2.35 carries `updateCaution` before installation;
+installing it does not certify native login/media/chat compatibility or its own
+updater.
+
+An explicit update reserves the item before asynchronous preflight, refreshes
+path/version/stable-target evidence and rechecks active/pending chat immediately
+before mutation. It invokes `<pinned cortex> update <checked full version>` via
+execFile with the existing 120-second deadline/output bound. Native 1.2.35 needs
+no unattended flag or input for this command. The native updater verifies its
+manifest/package checksum and manages versioned activation. A single failed
+attempt is returned without automatic retry, fallback installer or prompt replay.
+After success or native execution failure, the existing route callback shuts down
+registered adapters and now awaits `CortexCodeAdapter.stopping`; generation-safe
+native startups, descendants and ephemeral processors drain before the response.
+Later calls can recreate runtimes/idle supervision. Failed attempts also refresh
+cached status because native work may have partially changed files. Exit zero
+is insufficient: a new process and activation metadata must match the selected
+full distribution. An installed newer target can pass that check while remaining
+ineligible to run its own unverified updater. HTTP methods/bodies and status
+shapes remain unchanged; update execution failures return the existing 400 path,
+active chat the existing 409 path. No CLI authentication is inferred.
+
+The existing desktop CLI Updates panel displays CoCo versions, status/errors,
+caution and Update/Run updater controls. The native auth/browser probe verifies
+the normal installation's actionable row without clicking its updater. Mobile
+PWA remains chat-only, with no CLI administration, manifest or asset-source
+change. Existing Claude compatibility warnings and other harness update methods
+remain unchanged.
+
+`test/cortexUpdates.test.ts` covers shared executable/env isolation, strict
+layout/version gates, stable metadata, pinned invocation, duplicate/preflight
+ownership, newly active chat, awaited cleanup, failed attempts/no retry/explicit
+recovery, changed activation, exit-zero postcheck failure and unverified targets.
+`test/cortexUpdateRoutes.test.ts` checks real route response ownership while
+CoCo cleanup is held. Existing CLI/runtime/backend/macOS installer/release/update
+suites remain regression gates.
+
+`scripts/probe-cortex-updates.ts` passed on macOS arm64 with the genuine
+1.2.35 binary. A disposable copy uses synthetic older build metadata to force
+real download/checksum/extraction/activation of the current stable distribution;
+it does not certify an older release. A separately injected nonexistent stable
+target produces a real native failure, preserves activation, drains the old
+runtime and recovers on explicit retry. ACP startup after update/shutdown is
+only lifecycle evidence, not authentication. The probe creates no connection
+and leaves the normal installation/auth intact. C50 migration, C51 full macOS,
+C52/C53 native Linux/Windows and C26 human OAuth acceptance remain independent.
+
+
+C49 update-status browser acceptance has an explicit independent mode:
+`CORTEX_UPDATE_UI_PROBE=1 npx tsx scripts/probe-cortex-auth.ts`. It checks the
+normal installation's row/controls and 1280/390/320 px fit without login,
+inference or mutation, and labels the report scope. Full auth checks remain
+intact. C49 full auth repeats recorded one generic verification failure and one
+cached-login-job timeout after successful fresh inference; standalone exact
+fresh inference passed. Failed evidence is retained and remains a C26/C54
+compatibility observation, not a successful full auth recertification.

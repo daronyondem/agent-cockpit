@@ -164,6 +164,21 @@ tool is unavailable.
   docs-only; Linux policy tests do not certify native Linux. Updates and full
   platform acceptance remain separate gates.
 
+- CoCo C49 update policy lives in `src/services/cortexUpdates.ts`: only the
+  proven macOS native 1.2.35 activation symlink and matching versioned metadata
+  are actionable. Read the reviewed public stable version and invoke native
+  `update <full-distribution>` explicitly. Group shared executable targets;
+  retain server terminal HOME/auth environment and profile PATH discovery, never
+  profile auth-home/channel/secrets. Reserve/revalidate before mutation and
+  recheck active chat; invalidate and await CoCo draining after success or failure,
+  then verify fresh activation/version. No automatic update retry is allowed.
+  The disposable native update probe uses genuine 1.2.35 with synthetic older
+  build metadata to force download, and an injected missing target for real native
+  failure/retry. Those controls do not certify an older CLI or authentication.
+  Windows/Linux, custom layouts and unverified updater versions stay manual.
+  The auth browser runner's `CORTEX_UPDATE_UI_PROBE=1` mode checks update rows
+  independently; its scope must never be reported as a full auth-suite pass.
+
 ## Mobile PWA
 
 - Mobile direction is PWA-only. Native iOS/Expo work was evaluated but the

@@ -1835,6 +1835,21 @@ On Windows the command uses `npm.cmd` and the inherited `WebBuildService` `.cmd`
 - On success the route-level caller invokes `backendRegistry.shutdownAll()` so long-lived backend child processes restart on next use with the updated executable.
 - After the update command, the service re-probes the target and returns `{ success: true, steps, item }`. Failures return `{ success: false, steps, error, item? }` without mutating unrelated status items.
 
+CoCo P8 C49 is delegated to `cortexUpdates.ts`, which owns updater environment,
+absolute command discovery, official macOS symlink/layout/metadata recognition,
+stable full-version lookup and status projection. Only native 1.2.35 in that
+layout is currently actionable; other methods/platforms/versions remain manual.
+The shared target excludes profile auth-home/channel/secrets, preserves parent
+terminal env and profile PATH, and uses exact `cortex update <full-distribution>`.
+CoCo preflight is reserved and refreshed before execution and rechecks active
+chat. Native failures are never retried; success and failure both invalidate
+runtime caches through the route callback, which awaits CoCo draining. Fresh
+version plus activation metadata must verify the selected distribution before
+success. Known installed versions survive metadata/network check failures.
+A newer target can install after a compatibility caution while its own updater
+stays gated. See [C49](spec-cortex-code.md#native-cli-updates-p8-c49) for exact
+layout/version/source policy, lifecycle and native evidence limits.
+
 See [ADR-0027](adr/0027-manage-cli-updates-from-web-cockpit.md) for the web-only product decision and supported-install policy.
 
 ## 4.3.1 UsagePricingStore

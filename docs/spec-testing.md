@@ -951,3 +951,53 @@ C48 measured V8 coverage: 173 suites / 2,941 tests passed; 88.62% statements/lin
 76.69% branches and 93.82% functions. Floors rise to 88.62 statements/lines and
 76.65 branches, retaining 93.8 functions. Existing macOS installer/release/update
 regressions pass; rebuilt desktop/mobile assets retain the 914 KiB JS budget.
+
+
+### CoCo native CLI updates (P8 C49)
+
+`test/cortexUpdates.test.ts` covers shared executable grouping and profile env
+exclusion, canonical native layout/metadata/version gating, full build lookup,
+pinned updater invocation, reserved preflight/duplicate and newly active chat,
+network/metadata failure recovery, awaited invalidation, one failed native
+attempt with explicit retry, changed activation, exit-zero postcheck failure and
+unverified versions/platforms. `test/cortexUpdateRoutes.test.ts` holds real HTTP
+responses until CoCo draining finishes on success/failure. The existing CLI update
+foundation case now expects a visible non-actionable CoCo target rather than
+excluding the harness. Existing runtime/backend and macOS installer/release/
+updater suites remain required regressions.
+
+Run `CORTEX_UPDATE_PROBE=1 npx tsx scripts/probe-cortex-updates.ts` on macOS for
+a real official install and native updater in a disposable home/app path with
+spaces. Genuine 1.2.35 with synthetic older build metadata forces actual stable
+package download/checksum/extraction/activation; this is not old-release evidence.
+A one-time injected missing stable target exercises real native failure,
+activation preservation, cache invalidation and explicit retry. Registry shutdown
+is awaited; idle native ACP runtimes close and fresh native runtimes start after
+success/failure/retry. ACP creation is not authentication. Reports/logs remain
+private in the fixture, the installed distribution is removed, and normal CLI/
+terminal credentials are untouched. Full package/PM2/platform acceptance remains
+C51–C53; C26 remains human OAuth. The saved-auth PM2 browser runner additionally
+checks CoCo's normal desktop update row without executing its updater. Run full
+Jest first, rebuild both clients, then run browser checks separately.
+
+
+C49 full V8 baseline: 175 suites / 2,956 tests passed; 88.66% statements/lines,
+76.83% branches and 93.86% functions. Coverage floors rise to 88.65 statements/
+lines, 76.8 branches and 93.85 functions. Focused native-update, route/runtime/
+backend and macOS installer/release/updater regression suites pass.
+
+
+For independent update-status acceptance, run
+`CORTEX_UPDATE_UI_PROBE=1 npx tsx scripts/probe-cortex-auth.ts`. This explicit
+scope uses a fixture connection name, makes no login/inference/update request,
+and checks the normal native installation's Update row/controls and fit at
+1280/390/320 px. Its report says `scope: updates-ui-only`; it must not be reported
+as an auth-suite pass. The ordinary `CORTEX_AUTH_PROBE=1` path retains every
+cached-login, cancellation, chat and responsive handoff assertion.
+
+During C49, the first full auth repeat failed native verification; the second
+passed fresh inference but timed out at the cached-login job. A separate exact
+fresh-process verification also passed. Both failed reports are retained;
+no auth code/retry policy or credentials were changed. This is an outstanding
+native auth compatibility observation for C26/C54, independently of C49 update
+execution/status evidence; do not count either full repeat as passed.

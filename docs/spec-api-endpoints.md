@@ -948,3 +948,12 @@ failed run instead of leaving running state. Explicit saved processor IDs are
 retained through settings/import even when unavailable, so runtime errors refer
 to the requested selection rather than a fallback harness. No endpoint or wire
 shape is added. See [CoCo C41](spec-cortex-code.md#processor-selection-boundaries-p6-c41).
+
+
+CoCo C49 extends the existing `/cli-updates` snapshot/check/update routes without
+new bodies or endpoints. Only verified macOS native 1.2.35 standalone targets
+are actionable; full installed/stable distribution versions and existing
+`updateCaution` convey provider policy. Native failures invalidate caches and
+await CoCo cleanup before the existing 400 response; active chat still returns
+409. Fresh activation/version verifies success. See
+[C49](spec-cortex-code.md#native-cli-updates-p8-c49).

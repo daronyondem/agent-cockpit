@@ -370,6 +370,23 @@ home/app/override paths. Preserve existing macOS installer/release/update suites
 Windows stays documentation-only; Linux action policy is not native acceptance.
 C49 update management and C51–C53 platform evidence remain separate.
 
+P8 C49 updater policy/discovery/version projection belongs to
+`src/services/cortexUpdates.ts`. Enable only the proven macOS native 1.2.35
+activation at `~/.local/bin/cortex`, with matching versioned distribution metadata.
+Keep profile auth homes/secrets/channel out of the updater env, group the pinned
+shared executable, and pass the checked full stable distribution to native
+`update <target>`; passive checks must never run an updater. Revalidate before
+mutation, reserve during preflight, recheck active chat, and await CoCo runtime
+draining after successful or failed attempts. Verify fresh activation/version;
+never automatically retry failures. Review `test/cortexUpdates.test.ts`,
+`test/cortexUpdateRoutes.test.ts` and existing CLI/runtime/macOS regressions; run
+opt-in `scripts/probe-cortex-updates.ts` for disposable native download/activation/
+shutdown/failure/retry evidence. Its older build metadata and missing target are
+synthetic controls, not old-release or authentication evidence. Other layouts,
+versions and native Windows/Linux remain manual until certified. Use
+`CORTEX_UPDATE_UI_PROBE=1 npx tsx scripts/probe-cortex-auth.ts` for independent
+update-row acceptance; its explicit scope is never a full auth-suite pass.
+
 # Server Management
 
 NEVER run `node server.js` directly. This causes orphan processes and port conflicts.
