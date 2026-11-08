@@ -1758,3 +1758,50 @@ first reproduced a background Bash late write after Stop; the updated close
 policy passed that exact scenario. Native desktop/mobile question/queue/
 reconnect/abort/explicit-resume probes also passed, with one original execution
 and no late file or prompt replay. No client contract or plan schema changes.
+
+
+## P8 C52 — Ubuntu acceptance preparation (not certified)
+
+`scripts/probe-cortex-linux.ts` is prepared, opt-in through
+`CORTEX_LINUX_PROBE=1`, and has not run on Ubuntu. It rejects non-Linux/x64,
+non-Ubuntu-24.04, musl, root, WSL, container and missing-user-manager targets.
+`--preflight` checks these read-only boundaries before selecting credentials,
+resolving a CLI or creating a fixture. Native evidence requires a real logged-in
+Ubuntu user; local generated-helper tests and mocked commands do not supply it.
+
+The full runner captures a retained official 1.2.35 executable realpath, packages
+the current build with release checksums, selects the Linux tar.gz artifact and
+creates spaced disposable install/data/workspace directories. Actual Linux
+installer functions install dependencies, generate runtime configuration,
+manifest, PM2 helpers and a unique systemd user unit in a private config root.
+Only generation-time systemctl calls are stubbed. Native systemctl link,
+enable --now, restart and disable exercise the resulting unit with a private
+PM2 home. The runner never uses the normal service name or PM2 home. It adds
+only PM2_HOME to the unit; it does not import the invoking terminal's HOME,
+SNOWFLAKE_HOME, D-Bus address, API keys or credential environment into systemd.
+Service HOME and effective Snowflake home must match the terminal selection.
+
+Required assertions are exact package-version HTTP health, fresh exact-response
+service inference, native desktop file creation and usage, native /proc executable
+identity, PM2 restart with process draining and native session continuity, user-unit
+restart with another fresh auth check, and Stop of an observed shell without its
+late write or prompt replay. User-manager variable presence and ownership of the
+Secret Service bus name are diagnostic booleans, not storage-backend or auth
+proof. The explicit start does not establish new-login or locked-store behavior.
+
+An 18-minute work deadline aborts commands and browser work. Cleanup uses bounded
+commands outside the aborted work signal to disable/remove only the unique unit,
+kill private PM2, remove its linked unit, reload systemd and verify captured
+PID/birth identities have gone. Successful runs remove the installed fixture and
+PM2 state. A private report records OS/glibc/Node/CLI/revision/dirty-state, scope
+and per-stage results without account, connection, OAuth or credential values.
+Normal native settings/auth and services are not edited. Native inference can
+maintain its own caches. A failed check never retries native tool work.
+
+The [runbook](research/cortex-code-linux-acceptance.md) retains separate gates for
+official native CoCo install, update packaging/recovery, actual credential/cache
+backend inspection and new-user-login reuse. These are not exercised by this
+runner. Existing install/update probes stay macOS-only, managed Linux updates
+remain disabled, and no capability/version gate changes. This preparation
+introduces no product endpoints, client storage, UI/PWA metadata or mobile
+behavior; packaged mobile assets are smoke-checked only. C52 remains open.

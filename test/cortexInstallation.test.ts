@@ -124,4 +124,23 @@ describe('Cortex optional installation', () => {
     expect(explicit.command).toBe(fs.realpathSync(override)); expect(await cortexVersion(explicit)).toBe('1.2.35');
     expect(explicit.env.SNOWFLAKE_HOME).toBe(profile.configDir);
   });
+
+  test('POSIX doctor executes only passive version queries and reports a broken executable without treating it as login', async () => {
+    Object.defineProperty(process, 'platform', { value: 'linux' }); Object.defineProperty(process, 'arch', { value: 'x64' });
+    process.env.PATH = path.join(root, 'no tools');
+    const captured = path.join(root, 'arguments.txt'); process.env.CORTEX_FIXTURE_ARGS = captured;
+    writeBinary();
+    fs.writeFileSync(binary(), '#!/bin/sh\nprintf \'%s\\n\' "$@" > "$CORTEX_FIXTURE_ARGS"\nprintf "Cortex Code v1.2.35\\n"\n');
+    const service = new InstallDoctorService({ appRoot: root, dataRoot: path.join(root, 'data'),
+      installStateService: { getStatus: () => ({ channel: 'dev', appDir: root }) } as any,
+      detectHomebrew: async () => false,
+      detectPandoc: async () => ({ available: false, binaryPath: null, version: null, checkedAt: '' }),
+      detectLibreOffice: async () => ({ available: false, binaryPath: null, checkedAt: '' }),
+    });
+    const check = (await service.getStatus()).checks.find(item => item.id === 'cortex-cli')!;
+    expect(check.status).toBe('ok'); expect(check.summary).toContain('Login has not been checked');
+    expect(fs.readFileSync(captured, 'utf8')).toBe('--no-auto-update\n--version\n');
+    fs.writeFileSync(binary(), '#!/bin/sh\nprintf "fixture executable failure\\n" >&2\nexit 7\n');
+    expect((await service.getStatus()).checks.find(item => item.id === 'cortex-cli')?.status).toBe('warning');
+  });
 });

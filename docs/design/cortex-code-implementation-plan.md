@@ -1397,6 +1397,18 @@ P7 C47 evidence (November 7 local / November 8 UTC, 2026; changes following
 - [ ] C52 — Implement and run Ubuntu 24.04 x64 native launch/install/auth/cache/
   credential-store/update/cleanup tests. Verify headless credential reuse under
   the actual user-session service environment before claiming support.
+  Preparation: `scripts/probe-cortex-linux.ts` packages the current build, uses
+  real Linux installer helpers and a unique systemd user unit/private PM2, and
+  checks fresh service auth, desktop chat/usage, PM2/session continuity, user-unit
+  restart, Stop and owned cleanup. It does not inject terminal credential env.
+  The macOS host has no Linux runtime or configured SSH host; native execution
+  is pending an Ubuntu environment. Host guards and generated-helper behavior
+  can be checked locally. Official native CoCo install/update and credential-
+  store/new-login evidence remain additional gates; managed updates stay macOS-
+  only. See [the runbook](../research/cortex-code-linux-acceptance.md). C52 stays
+  unchecked and the remaining task count stays 10. Local V8 preparation checks:
+  178 suites / 2,979 tests pass; coverage floors raised without a native Linux
+  claim. Backend/client/probe types, lint, specs and installer regressions pass.
 - [ ] C53 — Implement and run native Windows x64 executable discovery/auth/
   process tree/update tests. Respect official standalone packaging and existing
   private-Node wrappers for other harnesses; preserve appDir activation and

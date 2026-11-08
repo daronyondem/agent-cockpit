@@ -223,6 +223,16 @@ tool is unavailable.
   remain separate. Durable note:
   `notes/note_2026-11-08T11-23-22-807Z_cortex-code-c51-cancel-cleanup.md`.
 
+- CoCo C52 Ubuntu 24.04 x64/glibc acceptance is pending an actual Ubuntu test
+  environment. `scripts/probe-cortex-linux.ts` is prepared with a unique systemd
+  user unit/private PM2 and fresh service inference; local macOS guard/helper
+  checks are not native evidence. Do not inject terminal HOME/Snowflake/D-Bus/
+  credential environment into the user manager to manufacture successful reuse.
+  Official Linux CoCo install/update and credential-store/cache/new-login checks
+  remain additional gates; managed updates stay macOS-only. See
+  `docs/research/cortex-code-linux-acceptance.md`. Durable note:
+  `notes/note_2026-11-08T12-29-23-920Z_cortex-code-c52-linux.md`.
+
 ## Mobile PWA
 
 - Mobile direction is PWA-only. Native iOS/Expo work was evaluated but the

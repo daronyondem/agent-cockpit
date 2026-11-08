@@ -426,6 +426,16 @@ backend/turn/shots/integration/queue suites and rerun the native macOS and
 queue probes when changing this boundary; keep low-level cancellation separate
 from durable chat lease teardown.
 
+C52 Ubuntu acceptance preparation is `scripts/probe-cortex-linux.ts` (opt-in).
+Its preflight and generated-helper tests on macOS are not Linux evidence. Use
+Ubuntu 24.04 x64/glibc as a regular logged-in user with a real systemd user
+manager. The fixture uses a unique user unit/private PM2 and must not import the
+terminal's HOME, D-Bus or credential environment into that manager. Fresh service
+inference must prove saved credential reuse. Official Linux CoCo install/update,
+credential-store behavior and new-login acceptance remain separate C52 gates;
+the prepared runner alone does not certify them or enable managed Linux updates.
+See `docs/research/cortex-code-linux-acceptance.md`.
+
 # Server Management
 
 NEVER run `node server.js` directly. This causes orphan processes and port conflicts.

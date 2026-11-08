@@ -61,6 +61,11 @@ Before treating Linux support as release-ready, manually test on a fresh Ubuntu
 
 ## More Detail
 
+Cortex Code's Ubuntu compatibility is still pending C52. Existing Linux
+installer support does not certify CoCo credential reuse or managed updates.
+See the [CoCo Ubuntu acceptance runbook](../research/cortex-code-linux-acceptance.md)
+for prerequisites and the opt-in fixture. Managed CoCo updates remain macOS-only.
+
 - [Deployment spec](../spec-deployment.md)
 - [ADR-0071: Linux production installs](../adr/0071-support-linux-production-installs.md)
 - [ADR-0075: POSIX user-session autostart](../adr/0075-register-user-session-autostart-for-posix-installers.md)

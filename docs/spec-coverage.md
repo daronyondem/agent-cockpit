@@ -33,7 +33,7 @@ diagrams line up so future changes can see what must be updated.
 | Coverage and diagrams | `docs/spec-coverage.md` | This traceability matrix and cross-feature flow diagrams. |
 | Release operations | `docs/release-workflow.md`, `docs/release-notes-prompt.md`, `docs/releases/README.md`, `docs/releases/v*.md` | Agent-owned release preparation, release-note generation prompt, and per-release developer detail documents. |
 | Design/planning docs | `docs/design/cortex-code-implementation-plan.md`, `docs/design/claude-code-interactive/*.md`, `docs/design/knowledge-base/*.md`, `docs/design/context-map.md`, `docs/archive/*.md` | Proposed CoCo harness implementation tracker, implemented design intent, and historical planning context. Archive files are historical support only; status headers point readers to current specs where behavior has moved. |
-| Research/findings | `docs/research/*.md`, `docs/parity-decisions.md` | Durable empirical findings, review-cycle reports, intentional parity differences, the Grok Build ACP evaluation, and the pre-integration CoCo evaluation in `docs/research/cortex-code-acp-evaluation.md`. |
+| Research/findings | `docs/research/*.md`, `docs/parity-decisions.md` | Durable empirical findings, review-cycle reports, intentional parity differences, the Grok Build ACP evaluation, the pre-integration CoCo evaluation in `docs/research/cortex-code-acp-evaluation.md`, and pending Ubuntu acceptance preparation in `docs/research/cortex-code-linux-acceptance.md`. |
 | ADRs | `docs/adr/*.md`, `docs/adr/README.md`, `docs/adr/_template.md` | Architecture decision history. Accepted ADR content is normally immutable, with link-only maintenance allowed during documentation reorganization when explicitly approved. |
 
 ## Source Coverage Matrix

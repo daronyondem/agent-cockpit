@@ -1,5 +1,6 @@
 import fs from 'fs';
 import path from 'path';
+import os from 'os';
 import { execFileSync } from 'child_process';
 
 const scriptPath = path.join(process.cwd(), 'scripts/install-linux.sh');
@@ -103,5 +104,40 @@ describe('Linux installer script', () => {
     expect(source).toContain('xdg-open "$setup_url"');
     expect(source).toContain('Open ${setup_url} in your browser to continue setup.');
     expect(source).toContain('http://localhost:${PORT}/auth/setup');
+  });
+
+  test('materializes an isolated user unit and executes its PM2 helpers with spaced paths', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "cockpit linux helper ' "));
+    try {
+      const app = path.join(root, 'app folder'), config = path.join(root, 'config folder'), tools = path.join(root, 'tool bin');
+      for (const dir of [app, config, tools]) fs.mkdirSync(dir);
+      const capture = path.join(root, 'calls.txt'), systemctl = path.join(root, 'systemctl.txt');
+      fs.writeFileSync(path.join(tools, 'npx'), '#!/bin/sh\nprintf \'%s\\n\' "$PWD" "$@" >> "$C52_CAPTURE"\n', { mode: 0o700 });
+      const boundary = source.lastIndexOf('\nrequire_linux\n'); expect(boundary).toBeGreaterThan(0);
+      const prepare = path.join(root, 'prepare.sh');
+      fs.writeFileSync(prepare, source.slice(0, boundary) + `
+INSTALL_DIR="$C52_ROOT"
+SYSTEMD_SERVICE_NAME="agent-cockpit-cortex-fixture.service"
+XDG_CONFIG_HOME="$C52_CONFIG"
+systemctl() { printf '%s\\n' "$@" >> "$C52_SYSTEMCTL"; }
+write_helper_scripts "$C52_APP" "$C52_PATH"
+register_user_startup
+`);
+      const env = { ...process.env, C52_ROOT: root, C52_CONFIG: config, C52_APP: app, C52_PATH: `${tools}:${process.env.PATH}`,
+        C52_CAPTURE: capture, C52_SYSTEMCTL: systemctl };
+      execFileSync('/bin/bash', [prepare], { env });
+      const unit = fs.readFileSync(path.join(config, 'systemd/user/agent-cockpit-cortex-fixture.service'), 'utf8');
+      expect(unit).toContain(`ExecStart="${root}/bin/start-agent-cockpit.sh"`);
+      expect(unit).toContain(`ExecStop="${root}/bin/stop-agent-cockpit.sh"`);
+      expect(unit).toContain('WantedBy=default.target');
+      expect(fs.existsSync(path.join(config, 'systemd/user/agent-cockpit.service'))).toBe(false);
+      expect(fs.readFileSync(systemctl, 'utf8')).toBe('--user\ndaemon-reload\n--user\nenable\nagent-cockpit-cortex-fixture.service\n');
+      execFileSync(path.join(root, 'bin/start-agent-cockpit.sh'), [], { env });
+      execFileSync(path.join(root, 'bin/stop-agent-cockpit.sh'), [], { env });
+      expect(fs.readFileSync(capture, 'utf8').split('\n')).toEqual([
+        app, 'pm2', 'startOrRestart', 'ecosystem.config.js', '--update-env', app, 'pm2', 'save',
+        app, 'pm2', 'delete', 'agent-cockpit', app, 'pm2', 'save', '',
+      ]);
+    } finally { fs.rmSync(root, { recursive: true, force: true }); }
   });
 });

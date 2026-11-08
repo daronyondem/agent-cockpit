@@ -1139,3 +1139,46 @@ coverage passes 52 tests; the earlier macOS/CLI regressions pass 122 tests.
 Backend/web/mobile/probe types, zero-warning lint, maintainability, 189-route
 spec drift, 92-ADR checks, client builds and existing bundle budgets pass. Client
 assets are rebuilt after final Jest; no browser suite runs concurrently with it.
+
+
+### CoCo Ubuntu acceptance preparation (P8 C52, native pending)
+
+See [the pending Ubuntu runbook](research/cortex-code-linux-acceptance.md).
+The prepared opt-in entrypoint is:
+
+```sh
+CORTEX_LINUX_PROBE=1 npx tsx scripts/probe-cortex-linux.ts --preflight
+CORTEX_LINUX_PROBE=1 npx tsx scripts/probe-cortex-linux.ts
+```
+
+The read-only preflight rejects unsupported hosts before credentials/fixtures.
+Full execution requires an authenticated retained native 1.2.35 distribution,
+Ubuntu 24.04 x64/glibc, regular user, actual systemd user manager, locked project
+dependencies, rebuilt client bundles and Playwright Chromium. It uses actual
+release packaging/Linux installer helpers, a unique user unit and private PM2.
+It tests service-side fresh auth without terminal environment injection,
+chat/file/usage, /proc native identity, PM2 resume, user-unit restart/fresh auth,
+Stop/no replay and owned cleanup. Reports state which checks ran and omit auth
+values. Work deadline is 18 minutes; cleanup commands are separately bounded.
+Do not run full Jest concurrently with the native browser probe.
+
+`test/cortexLinuxProbe.test.ts` executes the real probe in child processes for
+missing opt-in and non-Linux rejection before native invocation/fixture creation.
+`test/linuxInstallerScript.test.ts` executes actual generated start/stop helpers
+against a recording npx shim and materializes the real unit under a private
+configuration path containing spaces and a quote. This is not native systemd,
+Linux/auth or installer-download evidence. Existing macOS installer/package and
+update regressions remain required if shared production behavior changes.
+
+Native execution is pending an Ubuntu environment. Separate official CoCo
+install/update and credential-store/new-login tests must also pass to close C52;
+macOS-only install/update probes must not have their guards bypassed. Mobile
+impact is limited to served packaged assets, with no source or contract changes.
+
+Local preparation regression: 178 suites / 2,979 tests pass (3 native opt-in
+suites / 20 tests skipped). V8 measures 88.72% statements/lines (56,017/63,137),
+76.93% branches (13,304/17,292), 93.93% functions (2,852/3,036). Floors raised to
+88.70% statements/lines and 93.90% functions; branches retain 76.90%. The
+additional POSIX doctor test executes a recording shell executable through the
+actual default command runner, asserting passive argv, no login claim and
+nonzero-exit warning. The platform is mocked; no native Linux execution occurred.
