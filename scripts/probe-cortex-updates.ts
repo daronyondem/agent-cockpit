@@ -48,7 +48,7 @@ async function main(): Promise<void> {
     fs.renameSync(distribution, syntheticDir); fs.writeFileSync(path.join(syntheticDir, 'cortex-version.txt'), synthetic);
     fs.unlinkSync(command); fs.symlinkSync(path.join(syntheticDir, 'cortex'), command);
     const nativeSettings = path.join(fixtureHome, '.snowflake/cortex/settings.json');
-    fs.mkdirSync(path.dirname(nativeSettings), { recursive: true }); fs.writeFileSync(nativeSettings, JSON.stringify({ autoUpdate: false }));
+    fs.mkdirSync(path.dirname(nativeSettings), { recursive: true }); fs.writeFileSync(nativeSettings, JSON.stringify({ autoUpdate: true }));
     results.syntheticOlderBuildMetadata = true;
     const profile: CliProfile = { id: 'fixture', name: 'fixture', harness: 'cortex-code', authMode: 'account',
       command, configDir: path.join(root, 'profile auth'), env: { SNOWFLAKE_HOME: path.join(root, 'other auth'), PRIVATE_TOKEN: 'fixture-only' },
@@ -58,6 +58,9 @@ async function main(): Promise<void> {
     const target = (await service.checkNow(async () => settings)).items[0];
     assert.equal(target.currentVersion, synthetic); assert.equal(target.latestVersion, version);
     assert.deepEqual(target.updateCommand, [command, 'update', version]);
+    assert.equal(path.basename(path.dirname(fs.realpathSync(command))), synthetic, 'Passive version detection changed activation');
+    assert.equal(JSON.parse(fs.readFileSync(nativeSettings, 'utf8')).autoUpdate, true);
+    results.passiveDetectionPreservesActivationAndNativeAutoUpdatePreference = true;
     const before = await sessions.acquire('before-update', { profile, cwd, workspaceId: 'fixture' }); sessions.release('before-update', before);
     const updated = await service.triggerUpdate(target.id, { loadSettings: async () => settings, onUpdated: drain });
     fs.writeFileSync(path.join(root, 'update-result.json'), JSON.stringify(updated, null, 2), { mode: 0o600 });

@@ -1,10 +1,12 @@
 #!/usr/bin/env node
 // Deterministic process fixture. Native compatibility uses the opt-in real CLI probe.
 const readline = require('readline');
-if (process.argv[2] === '--version') {
+if (process.argv.includes('--version')) {
+  if (!process.argv.includes('--no-auto-update')) throw new Error('Version detection must disable native automatic updates');
   process.stdout.write(process.env.FIXTURE_BAD_VERSION ? 'unknown\n' : 'Cortex Code v1.2.35\n');
   process.exit(0);
 }
+if (process.argv[2] !== 'acp' || process.argv[3] !== 'serve') throw new Error('ACP requires its native command prefix');
 let prompts = 0;
 let pending;
 const reply = (id, result) => process.stdout.write(JSON.stringify({ jsonrpc: '2.0', id, result }) + '\n');

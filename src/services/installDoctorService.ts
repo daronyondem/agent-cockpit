@@ -353,7 +353,7 @@ export class InstallDoctorService {
     if (!cortexInstallCommand()) return check('cortex-cli', 'Cortex Code (CoCo) CLI', 'warning', false,
       'Cortex Code runtime is not certified on this platform.', undefined, 'See the official installation guidance. Native platform acceptance is pending.', actions);
     const runtime = resolveCliCommandForRuntime('cortex-code', 'cortex');
-    const result = await this.commandRunner(runtime.command, ['--version'], { cwd: this.appRoot, timeoutMs: 5_000 });
+    const result = await this.commandRunner(runtime.command, ['--no-auto-update', '--version'], { cwd: this.appRoot, timeoutMs: 5_000 });
     if (result.ok && /\bCortex Code v\d+\.\d+\.\d+/.test(result.stdout)) {
       return check('cortex-cli', 'Cortex Code (CoCo) CLI', 'ok', false, 'Cortex Code CLI responded. Login has not been checked.', firstLine(result.stdout));
     }

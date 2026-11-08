@@ -52,14 +52,14 @@ async function main(): Promise<void> {
     const profile: CliProfile = { id: 'fixture', name: 'fixture', harness: 'cortex-code', authMode: 'account',
       configDir: path.join(root, 'separate auth'), cortexCode: { connection: 'fixture' }, createdAt: now, updatedAt: now };
     const automatic = resolveCortexRuntime({ profile, cwd: appRoot, workspaceId: 'fixture' });
-    assert.equal(automatic.command, path.join(fixtureHome, '.local/bin/cortex'));
+    assert.equal(automatic.command, fs.realpathSync(path.join(fixtureHome, '.local/bin/cortex')));
     const version = await cortexVersion(automatic);
     assert.equal(version, '1.2.35', 'A new stable release requires compatibility review');
     results.nativeVersion = version;
     const override = path.join(root, 'custom tools', 'cortex override'); fs.mkdirSync(path.dirname(override));
     fs.symlinkSync(automatic.command, override);
     const explicit = resolveCortexRuntime({ profile: { ...profile, command: override }, cwd: appRoot, workspaceId: 'fixture' });
-    assert.equal(explicit.command, override); assert.equal(await cortexVersion(explicit), version);
+    assert.equal(explicit.command, fs.realpathSync(override)); assert.equal(await cortexVersion(explicit), version);
     assert.equal(explicit.env.SNOWFLAKE_HOME, profile.configDir);
     results.spacedCommandOverride = true; results.executableIndependentOfAuthHome = true;
     // --help/--version create native logs even before any connection/login.

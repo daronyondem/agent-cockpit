@@ -59,7 +59,7 @@ describe('Cortex optional installation', () => {
     const result = await service.runInstallAction('cortex-cli:official-install');
     expect(result.success).toBe(true);
     expect(install).toHaveBeenCalledWith('sh', cortexInstallCommand()!.slice(1), expect.objectContaining({ timeoutMs: 600000 }));
-    expect(commandRunner).toHaveBeenCalledWith(binary(), ['--version'], expect.anything());
+    expect(commandRunner).toHaveBeenCalledWith(binary(), ['--no-auto-update', '--version'], expect.anything());
     expect(result.doctor?.checks.find(item => item.id === 'cortex-cli')?.status).toBe('ok');
   });
 
@@ -118,10 +118,10 @@ describe('Cortex optional installation', () => {
     const profile = { id: 'fixture', harness: 'cortex-code', name: 'fixture', authMode: 'account',
       configDir: path.join(root, 'separate auth'), cortexCode: { connection: 'fixture' }, createdAt: '', updatedAt: '' } as const;
     const automatic = resolveCortexRuntime({ profile, cwd: root, workspaceId: 'fixture' });
-    expect(automatic.command).toBe(binary()); expect(await cortexVersion(automatic)).toBe('1.2.35');
+    expect(automatic.command).toBe(fs.realpathSync(binary())); expect(await cortexVersion(automatic)).toBe('1.2.35');
     const override = path.join(root, 'custom tools', 'cortex override'); writeBinary(override);
     const explicit = resolveCortexRuntime({ profile: { ...profile, command: override }, cwd: root, workspaceId: 'fixture' });
-    expect(explicit.command).toBe(override); expect(await cortexVersion(explicit)).toBe('1.2.35');
+    expect(explicit.command).toBe(fs.realpathSync(override)); expect(await cortexVersion(explicit)).toBe('1.2.35');
     expect(explicit.env.SNOWFLAKE_HOME).toBe(profile.configDir);
   });
 });

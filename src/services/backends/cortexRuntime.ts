@@ -45,12 +45,14 @@ export function resolveCortexRuntime(options: CortexSessionOptions): CortexRunti
     env: Object.entries(env).sort(([a], [b]) => a.localeCompare(b)),
     profileId: profile.id, workspaceId: options.workspaceId, contextKey: options.contextKey || '',
   })).digest('hex');
-  return { command, args, env, cwd, fingerprint };
+  // Native auto-update can replace activation between version detection and
+  // ACP/login startup. Both launches must use this exact retained distribution.
+  return { command: executable.path, args, env, cwd, fingerprint };
 }
 
 export async function cortexVersion(config: CortexRuntimeConfig, signal?: AbortSignal): Promise<string> {
   try {
-    const { stdout } = await exec(config.command, ['--version'], { cwd: config.cwd, env: config.env, timeout: 20_000, maxBuffer: 64 * 1024, signal });
+    const { stdout } = await exec(config.command, ['--no-auto-update', '--version'], { cwd: config.cwd, env: config.env, timeout: 20_000, maxBuffer: 64 * 1024, signal });
     const version = stdout.match(/\bCortex Code v(\d+\.\d+\.\d+(?:[+.-][\w.-]+)?)/)?.[1];
     if (!version) throw new Error('Unexpected version');
     return version;

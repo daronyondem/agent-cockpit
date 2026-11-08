@@ -367,6 +367,7 @@ export class CliUpdateService {
   }
 
   private _versionArgs(harness: CliHarness): string[] {
+    if (harness === 'cortex-code') return ['--no-auto-update', '--version'];
     return harness === 'kiro' ? ['version'] : ['--version'];
   }
 

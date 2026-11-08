@@ -1204,7 +1204,9 @@ reject. Discovery or session creation does not establish authentication.
 `CortexRuntime.prompt` requires preparation and permits one pending prompt.
 The default deadline is 300 seconds; callers can override it. `cancel()` sends
 the `session/cancel` notification and waits up to 3 seconds for prompt settlement.
-A healthy completion preserves the session; rejection or an unresponsive CLI
+A healthy low-level cancel completion preserves the session; durable chat aborts
+still close that runtime before terminal done (C51), because background shell
+work can survive cancellation acknowledgement. Rejection or an unresponsive CLI
 terminates the runtime and its owned processes. Interrupted work is never retried.
 Idle close requests `session/close` with a 2-second deadline, then always tears
 down the transport. Closing is idempotent and forbids new prompts. Busy close
@@ -1670,3 +1672,89 @@ rejection and tampered CoCo settings. `test/chat.dataMigration.test.ts` verifies
 CoCo preview warnings and staged bytes through the existing REPLACE route.
 These disposable fixtures do not mutate normal data/auth or certify native
 cross-machine credentials. Existing migration and auth/plugin suites also apply.
+
+
+## P8 C51 — macOS native acceptance and passive version checks
+
+CoCo 1.2.35's native root command can update its activation automatically.
+Runtime `cortexVersion`, Install Doctor and CLI Update version detection invoke
+`--no-auto-update --version`. The login PTY already uses `--no-auto-update`.
+These queries request native update suppression without editing settings/auth.
+This flag is not a complete installation-containment boundary. Runtime
+resolution captures the executable realpath and executes that retained file for
+both version detection and ACP/login startup. A replaced activation symlink can
+change a later resolution/fingerprint but cannot change an already-resolved
+launch. Profile command values and updater activation discovery are unchanged. Root flags must not precede ACP: native 1.2.35 dispatch requires
+`acp serve` first and rejects `--no-auto-update` on that subcommand. Explicit
+managed updates retain `update <full distribution>`; neither ACP nor the update
+subcommand is wrapped in an interactive root invocation. The deterministic
+executable fixture rejects version queries without the flag and invalid ACP
+prefixes. Doctor and updater tests assert the exact passive argv. The native
+update probe uses `autoUpdate:true`, checks that passive discovery preserves the
+synthetic activation and the user's setting, then tests the explicit updater.
+
+C51 observed a real automatic activation change from 1.2.35 to downloaded
+1.2.37 during the initial checks. The normal activation was restored to its
+original retained 1.2.35 distribution; no native settings or credential files
+were edited and the downloaded distribution was retained. This is drift evidence,
+not certification of 1.2.37. A subsequent flagged-query fixture also observed
+activation drift; its originating process is unproven. Do not claim the query
+flag alone prevents all native or concurrent upgrades. See the [official update documentation](https://docs.snowflake.com/en/user-guide/cortex-code/cli-reference#updating-coco-cli)
+and native 1.2.35 `--help` for `--no-auto-update`.
+
+`scripts/probe-cortex-macos.ts` is opt-in via `CORTEX_MACOS_PROBE=1`, macOS-only,
+and requires saved native credentials. It packages the local current build with
+actual release assets/checksums, extracts it under a disposable install path with
+spaces, creates the production `current` symlink, and runs the real macOS installer
+functions for root/mobile dependency installation, existing asset readiness,
+.env/ecosystem/install-manifest generation, helper scripts and RunAtLoad plist.
+It does not fetch a public release or bootstrap a private Node runtime. It loads
+only a unique fixture LaunchAgent with a private PM2 home, a retained pinned
+1.2.35 distribution, and both shared terminal HOME and Snowflake home; normal services, data and startup registration remain untouched.
+The fixture plist's environment is explicitly scoped before bootstrap. The
+profile executes the retained distribution directly, independently of native
+activation changes. Isolated HOME with only shared SNOWFLAKE_HOME failed fresh
+verification in one run (null authentication); that configuration and its root
+cause are not certified. The
+installer's load/unload calls are stubbed only while materializing the fixture
+plist; native bootstrap/kickstart/bootout exercise its real helper without
+persistent per-user enable/disable overrides. The host GUI domain may be
+on-demand-only, so an explicit kickstart is used. This proves registered helper
+execution, not an actual logout/login event or automatic RunAtLoad dispatch.
+
+The probe requires version-matching HTTP health, fresh service-side exact
+inference authentication, desktop native file write and usage, PM2 restart with
+observed process identities drained, native session continuity and two persisted
+final answers, and Stop during an observed shell command without a late write or
+prompt replay. It closes the browser, boots out its label, kills only its own
+PM2 daemon, removes its plist and verifies observed process identities have gone
+and the retained source executable snapshot is unchanged. Success removes its
+installed app/dependencies, private PM2 state and fixture runtime state. Reports include CLI/OS/Node,
+revision/dirty state, phase and explicitly untested scope in a private temporary
+folder. External/in-process deadlines remain bounded. Shell/dependency logs and
+failure details remain private; connection/account/credential values are absent
+from the report. C26's human OAuth, strict Memory, native Windows/Linux,
+macOS x64, private Node bootstrap, public release downloads and real login events
+remain independent. No version ceiling or provider capability is relaxed.
+
+Mobile impact: these are shared server invocation and macOS fixture changes.
+There are no frontend storage/API, PWA metadata or source-asset changes. Existing
+mobile chat/media/queue contracts, types/builds and native C46 evidence remain
+applicable; responsive auth checks and the packaged mobile assets are included
+without claiming physical-device certification.
+
+
+C51 cancellation policy: `CortexTurn` awaits runtime close before terminal
+`done` for every aborted turn, even after an acknowledged native cancel. The
+pool sees a closed runtime and the next explicit user/queued turn creates a new
+process and loads its saved native session. It does not replay interrupted work.
+The adapter's retained abort handles are accepted only for their current owner;
+a completed handle cannot cancel a newer prompt. This replaces the earlier
+healthy-runtime reuse after chat abort. Low-level `CortexRuntime.cancel` retains
+its transport behavior for callers that separately own/drain ephemeral leases.
+Focused backend/turn/shots/integration/queue suites assert close-before-done,
+fresh saved-session load and stale-handle exclusion. The native macOS fixture
+first reproduced a background Bash late write after Stop; the updated close
+policy passed that exact scenario. Native desktop/mobile question/queue/
+reconnect/abort/explicit-resume probes also passed, with one original execution
+and no late file or prompt replay. No client contract or plan schema changes.

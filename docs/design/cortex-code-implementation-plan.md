@@ -1374,9 +1374,26 @@ P7 C47 evidence (November 7 local / November 8 UTC, 2026; changes following
   Full V8: 177 suites / 2,973 tests; no normal data/auth/installation mutation.
   C26, strict Memory, C49 auth-repeat observation and native platforms remain
   separate. C51 is next; 11 unchecked tasks remain including conditional C35.
-- [ ] C51 — Run macOS native install/update/auth/chat/cleanup evidence;
+- [x] C51 — Run macOS native install/update/auth/chat/cleanup evidence;
   preserve symlink activation, PM2/current-user startup and existing installer/
   updater compatibility tests.
+  Completed on macOS 26.5 arm64, Node 26 and CoCo 1.2.35: real optional install
+  and native update/recovery, full saved-auth/responsive UI, checksummed local
+  release with real npm ci/installer helpers/current symlink, registered fixture
+  LaunchAgent/private PM2, fresh service auth, desktop file/usage, PM2 native
+  session continuity, Stop/descendant cleanup, and desktop/mobile queue/resume.
+  Runtime realpath pinning prevents version/startup alias swaps. Aborted turns
+  now close before terminal done; explicit next turns reload saved sessions,
+  and old abort handles cannot cancel new owners. The background-shell late-write
+  regression and exact native Stop scenario pass without replay. Query flags
+  request update suppression; they are not global installation containment.
+  Native 1.2.37 activation drift was observed and the original 1.2.35 activation
+  restored without editing native settings/credentials. Failed HOME-isolation,
+  stale-title and on-demand startup reports remain separate from passed evidence.
+  Explicit kickstart is not a new login event; macOS x64, public release download,
+  private Node bootstrap, C26, strict Memory and other platforms are unverified.
+  C54 retains the drift/isolation observations. Final V8: 177 suites / 2,975
+  tests pass; coverage floors raised. C52 is next; 10 tasks remain.
 - [ ] C52 — Implement and run Ubuntu 24.04 x64 native launch/install/auth/cache/
   credential-store/update/cleanup tests. Verify headless credential reuse under
   the actual user-session service environment before claiming support.
@@ -1390,6 +1407,9 @@ P7 C47 evidence (November 7 local / November 8 UTC, 2026; changes following
 - [ ] C54 — Add opt-in native runner(s), proposed `npm run e2e:cortex-code`
   and `npm run e2e:cortex-code-ui`, with CLI/OS/Node/revision/dirty-state reports,
   bounded external deadlines, sanitized artifacts and owned fixture cleanup.
+  Retain C49 auth failures and C51 native activation drift/isolated-HOME null
+  verification observations; clean later repeats do not establish their cause.
+  Bind CLI version checks and startup to the same retained executable.
 - [ ] C55 — Add real Cockpit workflow fixtures for core and each enabled
   processor. Browser fixture server must be isolated and PM2-managed; preserve
   normal server data/auth. Separate missing-auth fixtures from real-account runs.

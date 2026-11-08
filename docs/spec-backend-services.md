@@ -953,6 +953,17 @@ The CLI backend layer uses a **pluggable adapter pattern**. New CLI tools can be
 
 `src/services/cliProfiles.ts` defines helpers that map internal backend ids to physical CLI harnesses, deterministic server-configured CLI profiles, and profile-derived runtime backends. The registry remains backend-keyed, but profile-based message sends, one-shot OCR calls, auto-title generation, session-summary generation, reset cleanup, memory capture, Memory MCP processing, and KB ingestion/digestion/dreaming choose the adapter through the profile resolver when a profile id is present. Message send, goal start, reset, and OCR routes may replace a stored conversation profile with the current composer-selected profile only when the session is empty or the stored profile can no longer be resolved; OCR also records an Agent Cockpit system message when it performs that missing-profile repair before the one-shot call. Claude Code profiles add `protocol: "standard" | "interactive"` so the same physical Claude CLI profile can select either `claude-code` or `claude-code-interactive` without a separate composer/provider picker. OpenCode profiles add optional `opencode.provider` metadata; Cockpit treats OpenCode as the CLI harness and leaves DeepSeek, Groq, xAI/Grok, Gemini, OpenRouter, and similar APIs as OpenCode provider/model choices ([ADR-0076](adr/0076-add-opencode-cli-profiles.md)). Server-configured profiles still use the server user's existing CLI state. Codex and Claude Code profiles apply profile-specific `command`, `configDir`, and `env` at spawn/path-resolution time. OpenCode profiles apply the optional `command` override and provider filter; model choice comes from the per-turn/processor model selector, and provider auth stays in OpenCode's own auth/config files. On macOS/Linux, default CLI commands are resolved through `src/services/cliCommandResolver.ts`: the resolver first honors `PATH`, then probes common user-local install locations such as `~/.local/bin`, `~/.npm-global/bin`, `~/.npm/bin`, `~/.bun/bin`, `~/.yarn/bin`, macOS `/opt/homebrew/bin`, Claude Code's `~/.claude/local/claude`, and OpenCode's `~/.opencode/bin/opencode`, so launchd/PM2 can find CLIs installed by their own installers even when the service PATH lacks those directories. Kiro stays self-configured only: no command/config/env/runtime-protocol isolation is applied because `kiro-cli` has no dedicated profile directory override and isolating via `HOME` was rejected.
 
+CoCo passive version queries in runtime, Install Doctor and CLI Update pass
+`--no-auto-update --version`, preserving terminal settings/auth and requesting
+native update suppression. Runtime launches pin the captured executable realpath
+for version/ACP/login consistency; the flag alone is not installation containment.
+Profile command storage and updater activation discovery remain unchanged. Aborted
+CoCo turns drain/close their runtime before terminal done; subsequent explicit
+turns load the saved session in a fresh process without replay. Stale abort
+handles cannot affect newer owners. ACP keeps its native `acp serve` prefix;
+1.2.35 does not accept that root option in ACP dispatch. Explicit updates remain
+`update <target>`. See [C51 macOS acceptance](spec-cortex-code.md#p8-c51--macos-native-acceptance-and-passive-version-checks).
+
 ### BaseBackendAdapter (`src/services/backends/base.ts`)
 
 Abstract base class. Every backend must implement:

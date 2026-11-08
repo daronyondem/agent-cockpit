@@ -29,7 +29,7 @@ describe('CoCo standalone updates', () => {
     settings = { theme: 'system', sendBehavior: 'enter', systemPrompt: '', cliProfiles: [profile] };
     service = new CliUpdateService(root);
     exec = jest.spyOn(service as any, '_exec').mockImplementation(async (cmd, args) => {
-      if (cmd === command && (args as string[]).join(' ') === '--version') return 'Cortex Code v1.2.35';
+      if (cmd === command && (args as string[]).join(' ') === '--no-auto-update --version') return 'Cortex Code v1.2.35';
       if (cmd === command && (args as string[])[0] === 'update') { activate(latest); return 'Updated'; }
       throw new Error('Unexpected executable');
     });
@@ -57,7 +57,7 @@ describe('CoCo standalone updates', () => {
     expect(runtime.env.HOME).toBe(root); expect(runtime.env.SNOWFLAKE_HOME).toBe(process.env.SNOWFLAKE_HOME);
     expect(runtime.env.CORTEX_CHANNEL).toBe('stable'); expect(runtime.env.PRIVATE_TOKEN).toBeUndefined();
     expect(fetcher).toHaveBeenCalledWith(expect.stringContaining('/stable_version.txt'), expect.objectContaining({ signal: expect.anything() }));
-    expect(exec.mock.calls.every(call => call[0] === command && call[1].join(' ') === '--version')).toBe(true);
+    expect(exec.mock.calls.every(call => call[0] === command && call[1].join(' ') === '--no-auto-update --version')).toBe(true);
   });
 
   test('pins the checked full distribution, waits for shutdown and verifies a fresh activation/version', async () => {
@@ -78,7 +78,7 @@ describe('CoCo standalone updates', () => {
   test('invalidates/drains after a failed native attempt, never retries it and recovers on an explicit later update', async () => {
     const target = await check(); let fail = true;
     exec.mockImplementation(async (_cmd, args: string[]) => {
-      if (args[0] === '--version') return 'Cortex Code v1.2.35';
+      if (args.includes('--version')) return 'Cortex Code v1.2.35';
       if (fail) throw new Error('checksum mismatch');
       activate(latest); return 'Updated';
     });
@@ -91,7 +91,7 @@ describe('CoCo standalone updates', () => {
   });
 
   test('rejects exit-zero without activation, even though the old version still responds', async () => {
-    exec.mockImplementation(async (_cmd, args: string[]) => args[0] === '--version' ? 'Cortex Code v1.2.35' : 'done');
+    exec.mockImplementation(async (_cmd, args: string[]) => args.includes('--version') ? 'Cortex Code v1.2.35' : 'done');
     const target = await check();
     expect(await update(target.id)).toMatchObject({ success: false, error: expect.stringContaining('fresh version detection') });
   });

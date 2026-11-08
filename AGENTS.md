@@ -399,6 +399,33 @@ import. Review `test/cortexMigration.test.ts`, `test/cortexDataMigration.test.ts
 and existing migration/route suites. Native cross-machine credentials, C26 and
 C51–C55 acceptance remain separate.
 
+P8 C51 passive CoCo version detection must use `--no-auto-update --version`
+in runtime, Install Doctor and CLI Update. Preserve native user settings/auth.
+Pin runtime commands to the captured executable realpath so version checks and
+ACP/login launch the same retained distribution despite activation changes.
+Keep profile command storage and updater activation discovery unchanged.
+Keep `acp serve` and explicit `update <target>` prefixes exact: 1.2.35 sends a
+prefixed root flag into terminal onboarding and rejects it on ACP. The login PTY
+already disables automatic updates. Review runtime/doctor/updater/fixture tests
+and rerun native install/update probes when changing this boundary.
+`scripts/probe-cortex-macos.ts` exercises a local release package, real installer
+helpers, a unique current-user LaunchAgent/private PM2, shared fresh auth,
+desktop chat/restart/resume/Stop and owned cleanup. Its CLI is pinned;
+retain both terminal HOME and SNOWFLAKE_HOME for shared credentials. A failed
+isolated-HOME auth check is not evidence of a supported account-isolation flow. Its explicit kickstart does
+not prove a new login event; public release/private Node bootstrap, macOS x64,
+C26 and other platforms remain separate. Never run full Jest alongside browser
+probes; rebuild assets afterward. Keep native activation snapshots and do not
+silently certify an automatically downloaded CLI version.
+
+C51 chat abort must await native runtime close before CortexTurn terminal done, even when
+session/cancel acknowledges: native background shells can otherwise continue.
+The next explicit turn reloads its saved session in a fresh process; never replay
+interrupted work. Retained abort handles must match the current owner. Review
+backend/turn/shots/integration/queue suites and rerun the native macOS and
+queue probes when changing this boundary; keep low-level cancellation separate
+from durable chat lease teardown.
+
 # Server Management
 
 NEVER run `node server.js` directly. This causes orphan processes and port conflicts.

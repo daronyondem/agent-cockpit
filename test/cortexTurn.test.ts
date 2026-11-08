@@ -128,7 +128,8 @@ test('validation, RPC errors, process death and pre-start cancellation end once 
   const turn = new CortexTurn(f.runtime, { text: 'cancel before start', allowTools: true });
   await turn.abort();
   expect((await collect(turn)).map(event => event.type)).toEqual(['error', 'done']);
-  expect(f.writes).toEqual([]);
+  expect(f.writes.map(message => message.method)).toEqual(['session/close']);
+  expect(f.client.isClosed).toBe(true);
   await expect(collect(turn)).rejects.toThrow('already consumed');
 });
 

@@ -71,6 +71,7 @@ export class CortexCodeAdapter extends BaseBackendAdapter {
     const owner: ActiveTurn = { aborted: false };
     this.active.set(id, owner);
     const abort = () => {
+      if (this.active.get(id) !== owner) return;
       owner.aborted = true;
       if (owner.turn) void owner.turn.abort();
       else if (this.active.get(id) === owner) void this.sessions.reset(id);

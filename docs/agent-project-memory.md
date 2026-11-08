@@ -192,6 +192,37 @@ tool is unavailable.
   C49 auth-repeat observation and native platform/cross-machine acceptance remain
   separate. Durable note: `notes/note_2026-11-08T10-04-02-798Z_cortex-code-c50-migration.md`.
 
+- CoCo C51 passive version queries use `--no-auto-update --version` in
+  runtime, Install Doctor and CLI Update, preserving native settings/auth.
+  Keep ACP's `acp serve` and explicit updater prefixes intact; native 1.2.35
+  dispatches a preceding root flag to terminal onboarding and rejects it on ACP.
+  The login PTY already disables automatic updates. Initial native checks
+  automatically activated 1.2.37; the original 1.2.35 activation was restored
+  without editing native settings/credentials. This does not certify 1.2.37.
+  The native update fixture uses autoUpdate:true to verify passive preservation.
+  Durable note: `notes/note_2026-11-08T10-36-19-799Z_cortex-code-passive-version-checks.md`.
+
+- CoCo runtime commands execute the captured executable realpath, keeping
+  version detection and ACP/login on the same retained distribution despite
+  activation changes. Stored profile commands and updater activation discovery
+  remain unchanged. Query flags request update suppression but do not establish
+  complete native/concurrent upgrade containment; later C51 drift had an
+  unproven origin. Acceptance pins the retained 1.2.35 binary while retaining both
+  terminal homes. A separate-HOME/shared-Snowflake run returned null auth; do
+  not certify that isolation or infer its cause. Durable note:
+  `notes/note_2026-11-08T11-01-29-270Z_cortex-code-c51-runtime-pinning.md`.
+
+- CoCo C51 aborted turns await runtime close before terminal done, even after
+  native cancellation acknowledgement, so background shells drain. The next
+  explicit turn reloads the saved session through a fresh process; interrupted
+  tool work is never replayed. Abort handles must belong to the current owner.
+  Packaged macOS 26.5 arm64/Node26/CLI1.2.35 LaunchAgent/private-PM2 auth/chat/
+  restart/resume/Stop/cleanup and native desktop/mobile queues passed. The probe
+  uses the retained original binary directly and both terminal homes. Explicit
+  kickstart is not a new login event; x64/other platforms, C26 and strict Memory
+  remain separate. Durable note:
+  `notes/note_2026-11-08T11-23-22-807Z_cortex-code-c51-cancel-cleanup.md`.
+
 ## Mobile PWA
 
 - Mobile direction is PWA-only. Native iOS/Expo work was evaluated but the

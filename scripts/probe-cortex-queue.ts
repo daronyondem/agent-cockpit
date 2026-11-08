@@ -63,11 +63,12 @@ async function main(): Promise<void> {
         }
       };
     });
-    async function open(conversation: { title: string; workspaceId: string }, mobile: boolean) {
+    async function open(conversation: { id: string; title: string; workspaceId: string }, mobile: boolean) {
+      conversation.title = (await (await page.request.get(`${base}/api/chat/conversations/${conversation.id}`)).json()).title;
       await page.setViewportSize(mobile ? { width: 390, height: 844 } : { width: 1280, height: 900 });
       await page.goto(`${base}/${mobile ? 'mobile' : 'v2'}/`);
       if (mobile) await page.locator('.conversation-card').filter({ hasText: conversation.title }).click();
-      else { await page.getByLabel('Workspace filter').selectOption(conversation.workspaceId); await page.locator('.sb-row').filter({ hasText: conversation.title }).click(); }
+      else { await page.getByLabel('Workspace filter').selectOption(conversation.workspaceId); await page.locator(`.sb-row[data-conv-id="${conversation.id}"]`).click(); }
       if (mobile) {
         await page.locator('.composer-profile').click();
         const settings = page.getByRole('dialog').filter({ hasText: 'Run Settings' });

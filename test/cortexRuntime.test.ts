@@ -58,6 +58,22 @@ runtimeSuite('CoCo POSIX runtime foundations', () => {
     expect(explicit.fingerprint).not.toBe(shared.fingerprint);
   });
 
+  test('version detection and startup retain the same distribution when native activation changes', async () => {
+    const alias = path.join(dir, 'activation'), updated = path.join(dir, 'new cortex');
+    await fs.writeFile(updated, (await fs.readFile(profile.command!, 'utf8')).replace('Cortex Code v1.2.35', 'Cortex Code v1.2.37'), { mode: 0o700 });
+    await fs.symlink(profile.command!, alias);
+    const input = { ...options, profile: { ...profile, command: alias } };
+    const pinned = resolveCortexRuntime(input);
+    expect(pinned.command).toBe(await fs.realpath(profile.command!));
+    await fs.unlink(alias); await fs.symlink(updated, alias);
+    expect(await cortexVersion(pinned)).toBe('1.2.35');
+    const later = resolveCortexRuntime(input);
+    expect(await cortexVersion(later)).toBe('1.2.37');
+    expect(later.fingerprint).not.toBe(pinned.fingerprint);
+    const runtime = await startCortexRuntime(pinned); runtimes.push(runtime);
+    expect(runtime.version).toBe('1.2.35');
+  });
+
   test('resolution rejects invalid profiles/platform and command absence without leaking values', () => {
     expect(() => resolveCortexRuntime({ ...options, profile: { ...profile, disabled: true } })).toThrow('enabled');
     expect(() => resolveCortexRuntime({ ...options, profile: { ...profile, cortexCode: undefined } })).toThrow(/connection/);

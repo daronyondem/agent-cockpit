@@ -29,7 +29,7 @@ Test HTTP servers that are contacted through `127.0.0.1` bind explicitly to `127
 | `test/memoryProcessorSelect.test.ts` | Rendered lazy Memory control: disabled saved CoCo selection, no automatic change, explicit eligible selection, unsupported choice exclusion and empty catalog. |
 | `test/cortexProfiles.test.ts` | CoCo config validation, literal names, credential-field rejection, identity/resolution/default completeness, settings round-trip/edit/atomic rejection and setup-home migration. No native execution. |
 | `test/cortexProtocol.test.ts` | Dedicated strict CoCo JSONL framing/IDs/reverse ownership, limits, failures, deadlines and private diagnostics. |
-| `test/cortexRuntime.test.ts` | Deterministic executable fixture: exact argv/env/version, profile fingerprints, session replay, cancellation, catalog scope, startup/reset/idle/reusable registry lifecycle. |
+| `test/cortexRuntime.test.ts` | Deterministic executable fixture: exact argv/env/version, realpath pinning across activation changes, profile fingerprints, session replay, cancellation, catalog scope, startup/reset/idle/reusable registry lifecycle. |
 | `test/cortexProcess.test.ts` | POSIX detached-child cleanup after root exit, unrelated process preservation, identity reuse, bounded stop and enumeration failure. |
 | `test/cortexMobileAttachments.test.ts` | Selected OCR model/effort, synchronous duplicate exclusion, deferred ownership across navigation/reset/removal/clear/model/unmount, cached insertion, failure and explicit retry. |
 | `test/cortexMobileSelection.test.ts` | Saved CoCo model/effort through pending/failed profile discovery, locked profile, unsupported goal capability, and dismissal of the Conversation actions sheet before opening session history. |
@@ -38,7 +38,7 @@ Test HTTP servers that are contacted through `127.0.0.1` bind explicitly to `127
 | `test/cortexEvents.test.ts` | Native text/thinking/tool/diff/resource mapping, ownership, fragmented errors/delivery markers, failure classification and token/context counters. |
 | `test/cortexModels.test.ts` | Dynamic configOptions, model/effort/mode selection, auto reset, invalid selections, stale catalogs, profile separation and pinned image evidence. |
 | `test/cortexInteractions.test.ts` | RPC ID 0, exact option/free-form/sequential replies, decision generations, stale/double responses, permissions, plan revision and exit cancellation. |
-| `test/cortexTurn.test.ts` | Internal bridge sequencing, retained native excerpt transport, repeated turns, known/unknown/quoted errors, incomplete usage, abort, process death and explicit delivery. |
+| `test/cortexTurn.test.ts` | Internal bridge sequencing, retained native excerpt transport, repeated turns, known/unknown/quoted errors, incomplete usage, abort/runtime drain before adapter done, process death and explicit delivery. |
 | `test/cortexAttachments.test.ts` | Upload-root validation, PNG signatures/decoding, model/version/MIME gates, file/pixel/aggregate limits and traversal/symlink rejection. |
 | `test/cortexArtifacts.test.ts` | Real upload/queue, explicit artifact/storage/download/text-preview and ledger integration; text/code/Office/PDF bytes, deduplication and ownership. |
 | `test/backendCapabilities.test.ts` | Browser-safe role/interaction policy, CoCo fail-closed one-shot metadata, legacy compatibility, sequential and model/media eligibility. Existing `test/mediaCapabilities.test.ts` covers the backend facade. |
@@ -1037,3 +1037,105 @@ opt-in tests skipped), 88.67% statements/lines (55,980/63,128), 76.90% branches
 statements/lines, 76.85% branches and 93.86% functions. Backend/web/mobile types,
 zero-warning lint, maintainability, 189-route spec drift and 92-ADR validation
 pass. Rebuild both client assets after the full suite, before any browser probe.
+
+
+### CoCo macOS acceptance (P8 C51)
+
+Run native checks only after full Jest and rebuilding both clients:
+
+```sh
+CORTEX_INSTALL_PROBE=1 npx tsx scripts/probe-cortex-install.ts
+CORTEX_UPDATE_PROBE=1 npx tsx scripts/probe-cortex-updates.ts
+CORTEX_AUTH_PROBE=1 CORTEX_TEST_CONNECTION=<saved-name> npx tsx scripts/probe-cortex-auth.ts
+CORTEX_MACOS_PROBE=1 CORTEX_TEST_CONNECTION=<saved-name> npx tsx scripts/probe-cortex-macos.ts
+```
+
+The saved connection may also be selected privately by the macOS probe from the
+native connection reader. Reports omit its value. Optional CORTEX_TEST_COMMAND
+pins a retained executable; require the version-tested 1.2.35 binary rather than
+silently certifying a new auto-downloaded version. Root passive version queries
+use `--no-auto-update --version`; ACP and explicit updates keep their native
+prefixes. The deterministic ACP executable enforces both query and dispatch
+rules. Runtime tests change activation after resolution and verify version
+detection/startup retain the original distribution while a fresh resolution sees
+the new version/fingerprint. Review `test/cortexRuntime.test.ts`, `test/cortexInstallation.test.ts`,
+`test/cortexUpdates.test.ts`, `test/cortexUpdateRoutes.test.ts` and the existing
+CLI update/auth/backend/process/macOS installer/release/update suites.
+
+The update probe now retains `autoUpdate:true`, asserts passive activation and
+settings preservation, then executes the explicit target update and native
+failure/retry. Synthetic older build metadata remains separate from older
+release evidence. The macOS probe uses a checksummed local release package, real
+root/mobile npm ci and installer helper functions, spaced paths, production
+current symlink/install manifest, fixture RunAtLoad plist, unique LaunchAgent
+and private PM2. The profile uses a retained pinned binary and both shared terminal
+homes; one isolated-HOME/shared-Snowflake run failed fresh verification and
+does not certify that auth configuration. It explicitly kickstarts its registered current-user job because
+this host can hold the GUI domain in on-demand-only mode. It checks exact
+HTTP package version, shared fresh service inference, packaged mobile assets,
+desktop file write/usage, PM2 restart/native session resume, Stop of an observed
+shell, no late write/replay and identity-based process cleanup. Only the fixture
+label/daemon/plist are removed. Normal executable activation is snapshotted;
+native settings/credentials and normal services remain intact. The source
+executable is checked and successful fixtures remove their app/dependencies,
+private PM2 state and fixture runtime state.
+
+This is macOS arm64/current Node evidence, not native macOS x64, public release
+download, private Node bootstrap, an actual logout/login event, C26 human OAuth,
+strict Memory, Windows/Linux or physical mobile certification. Initial C51
+saved-auth/browser checks passed, including the previously timed-out cached-job
+path; C49 failed reports remain historical observations without a claimed root
+cause. A first macOS fixture failed health because launchd left RunAtLoad pending
+in on-demand-only mode and detected automatic native activation drift; retain
+that failed report alongside corrected acceptance evidence. No failed report
+counts as a pass and no auth retry policy is weakened.
+
+Runtime version/launch consistency is independent of native automatic activation:
+C51 also observed activation drift after adding query flags, with the originating
+process unproven. Pin the retained distribution; never infer global upgrade
+containment from one argv flag. Preserve the failed isolated-HOME auth report
+and the stale-title selector failure (the corrected probe selects the immutable conversation ID).
+
+C51 aborted-turn regression: acknowledged native cancel alone allowed the
+background Bash fixture to write its late file. `CortexTurn` now awaits native
+close before done; next explicit turns use fresh-process saved-session load.
+Backend/turn tests cover close-before-done, no prompt replay and a retained
+completed handle attempting to cancel a newer active prompt. The existing
+native queue runner now selects desktop conversations by immutable ID and reads
+current titles for mobile, avoiding asynchronous title changes. Native macOS
+and all four desktop/mobile queue/abort cases passed with the close policy.
+
+Passed native C51 reports (private temporary artifacts, revision 4c05a35 plus
+C51 working tree; all dirty states are explicit):
+
+- `cockpit cortex install aADkrK/report.json`: disposable official install,
+  physical executable pinning and spaced alias/auth-home checks.
+- `cockpit cortex updates VebO4v/report.json`: autoUpdate:true passive activation
+  preservation, genuine native explicit download/activation, cleanup and retry.
+- `cockpit cortex macos qvQpiE/report.json`: macOS 26.5 / Darwin 25.5.0 arm64,
+  Node 26.0.0, CoCo 1.2.35+191333.f82de3d91715; local release/dependencies,
+  fixture LaunchAgent/private PM2, source-binary observation, shared fresh auth,
+  desktop write/usage, restart/resume, Stop and removal of fixture installation.
+- `cockpit-cortex-queue-6gCILM/report.json`: all four desktop/mobile queue/abort
+  cases with close-before-done, owned descendants gone and explicit resume once.
+- `cockpit-cortex-auth-ui-tt3HA4/report.json`: full native saved auth/cached jobs,
+  cancel/retry, responsive setup/profile/catalog/fresh chat and synthetic handoff
+  checks. Uses the retained command; this run does not check its update row.
+
+These are temporary folder basenames under the probe's printed report path.
+The normal activation was restored to original 1.2.35 after all native jobs
+closed; native settings/credentials were not edited and downloaded 1.2.37 was
+retained. C51 also retains failed on-demand startup, stale-title, isolated-HOME
+null-auth and background-shell late-write reports. Only the last two native
+Stop/queue reports establish the corrected cancellation behavior. C26 remains
+pending human handoff. Root causes of C49 auth repeats and later native activation
+drift are not inferred from clean reruns.
+
+Final C51 full V8: 177 suites / 2,975 tests passed; three native opt-in suites /
+20 tests skipped. Statements/lines 88.67% (55,989/63,137), branches 76.93%
+(13,294/17,279), functions 93.87% (2,850/3,036). Floors rise to 88.67%
+statements/lines and 76.90% branches; functions remain 93.86%. Focused cancellation
+coverage passes 52 tests; the earlier macOS/CLI regressions pass 122 tests.
+Backend/web/mobile/probe types, zero-warning lint, maintainability, 189-route
+spec drift, 92-ADR checks, client builds and existing bundle budgets pass. Client
+assets are rebuilt after final Jest; no browser suite runs concurrently with it.

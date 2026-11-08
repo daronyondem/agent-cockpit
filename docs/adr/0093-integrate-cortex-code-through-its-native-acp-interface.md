@@ -7,6 +7,7 @@ supersedes: []
 superseded-by: null
 tags: [backends, profiles, protocol, authentication]
 affects:
+  - scripts/probe-cortex-macos.ts
   - src/services/cortexMigration.ts
   - src/services/dataMigrationService.ts
   - src/services/cortexUpdates.ts
@@ -328,6 +329,21 @@ reserved plugin/login/verification temp directories never restore, and passive
 dependency checks cannot establish auth or execute an imported command. Durable
 profile/selection/chat state retains its format; users explicitly repair stale
 absolute homes and verify login through the dedicated flow.
+
+P8 C51 suppresses native auto-update on passive version queries with the native
+root flag, while retaining exact ACP/update dispatch prefixes and shared auth.
+Runtime resolution executes its captured realpath so activation changes cannot
+swap the binary between version detection and startup; updater discovery remains
+activation-based. The flag alone is not native upgrade containment.
+The macOS acceptance fixture packages the local build, uses real installer
+helpers and a unique LaunchAgent/private PM2, and distinguishes explicit
+kickstart from a real login event. Downloaded CLI versions are not silently
+certified; public release/private Node and other native platforms stay separate.
+
+C51 also closes aborted runtimes before terminal completion, since native
+cancel acknowledgement can leave background shells running. The next explicit
+turn reloads its saved session; old abort handles cannot cancel newer owners.
+Native macOS and desktop/mobile queue acceptance verify cleanup without replay.
 
 ## Alternatives Considered
 

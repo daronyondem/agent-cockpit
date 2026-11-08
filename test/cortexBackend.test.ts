@@ -169,19 +169,43 @@ describe('Cortex chat adapter ownership and recovery', () => {
     expect(promptText(fixtures.at(-1)!)).toEqual([]);
   });
 
-  test('abort during prompt cancels once and next user turn may reuse a healthy native session', async () => {
+  test('abort closes the native owner before done and next user turn reloads its saved session', async () => {
     hold = true;
     const result = adapter.sendMessage('wait', options);
     const events: StreamEvent[] = [];
     for await (const event of result.stream) {
       events.push(event);
       if (event.type === 'backend_runtime') setTimeout(result.abort, 5);
+      if (event.type === 'done') expect(fixtures[0].client.isClosed).toBe(true);
     }
     expect(events.filter(event => event.type === 'error')).toEqual([expect.objectContaining({ source: 'abort' })]);
     expect(events.filter(event => event.type === 'done')).toHaveLength(1);
     expect(fixtures[0].writes.filter(message => message.method === 'session/prompt')).toHaveLength(1);
     hold = false;
     expect((await collect(adapter.sendMessage('next', { ...options, isNewSession: false, externalSessionId: 'native-1' }))).some(event => event.type === 'result')).toBe(true);
+    expect(fixtures).toHaveLength(2);
+    expect(fixtures[1].writes.some(message => message.method === 'session/load' && message.params?.sessionId === 'native-1')).toBe(true);
+    expect(promptText(fixtures[1])).toHaveLength(1);
+    expect(promptText(fixtures[1])[0]).toContain('next');
+  });
+
+  test('a completed turn cannot cancel the newer owner through a retained abort handle', async () => {
+    const first = adapter.sendMessage('first', options); await collect(first);
+    hold = true;
+    const second = adapter.sendMessage('second', { ...options, isNewSession: false, externalSessionId: 'native-1' });
+    const events: StreamEvent[] = [];
+    for await (const event of second.stream) {
+      events.push(event);
+      if (event.type === 'backend_runtime') setTimeout(() => {
+        first.abort();
+        const prompt = fixtures[0].writes.filter(message => message.method === 'session/prompt').at(-1)!;
+        fixtures[0].notification({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'SECOND' } }, 'native-1');
+        fixtures[0].send({ jsonrpc: '2.0', id: prompt.id, result: { stopReason: 'end_turn', usage: {
+          inputTokens: 1, outputTokens: 1, cachedReadTokens: 0, cachedWriteTokens: 0 } } });
+      }, 5);
+    }
+    expect(events.some(event => event.type === 'result' && event.content === 'SECOND')).toBe(true);
+    expect(fixtures[0].writes.some(message => message.method === 'session/cancel')).toBe(false);
   });
 
   test('abort before startup, concurrent sends and resets cannot launch or reuse an old owner', async () => {

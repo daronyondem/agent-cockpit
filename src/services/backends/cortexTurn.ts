@@ -93,9 +93,14 @@ export class CortexTurn {
     } finally {
       unsubscribe?.();
       this.interactions.cancel();
-      this.emit({ type: 'done' });
-      this.ended = true;
-      this.wake?.();
+      try {
+        // Acknowledged native cancellation can leave background shells alive.
+        if (this.aborted) await this.runtime.close();
+      } finally {
+        this.emit({ type: 'done' });
+        this.ended = true;
+        this.wake?.();
+      }
     }
   }
 

@@ -31,7 +31,7 @@ async function main(): Promise<void> {
   assert.ok(connection, 'Set CORTEX_TEST_CONNECTION to an existing authenticated named connection');
   const command = process.env.CORTEX_TEST_COMMAND || 'cortex';
   const model = process.env.CORTEX_TEST_MODEL || 'claude-sonnet-4-6';
-  const version = spawnSync(command, ['--version'], { encoding: 'utf8', timeout: 20_000 });
+  const version = spawnSync(command, ['--no-auto-update', '--version'], { encoding: 'utf8', timeout: 20_000 });
   assert.equal(version.status, 0, 'CLI version probe failed');
   assert.match(version.stdout, /Cortex Code v1\.2\.35\b/, 'Review the probe against a changed CLI version first');
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'cockpit-cortex-phase0-'));
