@@ -2294,3 +2294,49 @@ test.each(['failed', 'message'])('a late %s input response cannot replace a newe
   expect(Store.getState('c1').streamError).toBeFalsy(); expect(Store.getState('c1').respondPending).toBe(false);
   expect(api.fetch).toHaveBeenCalledTimes(1);
 });
+
+test('completed CoCo decisions clear on replay/outcome without clearing a newer question or the draft', async () => {
+  const ws = await openWs('c1'), Store = (window as any).StreamStore;
+  const question = (id: string) => ws.dispatch({ type: 'tool_activity', id, isQuestion: true, questions: [{ question: 'Color?', options: [] }] });
+  Store.setInput('c1', 'unsent draft'); question('cortex-decision:first');
+  ws.dispatch({ type: 'tool_outcomes', outcomes: [{ toolUseId: 'cortex-decision:first' }] });
+  expect(Store.getState('c1').pendingInteraction).toBeNull();
+  question('cortex-decision:next'); ws.dispatch({ type: 'tool_outcomes', outcomes: [{ toolUseId: 'cortex-decision:first' }] });
+  expect(Store.getState('c1').pendingInteraction.decisionId).toBe('cortex-decision:next');
+  expect(Store.getState('c1').input).toBe('unsent draft');
+  await Store.send('c1', 'unsent draft'); expect((global as any).AgentApi.fetch).not.toHaveBeenCalled();
+});
+
+test('desktop abort with queued work retains both queue and unsent draft without draining', async () => {
+  const ws = await openWs('c1'), Store = (window as any).StreamStore, api = (global as any).AgentApi;
+  ws.dispatch({ type: 'text', content: 'running' }); Store.setInput('c1', 'unsent draft');
+  await Store.enqueue('c1', 'queued'); api.fetch.mockClear();
+  ws.dispatch({ type: 'error', error: 'Aborted by user', terminal: true, source: 'abort' }); ws.dispatch({ type: 'done' });
+  await new Promise(resolve => setTimeout(resolve, 5));
+  expect(Store.getState('c1').queue.map((item: any) => item.content)).toEqual(['queued']);
+  expect(Store.getState('c1').input).toBe('unsent draft');
+  expect(api.fetch.mock.calls.filter((call: any[]) => call[0].endsWith('/message'))).toEqual([]);
+});
+
+test('a question arriving before a scheduled queue send keeps its text queued and editable', async () => {
+  const ws = await openWs('c1'), Store = (window as any).StreamStore, api = (global as any).AgentApi;
+  await Store.enqueue('c1', 'queued'); api.fetch.mockClear(); Store.resumeSuspendedQueue('c1');
+  ws.dispatch({ type: 'tool_activity', id: 'cortex-decision:now', isQuestion: true, questions: [{ question: 'Color?', options: [] }] });
+  await new Promise(resolve => setTimeout(resolve, 5));
+  expect(Store.getState('c1').queue).toEqual([expect.objectContaining({ content: 'queued', inFlight: false })]);
+  expect(Store.getState('c1').pendingInteraction.decisionId).toBe('cortex-decision:now');
+  expect(api.fetch.mock.calls.filter((call: any[]) => call[0].endsWith('/message'))).toEqual([]);
+});
+
+test('desktop Stop suspends the queue before cancellation finishes or a stale done can drain it', async () => {
+  const ws = await openWs('c1'), Store = (window as any).StreamStore, api = (global as any).AgentApi;
+  await startAcceptedStream('c1', ws); Store.setInput('c1', 'unsent'); await Store.enqueue('c1', 'queued');
+  let abort!: (value: unknown) => void;
+  api.abortConversation.mockReturnValueOnce(new Promise(resolve => { abort = resolve; }));
+  api.fetch.mockClear(); api.fetch.mockResolvedValue(makeResponse({ id: 'c1', messages: [], messageQueue: [{ content: 'queued' }] }));
+  const stopping = Store.stopStream('c1'); expect(Store.getState('c1').queueSuspended).toBe(true);
+  ws.dispatch({ type: 'done' }); await new Promise(resolve => setTimeout(resolve, 5));
+  expect(api.fetch.mock.calls.filter((call: any[]) => call[0].endsWith('/message'))).toEqual([]);
+  abort({ aborted: true }); await stopping;
+  expect(Store.getState('c1').queueSuspended).toBe(true); expect(Store.getState('c1').input).toBe('unsent');
+});

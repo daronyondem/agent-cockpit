@@ -13,6 +13,7 @@ export type StreamEventNotification = {
 };
 
 export type ChatStreamEventAction =
+  | { type: 'complete-decision'; decisionId: string }
   | { type: 'set-stream-placeholder'; value: boolean }
   | { type: 'append-stream-text'; content: string }
   | { type: 'set-stream-text'; value: string }
@@ -104,6 +105,11 @@ export function chatStreamEventActions(event: StreamEvent): ChatStreamEventActio
       if (notification) actions.push({ type: 'notify', notification });
       break;
     }
+    case 'tool_outcomes':
+      for (const outcome of event.outcomes || []) {
+        if (outcome.toolUseId?.startsWith('cortex-decision:')) actions.push({ type: 'complete-decision', decisionId: outcome.toolUseId });
+      }
+      break;
     case 'title_updated':
       if (event.title) {
         actions.push({ type: 'update-title', title: event.title });

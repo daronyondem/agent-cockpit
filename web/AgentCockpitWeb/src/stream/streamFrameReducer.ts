@@ -160,7 +160,12 @@ export function reduceStreamFrame(
     }, context));
   }
   if (frame.type === 'tool_outcomes') {
-    return withEffects(patchToolOutcomes(next, Array.isArray(frame.outcomes) ? frame.outcomes : [], context.nowMs));
+    const outcomes = Array.isArray(frame.outcomes) ? frame.outcomes : [];
+    const decisionId = next.pendingInteraction?.decisionId;
+    if (decisionId?.startsWith('cortex-decision:') && outcomes.some(outcome => outcome.toolUseId === decisionId)) {
+      next = { ...next, pendingInteraction: null, uiState: next.streamError ? 'error' : next.streaming ? 'streaming' : null };
+    }
+    return withEffects(patchToolOutcomes(next, outcomes, context.nowMs));
   }
   if (frame.type === 'artifact') {
     return withEffects(pushArtifactBlock(next, frame.artifact, context));

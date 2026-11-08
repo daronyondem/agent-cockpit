@@ -68,12 +68,14 @@ export function useChatStreamConnection(options: UseChatStreamConnectionOptions)
     }
     socketRef.current = socket;
     socket.onopen = () => {
+      if (socketRef.current !== socket) return;
       clearStreamReconnectTimer();
       streamReconnectAttemptsRef.current = 0;
       options.setErrorMessage((current) => (current === 'Stream connection failed.' ? null : current));
       socket.send(JSON.stringify({ type: 'reconnect' }));
     };
     socket.onmessage = (event) => {
+      if (socketRef.current !== socket || options.activeConversationRef.current?.id !== conversationID) return;
       try {
         handleStreamEvent(conversationID, JSON.parse(event.data) as StreamEvent);
       } catch {
@@ -81,10 +83,9 @@ export function useChatStreamConnection(options: UseChatStreamConnectionOptions)
       }
     };
     socket.onerror = () => {
-      if (socketRef.current === socket) {
-        socketRef.current = null;
-        socket.close();
-      }
+      if (socketRef.current !== socket) return;
+      socketRef.current = null;
+      socket.close();
       scheduleStreamReconnect(conversationID);
     };
     socket.onclose = () => {
@@ -178,6 +179,9 @@ export function useChatStreamConnection(options: UseChatStreamConnectionOptions)
 
   function applyChatStreamAction(conversationID: string, action: ChatStreamEventAction) {
     switch (action.type) {
+      case 'complete-decision':
+        options.setPendingInteraction(current => current?.decisionId === action.decisionId ? null : current);
+        break;
       case 'set-stream-placeholder':
         setShowStreamPlaceholder(action.value);
         break;
@@ -229,6 +233,8 @@ export function useChatStreamConnection(options: UseChatStreamConnectionOptions)
   }
 
   function markStreamFinished(conversationID: string) {
+    if (options.activeConversationRef.current?.id !== conversationID) return;
+    options.setPendingInteraction(current => current?.decisionId?.startsWith('cortex-decision:') ? null : current);
     clearStreamReconnectTimer();
     streamReconnectAttemptsRef.current = 0;
     setIsStreaming(false);

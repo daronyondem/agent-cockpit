@@ -1,6 +1,7 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type MouseEvent } from 'react';
 import DOMPurify from 'dompurify';
 import { marked } from 'marked';
+import { checkBackendRoleEligibility } from '../../../src/contracts/backendCapabilities';
 import type { Tokens } from 'marked';
 import type { AgentCockpitAPI } from './api';
 import {
@@ -98,6 +99,7 @@ export function ChatScreen(props: {
   onEditQueued: (index: number) => void;
   onMoveQueued: (index: number, direction: -1 | 1) => void;
   onClearQueue: () => void;
+  onResumeQueue?: () => void;
   onTogglePin: (messageID: string, pinned: boolean) => void;
   onOpenFile: (reference: FileReference) => void;
   onShareFile: (reference: FileReference) => void;
@@ -243,9 +245,10 @@ export function ChatScreen(props: {
     props.isSending ||
     !!props.pendingInteraction ||
     (props.goalMode && props.isStreaming);
-  const composerPlaceholder = props.goalMode
+  const composerPlaceholder = props.pendingInteraction ? 'Answer the prompt above to continue.' : props.goalMode
     ? (props.isStreaming ? 'Goal can be set after this stream finishes.' : 'Set a goal')
-    : (props.isStreaming ? 'Message will be queued while the stream runs.' : 'Message Agent Cockpit');
+    : (props.isStreaming ? (checkBackendRoleEligibility(props.backends.find(backend => backend.id === conversation.backend), { role: 'steering' }).ok
+      ? 'Message will be queued while the stream runs.' : 'Live steering unavailable — messages queue for the next turn.') : 'Message Agent Cockpit');
   const sendLabel = props.goalMode ? 'Set goal' : (props.isStreaming ? 'Queue' : 'Send');
 
   return (
@@ -333,6 +336,8 @@ export function ChatScreen(props: {
           onEdit={props.onEditQueued}
           onMove={props.onMoveQueued}
           onClear={props.onClearQueue}
+          busy={props.isSending}
+          onResume={!props.isStreaming && !props.pendingInteraction ? props.onResumeQueue : undefined}
         />
       ) : null}
       <UsageBar usage={conversation.sessionUsage || conversation.usage} backend={conversation.backend} />
@@ -821,22 +826,25 @@ function QueueStack(props: {
   onEdit: (index: number) => void;
   onMove: (index: number, direction: -1 | 1) => void;
   onClear: () => void;
+  busy?: boolean;
+  onResume?: () => void;
 }) {
   return (
     <section className="queue-stack">
       <div className="row">
         <strong>Queued</strong>
-        <Button label="Clear" onClick={props.onClear} />
+        {props.onResume ? <Button label="Resume queue" disabled={props.busy} onClick={props.onResume} /> : null}
+        <Button label="Clear" disabled={props.busy} onClick={props.onClear} />
       </div>
       {props.queue.map((item, index) => (
         <div key={`${index}-${item.content.slice(0, 16)}`} className="queue-item">
           <p>{item.content || '[Attachment]'}</p>
           {item.attachments?.length ? <span className="meta">{item.attachments.length} attachment(s)</span> : null}
           <div className="button-row">
-            <Button label="Up" disabled={index === 0} onClick={() => props.onMove(index, -1)} />
-            <Button label="Down" disabled={index === props.queue.length - 1} onClick={() => props.onMove(index, 1)} />
-            <Button label="Edit" onClick={() => props.onEdit(index)} />
-            <Button label="Remove" onClick={() => props.onRemove(index)} />
+            <Button label="Up" disabled={props.busy || index === 0} onClick={() => props.onMove(index, -1)} />
+            <Button label="Down" disabled={props.busy || index === props.queue.length - 1} onClick={() => props.onMove(index, 1)} />
+            <Button label="Edit" disabled={props.busy} onClick={() => props.onEdit(index)} />
+            <Button label="Remove" disabled={props.busy} onClick={() => props.onRemove(index)} />
           </div>
         </div>
       ))}

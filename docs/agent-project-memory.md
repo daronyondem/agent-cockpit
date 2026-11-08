@@ -273,7 +273,20 @@ tool is unavailable.
   approved writes and stale/duplicate rejection passed with shared terminal auth.
   Rejection may finish in text; never invent a card or replay a prompt. Run native
   browser fixtures separately from full Jest, which can mutate built assets.
-  C26, strict Memory and C44–C47/full platform acceptance remain open.
+  C44 native queue/reconnect/abort acceptance now passes through production
+  desktop/mobile assets using `scripts/probe-cortex-queue.ts`. Stop must pause
+  queue ownership synchronously before awaiting native cancellation: an older
+  transcript refresh during teardown otherwise appears idle and starts queued
+  work. Desktop keeps Stop beside draft/queue actions. Mobile queue save/drain
+  ownership lives in `useSendPipeline.ts`, with current options, an in-flight
+  operation guard and per-conversation suspension. Preserve newer drafts/uploads,
+  restore a removed queue head after intervening questions/switch/Stop, and require
+  explicit resume after interruption. Match CoCo completion generations to clear
+  cards across clients/replay; reject superseded mobile socket callbacks. Native
+  checks passed delayed input acknowledgement, reconnect, one queued execution,
+  shell descendant cleanup, persisted queue reload and explicit resume without
+  replaying interrupted tools. Queued text persists; mobile draft scope remains
+  in-memory. C26, strict Memory and C45–C47/full platform acceptance remain open.
   See the current CoCo spec and progress tracker.
 - Fresh installs should be provider-neutral. Do not imply Claude Code is
   configured when the user has not installed or authenticated it.

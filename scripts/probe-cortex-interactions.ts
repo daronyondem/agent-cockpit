@@ -41,6 +41,7 @@ async function main(): Promise<void> {
   const report = { startedAt, cliVersion: version, platform: process.platform, arch: process.arch, node: process.version,
     revision: spawnSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' }).stdout.trim(), dirty: Boolean(spawnSync('git', ['status', '--porcelain'], { encoding: 'utf8' }).stdout.trim()), results };
   let browser: Awaited<ReturnType<typeof chromium.launch>> | undefined;
+  let captureFailure: (() => Promise<void>) | undefined;
   const deadline = setTimeout(() => { results.deadlineExceeded = true; void browser?.close(); }, 8 * 60_000);
   try {
     assert.equal(pm2(['start', config, '--only', app]).status, 0);
@@ -51,6 +52,7 @@ async function main(): Promise<void> {
     assert.ok(ready, 'Fixture did not become ready');
     browser = await chromium.launch({ headless: true });
     const page = await browser.newPage(); page.setDefaultTimeout(120_000);
+    captureFailure = async () => { await fs.writeFile(path.join(root, 'failure-ui.txt'), await page.locator('body').innerText(), { mode: 0o600 }); };
     const csrf = (await (await page.request.get(`${base}/api/csrf-token`)).json()).csrfToken;
     const headers = { 'x-csrf-token': csrf };
     assert.ok((await page.request.post(`${base}/api/chat/install/welcome-complete`, { headers, data: {} })).ok());
@@ -149,7 +151,7 @@ async function main(): Promise<void> {
     }
     await exercise(false); await rejectPlan(false); await exercise(true); await rejectPlan(true); results.passed = true;
     process.stdout.write('PASS native desktop/mobile questions, rejection, revision, approval, decision ownership and no prompt resend\n');
-  } catch (error) { await fs.writeFile(path.join(root, 'failure.txt'), error instanceof Error ? error.stack || error.message : 'Probe failed', { mode: 0o600 }); throw error;
+  } catch (error) { await captureFailure?.().catch(() => {}); await fs.writeFile(path.join(root, 'failure.txt'), error instanceof Error ? error.stack || error.message : 'Probe failed', { mode: 0o600 }); throw error;
   } finally { clearTimeout(deadline); await browser?.close(); pm2(['delete', app]); await fs.writeFile(path.join(root, 'report.json'), JSON.stringify({ ...report, finishedAt: new Date().toISOString() }, null, 2), { mode: 0o600 });
     process.stdout.write(`Private interaction evidence: ${path.join(root, 'report.json')}\n`); }
 }

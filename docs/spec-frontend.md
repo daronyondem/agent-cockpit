@@ -401,7 +401,25 @@ an input error. New decision/prompt keys clear old answer text; delayed replies
 cannot erase a newer draft. Delivery failure retains the current answer and
 interaction. The existing legacy `mode:'message'` fallback remains available only
 for the still-current interaction; CoCo stale/completed decisions return 409 and
-never become a new prompt. Full steering/queue/reconnect acceptance remains C44.
+never become a new prompt. C44 queue/abort/reconnect behavior is specified below.
+
+### CoCo queued input and cancellation (C44)
+
+The composer checks shared steering eligibility for its active backend. While
+CoCo runs it explicitly states that live steering is unavailable and Enter queues
+the next turn. Stop remains visible alongside the queue action when text is
+present; a question may disable queuing while retaining that text and Stop.
+The store rejects a direct send while a decision is pending. Matching CoCo
+completion outcomes clear the decision in the pure reducer; replayed older
+outcomes cannot clear a newer one. Composer text is never reused as a decision.
+
+Stop immediately suspends the queue before the abort HTTP request. Native done
+frames or older transcript refreshes during cancellation must not drain it.
+Scheduled drains recheck live interaction/error/suspension state and unmark a
+blocked head, keeping it editable. Explicit Resume clears suspension and stream
+error state, then sends only the queued follow-up. Restored queues still require
+Resume. Draft text stays independent through replay, auto-drain and cancellation.
+See [C44 ownership details](spec-cortex-code.md#queued-input-abort-and-reconnect-p7-c44).
 
 ### Cortex Code profiles and setup
 
@@ -442,7 +460,9 @@ the desktop browser panel wraps at narrow viewports.
 The dedicated lazy setup chunk has an 8 KiB JS budget; the existing 260 KiB
 index limit is unchanged. C42 raises the total JS budget from 910 to 912 KiB for
 profile editing and metadata ownership; measured output is approximately
-911.3 KiB. Individual Settings (80 KiB), workspace (95 KiB) and setup limits stay
+911.3 KiB at C42. C44 adds approximately 0.5 KiB for live-role guidance, Stop
+availability, decision completion and queue race guards; its aggregate cap is
+913 KiB with measured output approximately 912.3 KiB. Individual Settings (80 KiB), workspace (95 KiB) and setup limits stay
 unchanged. CSS retains its existing 230 KiB aggregate limit.
 
 CoCo appears in the standard Harness selector and profile cards, including

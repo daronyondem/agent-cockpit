@@ -107,10 +107,12 @@ test.describe('Claude Code Interactive UI', () => {
     );
     await page.getByLabel('Send').click();
     await expect(page.getByLabel('Stop agent')).toBeVisible({ timeout: 20_000 });
+    await page.getByPlaceholder(/Message Agent Cockpit|Agent is running|Live steering unavailable/).fill('UNSENT_AFTER_ABORT');
     await page.getByLabel('Stop agent').click();
 
     await expect(page.locator('.err-card')).toContainText(/Operation aborted|Aborted by user/i, { timeout: 45_000 });
     await expect(page.getByLabel('Send')).toBeVisible({ timeout: 30_000 });
+    await expect(page.getByPlaceholder(/Message Agent Cockpit/)).toHaveValue('UNSENT_AFTER_ABORT');
   });
 
   test('survives a browser reload while a Claude Code Interactive turn is active', async ({ page, request }) => {

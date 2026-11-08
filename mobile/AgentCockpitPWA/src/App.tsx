@@ -206,6 +206,7 @@ export default function App() {
     isResponding,
     sendDraft,
     drainNextQueuedMessage,
+    suspendQueue,
     submitInteraction,
   } = useSendPipeline({
     activeConversation,
@@ -507,6 +508,7 @@ export default function App() {
     if (!conversation) {
       return;
     }
+    suspendQueue(conversation.id);
     try {
       clearStreamReconnectTimer();
       closeStreamSocket();
@@ -786,6 +788,7 @@ export default function App() {
           onEditQueued={openQueueEditor}
           onMoveQueued={(index, direction) => void moveQueuedMessage(index, direction)}
           onClearQueue={() => void clearQueue()}
+          onResumeQueue={() => { if (activeConversation) void drainNextQueuedMessage(activeConversation, true); }}
           onTogglePin={(messageID, pinned) => void toggleMessagePin(messageID, pinned)}
           onOpenFile={(reference) => void openFileReference(reference)}
           onShareFile={(reference) => void shareFileReference(reference)}

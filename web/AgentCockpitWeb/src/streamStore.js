@@ -1263,7 +1263,7 @@ import { reduceStreamFrame } from './stream/streamFrameReducer.ts';
 
   async function send(convId, text){
     const s = states.get(convId);
-    if (!s || s.sending || s.streaming) return;
+    if (!s || s.sending || s.streaming || s.pendingInteraction) return;
     const doneAtts = s.pendingAttachments.filter(f => f.status === 'done');
     const hasUploading = s.pendingAttachments.some(f => f.status === 'uploading');
     if (hasUploading) return;
@@ -1861,7 +1861,7 @@ import { reduceStreamFrame } from './stream/streamFrameReducer.ts';
   function resumeSuspendedQueue(convId){
     const s = states.get(convId);
     if (!s) return;
-    update(convId, { queueSuspended: false });
+    update(convId, { queueSuspended: false, streamError: null, streamErrorSource: null });
     drainQueueIfReady(convId);
   }
 
@@ -1899,6 +1899,7 @@ import { reduceStreamFrame } from './stream/streamFrameReducer.ts';
   async function stopStream(convId){
     const s = states.get(convId);
     if (!s || !s.streaming) return false;
+    update(convId, { queueSuspended: true });
     const applyAbortFallback = () => {
       update(convId, cur => ({
         ...cur,
@@ -2060,6 +2061,10 @@ import { reduceStreamFrame } from './stream/streamFrameReducer.ts';
   async function sendWireContent(convId, queuedMessage){
     const s = states.get(convId);
     if (!s || s.sending || s.streaming) return;
+    if (s.pendingInteraction || s.streamError || s.queueSuspended) {
+      update(convId, { queue: s.queue.map(item => ({ ...item, inFlight: false })) });
+      return;
+    }
     const originalHead = queuedMessage && typeof queuedMessage === 'object'
       ? {
           content: queuedMessage.content || '',

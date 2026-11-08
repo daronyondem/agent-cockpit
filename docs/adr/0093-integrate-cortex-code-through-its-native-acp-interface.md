@@ -59,6 +59,9 @@ affects:
   - web/AgentCockpitWeb/src/api.js
   - scripts/probe-cortex-auth.ts
   - scripts/probe-cortex-interactions.ts
+  - scripts/probe-cortex-queue.ts
+  - mobile/AgentCockpitPWA/src/useChatStreamConnection.ts
+  - web/AgentCockpitWeb/src/stream/streamFrameReducer.ts
   - web/AgentCockpitWeb/src/chat/chatStatusCards.jsx
   - web/AgentCockpitWeb/src/streamStore.js
   - mobile/AgentCockpitPWA/src/interactionCard.tsx
@@ -197,6 +200,16 @@ no finished-plan execution. Keep proceed/keep_planning approval independent and
 explicit. Headless/restricted entry remains denied. A native rejection may end
 with explanatory text or request a new decision; never synthesize a new card or
 resend the prompt to force a preferred outcome.
+
+Pause client queues synchronously when Stop begins, before awaiting native
+cancellation: terminal frames and older transcript refreshes can otherwise start
+queued work during teardown. Keep queued follow-ups and drafts distinct from
+pending decisions. Serialize mobile queue saves/draining, use current render and
+conversation ownership at asynchronous boundaries, and require explicit resume
+after interrupted work. Matching CoCo completion IDs resolve cards across client
+answers/replay; old sockets/outcomes cannot end a newer stream or decision. Keep
+native steering gated and expose the queue-only behavior through shared role
+metadata without changing persisted queue formats or retrying interrupted work.
 
 Advertise native history recovery only after adapter reload tests pass; leave
 active-turn reattachment, goals and subagents unavailable until verified. Never

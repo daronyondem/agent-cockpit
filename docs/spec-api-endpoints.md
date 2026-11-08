@@ -906,6 +906,17 @@ See Section 4.6 (`CodexPlanUsageService`) for the spawn / RPC / kill semantics.
 
 Unauthenticated requests to `/api/*` return `401 { error: "Not authenticated" }` as JSON so the client can react without trying to parse an HTML login page. All other unauthenticated requests redirect to `/auth/login`.
 
+## CoCo queued input and stream ownership (C44)
+
+Routes and schemas remain unchanged. Normal mid-turn text uses the persisted
+conversation queue and later message endpoint. CoCo input without a current
+owned decision fails with 409; completed/aborted generations cannot become new
+prompts. WS input likewise cannot send unsolicited steering. Client Stop pauses
+queue draining before awaiting abort; reload preserves queued items for explicit
+resume, with no resend of interrupted native work. Existing tool_outcomes IDs
+resolve matching pending CoCo cards during replay and cross-client answers.
+See [C44 client ownership](spec-cortex-code.md#queued-input-abort-and-reconnect-p7-c44).
+
 ## Plan/question reply ownership (CoCo C43)
 
 No route, stream frame or request/response field changes. Both clients retain

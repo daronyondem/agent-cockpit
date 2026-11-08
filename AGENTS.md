@@ -302,6 +302,21 @@ fixture uses production assets and shared terminal auth. Do not run asset-mutati
 full Jest concurrently with native browser checks. C26, C44 queue/reconnect,
 usage/full mobile and platform acceptance remain independent.
 
+P7 C44 pauses queues synchronously when Stop begins, before cancellation can
+emit terminal frames or an older refresh can appear idle. Keep desktop Stop
+available with drafts; mobile queue save/drain ownership belongs to
+`useSendPipeline.ts` with current options and per-conversation suspension.
+Preserve newer drafts/uploads and recheck pending/conversation/Stop state after
+queue persistence. Explicit Resume sends queued follow-ups without replaying
+interrupted work. Matching CoCo completion IDs resolve only their card; mobile
+socket callbacks must retain current socket/conversation ownership. Review
+`test/cortexQueueUi.test.ts`, `test/mobileStreamOwnership.test.ts`, the desktop
+store/reducer and CoCo integration suites. Run opt-in
+`scripts/probe-cortex-queue.ts` for native desktop/mobile question/queue/reconnect/
+abort/resume drift, and the interaction probe when plan completion changes.
+Persisted queues survive reload; mobile drafts retain their existing in-memory
+scope. C26, strict Memory, C45–C47 and platform gates remain separate.
+
 # Server Management
 
 NEVER run `node server.js` directly. This causes orphan processes and port conflicts.

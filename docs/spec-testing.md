@@ -8,7 +8,7 @@
 
 **Framework:** Jest 30.x — run with `npm test`. The script is `node --experimental-vm-modules node_modules/.bin/jest` because the KB handler tests import `unpdf` (ESM-only, wraps `pdfjs-dist`) and Jest's VM needs the flag to allow runtime `import()` calls. `jest.config.js` uses `ts-jest` for TypeScript and also transforms JS/JSX with `allowJs: true`, `module: CommonJS`, and `jsx: react-jsx` so tests can import the V2 frontend ES modules directly instead of evaluating browser globals. Default Jest execution is capped at `maxWorkers: '50%'` so process-spawning suites still run in parallel without stampeding local or CI machines, and the global per-test timeout is 30 seconds so widened harness-specific timeouts can surface their route/process-specific errors before Jest's generic timeout.
 
-**Coverage gate:** Run `npm run test:coverage` for backend coverage. The script keeps plain `npm test` unchanged for fast local iteration and runs Jest with `--coverage --runInBand`; serial execution keeps the full-suite coverage gate stable on local machines where parallel workers can exceed short route-test timeouts. `jest.config.js` collects coverage from `src/**/*.ts` and `server.ts`, excludes declaration-only `src/types/**` and `*.d.ts` files, writes reports under `coverage/`, and uses V8 coverage with `text-summary` plus `lcov` reporters. The global threshold floor is statements/lines 88.5%, branches 76.4%, and functions 93.8%, last raised with CoCo processor-selection coverage. The November 7, 2026 C43 V8 baseline is statements/lines 88.57%, branches 76.50%, and functions 93.81% (165 passing suites, 2,882 passing tests; three opt-in suites and 20 tests skipped), measured on macOS; those floors remain unchanged. When meaningful tests land, raise the thresholds toward the new baseline in the same PR. Do not lower thresholds to merge a regression; either add behavior coverage, make a narrow intentional exclusion in `jest.config.js`, or document the explicit exception in the PR.
+**Coverage gate:** Run `npm run test:coverage` for backend coverage. The script keeps plain `npm test` unchanged for fast local iteration and runs Jest with `--coverage --runInBand`; serial execution keeps the full-suite coverage gate stable on local machines where parallel workers can exceed short route-test timeouts. `jest.config.js` collects coverage from `src/**/*.ts` and `server.ts`, excludes declaration-only `src/types/**` and `*.d.ts` files, writes reports under `coverage/`, and uses V8 coverage with `text-summary` plus `lcov` reporters. The global threshold floor is statements/lines 88.5%, branches 76.4%, and functions 93.8%, last raised with CoCo processor-selection coverage. The November 7, 2026 C44 V8 baseline is statements/lines 88.58%, branches 76.51%, and functions 93.81% (167 passing suites, 2,896 passing tests; three opt-in suites and 20 tests skipped), measured on macOS; those floors remain unchanged. When meaningful tests land, raise the thresholds toward the new baseline in the same PR. Do not lower thresholds to merge a regression; either add behavior coverage, make a narrow intentional exclusion in `jest.config.js`, or document the explicit exception in the PR.
 
 Shared chat route tests use `test/helpers/chatEnv.ts` for isolated Express/WebSocket servers and scratch data directories. Teardown waits for active streams, the session finalizer queue, and any in-flight durable stream-job registry mutation to become idle before closing the server and removing the scratch directory, so background finalizer/job writes cannot race temp-directory cleanup.
 
@@ -334,6 +334,63 @@ The six P3 Jest suites contain 30 tests. They include existing conversation
 upload/queue/artifact/preview/download and ledger storage without registering a
 CortexCodeAdapter. Whole app/native UI acceptance is separate; normalization
 fixtures do not certify a processor role or native image generation.
+
+## Cortex queued input, abort and reconnect (P7 C44)
+
+Normal coverage adds `test/cortexQueueUi.test.ts` for the actual mobile send
+pipeline: duplicate enqueue exclusion, save-failure/new draft/upload retention,
+latest-render draining, intervention by question/conversation change, explicit
+resume after interruption and synchronous Stop suspension. New
+`test/mobileStreamOwnership.test.ts` exercises the actual mobile connection hook
+with controlled sockets/timers: reconnect ownership, matching versus stale CoCo
+outcomes, superseded socket rejection and terminal cleanup without a new prompt.
+Desktop store tests cover replayed decision completion, pending-question send
+protection, queue preservation after abort, scheduled-send races and suspension
+before cancellation finishes. `test/cortexIntegration.test.ts` checks actual
+HTTP/WS input rejection during native work/after cancellation, persisted queues,
+exactly one native prompt and one original user message. Existing C43/reducer/
+mobile projection/pipeline tests remain aligned. The Claude Interactive browser
+abort case now checks Stop with a nonempty retained draft; its known native
+startup limit and Grok's model/auth limit from C43 remain unverified here.
+
+Build both clients before this opt-in paid native check:
+
+```sh
+CORTEX_QUEUE_PROBE=1 CORTEX_TEST_CONNECTION='<saved-name>' npx tsx scripts/probe-cortex-queue.ts
+```
+
+The runner requires macOS and CoCo 1.2.35, seeds isolated data/workspace/profile,
+serves production assets with PM2, selects Sonnet 4.6/low through each client and
+asserts the outgoing selection. Native Python fixtures are bounded by two-minute
+file gates. Each client exercises one question/queue flow and one abort/resume
+flow: retained draft through a disabled question and socket reconnect, held input
+HTTP acknowledgement after native completion, rejection of the closed decision,
+matching completion replay, persisted queue, one native script attempt, one
+queued prompt and preserved newer unsent draft. Stop must drain the owned Python
+descendant, leave its final file absent, pause the queue, retain it across a fresh
+page and resume only on explicit user action. Real native inference after abort
+must not rerun interrupted tools. Reports retain only sanitized flags/stages and
+CLI/OS/Node/revision/dirty evidence, with private failure diagnostics; the external
+eight-minute deadline closes the browser and PM2 allows twenty seconds to drain.
+Shared terminal auth stays intact. Run asset-mutating full Jest separately, then
+rebuild desktop/mobile assets. This certifies C44 scope, not C26, native steering,
+mobile full-reload draft persistence, C45–C47/P9 or Windows/Linux acceptance.
+
+The November 7 local / November 8 UTC native C44 report
+`cockpit-cortex-queue-NIIXq0/report.json` under system temp passed all four flows.
+The first run passed desktop queueing but exposed the older-refresh/abort race;
+its automatic queued send is retained as failed evidence. The corrected run
+paused before cancellation and drained native descendants. The existing C43
+interaction probe also passed (`cockpit-cortex-interactions-wwZkRe/report.json`)
+with revised plans and approvals on both clients. An earlier interaction recheck
+stopped at a missing Model selector before inference; no result is inferred from
+that attempt. Failure artifacts now include private UI text as well as the stack,
+while summary reports remain sanitized. All owned PM2 fixtures were deleted.
+
+C44 adds approximately 0.5 KiB of desktop JS for role guidance, Stop availability,
+decision completion and queue guards; the aggregate budget moves from 912 to
+913 KiB. Per-screen/index/CSS limits stay unchanged; verify actual production
+output with `npm run web:budget`.
 
 ## Cortex desktop/mobile interaction controls (P7 C43)
 

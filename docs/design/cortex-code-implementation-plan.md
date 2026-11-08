@@ -1,6 +1,6 @@
 # Cortex Code (CoCo) harness implementation plan
 
-**Status:** P0–P3 and P5 complete; P4 C21–C25 setup implemented, C26 actual remote-browser acceptance pending. P6 C33/C34/C36–C41 complete; P7 C42 desktop profile/catalog and C43 desktop/mobile decisions implemented; C44–C47 client acceptance is next. C35 remains conditional on G1.
+**Status:** P0–P3 and P5 complete; P4 C21–C25 setup implemented, C26 actual remote-browser acceptance pending. P6 C33/C34/C36–C41 complete; P7 C42 desktop profile/catalog, C43 decisions and C44 queue/abort/reconnect implemented; C45–C47 client acceptance is next. C35 remains conditional on G1.
 **Created:** 2026-11-05.
 **Planning baseline:** Agent Cockpit `0.4.166`, revision `11d14825e955f6c83364c3917558b4d3068a4bac`, plus the uncommitted CoCo research/guidance documents.
 **Native compatibility baseline:** Cortex Code `1.2.35`, distribution `1.2.35+191333.f82de3d91715`, macOS arm64.
@@ -34,8 +34,8 @@ Planning assumptions:
 - Deliver core chat before optional parity work. Unverified features remain
   explicitly unavailable; do not emulate native goals or silently reroute work
   to a different profile to make a selector appear functional.
-- C01–C25, C27–C34 and C36–C43 are implemented as recorded below. C26, conditional
-  C35 and C44–C59 remain open and do not describe shipped support.
+- C01–C25, C27–C34 and C36–C44 are implemented as recorded below. C26, conditional
+  C35 and C45–C59 remain open and do not describe shipped support.
 
 Track work as follows:
 
@@ -1031,7 +1031,7 @@ P6 C41 evidence (November 7, 2026; changes following `be4bbed`):
 - [x] C43 — Replace Grok-only plan revision checks with shared capability,
   keeping Claude/Grok behavior stable. Verify CoCo approval/revision/rejection,
   sequential/free-text questions and duplicate/stale response prevention.
-- [ ] C44 — Make unsupported mid-turn steering explicit while pending replies
+- [x] C44 — Make unsupported mid-turn steering explicit while pending replies
   work. Verify typed input is retained/queued, not lost; test queue/abort/reconnect
   and input arriving as an interaction closes.
 - [ ] C45 — Wire honest context/token/cache/cost display on both clients.
@@ -1134,6 +1134,57 @@ P7 C43 evidence (November 7, 2026; changes following `fa17897`):
   mobile typechecks, zero-warning lint, maintainability, API drift, ADR lint and
   rebuilt production assets passed. Desktop JS/CSS measured 911.8/912 KiB and
   202.3/230 KiB. Eighteen implementation tasks remain unchecked; C44 is next.
+
+P7 C44 evidence (November 7 local / November 8 UTC, 2026; following `fa75997`):
+
+- Both clients use shared steering eligibility to explain CoCo's queue-only
+  mid-turn behavior while preserving native decision replies. Desktop Stop stays
+  available with a draft, including while questions disable queue submission.
+  Matching CoCo decision outcomes resolve cards across clients/replay, without
+  clearing newer or legacy decisions. Mobile ignores superseded socket frames
+  and clears remaining CoCo decisions at terminal completion.
+- Mobile serializes queue saves/draining, reads current options and conversation
+  ownership, preserves newer draft/uploads, and restores persisted heads if a
+  question, switch or Stop intervenes. Queue editing/sending disables during
+  persistence. Stop sets a per-conversation pause before cancellation; idle
+  queues expose explicit Resume queue. Durable terminal errors prevent automatic
+  drain, with no native work retry. Queued text persists through reload; mobile
+  drafts retain their existing in-memory scope.
+- The first native C44 run passed desktop questions/queueing, then reproduced an
+  actual abort race: an older transcript refresh looked idle during cancellation
+  and started the queued follow-up. This remains failed evidence. Stop now
+  suspends desktop/mobile queues synchronously before awaiting teardown.
+  Desktop scheduled sends recheck interactions/errors/pauses and explicit Resume
+  clears pause/error state. Focused deferred-cancel tests cover this timing.
+- The corrected `scripts/probe-cortex-queue.ts` passed all four native production
+  desktop/mobile question/queue and abort/resume flows on CoCo 1.2.35/macOS
+  arm64/Node 26.0.0. Private system-temp report
+  `cockpit-cortex-queue-NIIXq0/report.json`: decision input ownership, retained
+  drafts, held input HTTP acknowledgement, same-decision reconnect, completed-card
+  replay, rejection of closed input, one native script attempt, one queued prompt,
+  child exit, absent interrupted output, paused queue reload and explicit resume.
+  The PM2 fixture and native descendants drained; shared terminal auth stayed
+  intact. C26, strict Memory, C45–C47/P9 and Windows/Linux remain separate.
+- The existing Claude Interactive abort case now checks Stop with a retained
+  draft. C43's native Claude startup and Grok model/auth limitations remain
+  recorded; no native pass for those environments is claimed here. The native
+  interaction probe was rerun because matching completion affects question and
+  plan cards: all desktop/mobile sequential/custom questions, revision/rejection,
+  approval-controlled writes and exact ownership passed in private report
+  `cockpit-cortex-interactions-wwZkRe/report.json`. An earlier recheck stopped at
+  a missing Model selector before sending any prompt; it is not a pass. Private
+  UI diagnostics were added before the fresh-built fixture passed. The durable
+  C44 workflow note was saved through Memory.
+- Desktop JS grows approximately 0.5 KiB to 912.3 KiB; the aggregate cap moves
+  from 912 to 913 KiB for role guidance, Stop availability and ownership guards.
+  Individual Settings/workspace/index/setup and CSS limits stay unchanged.
+- Final full coverage passed 167 suites/2,896 tests (three opt-in suites/20 tests
+  skipped), with 88.58% statements/lines, 76.51% branches and 93.81% functions.
+  Backend floors stay unchanged for this frontend-focused increment. All 139
+  focused tests, backend/web/mobile typechecks, zero-warning lint, maintainability,
+  API drift and ADR lint passed. Production web/mobile assets were rebuilt after
+  full Jest; JS/CSS budget passed at 912.3/913 KiB and 202.3/230 KiB. Seventeen
+  implementation tasks remain unchecked; C45 is next.
 
 ### P8 — Installation, updates, migration, and platforms
 
@@ -1310,6 +1361,7 @@ At implementation time update only the relevant current specifications:
 | 2026-11-07 | P6 C41 complete; 20 tasks remain unchecked | Processor-selection boundaries change following `be4bbed` | CoCo 1.2.35 / macOS arm64 / Node 26.0.0 | 161 suites / 2,851 tests passed; V8 88.58% lines, 76.48% branches, 93.81% functions; exact selection persistence/import, role preflights, failed-state ownership and rendered controls passed. Native sequential/headless/OCR/cancel/fresh-inference probe passed with shared auth. Required checks and rebuilt web/mobile assets/budget passed; C26, conditional C35 and C42–C59 remain open; P7 desktop/mobile acceptance next |
 | 2026-11-07 | P7 C42 complete; 19 tasks remain unchecked | Desktop profile/catalog integration following `c6707f2` | CoCo 1.2.35 / macOS arm64 / Node 26.0.0 | 164 suites / 2,866 tests passed; V8 88.57% lines, 76.49% branches, 93.81% functions. Native PM2 auth/editor/responsive/save/default/catalog/effort/icon/hidden controls/browser inference passed. All required checks and rebuilt web/mobile assets/budget passed; shared auth retained. C26, conditional C35 and C43–C59 remain open; C43 interactions next |
 | 2026-11-07 | P7 C43 complete; 18 tasks remain unchecked | Desktop/mobile decision controls following `fa17897` | CoCo 1.2.35 / macOS arm64 / Node 26.0.0 | 165 suites / 2,882 tests passed; V8 88.57% lines, 76.50% branches, 93.81% functions. Native production desktop/mobile questions, revision, rejection, approval-controlled writes and decision ownership passed; shared auth retained. Native Claude startup and Grok model/auth limitations are recorded above; no pass is claimed for them. Standard checks, rebuilt assets/budget and saved Memory passed. C26, conditional C35 and C44–C59 remain open |
+| 2026-11-07 | P7 C44 complete; 17 tasks remain unchecked | Queued input/abort/reconnect ownership following `fa75997` | CoCo 1.2.35 / macOS arm64 / Node 26.0.0 | 167 suites / 2,896 tests passed; V8 88.58% lines, 76.51% branches, 93.81% functions. Native production desktop/mobile questions/queue/reconnect/abort/descendant drain/persisted queue resume and existing plan interactions passed. Stop pauses before cancellation; queued work and drafts/uploads retain ownership without prompt replay. Standard checks and rebuilt assets/budget passed; Memory saved. C26, conditional C35 and C45–C59 remain open |
 
 ## 13. References
 

@@ -1,4 +1,5 @@
 import React from 'react';
+import { checkBackendRoleEligibility } from '../../../../src/contracts/backendCapabilities';
 
 import { Ico } from '../icons.jsx';
 import { StreamStore } from '../streamStore.js';
@@ -168,6 +169,7 @@ export const ChatComposer = React.memo(function ChatComposer({ convId, profileLo
       ? conv.backend
       : (state.composerBackend || conv.backend);
   const goalCapability = goalCapabilityForBackend(backends, topbarBackendId);
+  const canSteer = checkBackendRoleEligibility(backends.find(backend => backend.id === topbarBackendId), { role: 'steering' }).ok;
   const goalCapable = goalCapability.set === true;
   const goalMode = goalCapable && !!state.goalMode;
   const activeGoal = state.goal || null;
@@ -405,7 +407,7 @@ export const ChatComposer = React.memo(function ChatComposer({ convId, profileLo
             placeholder={
               awaiting
                 ? 'Answer the prompt above to continue…'
-                : streaming ? 'Agent is running — Enter queues behind the current run.'
+                : streaming ? (canSteer ? 'Agent is running — Enter queues behind the current run.' : 'Live steering unavailable — Enter queues the next turn.')
                   : goalMode ? 'Set a goal…' : 'Message Agent Cockpit…'
             }
             value={input}
@@ -513,7 +515,8 @@ export const ChatComposer = React.memo(function ChatComposer({ convId, profileLo
               </label>
             ) : null}
             {streaming ? (
-              hasContent ? (
+              <>
+              {hasContent ? (
                 <button
                   className="send"
                   onClick={doEnqueue}
@@ -524,7 +527,7 @@ export const ChatComposer = React.memo(function ChatComposer({ convId, profileLo
                 >
                   {Ico.up(14)}
                 </button>
-              ) : (
+              ) : null}
                 <button
                   className="send stop"
                   onClick={doStop}
@@ -533,7 +536,7 @@ export const ChatComposer = React.memo(function ChatComposer({ convId, profileLo
                 >
                   {Ico.stop(14)}
                 </button>
-              )
+              </>
             ) : (
               <button
                 className="send"

@@ -87,6 +87,21 @@ posix('Cortex durable Cockpit chat integration', () => {
     expect((await nextEvents).some(event => event.type === 'assistant_message' && event.message.content === 'CHOICE_green')).toBe(true);
   });
 
+  test('unsolicited input during native work and closed decisions cannot become another prompt', async () => {
+    const conv = await conversation();
+    const ws = await env.connectWs(conv.id), reading = env.readWsEvents(ws, 10_000);
+    await env.request('POST', `/api/chat/conversations/${conv.id}/message`, { content: 'fixture-wait' });
+    for (let i = 0; i < 100 && !(await calls()).some(call => call.method === 'session/prompt'); i++) await new Promise(resolve => setTimeout(resolve, 10));
+    expect((await env.request('POST', `/api/chat/conversations/${conv.id}/input`, { text: 'follow-up', streamActive: true })).status).toBe(409);
+    ws.send(JSON.stringify({ type: 'input', text: 'follow-up', decisionId: 'cortex-decision:closed' }));
+    await env.request('PUT', `/api/chat/conversations/${conv.id}/queue`, { queue: [{ content: 'follow-up' }] });
+    await env.request('POST', `/api/chat/conversations/${conv.id}/abort`, {}); await reading;
+    expect((await env.request('POST', `/api/chat/conversations/${conv.id}/input`, { text: 'follow-up', streamActive: false, decisionId: 'cortex-decision:closed' })).status).toBe(409);
+    expect((await calls()).filter(call => call.method === 'session/prompt')).toHaveLength(1);
+    expect((await env.request('GET', `/api/chat/conversations/${conv.id}/queue`)).body.queue).toEqual([{ content: 'follow-up' }]);
+    expect((await env.chatService.getConversation(conv.id))!.messages.filter(message => message.role === 'user')).toHaveLength(1);
+  });
+
   test('missing native session creates a persisted recovery snapshot and sends only the current request', async () => {
     const conv = await conversation(); await send(conv.id, 'fixture-remember:ORIGINAL');
     await sessions.evictIdle(0); await fs.writeFile(state, '{}');

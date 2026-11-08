@@ -433,6 +433,64 @@ Restricted/headless execution cancels entry; headless work reports the same
 human-decision-required failure as other plans. Unrecognized entry schemas
 remain denied. The sanitized native request is retained in `plan-entry.json`.
 
+## Queued input, abort and reconnect (P7 C44)
+
+`stdinInput:false` keeps unsolicited CoCo steering unavailable. Both composers
+use the shared `steering` role check to explain that typed messages queue for the
+next turn. Pending question/plan replies still use the existing input route and
+exact decision generation. Ordinary composer text never becomes a reply or a
+native mid-turn prompt. Closing/stale CoCo decisions return 409, including while
+native tools continue and after cancellation; there is no message fallback.
+
+Desktop keeps Stop visible beside the queue action when a draft exists, including
+while a pending question disables normal composition. `stopStream` sets
+`queueSuspended:true` synchronously before awaiting the abort request. This blocks
+both terminal-frame draining and stale transcript refreshes during cancellation.
+Suspension is client state, retained across refresh; restored nonempty queues
+already require explicit Resume. `resumeSuspendedQueue` clears suspension/error
+state and sends only queued follow-ups, never the interrupted prompt. Scheduled
+queue sends recheck pending interactions, stream errors and suspension, and reset
+inFlight markers if blocked. A direct stale composer send cannot clear an active
+question. Draft and attachment state remain separate from queued messages.
+
+Mobile `useSendPipeline.ts` owns a synchronous queue operation ref, current
+options ref and per-conversation suspension set. Enqueue saves serialize with
+draining; queue saves disable the send/queue editing controls. Saving a queue
+clears only the still-current conversation's unchanged draft and removes just
+the captured attachment IDs, so newer text/uploads survive without retaining
+files already moved to the queue. Draining reads current stream/loading/interaction
+state rather than the socket callback's render snapshot, reserves synchronously,
+and checks conversation identity and pending/stream/Stop state again after
+removing the persisted head. If ownership changed it restores that original queue
+without sending. Failed sends retain/restore the queued item. Stop pauses its
+conversation before closing the socket or awaiting native cancellation. Durable
+assistant streamError markers also prevent automatic drain; unrelated UI or
+nonterminal warnings do not pause a successful queue.
+An idle queue exposes explicit Resume queue; successful resume removes only the
+queued item. Native work is not automatically retried. Fresh enqueue is an
+explicit action that clears that conversation's suspension, matching desktop.
+
+CoCo `tool_outcomes` use opaque `cortex-decision:` IDs. Desktop's pure stream
+reducer and mobile's internal complete-decision action clear only a matching
+pending card. A later decision survives old/replayed outcomes. This allows another
+client's answer and reconnect replay to resolve a completed card without an HTTP
+acknowledgement. Mobile terminal completion clears remaining CoCo cards; legacy
+harness decisions retain their existing post-turn message behavior. Socket
+open/message/error handlers check socket ownership; messages also require the
+active conversation. Late events from superseded sockets cannot clear a newer
+card, end its stream or schedule an obsolete reconnect.
+
+The opt-in `scripts/probe-cortex-queue.ts` serves production desktop/mobile assets
+from isolated PM2/data/workspace directories with shared terminal auth. It checks
+question replay, draft retention, late HTTP reply acknowledgement, closed-decision
+rejection, queue execution exactly once, native shell cancellation/descendant
+exit, paused persisted queues after reload and explicit resume without replaying
+tool work. Queued text persists across reload. Mobile drafts retain their existing
+in-memory scope; this probe proves draft retention through socket reconnect and
+queue/abort flows, not mobile draft durability across a full page reload. Native
+CoCo goals, strict Memory, C26, usage display, full C46 mobile and platform
+acceptance remain independent. No REST/WS or persisted data format changes.
+
 ## Durable chat and managed MCP (P5)
 
 `src/services/backends/cortex.ts` is the registered public adapter facade.

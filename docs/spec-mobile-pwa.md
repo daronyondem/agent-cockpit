@@ -10,7 +10,7 @@ desktop catalog ownership and the backend-supplied CoCo icon. Mobile receives
 the icon through existing metadata. No PWA administration screen, endpoint,
 manifest, service worker, asset source or protocol change is introduced. The
 desktop's profile-catalog hook is not imported by mobile; broader native mobile
-model/usage/reconnect acceptance remains C44–C47, including C46.
+model/usage/media acceptance remains C45–C47, including C46.
 
 P7 C43 applies shared revision capability policy to mobile/desktop plan cards.
 The mobile send pipeline synchronously prevents duplicate/stale submissions,
@@ -19,7 +19,17 @@ responses. CoCo rejection selects keep_planning and may end with explanatory
 text or return to another native gate; approval permits execution.
 Question drafts reset on decision/prompt changes. Wire contracts and PWA metadata,
 manifest, service worker and asset sources stay unchanged. Native interaction
-acceptance is scoped separately from the remaining C44–C47 mobile feature matrix.
+acceptance is scoped separately from the remaining C45–C47 mobile feature matrix.
+
+P7 C44 adds explicit queue-only guidance for unsupported live steering, serialized
+queue saves/drains and an idle Resume queue control. Stop pauses queue ownership
+before cancellation; late callbacks and failed/aborted runs retain queued work.
+Queue persistence clears only unchanged draft/upload snapshots. Newer drafts,
+questions and conversations survive delayed replies. Matching CoCo decision
+outcomes resolve cards during socket replay; superseded socket frames are ignored.
+The native queue probe checks current chat flows and persisted queue reload,
+while mobile drafts retain their existing in-memory scope. No PWA metadata,
+manifest, service-worker, administrative or persistence-format changes are added.
 
 P6 C33/C34/C36 adds server-side tool-enabled sequential execution and verified
 PNG OCR through the existing endpoint. No new PWA settings, assets, metadata or
