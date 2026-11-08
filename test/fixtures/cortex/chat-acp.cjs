@@ -21,7 +21,9 @@ const write = value => fs.writeFileSync(stateFile, JSON.stringify(value));
 function finish(text) {
   const request = pending; pending = undefined;
   update({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text } });
-  send({ id: request.id, result: { stopReason: 'end_turn', usage: { inputTokens: 10, outputTokens: 2, cachedReadTokens: 0, cachedWriteTokens: 0 } } });
+  if (process.env.CORTEX_FIXTURE_USAGE) update({ sessionUpdate: 'usage_update', size: 100, used: 25 });
+  send({ id: request.id, result: { stopReason: 'end_turn', usage: { inputTokens: 10, outputTokens: 2,
+    cachedReadTokens: process.env.CORTEX_FIXTURE_USAGE ? 17 : 0, cachedWriteTokens: process.env.CORTEX_FIXTURE_USAGE ? 19 : 0 } } });
 }
 readline.createInterface({ input: process.stdin }).on('line', line => {
   const request = JSON.parse(line);

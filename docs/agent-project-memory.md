@@ -286,8 +286,19 @@ tool is unavailable.
   checks passed delayed input acknowledgement, reconnect, one queued execution,
   shell descendant cleanup, persisted queue reload and explicit resume without
   replaying interrupted tools. Queued text persists; mobile draft scope remains
-  in-memory. C26, strict Memory and C45–C47/full platform acceptance remain open.
+  in-memory. C26, strict Memory and C46/C47/full platform acceptance remain open.
   See the current CoCo spec and progress tracker.
+- P7 C45 native CoCo 1.2.35/macOS usage acceptance passed through production
+  desktop/mobile assets, two prompts each, fresh pages, isolated PM2 restart and
+  exact daily ledger reconciliation (`scripts/probe-cortex-usage.ts`). Shared
+  terminal auth remains intact. Display policy belongs to browser-safe
+  `usagePresentation.ts`; CoCo cards, Settings projections and mobile usage live
+  in `chat/cortexUsage.jsx`, `screens/usageStats.js` and `usageBar.tsx`. Keep all
+  four token/cache buckets in totals, unknown Snowflake prices n/a, context
+  snapshots separate from accumulated usage and mixed cost totals explicitly
+  incomplete. Preserve existing harness pricing/rounding. Run native browser
+  probes separately from asset-mutating full Jest, then rebuild both clients.
+  C26, strict Memory, C46/C47 and platform gates remain independent.
 - Fresh installs should be provider-neutral. Do not imply Claude Code is
   configured when the user has not installed or authenticated it.
 - CLI profiles are scoped per conversation where applicable and can support

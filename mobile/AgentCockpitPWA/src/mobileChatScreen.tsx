@@ -10,7 +10,6 @@ import {
   displayMessagePreview,
   fileReferencesFromParsed,
   formatGoalElapsed,
-  formatPercent,
   goalElapsedSeconds,
   goalStatusLabel,
   goalSupportsAction,
@@ -39,6 +38,7 @@ import {
 } from './mobileIcons';
 import { Button, ErrorBanner, ProgressBar } from './mobilePrimitives';
 import { GrokBilling } from './grokBilling';
+import { UsageBar } from './usageBar';
 import { InteractionCard } from './interactionCard';
 import type {
   BackendMetadata,
@@ -51,7 +51,6 @@ import type {
   QueuedMessage,
   ServiceTier,
   ThreadGoal,
-  Usage,
 } from './types';
 
 export function ChatScreen(props: {
@@ -881,41 +880,6 @@ function AttachmentTray(props: { attachments: PendingAttachment[]; onRemove: (id
           </div>
         </div>
       ))}
-    </div>
-  );
-}
-
-function UsageBar({ usage, backend }: { usage?: Usage; backend?: string }) {
-  if (!usage) {
-    return null;
-  }
-  const tokens = usage.inputTokens + usage.outputTokens + usage.cacheReadTokens + usage.cacheWriteTokens;
-  const context = usage.contextUsagePercentage ?? 0;
-  const reportedCost = Number(usage.costUsd) || 0;
-  const estimatedCost = Number(usage.estimatedCostUsd) || 0;
-  const estimatedCostLabel = estimatedCost > 0 ? `$${Math.ceil(estimatedCost).toLocaleString()}` : backend === 'grok-build' ? 'n/a' : '$0';
-  return (
-    <div className="usage-bar">
-      <div>
-        <span className="usage-label">Tokens</span>
-        <span className="usage-value">{tokens.toLocaleString()}</span>
-        <span className="usage-track"><i style={{ width: `${Math.min(100, Math.max(4, context))}%` }} /></span>
-      </div>
-      <div>
-        <span className="usage-label">{backend === 'grok-build' ? 'Reported model cost' : 'Cost'}</span>
-        <span className="usage-value">{usage.costSource === 'none' ? 'n/a' : `$${reportedCost.toFixed(4)}`}</span>
-        <span className="usage-track"><i style={{ width: `${reportedCost > 0 ? 18 : 4}%` }} /></span>
-      </div>
-      <div>
-        <span className="usage-label">Estimated Cost</span>
-        <span className="usage-value">{estimatedCostLabel}</span>
-        <span className="usage-track"><i style={{ width: `${estimatedCost > 0 ? 18 : 4}%` }} /></span>
-      </div>
-      <div>
-        <span className="usage-label">Context</span>
-        <span className="usage-value">{usage.contextUsagePercentage !== undefined ? formatPercent(usage.contextUsagePercentage) : 'n/a'}</span>
-        <span className="usage-track"><i style={{ width: `${Math.min(100, Math.max(4, context))}%` }} /></span>
-      </div>
     </div>
   );
 }

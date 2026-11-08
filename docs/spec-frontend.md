@@ -502,3 +502,17 @@ success from a model list. Claude mode and Codex speed remain harness-specific;
 CoCo goals, agents, steering and restricted Memory remain unavailable. Native
 browser acceptance for interactions, queues, usage and the mobile PWA is tracked
 separately under the remaining P7 tasks.
+
+### CoCo usage display (P7 C45)
+
+`chip-renderers.jsx` registers the CoCo renderer backed by `chat/cortexUsage.jsx`.
+It displays session context, all four token counters and n/a for unknown
+Snowflake Cost/Estimated Cost, without querying another provider's billing.
+`src/contracts/usagePresentation.ts` shares token-total and unavailable-price
+projection with mobile and Usage settings. `screens/usageStats.js` owns the pure
+period/model/tier projections; unpriced usage retains tokens, displays n/a in
+CoCo-only totals/rows and marks mixed totals as excluding unpriced usage. Token
+charts and daily totals include caches. Context absence is distinct from zero.
+No pricing formulas or persistence formats change. C45's shared summary markup
+keeps Settings within its existing 80 KiB chunk budget; total JS grows from 913
+to 914 KiB (measure the production build with `npm run web:budget`).

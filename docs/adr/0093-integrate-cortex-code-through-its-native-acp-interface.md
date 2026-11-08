@@ -7,6 +7,11 @@ supersedes: []
 superseded-by: null
 tags: [backends, profiles, protocol, authentication]
 affects:
+  - src/contracts/usagePresentation.ts
+  - web/AgentCockpitWeb/src/chat/cortexUsage.jsx
+  - web/AgentCockpitWeb/src/screens/usageStats.js
+  - mobile/AgentCockpitPWA/src/usageBar.tsx
+  - scripts/probe-cortex-usage.ts
   - docs/design/cortex-code-implementation-plan.md
   - docs/research/cortex-code-acp-evaluation.md
   - scripts/probe-cortex-phase0.ts
@@ -244,6 +249,14 @@ Preserve native token/cache categories and context snapshots separately. Use
 Anthropic/OpenAI prices from a CoCo model ID. Classify version-tested native
 terminal error signatures without treating every failed tool or quoted `Error:`
 string as a failed turn. Unknown failures remain visible.
+
+Share display-only token totals/unavailable-cost policy through browser-safe
+contracts, while provider calculators retain pricing ownership. Explicitly show
+unknown CoCo dollar amounts as n/a and mixed ledger totals as incomplete rather
+than presenting storage zero placeholders as verified free usage. Preserve
+existing harness calculations, model/tier groupings and storage formats; keep
+context snapshots separate from cumulative tokens. Certify live, reloaded and
+fixture-restart browser values against the persisted native usage ledger.
 
 Keep CoCo authentication behind the existing CLI auth facade, delegated to
 focused native connection, OAuth ownership, PTY and verification modules. Use

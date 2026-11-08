@@ -4,6 +4,7 @@ import { execFileSync } from 'child_process';
 import type { CliProfile } from '../src/types';
 import { CortexCodeAdapter } from '../src/services/backends/cortex';
 import { CortexSessions } from '../src/services/backends/cortexSessions';
+import { ChatService } from '../src/services/chatService';
 import { createChatRouterEnv, destroyChatRouterEnv, type ChatRouterEnv } from './helpers/chatEnv';
 
 const posix = process.platform === 'win32' ? describe.skip : describe;
@@ -58,6 +59,29 @@ posix('Cortex durable Cockpit chat integration', () => {
     expect(saved.usage?.inputTokens).toBe(30);
     expect((await calls()).filter(call => call.method === 'session/prompt')).toHaveLength(3);
     expect((await env.request('GET', '/api/chat/active-streams')).body.ids).not.toContain(conv.id);
+  });
+
+  test('cached tokens, context and unknown Snowflake costs survive replay and a new storage instance without double counting', async () => {
+    const settings = await env.chatService.getSettings();
+    await env.chatService.saveSettings({ ...settings, cliProfiles: settings.cliProfiles!.map(item => item.id === profile.id
+      ? { ...item, env: { ...item.env, CORTEX_FIXTURE_USAGE: '1' } } : item) });
+    const conv = await conversation();
+    const expected = { inputTokens: 20, outputTokens: 4, cacheReadTokens: 34, cacheWriteTokens: 38,
+      contextUsagePercentage: 25, costUsd: 0, costSource: 'none' };
+    await send(conv.id, 'first usage');
+    const frames = await send(conv.id, 'second usage');
+    expect(frames.filter(frame => frame.type === 'usage')).toHaveLength(1);
+    expect(frames.find(frame => frame.type === 'usage')).toMatchObject({ usage: expected, sessionUsage: expected });
+    const restored = new ChatService(env.tmpDir, { defaultWorkspace: env.tmpDir, backendRegistry: env.backendRegistry });
+    await restored.initialize();
+    const saved = (await restored.getConversation(conv.id))!;
+    expect(saved.usage).toMatchObject(expected); expect(saved.sessionUsage).toMatchObject(expected);
+    expect(saved.usage?.estimatedCostUsd).toBeUndefined(); expect(saved.usage?.costSnapshot).toBeUndefined();
+    const record = (await restored.getUsageStats()).days.flatMap(day => day.records).find(row => row.backend === 'cortex-code')!;
+    expect(record.usage).toMatchObject(expected);
+    const ws = await env.connectWs(conv.id); await env.readWsEvents(ws, 10_000);
+    expect((await env.chatService.getConversation(conv.id))!.usage).toMatchObject(expected);
+    expect((await calls()).filter(call => call.method === 'session/prompt')).toHaveLength(2);
   });
 
   test('question replies retain their decision generation across reconnect and reject duplicates', async () => {

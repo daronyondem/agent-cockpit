@@ -1,6 +1,6 @@
 # Cortex Code (CoCo) harness implementation plan
 
-**Status:** P0–P3 and P5 complete; P4 C21–C25 setup implemented, C26 actual remote-browser acceptance pending. P6 C33/C34/C36–C41 complete; P7 C42 desktop profile/catalog, C43 decisions and C44 queue/abort/reconnect implemented; C45–C47 client acceptance is next. C35 remains conditional on G1.
+**Status:** P0–P3 and P5 complete; P4 C21–C25 setup implemented, C26 actual remote-browser acceptance pending. P6 C33/C34/C36–C41 complete; P7 C42 desktop profile/catalog, C43 decisions, C44 queue/abort/reconnect and C45 usage display implemented; C46–C47 client acceptance is next. C35 remains conditional on G1.
 **Created:** 2026-11-05.
 **Planning baseline:** Agent Cockpit `0.4.166`, revision `11d14825e955f6c83364c3917558b4d3068a4bac`, plus the uncommitted CoCo research/guidance documents.
 **Native compatibility baseline:** Cortex Code `1.2.35`, distribution `1.2.35+191333.f82de3d91715`, macOS arm64.
@@ -34,8 +34,8 @@ Planning assumptions:
 - Deliver core chat before optional parity work. Unverified features remain
   explicitly unavailable; do not emulate native goals or silently reroute work
   to a different profile to make a selector appear functional.
-- C01–C25, C27–C34 and C36–C44 are implemented as recorded below. C26, conditional
-  C35 and C45–C59 remain open and do not describe shipped support.
+- C01–C25, C27–C34 and C36–C45 are implemented as recorded below. C26, conditional
+  C35 and C46–C59 remain open and do not describe shipped support.
 
 Track work as follows:
 
@@ -1034,7 +1034,7 @@ P6 C41 evidence (November 7, 2026; changes following `be4bbed`):
 - [x] C44 — Make unsupported mid-turn steering explicit while pending replies
   work. Verify typed input is retained/queued, not lost; test queue/abort/reconnect
   and input arriving as an interaction closes.
-- [ ] C45 — Wire honest context/token/cache/cost display on both clients.
+- [x] C45 — Wire honest context/token/cache/cost display on both clients.
   Verify unavailable Snowflake pricing is `n/a`/unknown, supported existing
   harness pricing stays correct and usage reloads consistently.
 - [ ] C46 — Verify current mobile chat scope with real CoCo: selection,
@@ -1185,6 +1185,50 @@ P7 C44 evidence (November 7 local / November 8 UTC, 2026; following `fa75997`):
   API drift and ADR lint passed. Production web/mobile assets were rebuilt after
   full Jest; JS/CSS budget passed at 912.3/913 KiB and 202.3/230 KiB. Seventeen
   implementation tasks remain unchecked; C45 is next.
+
+P7 C45 evidence (November 7 local / November 8 UTC, 2026; following `8c59b14`):
+
+- Shared browser-safe usage display policy preserves unknown cost versus reported
+  zero and includes input/output/cache read/cache write in totals. Desktop CoCo
+  has a dedicated context/token/cost card; mobile has a compact expandable
+  four-counter breakdown. Unknown Snowflake Cost and Estimated Cost are n/a.
+  Missing context remains distinct from zero. Existing harness costs/rounding
+  stay unchanged; no direct-vendor rate is inferred from the CoCo model name.
+- Pure Usage settings projections retain tokens and model/service-tier grouping,
+  mark unpriced period/model rows n/a and mixed totals incomplete. Token chart
+  and daily totals include caches. CoCo-only cost charts explain unavailable
+  prices rather than reporting no usage. Shared summary markup keeps Settings
+  within its 80 KiB chunk cap; total JS allowance is 914 KiB, with measured
+  production output 913.6 KiB after the final rebuild (CSS 202.3 / 230 KiB).
+- Nine focused suites / 166 tests passed, including rendered both-client usage,
+  existing harness prices, mixed aggregation, exact cache/context HTTP/WS totals,
+  a fresh storage instance and replay without double accounting. The existing
+  profile-editor fixture also gained standalone/mixed Usage rendering checks
+  after its new import dependencies were registered. Backend/web/
+  mobile typechecks and probe typecheck passed. Full V8 coverage passed 168
+  suites / 2907 tests (3 suites / 20 tests skipped): statements/lines 88.57%,
+  branches 76.53%, functions 93.82%. Existing floors remain unchanged for this
+  frontend-focused increment. After that run, only two erased test type
+  assertions were removed for lint; the 14 affected UI tests were rerun.
+  Final zero-warning lint, backend/web/mobile typechecks, maintainability,
+  189-route spec drift, 92-ADR lint, both production builds and bundle budget
+  passed. The private-identifier scan is clean and no usage PM2 fixture remains.
+- Native `scripts/probe-cortex-usage.ts` passed on CoCo 1.2.35, macOS arm64,
+  Node 26.0.0 using production assets and shared terminal auth. Private report:
+  `cockpit-cortex-usage-xaTzNR/report.json` under system temp. Two prompts per
+  client matched live, reloaded and isolated PM2-restart usage; the daily ledger
+  reconciled input 20, output 573, cache read 187806 and cache write 14426.
+  All prices remained unknown. Usage settings showed n/a totals/table prices and
+  the unavailable-price chart message. Private screenshots were visually checked.
+- Earlier native probes stopped at scaffolding expectations: a stale original
+  title after automatic conversation rename (`cockpit-cortex-usage-xuuFbH`) and
+  expected integer context where mobile uses one decimal below 10 percent
+  (`cockpit-cortex-usage-MBX3uo`). Both were corrected in the runner; no product
+  regression or successful acceptance is inferred from those failed runs.
+  Fixture PM2 apps were removed; no production restart or logout occurred.
+- Memory note saved successfully; no local fallback was used. PWA assets need
+  rebuild only; manifest, identity, service-worker/auth/offline policy unchanged.
+  C26, conditional C35 and C46–C59 remain open (16 tasks); C46 is next.
 
 ### P8 — Installation, updates, migration, and platforms
 
@@ -1361,7 +1405,8 @@ At implementation time update only the relevant current specifications:
 | 2026-11-07 | P6 C41 complete; 20 tasks remain unchecked | Processor-selection boundaries change following `be4bbed` | CoCo 1.2.35 / macOS arm64 / Node 26.0.0 | 161 suites / 2,851 tests passed; V8 88.58% lines, 76.48% branches, 93.81% functions; exact selection persistence/import, role preflights, failed-state ownership and rendered controls passed. Native sequential/headless/OCR/cancel/fresh-inference probe passed with shared auth. Required checks and rebuilt web/mobile assets/budget passed; C26, conditional C35 and C42–C59 remain open; P7 desktop/mobile acceptance next |
 | 2026-11-07 | P7 C42 complete; 19 tasks remain unchecked | Desktop profile/catalog integration following `c6707f2` | CoCo 1.2.35 / macOS arm64 / Node 26.0.0 | 164 suites / 2,866 tests passed; V8 88.57% lines, 76.49% branches, 93.81% functions. Native PM2 auth/editor/responsive/save/default/catalog/effort/icon/hidden controls/browser inference passed. All required checks and rebuilt web/mobile assets/budget passed; shared auth retained. C26, conditional C35 and C43–C59 remain open; C43 interactions next |
 | 2026-11-07 | P7 C43 complete; 18 tasks remain unchecked | Desktop/mobile decision controls following `fa17897` | CoCo 1.2.35 / macOS arm64 / Node 26.0.0 | 165 suites / 2,882 tests passed; V8 88.57% lines, 76.50% branches, 93.81% functions. Native production desktop/mobile questions, revision, rejection, approval-controlled writes and decision ownership passed; shared auth retained. Native Claude startup and Grok model/auth limitations are recorded above; no pass is claimed for them. Standard checks, rebuilt assets/budget and saved Memory passed. C26, conditional C35 and C44–C59 remain open |
-| 2026-11-07 | P7 C44 complete; 17 tasks remain unchecked | Queued input/abort/reconnect ownership following `fa75997` | CoCo 1.2.35 / macOS arm64 / Node 26.0.0 | 167 suites / 2,896 tests passed; V8 88.58% lines, 76.51% branches, 93.81% functions. Native production desktop/mobile questions/queue/reconnect/abort/descendant drain/persisted queue resume and existing plan interactions passed. Stop pauses before cancellation; queued work and drafts/uploads retain ownership without prompt replay. Standard checks and rebuilt assets/budget passed; Memory saved. C26, conditional C35 and C45–C59 remain open |
+| 2026-11-07 | P7 C44 complete; 17 tasks remain unchecked | Queued input/abort/reconnect ownership following `fa75997` | CoCo 1.2.35 / macOS arm64 / Node 26.0.0 | 167 suites / 2,896 tests passed; V8 88.58% lines, 76.51% branches, 93.81% functions. Native production desktop/mobile questions/queue/reconnect/abort/descendant drain/persisted queue resume and existing plan interactions passed. Stop pauses before cancellation; queued work and drafts/uploads retain ownership without prompt replay. Standard checks and rebuilt assets/budget passed; Memory saved. C26, conditional C35 and C46–C59 remain open |
+| 2026-11-07 | P7 C45 complete; 16 tasks remain unchecked | Usage display and persistence following `8c59b14` | CoCo 1.2.35 / macOS arm64 / Node 26.0.0 | 168 suites / 2907 tests passed; V8 88.57% lines, 76.53% branches, 93.82% functions. Native production desktop/mobile context/token/cache/n/a costs, reload, isolated PM2 restart and exact daily ledger reconciliation passed. Existing harness price rendering and mixed Usage totals covered. Memory saved. C26, conditional C35 and C46–C59 remain open; C46 next. |
 
 ## 13. References
 

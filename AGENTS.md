@@ -315,7 +315,18 @@ store/reducer and CoCo integration suites. Run opt-in
 `scripts/probe-cortex-queue.ts` for native desktop/mobile question/queue/reconnect/
 abort/resume drift, and the interaction probe when plan completion changes.
 Persisted queues survive reload; mobile drafts retain their existing in-memory
-scope. C26, strict Memory, C45–C47 and platform gates remain separate.
+scope. C26, strict Memory, C46/C47 and platform gates remain separate.
+
+P7 C45 usage display policy lives in browser-safe
+`src/contracts/usagePresentation.ts`; calculators remain provider-specific.
+Keep CoCo Snowflake pricing unknown, cache buckets in total tokens, context
+snapshots distinct from accumulated usage, and mixed ledger totals explicitly
+incomplete. Desktop CoCo cards, Settings projection and mobile usage composition
+belong to `chat/cortexUsage.jsx`, `screens/usageStats.js` and `usageBar.tsx`.
+Review `test/cortexUsageUi.test.ts`, the CoCo integration/usage suites and run
+opt-in `scripts/probe-cortex-usage.ts` for native client/reload/isolated PM2
+restart evidence. Run browser probes separately from asset-mutating full Jest;
+this scoped acceptance does not close C26, strict Memory, C46/C47 or platforms.
 
 # Server Management
 

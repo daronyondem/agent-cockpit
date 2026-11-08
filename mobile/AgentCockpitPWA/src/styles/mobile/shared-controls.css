@@ -117,6 +117,24 @@
   margin: 0;
 }
 
+.usage-breakdown {
+  margin: 0;
+  padding: 6px 10px;
+  flex: 0 0 auto;
+  font-size: 12px;
+  color: var(--text-3);
+}
+
+.usage-breakdown dl > div {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.usage-breakdown dd {
+  margin: 0;
+}
+
 .usage-bar {
   background: var(--bg);
   border-top: 1px solid var(--border);

@@ -490,16 +490,6 @@ describe('frontend routes', () => {
     expect(cssSrc).toContain('.usage-pricing-actions');
   });
 
-  test('mobile Usage bar separates reported and estimated cost', () => {
-    const componentsSrc = readMobileChatScreen();
-    const cssSrc = readMobileCss();
-
-    expect(componentsSrc).toContain('const estimatedCost = Number(usage.estimatedCostUsd) || 0;');
-    expect(componentsSrc).toContain('Math.ceil(estimatedCost).toLocaleString()');
-    expect(componentsSrc).toContain('<span className="usage-label">Estimated Cost</span>');
-    expect(componentsSrc).toContain('{estimatedCostLabel}');
-    expect(cssSrc).toContain('grid-template-columns: repeat(4, minmax(0, 1fr));');
-  });
 
   test('mobile PWA renders thinking Markdown blocks without flex-column squeeze', () => {
     const componentsSrc = readMobileChatScreen();

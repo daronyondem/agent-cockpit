@@ -5,8 +5,8 @@
 **Implemented scope:** P1 profiles, P2 transport/runtime, and P3 internal
 events/interactions/models/usage/attachments/artifacts, P4 connection/auth
 setup, P5 durable chat/managed MCP, P6 C33/C34/C36–C41 background workflows and processor selection,
-and P7 C42 desktop profile/catalog controls,
-November 7, 2026.
+and P7 C42–C45 desktop profile/catalog, decision, queue/reconnect and usage
+display controls, November 7, 2026.
 Native acceptance baseline is CoCo 1.2.35, macOS arm64.
 **Runtime status:** `CortexCodeAdapter` is registered in `server.ts` for chat.
 CoCo setup/authentication, durable chat, tool-enabled ephemeral execution and
@@ -490,6 +490,49 @@ in-memory scope; this probe proves draft retention through socket reconnect and
 queue/abort flows, not mobile draft durability across a full page reload. Native
 CoCo goals, strict Memory, C26, usage display, full C46 mobile and platform
 acceptance remain independent. No REST/WS or persisted data format changes.
+
+## Usage display and reload (P7 C45)
+
+Browser-safe `src/contracts/usagePresentation.ts` owns total token calculation
+(input + output + cache read + cache write) and unavailable-cost projection.
+Positive reported/estimated values remain known; `costSource:none` and legacy
+CoCo zero placeholders are unavailable. Explicit reported/estimated zero and
+legacy non-CoCo zero retain existing behavior. Pricing calculation stays in the
+provider calculators; this display policy never applies direct Anthropic/OpenAI
+rates to a Snowflake model name or mutates stored usage.
+
+The desktop registry selects `chat/cortexUsage.jsx` for CoCo. Its session chip
+includes bounded native context percentage when known, all four token buckets
+in its total, and `cost n/a` for unknown price. The tooltip always lists Context,
+Fresh input, Output, Cache read, Cache write, Cost and Estimated Cost, including
+zero cache counters; absent context is n/a and has no progress bar. Unknown cost
+and estimate are n/a, with a Snowflake-pricing explanation. Mixed-harness known
+costs remain visible, with the explanation that unpriced CoCo usage is excluded.
+No CoCo account quota/billing request is invented.
+
+Mobile delegates to `usageBar.tsx`: preserve session-over-conversation usage,
+existing rounded context formatting and existing harness price rounding. CoCo
+shows n/a for both unknown cost fields and a collapsible four-counter Token
+breakdown plus the same pricing explanation. Unknown/zero CoCo context does not
+show the existing minimum 4-percent fill. No routes, stored data, PWA identity,
+authentication or offline-cache policy change; rebuild ignored mobile assets.
+
+Desktop Usage settings keeps pure period/per-model aggregation in
+`screens/usageStats.js`. The projection retains an unpriced flag without dropping
+tokens or mixing model/service-tier rows. CoCo-only totals and table prices are
+n/a; mixed known totals say `+ unpriced usage` and explain the exclusion. Token
+charts/daily totals include cache counters. A cost chart with only unpriced data
+says no priced usage for this metric rather than claiming no usage occurred.
+Existing reported amounts and estimated-price rounding remain unchanged.
+
+`test/cortexUsageUi.test.ts` renders both displays, missing/zero context and
+existing-harness prices, tests shared projections and mixed ledger aggregation.
+The extended `test/cortexIntegration.test.ts` uses cache/context process fixtures
+to verify two final events, persisted conversation/session/backend/daily totals,
+fresh storage restoration and reconnect without double accounting. The opt-in
+`scripts/probe-cortex-usage.ts` checks production browser assets with native
+CoCo, two prompts per client, fresh pages, isolated PM2 restart and reconciled
+ledger counters. This does not close C26, strict Memory, C46/C47 or platform gates.
 
 ## Durable chat and managed MCP (P5)
 

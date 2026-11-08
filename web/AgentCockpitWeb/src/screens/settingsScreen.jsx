@@ -1,3 +1,5 @@
+import { totalsFor, aggregatePerModel } from './usageStats.js';
+import { isUsageCostUnavailable, usageTokenTotal } from '../../../../src/contracts/usagePresentation';
 import { backendIdForProfile, backendForProfile, modelsForProfile, modelDisplayLabel, defaultModelId, effortLevelsForProfile, defaultEffortFor } from '../profileCatalog.js';
 import { processorProfileForSetting as profileForSetting } from './processorProfiles';
 import React from 'react';
@@ -2608,24 +2610,18 @@ function usageRoundedEstimatedCost(usage){ const v = usageEstimatedCost(usage); 
 function fmtUsageDisplayCost(usage){
   const estimated = usageRoundedEstimatedCost(usage);
   const reported = usageReportedCost(usage);
-  return estimated > 0 ? `$${Math.ceil(reported + estimated)}` : fmtCostShort(reported);
+  if (usage.hasUnpricedUsage && reported === 0 && estimated === 0) return 'n/a';
+  const label = estimated > 0 ? `$${Math.ceil(reported + estimated)}` : fmtCostShort(reported);
+  return usage.hasUnpricedUsage ? `${label} + unpriced usage` : label;
 }
 
-/* Sum every record across the given days into a single usage total. */
-function totalsFor(days){
-  const t = { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, costUsd: 0, estimatedCostUsd: 0 };
-  for (const d of days || []) {
-    for (const r of (d.records || [])) {
-      const u = r.usage || {};
-      t.inputTokens      += u.inputTokens      || 0;
-      t.outputTokens     += u.outputTokens     || 0;
-      t.cacheReadTokens  += u.cacheReadTokens  || 0;
-      t.cacheWriteTokens += u.cacheWriteTokens || 0;
-      t.costUsd          += usageReportedCost(u);
-      t.estimatedCostUsd += usageEstimatedCost(u);
-    }
-  }
-  return t;
+function UsageSummaryStat({ label, usage, tokens }){
+  return <div className="stat">
+    <div className="lbl">{label}</div>
+    <div className="num">{fmtUsageDisplayCost(usage)}</div>
+    <div className="sub u-dim">Cost {usage.hasUnpricedUsage && usage.costUsd === 0 ? 'n/a' : fmtCostShort(usage.costUsd)} · Estimated Cost {usage.hasUnpricedUsage && usage.estimatedCostUsd === 0 ? 'n/a' : fmtEstimatedCost(usage.estimatedCostUsd)}</div>
+    <div className="sub u-dim">{tokens}</div>
+  </div>;
 }
 
 /* Filter the raw `days` list to the selected range. Empty range returns an
@@ -2662,29 +2658,6 @@ function buildDailyRows(days){
   return rows;
 }
 
-function aggregatePerModel(days){
-  const map = new Map();
-  for (const d of days || []) {
-    for (const r of (d.records || [])) {
-      const pricingTier = r.pricingTier || '';
-      const key = `${r.backend}\u0001${r.model}\u0001${pricingTier}`;
-      const slot = map.get(key) || {
-        backend: r.backend, model: r.model, pricingTier,
-        inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, costUsd: 0, estimatedCostUsd: 0,
-      };
-      const u = r.usage || {};
-      slot.inputTokens      += u.inputTokens      || 0;
-      slot.outputTokens     += u.outputTokens     || 0;
-      slot.cacheReadTokens  += u.cacheReadTokens  || 0;
-      slot.cacheWriteTokens += u.cacheWriteTokens || 0;
-      slot.costUsd          += usageReportedCost(u);
-      slot.estimatedCostUsd += usageEstimatedCost(u);
-      map.set(key, slot);
-    }
-  }
-  return Array.from(map.values()).sort((a, b) => (b.costUsd + b.estimatedCostUsd) - (a.costUsd + a.estimatedCostUsd));
-}
-
 /* Build the bar series for the "last 14 days" chart. Returns ascending
    (oldest → newest left → right) bars whose value is either total cost or
    total tokens for that day, depending on the selected metric. */
@@ -2696,7 +2669,7 @@ function buildBars(days, metric){
       const u = r.usage || {};
       if (metric === 'cost')       value += usageReportedCost(u);
       else if (metric === 'estimated') value += usageEstimatedCost(u);
-      else                         value += (u.inputTokens || 0) + (u.outputTokens || 0);
+      else                         value += usageTokenTotal(u);
     }
     return { date: d.date, value };
   });
@@ -2897,32 +2870,13 @@ function UsageTab(){
   return (
     <div className="settings-usage">
       <div className="stat-grid">
-        <div className="stat">
-          <div className="lbl">Today</div>
-          <div className="num">{fmtUsageDisplayCost(today)}</div>
-          <div className="sub u-dim">Cost {fmtCostShort(today.costUsd)} · Estimated Cost {fmtEstimatedCost(today.estimatedCostUsd)}</div>
-          <div className="sub u-dim">{fmtTokensShort(today.inputTokens)} in · {fmtTokensShort(today.outputTokens)} out</div>
-        </div>
-        <div className="stat">
-          <div className="lbl">Last 7 days</div>
-          <div className="num">{fmtUsageDisplayCost(week)}</div>
-          <div className="sub u-dim">Cost {fmtCostShort(week.costUsd)} · Estimated Cost {fmtEstimatedCost(week.estimatedCostUsd)}</div>
-          <div className="sub u-dim">{fmtTokensShort(week.inputTokens + week.outputTokens)} tokens</div>
-        </div>
-        <div className="stat">
-          <div className="lbl">Last 30 days</div>
-          <div className="num">{fmtUsageDisplayCost(month)}</div>
-          <div className="sub u-dim">Cost {fmtCostShort(month.costUsd)} · Estimated Cost {fmtEstimatedCost(month.estimatedCostUsd)}</div>
-          <div className="sub u-dim">{fmtTokensShort(month.inputTokens + month.outputTokens)} tokens</div>
-        </div>
-        <div className="stat">
-          <div className="lbl">All time</div>
-          <div className="num">{fmtUsageDisplayCost(all)}</div>
-          <div className="sub u-dim">Cost {fmtCostShort(all.costUsd)} · Estimated Cost {fmtEstimatedCost(all.estimatedCostUsd)}</div>
-          <div className="sub u-dim">{fmtTokensShort(all.inputTokens + all.outputTokens)} tokens</div>
-        </div>
+        <UsageSummaryStat label="Today" usage={today} tokens={`${fmtTokensShort(today.inputTokens)} in · ${fmtTokensShort(today.outputTokens)} out`}/>
+        <UsageSummaryStat label="Last 7 days" usage={week} tokens={`${fmtTokensShort(usageTokenTotal(week))} tokens`}/>
+        <UsageSummaryStat label="Last 30 days" usage={month} tokens={`${fmtTokensShort(usageTokenTotal(month))} tokens`}/>
+        <UsageSummaryStat label="All time" usage={all} tokens={`${fmtTokensShort(usageTokenTotal(all))} tokens`}/>
       </div>
 
+      {all.hasUnpricedUsage ? <p className="u-dim">Costs exclude usage with unavailable pricing. Token counts remain included.</p> : null}
       <div className="pane-block">
         <div className="pane-block-head">
           <span>Last 14 days</span>
@@ -2934,7 +2888,7 @@ function UsageTab(){
           />
         </div>
         {bars.length === 0 || maxBar === 0 ? (
-          <div className="u-dim" style={{padding:'24px',fontSize:12}}>No usage recorded yet.</div>
+          <div className="u-dim" style={{padding:'24px',fontSize:12}}>{all.hasUnpricedUsage && metric !== 'tokens' ? 'No priced usage for this metric.' : 'No usage recorded yet.'}</div>
         ) : (
           <div className="bars">
             {bars.map((b, i) => (
@@ -2987,8 +2941,8 @@ function UsageTab(){
                     <td className="r">{fmtNum(r.outputTokens)}</td>
                     <td className="r">{fmtNum(r.cacheReadTokens)}</td>
                     <td className="r">{fmtNum(r.cacheWriteTokens)}</td>
-                    <td className="r">{r.costUsd > 0 ? fmtCost(r.costUsd) : '—'}</td>
-                    <td className="r">{fmtEstimatedCostCell(r.estimatedCostUsd)}</td>
+                    <td className="r">{r.hasUnpricedUsage && r.costUsd === 0 ? 'n/a' : r.costUsd > 0 ? fmtCost(r.costUsd) : '—'}</td>
+                    <td className="r">{r.hasUnpricedUsage && r.estimatedCostUsd === 0 ? 'n/a' : fmtEstimatedCostCell(r.estimatedCostUsd)}</td>
                   </tr>
                 ))}
               </tbody>
@@ -3015,7 +2969,7 @@ function UsageTab(){
               <tbody>
                 {dailyRows.map((r, i) => {
                   const u = r.usage;
-                  const tokens = (u.inputTokens || 0) + (u.outputTokens || 0);
+                  const tokens = usageTokenTotal(u);
                   return (
                     <tr key={`${r.date}/${r.backend}/${r.model}/${r.pricingTier || ''}/${i}`}>
                       <td className="u-mono">{r.date}</td>
@@ -3023,8 +2977,8 @@ function UsageTab(){
                       <td className="u-mono">{r.model}</td>
                       <td className="u-mono">{r.pricingTier || '—'}</td>
                       <td className="r">{fmtNum(tokens)}</td>
-                      <td className="r">{usageReportedCost(u) > 0 ? fmtCost(usageReportedCost(u)) : '—'}</td>
-                      <td className="r">{fmtEstimatedCostCell(usageEstimatedCost(u))}</td>
+                      <td className="r">{isUsageCostUnavailable(u, r.backend) ? 'n/a' : usageReportedCost(u) > 0 ? fmtCost(usageReportedCost(u)) : '—'}</td>
+                      <td className="r">{isUsageCostUnavailable(u, r.backend) ? 'n/a' : fmtEstimatedCostCell(usageEstimatedCost(u))}</td>
                     </tr>
                   );
                 })}

@@ -273,3 +273,18 @@ The generated app is served from:
 ```
 
 When `WEB_BUILD_MODE=auto`, `MobileBuildService` verifies `public/mobile-built/.agent-cockpit-build.json` at server startup and rebuilds from `mobile/AgentCockpitPWA/` when the source or lockfiles are stale. The service uses `npm.cmd` through the shared `.cmd` wrapper on Windows and `npm` elsewhere. Dev self-update installs mobile dependencies and forces this build before restarting PM2; production self-update installs mobile dependencies in the staged release and runs the same build preflight only when the packaged mobile marker/assets are missing or stale.
+
+### CoCo usage display (P7 C45)
+
+`mobileChatScreen.tsx` composes `usageBar.tsx`, preserving session usage priority
+and existing harness price/context formatting. CoCo has separate Cost and
+Estimated Cost n/a cells for unknown Snowflake prices and a collapsible Token
+breakdown with Fresh input, Output, Cache read and Cache write (including zero).
+The total includes all four buckets via browser-safe
+`src/contracts/usagePresentation.ts`. Missing context stays n/a; zero/missing
+CoCo context has no fabricated minimum progress fill. The expanded details
+explain that costs exclude unpriced CoCo usage. Existing positive reported costs
+and rounded-up estimates stay intact for other harnesses. Build mobile assets;
+no PWA manifest, identity, auth, service worker or offline policy changes.
+Rendered tests live in `test/cortexUsageUi.test.ts`; the isolated native
+`scripts/probe-cortex-usage.ts` verifies display, reload and PM2 restart counters.
