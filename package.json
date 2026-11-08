@@ -20,6 +20,8 @@
     "e2e:grok-build-ui": "tsx scripts/run-grok-build-ui-e2e.ts",
     "e2e:cortex-code": "tsx scripts/run-cortex-code-e2e.ts",
     "e2e:cortex-code-ui": "tsx scripts/run-cortex-code-ui-e2e.ts",
+    "e2e:cortex-code-workflows": "tsx scripts/run-cortex-code-workflows.ts",
+    "e2e:cortex-code-auth-control": "tsx scripts/run-cortex-code-auth-control.ts",
     "claude-interactive:check-release": "node scripts/check-claude-interactive-release.js",
     "web:build": "vite build --config web/AgentCockpitWeb/vite.config.ts",
     "web:budget": "node scripts/check-web-bundle-size.js",

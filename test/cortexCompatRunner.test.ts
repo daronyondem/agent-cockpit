@@ -3,7 +3,7 @@ import os from 'os';
 import path from 'path';
 import net from 'net';
 import { spawnSync } from 'child_process';
-import { CORTEX_PROBES, readCortexProbeReport, selectCortexProbes } from '../scripts/cortexCompatReports';
+import { CORTEX_PROBES, CORTEX_WORKFLOW_CHECKS, readCortexProbeReport, selectCortexProbes } from '../scripts/cortexCompatReports';
 
 const revision = 'a'.repeat(40);
 
@@ -42,6 +42,31 @@ describe('CoCo consolidated compatibility reports', () => {
     expect((await readCortexProbeReport(root, 'probe-', revision)).passed).toBe(false);
   });
 
+  test('workflow and expected-auth-failure catalogs are separate; every workflow requires its own evidence', async () => {
+    expect(selectCortexProbes('workflows', []).map(item => item.id)).toEqual(['chat', 'kb', 'context', 'routines', 'mobile']);
+    expect(selectCortexProbes('auth-control', []).map(item => item.id)).toEqual(['missing-auth']);
+    expect(() => selectCortexProbes('workflows', ['--probe', 'missing-auth'])).toThrow();
+    for (const probe of [...CORTEX_PROBES.workflows, ...CORTEX_PROBES['auth-control']]) {
+      const checks = CORTEX_WORKFLOW_CHECKS[probe.id]; expect(checks.length).toBeGreaterThan(0);
+      await report(metadata());
+      expect((await readCortexProbeReport(root, 'probe-', revision, checks)).passed).toBe(false);
+      const raw = metadata() as any;
+      for (const keys of checks) {
+        let target = raw.results;
+        for (const key of keys.slice(0, -1)) target = target[key] ||= {};
+        target[keys.at(-1)!] = true;
+      }
+      await report(raw);
+      const projected = await readCortexProbeReport(root, 'probe-', revision, checks);
+      expect(projected).toMatchObject({ passed: true, evidenceComplete: true, checks: checks.map(keys => keys.join('.')) });
+      // Truthy strings and missing nested checks cannot certify an enabled role.
+      const keys = checks[0]; let target = raw.results;
+      for (const key of keys.slice(0, -1)) target = target[key];
+      target[keys.at(-1)!] = 'true'; await report(raw);
+      expect((await readCortexProbeReport(root, 'probe-', revision, checks)).passed).toBe(false);
+    }
+  });
+
   test.each([{ cliVersion: '1.2.37' }, { platform: 'other' }, { arch: 'other' }, { node: 'other' }, { revision: 'b'.repeat(40) }, { dirty: 'true' }])(
     'rejects mismatched native metadata %j', async mismatch => {
       await report({ ...metadata(), ...mismatch });
@@ -63,7 +88,7 @@ describe('CoCo consolidated compatibility reports', () => {
   });
 
   test('CLI list is read-only and native execution requires explicit opt-in', async () => {
-    for (const entry of ['run-cortex-code-e2e.ts', 'run-cortex-code-ui-e2e.ts']) {
+    for (const entry of ['run-cortex-code-e2e.ts', 'run-cortex-code-ui-e2e.ts', 'run-cortex-code-workflows.ts', 'run-cortex-code-auth-control.ts']) {
       const env = { ...process.env, CORTEX_CODE_E2E: '', CORTEX_TEST_CONNECTION: 'DO_NOT_PRINT_CONNECTION', TMPDIR: root };
       const listed = spawnSync(process.execPath, ['--import', 'tsx', `scripts/${entry}`, '--list'], { env, encoding: 'utf8', timeout: 30000 });
       expect(listed.status).toBe(0); expect(listed.stdout).not.toContain('DO_NOT_PRINT');

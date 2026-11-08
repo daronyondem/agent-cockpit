@@ -249,6 +249,25 @@ tool is unavailable.
   OAuth, strict Memory, platforms and complete workflows remain separate.
   Durable note: `notes/note_2026-11-08T18-35-14-712Z_cortex-code-c54-compatibility.md`.
 
+- CoCo C55 workflows use `CORTEX_CODE_E2E=1 npm run
+  e2e:cortex-code-workflows` and the separate `e2e:cortex-code-auth-control`.
+  Required individual boolean outcomes live in cortexCompatReports.ts; a
+  top-level pass is insufficient. Native chat, KB, Context, Routines and
+  PM2 mobile/OCR passed 5/5 on macOS arm64/Node26/CoCo1.2.35, with observed
+  processes/private PM2 drained and activation/executable unchanged. Service
+  fixtures remain isolated in-process HTTP/WS; browser fixtures use production
+  assets and PM2. Governed chat Memory uses an authenticated separate Claude
+  processor, KB needs real Pandoc/LibreOffice/Ollama, and outreach is a stub.
+  Strict CoCo Memory remains disabled. Empty auth omits the model catalog:
+  retain Cockpit's pre-prompt configuration guard, then check low-level native
+  no-connection inference independently. Never weaken production guards or
+  treat expected failure as auth/account-isolation proof. The auth control
+  never selects a saved connection. Keep shared credentials, private reports,
+  short roots, no retry/replay and full Jest before browser builds. Human OAuth,
+  strict Memory, native other platforms and physical devices remain separate.
+  Eight tasks remain; C56 is next. Durable note:
+  `notes/note_2026-11-08T21-12-43-644Z_cortex-code-c55-workflows.md`.
+
 ## Mobile PWA
 
 - Mobile direction is PWA-only. Native iOS/Expo work was evaluated but the

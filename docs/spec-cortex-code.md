@@ -1836,7 +1836,6 @@ claimed root cause. [Testing specification](spec-testing.md#coco-consolidated-co
 defines exact catalogs, controls, deadlines, report validation and cleanup.
 C26, C35, Ubuntu/Windows, complete workflows and physical mobile are independent.
 
-
 C54 native mobile recovery exposed a separate chat admission race: HTTP Stop
 can finish its terminal finalizer/detach the route before the old CoCo stream
 iterator unwinds and removes its active lease. A new explicit message then hit
@@ -1868,3 +1867,20 @@ shutdown and every outstanding direct reset promise. Thus removal from the
 session map or absence of an active consumer cannot make shutdown finish while
 an old native lease is still draining. The lifecycle tests hold native close,
 verify reset/shutdown remain pending, and ensure waiting successors never start.
+
+## P9 C55 — Real workflow and missing-auth catalogs
+
+P9 C55 adds separate `e2e:cortex-code-workflows` and
+`e2e:cortex-code-auth-control` catalogs through the same supervisor. The real
+account catalog runs chat, KB, Context, Routines and production mobile/OCR
+fixtures, validating fixed individual workflow outcomes before projecting a
+pass. Browser work uses an isolated PM2 server; service workflows retain their
+isolated real-adapter HTTP/WS fixture. Chat Memory governance uses a separate
+authenticated Claude CLI, keeping strict CoCo Memory unavailable. Actual native
+conversion, embeddings, scheduling, cancellation, persistence, resume and output
+are asserted; Routine outreach stays a stub. Empty-config expected failure has
+its own command/report and never selects a saved account: Cockpit's model guard
+rejects before prompt; a separate low-level prompt verifies native no-connection
+failure. This leaves auth success, account isolation and human OAuth distinct.
+See [workflow fixture specification](spec-testing.md#coco-complete-workflow-fixtures-p9-c55)
+for prerequisites, exact coverage/deadlines, mandatory report checks and limits.

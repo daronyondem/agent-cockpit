@@ -1434,9 +1434,26 @@ P7 C47 evidence (November 7 local / November 8 UTC, 2026; changes following
   Branch coverage floor raised; activation/executable snapshots are unchanged.
   C26, conditional C35, Ubuntu/Windows and full workflows remain independent.
   Nine tasks remain; C55 is next while C52/C53 await native environments.
-- [ ] C55 — Add real Cockpit workflow fixtures for core and each enabled
+- [x] C55 — Add real Cockpit workflow fixtures for core and each enabled
   processor. Browser fixture server must be isolated and PM2-managed; preserve
   normal server data/auth. Separate missing-auth fixtures from real-account runs.
+  **Complete:** dedicated workflow/auth-control catalogs reuse the pinned C54
+  supervisor with mandatory individual outcomes. Real chat/MCP/resume/artifact/
+  relocation, KB conversion/gleaning/embeddings/dreaming/re-dreaming, Context
+  scan/maintenance/schedules/Stop, Routine proposal/manual/scheduled/deadline
+  and PM2 mobile/OCR/history/recovery passed 5/5 (62 required checks). Separate
+  empty-config control passed 8 checks: Cockpit rejects missing model configuration
+  before prompting, then independent native inference fails without usage/tools/
+  a waiting login wizard. Production guards remain intact. Shared credentials,
+  private data/PM2/process cleanup and unchanged native activation/executable
+  verified on macOS arm64/Node26/CoCo1.2.35. Evidence is the shareable
+  compatibility-report.json in /tmp/cockpit-cortex-workflows-compat-nlmgTo and
+  /tmp/cockpit-cortex-auth-control-compat-C2s9H4 (ad0c55e, dirty working tree).
+  Full Jest: 180 suites / 3,003 tests; all required gates pass. Memory governance
+  uses a separate Claude CLI, Routine outreach is a stub, and service fixtures
+  are in-process while the browser server is PM2-managed. No claim that all
+  workflows ran through a browser, strict CoCo Memory, human OAuth, native other
+  platforms or physical mobile are certified. Eight tasks remain; C56 is next.
 - [ ] C56 — Resolve or explicitly defer native goals (G6), subagents (G7),
   steering, additional media (G4), billing (G10), and account isolation (G5).
   Update capabilities/tests/specs only for positively verified behavior.

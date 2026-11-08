@@ -463,6 +463,22 @@ and native queue/mobile probes aligned with this admission rule. Track pending
 reset/drain promises independently of session-map entries, and include them and
 previous cleanup in reset/shutdown completion even when no consumer is active.
 
+C55 complete native workflows use `CORTEX_CODE_E2E=1 npm run
+e2e:cortex-code-workflows` (chat, KB, Context, Routines, mobile/OCR). Keep the
+separate `e2e:cortex-code-auth-control` expected-failure catalog free of saved
+account selection; an empty native home can omit the model catalog, so preserve
+Cockpit's configuration guard and check native inference separately. Never
+weaken production guards to reach a missing-auth prompt. Validate each fixed
+workflow outcome in `cortexCompatReports.ts`, not just a top-level pass.
+The browser fixture is isolated and PM2-managed; real-adapter service fixtures
+remain in-process. Chat's governed Memory uses a separate authenticated Claude
+processor; strict CoCo Memory remains disabled. KB needs real Ollama/Pandoc/
+LibreOffice; Routine outreach stays a stub. Missing dependencies must fail,
+never silently skip, mock or retry. Preserve short temporary roots, shared auth,
+private report material and full-Jest-before-browser ordering. See the C55
+matrix in `docs/spec-testing.md`; no full browser coverage of every workflow,
+physical mobile, human OAuth or additional platform support is implied.
+
 # Server Management
 
 NEVER run `node server.js` directly. This causes orphan processes and port conflicts.

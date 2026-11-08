@@ -7,7 +7,7 @@ import { execFile } from 'child_process';
 import { promisify } from 'util';
 import { cortexVersion, resolveCortexRuntime } from '../src/services/backends/cortexRuntime';
 import { CortexConnections } from '../src/services/cortexConnections';
-import { CORTEX_PROBES, readCortexProbeReport, selectCortexProbes, type CortexCompatSuite } from './cortexCompatReports';
+import { CORTEX_PROBES, CORTEX_WORKFLOW_CHECKS, readCortexProbeReport, selectCortexProbes, type CortexCompatSuite } from './cortexCompatReports';
 import { drainCortexPm2, runCortexProbeProcess } from './cortexCompatProcess';
 import type { CliProfile } from '../src/types';
 
@@ -15,7 +15,7 @@ const exec = promisify(execFile);
 
 export async function runCortexCompatibility(suite: CortexCompatSuite, args = process.argv.slice(2)): Promise<void> {
   if (args.length === 1 && ['--list', '--help'].includes(args[0])) {
-    process.stdout.write(`CoCo ${suite}: ${CORTEX_PROBES[suite].map(probe => probe.id).join(', ')}\nUse CORTEX_CODE_E2E=1; optionally repeat --probe <id>. Native inference uses shared terminal auth.\n`);
+    process.stdout.write(`CoCo ${suite}: ${CORTEX_PROBES[suite].map(probe => probe.id).join(', ')}\nUse CORTEX_CODE_E2E=1; optionally repeat --probe <id>. ${suite === 'auth-control' ? 'Expected failure with empty native configuration; no saved account is selected.' : 'Native inference uses shared terminal auth.'}\n`);
     return;
   }
   const selected = selectCortexProbes(suite, args);
@@ -32,12 +32,14 @@ export async function runCortexCompatibility(suite: CortexCompatSuite, args = pr
   const controller = new AbortController();
   const abort = () => controller.abort();
   process.once('SIGINT', abort); process.once('SIGTERM', abort);
-  const deadline = setTimeout(abort, (suite === 'ui' ? 70 : 40) * 60_000);
+  const deadline = setTimeout(abort, ({ backend: 40, ui: 70, workflows: 70, 'auth-control': 5 }[suite]) * 60_000);
   const results: Array<Record<string, unknown>> = [];
   const report: Record<string, unknown> = { startedAt, suite, platform: process.platform, osRelease: os.release(), arch: process.arch, node: process.version,
     selected: selected.map(probe => probe.id), omitted: CORTEX_PROBES[suite].filter(probe => !selected.some(item => item.id === probe.id)).map(probe => probe.id),
     scope: selected.length === CORTEX_PROBES[suite].length ? 'all catalog probes' : 'selected catalog probes',
-    pending: ['C26 human remote OAuth', 'C35 strict Memory', 'C52 Ubuntu', 'C53 Windows', 'C55 complete workflows', 'physical mobile devices'],
+    authScope: suite === 'auth-control' ? 'empty native configuration; expected failure only' : 'shared terminal credentials; real account inference required',
+    pending: ['C26 human remote OAuth', 'C35 strict Memory', 'C52 Ubuntu', 'C53 Windows', 'physical mobile devices',
+      ...(suite === 'workflows' && selected.length === CORTEX_PROBES.workflows.length ? [] : ['complete workflow catalog outside this run'])],
     historicalObservations: [
       'C49 saved-auth verification failure and cached-job timeout; later passes do not establish their cause.',
       'C51 native activation drift to 1.2.37, including after query flags; originating process unproven.',
@@ -64,7 +66,8 @@ export async function runCortexCompatibility(suite: CortexCompatSuite, args = pr
     report.revision = revision;
     report.dirty = Boolean((await exec('git', ['status', '--porcelain'], { cwd, timeout: 10000 })).stdout.trim());
     activationBefore = await fs.realpath(activation).catch(() => null);
-    const connection = process.env.CORTEX_TEST_CONNECTION || (await new CortexConnections().list())[0]?.name;
+    const connection = suite === 'auth-control' ? 'cortex_missing_auth_fixture'
+      : process.env.CORTEX_TEST_CONNECTION || (await new CortexConnections().list())[0]?.name;
     assert.ok(connection, 'Select a saved native connection');
     const profile: CliProfile = { id: 'cortex-compatibility', name: 'CoCo compatibility', harness: 'cortex-code', authMode: 'account',
       command: process.env.CORTEX_TEST_COMMAND || 'cortex', cortexCode: { connection }, createdAt: startedAt, updatedAt: startedAt };
@@ -77,7 +80,8 @@ export async function runCortexCompatibility(suite: CortexCompatSuite, args = pr
     jobEnv.CORTEX_TEST_MODEL = 'claude-sonnet-4-6';
     // Subset flags must never silently change a catalog probe's meaning.
     delete jobEnv.CORTEX_UPDATE_UI_PROBE;
-    if (suite === 'ui') {
+    if (suite === 'auth-control') delete jobEnv.CORTEX_TEST_CONNECTION;
+    if (suite === 'ui' || suite === 'workflows') {
       report.phase = 'build';
       for (const side of ['web', 'mobile']) {
         const mobile = side === 'mobile', app = mobile ? path.join(cwd, 'mobile/AgentCockpitPWA') : cwd;
@@ -92,7 +96,8 @@ export async function runCortexCompatibility(suite: CortexCompatSuite, args = pr
       const { tmp, result } = await run(probe.id, process.execPath, ['--import', 'tsx', `scripts/probe-cortex-${probe.id}.ts`],
         { env: { [probe.flag]: '1' }, timeoutMs: probe.minutes * 60_000 });
       try {
-        const native = await readCortexProbeReport(tmp, probe.prefix, revision);
+        const checks = suite === 'workflows' || suite === 'auth-control' ? CORTEX_WORKFLOW_CHECKS[probe.id] : [];
+        const native = await readCortexProbeReport(tmp, probe.prefix, revision, checks);
         result.native = native; result.passed = result.passed === true && native.passed;
       }
       catch { result.reportInvalid = true; result.passed = false; }

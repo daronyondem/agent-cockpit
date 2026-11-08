@@ -1215,13 +1215,16 @@ remain unchanged.
 |---|---|---|
 | e2e:cortex-code | runtime, events, processors | 8, 15, 12 minutes |
 | e2e:cortex-code-ui | auth, interactions, queue, usage, mobile | 12, 12, 10, 12, 15 minutes |
+| e2e:cortex-code-workflows | chat, kb, context, routines, mobile | 12, 12, 12, 12, 15 minutes |
+| e2e:cortex-code-auth-control | missing-auth | 3 minutes |
 
-Backend and UI wrapper deadlines are 40 and 70 minutes. The UI runner first
+Backend, UI, workflow and auth-control wrapper deadlines are 40, 70, 70 and
+5 minutes. The UI and workflow runners first
 builds production web/mobile assets (two-minute deadline each). It does not run
 Jest: finish asset-mutating full Jest before starting it. The default catalog
 excludes installer/updater downloads, packaged platform installation, the
-research phase-0 restriction probe and the full workflow fixtures (C55).
-Those dedicated probes remain independently opt-in. Processor primitives are
+research phase-0 restriction probe. Full workflows have their own C55 command
+described below. Those dedicated probes remain independently opt-in. Processor primitives are
 not complete KB/Context/Routine or strict Memory acceptance.
 
 Ownership/report logic lives in scripts/run-cortex-code-compat.ts, report
@@ -1272,9 +1275,10 @@ The report retains three historical observations independently of a later pass:
 C49 saved-auth verification failure/cached-job timeout; C51 native activation
 drift to 1.2.37 with unproven originating process; and isolated HOME with shared
 SNOWFLAKE_HOME returning null auth. A clean rerun establishes neither root
-cause nor supported isolation. C26, conditional C35, native Ubuntu/Windows,
-complete workflows and physical mobile devices remain pending gates in every
-report. C49's independent update-row-only mode remains outside the auth catalog.
+cause nor supported isolation. C26, conditional C35, native Ubuntu/Windows and
+physical mobile devices remain pending gates in every report. Complete workflows
+remain outside the scope of backend/UI/auth-control and selected workflow reports.
+C49's independent update-row-only mode remains outside the auth catalog.
 
 Focused tests: test/cortexCompatRunner.test.ts covers catalog/argument scope,
 metadata validation, absent/duplicate/symlink/oversize/malformed reports,
@@ -1288,7 +1292,6 @@ regressions. These
 supervision fixtures are not authenticated native evidence; run the commands
 with the actual retained CLI for that evidence. Mobile client source/contracts remain unchanged; CoCo server admission after
 Stop now waits safely for the native drain, verified by the existing mobile probe.
-
 
 C54 runner development retained an initial UI failure at PM2 fixture startup:
 the former nested system-temp path exceeded the macOS tsx socket limit (EINVAL).
@@ -1341,3 +1344,93 @@ full Jest with frozen source before rebuilding clients/browser checks; mixed
 source versions previously inflated V8 mappings and are not acceptance data.
 Backend/web/mobile/tool types, zero-warning lint, maintainability, API spec
 and ADR checks pass. Both client assets and bundle budget remain verified.
+
+### CoCo complete workflow fixtures (P9 C55)
+
+```sh
+npm run e2e:cortex-code-workflows -- --list
+npm run e2e:cortex-code-auth-control -- --list
+CORTEX_CODE_E2E=1 npm run e2e:cortex-code-auth-control
+CORTEX_CODE_E2E=1 npm run e2e:cortex-code-workflows
+CORTEX_CODE_E2E=1 npm run e2e:cortex-code-workflows -- --probe kb
+```
+
+These catalogs use the same retained executable, serialization lock, bounded
+process supervision, private temporary folders, validated metadata projection
+and activation checks as C54. The workflow command builds both production clients
+before native work. Finish full Jest first. Its real-account catalog uses shared
+terminal auth; it never logs out or copies credentials. Test data, workspace files,
+SQLite/PGLite and app settings are temporary. The browser fixture server is
+PM2-managed with an isolated data root and private PM2 home. The service fixtures
+use the existing in-process HTTP/WS test helper with the real CoCo adapter; its
+registered mock adapter is never the selected profile. They do not claim that
+every workflow was driven through a browser or a production process manager.
+
+| Fixture | Actual workflow boundary and required results |
+|---|---|
+| chat | Real Cockpit HTTP/WS durable chat, native plugin/stdio MCP discovery, governed Memory note/search, SQLite topic reads/PGLite keyword search, usage once per turn, idle and adapter restart resume, delivered artifact, immutable workspace identity through relocation and native read/write in its new cwd. Memory governance runs through a separate authenticated Claude CLI; this does not enable strict CoCo Memory processors. |
+| kb | Real ingestion/digestion/dream services and isolated stores; JPEG/PDF/DOCX/PPTX native AI conversion and duplicate reuse, PNG media preparation without changing original bytes, sequential digestion/gleaning, glossary expansion, real Ollama embeddings/vector search, native KB MCP, dreaming/re-dreaming/materialized topics, interrupted digestion with one attempt and fresh later inference. |
+| context | Actual Workspace Context service and scheduler: disabled passivity, zero sources without inference, scan/uploaded sources, global/workspace profile/model/effort selection, direct markdown maintenance, eligible Memory consumption while retaining inactive entries/references/assets, run retention, scheduled scan/maintenance, Stop retaining pending Memory, and fresh inference afterward. Scheduler clock advancement is a fixture control. |
+| routines | Actual chat proposal/validation/install plus Routine service/routes/scheduler: opt-in instructions, manual/scheduled runs, persistent state, output/temp/history/retention, explorer access, duplicate exclusion, real one-minute native deadline with no retry or failed-run notification, and disabled passivity. Outreach is an injected stub; no external message is sent. |
+| mobile | Production Chromium mobile viewport and isolated PM2 app: profile/model/effort, real upload/image/text/OCR, cached OCR and model denial, invocation-only OCR choices, thinking/tools, socket replay, delivered artifact/preview/download, read-only history/reset, Stop/descendant drain and a fresh explicit turn with one interrupted tool attempt. This is browser evidence, not physical iOS/Android acceptance. |
+
+Prerequisites beyond locked root/mobile dependencies and Playwright Chromium:
+authenticated CoCo 1.2.35 with the selected connection and claude-sonnet-4-6;
+authenticated `claude` (or CORTEX_TEST_MEMORY_COMMAND) for chat's separate Memory
+governance; real Pandoc, LibreOffice and a running local Ollama containing
+nomic-embed-text for KB. No fallback installs, mocked AI, skipped prerequisite
+or automatic native retry can turn a missing dependency into a pass. Native
+Routine timeout takes at least a minute. Strict Memory consolidation/dreaming
+requires restrictedText and remains unavailable to CoCo; titles/summaries retain
+their existing fallback behavior. Unsupported native goals/agents/steering/media
+and unknown Snowflake pricing retain their independent gates.
+
+`CORTEX_WORKFLOW_CHECKS` in cortexCompatReports.ts lists fixed nested boolean
+outcomes for each workflow. Full/selected workflow reports validate all required
+checks in addition to native pass/version/revision/platform metadata. Missing
+outcomes and truthy strings fail; the shareable report includes only the fixed
+check labels and `evidenceComplete`, never raw native values. A full workflow
+catalog pass removes the outside-workflow scope marker only for that catalog;
+backend/UI/auth-control and selected workflow runs retain it. Other platform,
+human OAuth, strict Memory and physical-device gates always remain independent.
+
+The separate auth-control command does not select/read a saved connection or
+pass CORTEX_TEST_CONNECTION into its probe. It still validates the real retained
+executable using a synthetic name, then runs probe-cortex-missing-auth.ts with an
+empty custom SNOWFLAKE_HOME. Its profile's custom home overrides only its child
+environment; the parent's normal terminal credential home is unchanged. First,
+the actual Cockpit HTTP/WS path must fail model selection before prompting,
+because native empty auth omits its model catalog: one terminal frame, no tools
+or usage, one saved user message. Then a separate low-level native prompt must
+produce the version-tested no-connection error without complete usage, tool work
+or a waiting login wizard. ACP/session creation never proves login. This is
+expected failure evidence only, with an explicit authScope; it does not certify
+account isolation, a real invalid account/key, token expiry or successful auth.
+The fixture does not relax production configuration guards to reach inference.
+
+Focused deterministic coverage lives in test/cortexCompatRunner.test.ts and
+test/cortexCompatProcess.test.ts, alongside existing CoCo chat/KB/Context/Routine/
+processor/mobile regression suites. There is no product UI, route, contract,
+installer, capability or mobile source change in C55. Raw native reports/logs,
+fixture settings and screenshots are private; share only compatibility-report.json.
+
+C55 acceptance: all five workflow probes passed (62 required individual checks)
+in /tmp/cockpit-cortex-workflows-compat-nlmgTo/compatibility-report.json;
+the separate missing-auth catalog passed all eight required checks in
+/tmp/cockpit-cortex-auth-control-compat-C2s9H4/compatibility-report.json.
+Both record macOS/Darwin 25.5.0 arm64, Node 26.0.0,
+CoCo 1.2.35+191333.f82de3d91715, revision ad0c55e and dirty working-tree state.
+All observed processes and private PM2 drained, and native activation/retained
+executable snapshots stayed unchanged. These are developer-checkout acceptance
+reports, not public release or account-isolation evidence. Earlier auth-control
+fixture expectations were corrected to retain the unavailable-model guard and
+trim native error whitespace; their failed reports remain failed. Production
+configuration/auth guards were unchanged.
+
+Frozen full Jest: 180 suites / 3,003 tests pass; three opt-in suites / 20 tests
+skipped. Statements/lines 88.71% (56,028/63,153), branches 76.94%
+(13,320/17,310), functions 93.94% (2,853/3,037); existing floors remain intact.
+Root/web/mobile/strict tooling types, zero-warning lint, maintainability,
+189-route spec drift and 92 ADR checks pass. Both clients were rebuilt after
+Jest by the workflow runner; desktop bundle budget passes. C26, conditional C35,
+native Ubuntu/Windows, physical devices and C56–C59 remain separate.
