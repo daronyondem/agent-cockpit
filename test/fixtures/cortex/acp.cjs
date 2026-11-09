@@ -23,6 +23,12 @@ readline.createInterface({ input: process.stdin }).on('line', line => {
     }
   } else if (frame.method === 'session/prompt') {
     prompts++;
+    if (frame.params.prompt[0].text === 'late-descendant') {
+      const file = process.env.FIXTURE_LATE_CHILD_FILE;
+      const program = `setTimeout(()=>{const child=require('child_process').spawn(process.execPath,['-e','setInterval(()=>{},1000)'],{detached:true,stdio:'ignore'});child.unref();require('fs').writeFileSync(${JSON.stringify(file)},String(child.pid))},350);setTimeout(()=>process.exit(0),900);`;
+      const parent = require('child_process').spawn(process.execPath, ['-e', program], { stdio: 'ignore' });
+      require('fs').writeFileSync(file + '.parent', String(parent.pid));
+    }
     if (frame.params.prompt[0].text === 'wait') pending = frame.id;
     else { update('OK'); reply(frame.id, { stopReason: 'end_turn' }); }
   } else if (frame.method === 'session/cancel') {

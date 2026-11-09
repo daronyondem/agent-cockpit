@@ -615,6 +615,14 @@ tool is unavailable.
 
 ## Process Management
 
+- CoCo descendant scans stay at 250 ms on POSIX / 1 s on Windows for the
+  entire watched runtime lifetime, including idle cached sessions. Prompt
+  completion does not prove background work drained; slower scans can lose a
+  detached child's ancestry when its short-lived parent exits. Keep native
+  identity checks, awaited cleanup and no replay. The runtime's real process
+  fixture covers a child spawned after prompt completion. Durable note:
+  `notes/note_2026-11-09T22-05-10-368Z_cortex-code-descendant-scan-cadence.md`.
+
 - `BackendRegistry.shutdownAll()` also runs after CLI updates and is awaited by
   server shutdown and the update route, so adapter shutdown must permit
   subsequent runtimes, return a Promise for asynchronous cleanup, and close

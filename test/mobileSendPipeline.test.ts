@@ -4,9 +4,10 @@ import { createRoot } from 'react-dom/client';
 import { loadMobileModule } from './mobileModuleLoader';
 
 type PendingInteraction = { kind: 'question' | 'plan'; prompt: string; options?: unknown[]; decisionId?: string };
+class APIError extends Error { status = 500; }
 
 const { useSendPipeline } = loadMobileModule('useSendPipeline.ts', {
-  react: require('react'), './api': {}, './appModel': loadMobileModule('appModel.ts'),
+  react: require('react'), './api': { AgentAPIError: APIError }, './appModel': loadMobileModule('appModel.ts'),
 });
 
 async function renderPipeline(first: PendingInteraction, sendInput: jest.Mock, extra: Record<string, unknown> = {}, client: Record<string, unknown> = {}) {
@@ -143,4 +144,47 @@ test('a message-mode answer cannot bypass a newer card', async () => {
     expect(sendMessage).not.toHaveBeenCalled();
     expect(view.current.interaction).toBe(next);
   } finally { await view.close(); }
+});
+
+test.each([false, true])('message-mode answers preserve separate drafts/uploads before and after a send (failure=%s)', async fail => {
+  const fixture = messageSendFixture();
+  let resolve!: (response: unknown) => void, reject!: (error: Error) => void;
+  fixture.sendMessage.mockImplementation(() => new Promise((yes, no) => { resolve = yes; reject = no; }));
+  const sendInput = jest.fn().mockResolvedValue({ mode: 'message' });
+  const originalUploads = [{ id: 'original-upload', status: 'done' }];
+  const newerUploads = [{ id: 'newer-upload', status: 'done' }];
+  const onError = jest.fn();
+  (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
+  const root = createRoot(document.createElement('div')); let view: any;
+  function Harness() {
+    const [draft, setDraft] = useState('Separate follow-up');
+    const [uploads, setUploads] = useState(originalUploads);
+    const [interaction, setInteraction] = useState<PendingInteraction | null>(question);
+    const pipeline = useSendPipeline({ ...fixture.extra,
+      activeConversation: { id: 'fixture', messages: [] }, pendingInteraction: interaction, interactionAnswer: 'Blue',
+      clientRef: { current: { sendInput, sendMessage: fixture.sendMessage } },
+      draft, setDraft, pendingAttachments: uploads, setPendingAttachments: setUploads,
+      setPendingInteraction: setInteraction, setInteractionAnswer: jest.fn(), onError,
+    });
+    view = { ...pipeline, draft, uploads, setDraft, setUploads }; return null;
+  }
+  let sending: Promise<void> | undefined;
+  try {
+    await act(async () => { root.render(createElement(Harness)); });
+    await act(async () => { sending = view.submitInteraction('Blue'); });
+    expect(fixture.sendMessage).toHaveBeenCalledWith('fixture', expect.objectContaining({ content: 'Blue' }));
+    expect(fixture.sendMessage.mock.calls[0][1]).not.toHaveProperty('attachments');
+    expect(view.draft).toBe('Separate follow-up'); expect(view.uploads).toBe(originalUploads);
+    await act(async () => { view.setDraft('Newer follow-up'); view.setUploads(newerUploads); });
+    await act(async () => {
+      if (fail) reject(new Error('Answer send failed'));
+      else resolve({ userMessage: { id: 'answer', role: 'user', content: 'Blue' }, streamReady: true });
+      await sending;
+    });
+    expect(view.draft).toBe('Newer follow-up'); expect(view.uploads).toBe(newerUploads);
+    expect(onError).toHaveBeenCalledTimes(fail ? 1 : 0);
+    expect(fixture.sendMessage).toHaveBeenCalledTimes(1);
+  } finally {
+    await act(async () => { resolve?.({ userMessage: { id: 'answer', role: 'user', content: 'Blue' }, streamReady: true }); await sending; root.unmount(); });
+  }
 });

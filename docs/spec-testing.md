@@ -29,8 +29,8 @@ Test HTTP servers that are contacted through `127.0.0.1` bind explicitly to `127
 | `test/memoryProcessorSelect.test.ts` | Rendered lazy Memory control: disabled saved CoCo selection, no automatic change, explicit eligible selection, unsupported choice exclusion and empty catalog. |
 | `test/cortexProfiles.test.ts` | CoCo config validation, literal names, credential-field rejection, identity/resolution/default completeness, settings round-trip/edit/atomic rejection, read-time repair of malformed stored config and setup-home migration. No native execution. |
 | `test/cortexProtocol.test.ts` | Dedicated strict CoCo JSONL framing/IDs/reverse ownership, limits, failures, deadlines (including zero = no deadline) and private diagnostics. |
-| `test/cortexRuntime.test.ts` | Deterministic executable fixture: exact argv/env/version, realpath pinning across activation changes, profile fingerprints, session replay, cancellation, catalog scope, startup/reset/idle/reusable registry lifecycle, and fast descendant scans only while a prompt is pending. |
-| `test/cortexProcess.test.ts` | POSIX detached-child cleanup after root exit, unrelated process preservation, identity reuse, bounded stop, enumeration failure and active (250 ms)/idle (2 s) scan pacing. |
+| `test/cortexRuntime.test.ts` | Deterministic executable fixture: exact argv/env/version, realpath pinning across activation changes, profile fingerprints, session replay, cancellation, catalog scope, startup/reset/idle/reusable registry lifecycle, and cleanup of a detached child spawned after prompt completion whose parent exits before runtime shutdown. |
+| `test/cortexProcess.test.ts` | POSIX detached-child cleanup after root exit, unrelated process preservation, identity reuse, bounded stop, enumeration failure and continuous 250 ms POSIX scanning until stop, with idempotent watcher registration. |
 | `test/cortexMobileAttachments.test.ts` | Selected OCR model/effort, synchronous duplicate exclusion, deferred ownership across navigation/reset/removal/clear/model/unmount, cached insertion, failure and explicit retry. |
 | `test/cortexMobileSelection.test.ts` | Saved CoCo model/effort through pending/failed profile discovery, locked profile, unsupported goal capability, and dismissal of the Conversation actions sheet before opening session history. |
 | `test/chatAttachmentResolution.test.ts` | Explicit upload references derive real server metadata; missing, nested, traversal, non-file and symlink references are rejected. CoCo HTTP integration verifies actual PNG blocks and prose-only paths staying text; desktop and mobile tests cover immediate and queued references. |
@@ -1545,3 +1545,35 @@ catalog validates 14 outcomes, including actual MCP initialize/tools-list. This 
 Memory only on that distribution/platform; prior strict-Memory deferrals in
 historical checkpoint sections are superseded for this scope. C26, C52/C53,
 physical devices, new releases and account isolation remain independent.
+
+
+### Post-review descendant and mobile draft regressions (2026-11-09)
+
+The ACP executable fixture starts a short-lived parent during a prompt and
+returns the prompt result before that parent forks a detached child. The real
+runtime test waits for the parent to exit, then closes the runtime and requires
+the detached child to be gone. It failed with prompt-dependent scan pacing and
+passes with continuous runtime-lifetime scans. Process tests also verify one
+watcher, normal cadence through idle time and no scans after stop.
+
+The rendered mobile pipeline tests hold a message-mode answer request pending
+while keeping a separate composer draft/uploads. They verify no initial clearing,
+no unrelated uploads in the answer request, and preservation of newer draft/
+upload edits after both success and failure. The cases failed before the fix.
+
+Final frozen full V8 run: 185 suites / 3,084 tests passed, with the existing
+three opt-in suites / 20 tests skipped. Statements/lines: 88.81%
+(56,463/63,572), branches: 77.36% (13,677/17,678), functions: 94.02%
+(2,882/3,065). Floors raised to 88.80/77.34/93.98 and verified against the same
+LCOV collection; unchanged tests were not recollected solely for that config edit.
+Backend/web/mobile types, zero-warning lint, maintainability, spec/ADR checks,
+production client builds and web bundle budget passed.
+
+Native CoCo 1.2.35/macOS arm64 selected runtime probe passed 1/1 (selected 1/3)
+at `/tmp/cockpit-cortex-backend-compat-GZ0xmU/compatibility-report.json`; selected
+production desktop/mobile queue probe passed 1/1 (selected 1/5) at
+`/tmp/cockpit-cortex-ui-compat-vyRYFi/compatibility-report.json`. These retain
+shared terminal auth and prove their scoped cancellation/root-exit/resume and
+question/draft/reconnect/Stop/queue paths. The delayed post-prompt fork and
+message-mode composer preservation are the dedicated deterministic regressions;
+no new native platform, human OAuth, full-catalog or physical-device claim.

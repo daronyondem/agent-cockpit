@@ -425,7 +425,7 @@ export function useSendPipeline(options: UseSendPipelineOptions) {
       options.setPendingInteraction((current) => current === interaction ? null : current);
       options.setInteractionAnswer('');
       if (response.mode === 'message') {
-        await sendMessageNow({ content: answer }, { answering: interaction });
+        await sendMessageNow({ content: answer }, { answering: interaction, clearComposer: false, restoreDraftOnFailure: false });
       }
     } catch (error) {
       if (ownsInteraction()) options.onError(error);

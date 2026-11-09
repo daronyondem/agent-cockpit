@@ -7,8 +7,6 @@ import { CortexRuntime, cortexVersion, resolveCortexRuntime, startCortexRuntime,
 import { CortexSessions } from '../src/services/backends/cortexSessions';
 import { CortexCodeAdapter } from '../src/services/backends/cortex';
 import { BackendRegistry } from '../src/services/backends/registry';
-import { cortexFixture } from './helpers/cortexFixtures';
-import type { CortexRpcMessage } from '../src/types';
 
 // The deterministic executable is a POSIX shebang fixture; Windows has separate launch tests.
 const runtimeSuite = process.platform === 'win32' ? describe.skip : describe;
@@ -48,6 +46,34 @@ runtimeSuite('CoCo POSIX runtime foundations', () => {
     expect(state).toMatchObject({ cwd: dir, memory: '0', test: '0', manual: '1' });
     expect(runtime.version).toBe('1.2.35');
     expect(cortexRecord(runtime.init.agentInfo).version).toBe('1.0.0');
+  });
+
+  test('prompt completion still tracks a delayed detached child after its short-lived parent exits', async () => {
+    const file = path.join(dir, 'late-child.pid');
+    const runtime = await start({ ...options, profile: { ...profile, env: { FIXTURE_LATE_CHILD_FILE: file } } });
+    const alive = (pid: number) => { try { process.kill(pid, 0); return true; } catch { return false; } };
+    const waitFor = async (ready: () => Promise<boolean> | boolean) => {
+      const deadline = Date.now() + 1_700;
+      while (!await ready()) {
+        if (Date.now() > deadline) throw new Error('Delayed descendant fixture deadline exceeded');
+        await new Promise(resolve => setTimeout(resolve, 10));
+      }
+    };
+    let childPid: number | undefined;
+    try {
+      await runtime.prepare();
+      await prompt(runtime, 'late-descendant');
+      await waitFor(() => fs.access(file).then(() => true, () => false));
+      childPid = Number(await fs.readFile(file, 'utf8'));
+      const parentPid = Number(await fs.readFile(file + '.parent', 'utf8'));
+      await waitFor(() => !alive(parentPid));
+      expect(alive(childPid)).toBe(true);
+      await runtime.close();
+      expect(alive(childPid)).toBe(false);
+    } finally {
+      await runtime.close();
+      if (childPid && alive(childPid)) { try { process.kill(-childPid, 'SIGKILL'); } catch { /* fixture reaped */ } }
+    }
   });
 
   test('setup profiles retain shared auth; explicit profiles can resolve a separate home without changing executable', () => {
@@ -243,22 +269,4 @@ runtimeSuite('CoCo POSIX runtime foundations', () => {
     expect(first.client.isClosed).toBe(true);
     expect((await sessions.acquire('one', options)).client.isClosed).toBe(false);
   });
-});
-
-test('descendant scans run fast only while a prompt is pending', async () => {
-  const f = cortexFixture();
-  const pace = jest.fn();
-  const runtime = new CortexRuntime(f.client, '1.2.35', f.runtime.init, f.runtime.config, { pace });
-  runtime.sessionId = 'fixture-session';
-  expect(pace.mock.calls).toEqual([[false]]);
-  let prompt: CortexRpcMessage | undefined;
-  f.onRequest(request => { if (request.method === 'session/prompt') prompt = request; });
-  const pending = runtime.prompt([{ type: 'text', text: 'work' }], 0);
-  expect(pace.mock.calls.at(-1)).toEqual([true]);
-  while (!prompt) await new Promise(resolve => setImmediate(resolve));
-  f.send({ jsonrpc: '2.0', id: prompt.id, result: { stopReason: 'end_turn' } });
-  await pending;
-  await Promise.resolve();
-  expect(pace.mock.calls).toEqual([[false], [true], [false]]);
-  await f.client.close();
 });

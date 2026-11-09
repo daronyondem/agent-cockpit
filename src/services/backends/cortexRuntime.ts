@@ -73,11 +73,7 @@ export class CortexRuntime {
   private promptPending: Promise<unknown> | null = null;
   private closing: Promise<void> | null = null;
 
-  /** Descendant scans run fast only while a prompt is pending. */
-  constructor(readonly client: CortexAcpClient, readonly version: string, readonly init: CortexRecord, readonly config: CortexRuntimeConfig,
-    private scope?: Pick<CortexProcessScope, 'pace'>) {
-    scope?.pace(false);
-  }
+  constructor(readonly client: CortexAcpClient, readonly version: string, readonly init: CortexRecord, readonly config: CortexRuntimeConfig) {}
 
   async prepare(sessionId?: string): Promise<void> {
     this.restoring = Boolean(sessionId);
@@ -103,11 +99,9 @@ export class CortexRuntime {
     if (this.promptPending) return Promise.reject(new Error('Cortex session already has an active prompt'));
     const request = this.client.request('session/prompt', { sessionId: this.sessionId, prompt }, timeoutMs);
     this.promptPending = request;
-    this.scope?.pace(true);
     void request.finally(() => {
       if (this.promptPending !== request) return;
       this.promptPending = null;
-      this.scope?.pace(false);
     }).catch(() => {});
     return request;
   }
@@ -152,6 +146,6 @@ export async function startCortexRuntime(config: CortexRuntimeConfig, onClient?:
       clientInfo: { name: 'agent-cockpit', version: '1' },
       clientCapabilities: { fs: { readTextFile: false, writeTextFile: false }, terminal: false } }));
     if (init.protocolVersion !== 1) throw new Error('Cortex did not negotiate ACP version 1');
-    return new CortexRuntime(client, version, init, config, scope);
+    return new CortexRuntime(client, version, init, config);
   } catch (error) { await client.close(); throw error; }
 }

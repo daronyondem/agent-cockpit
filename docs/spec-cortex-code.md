@@ -1335,11 +1335,11 @@ Shutdown is reusable, not a permanent disabled state. The registered adapter's
 ### Owned process cleanup
 
 The POSIX scope samples `ps -axo pid=,ppid=,pgid=,lstart=` every 250 ms (Windows
-snapshots every second) while the runtime starts and while a chat or processor
-prompt is pending, when tools can spawn short-lived parents. A started runtime
-with no pending prompt, such as an idle cached chat lease, samples every 2 seconds;
-a new prompt rescans immediately and restores the fast cadence. Each
-enumeration has a 750 ms deadline and 8 MiB bound. It retains PID/start identities
+snapshots every second) for the entire watched runtime lifetime, including idle
+cached sessions. Prompt completion does not prove background descendants have
+finished: a short-lived parent can spawn and detach a child after the prompt
+settles. Do not reduce the cadence at a prompt boundary or lose that child's
+ancestry before cleanup. Each enumeration has a 750 ms deadline and 8 MiB bound. It retains PID/start identities
 for the root and transitive children, including children in detached sessions,
 and continues tracking children of observed owned descendants after root exit.
 Only matching current identities can be signalled. A whole process group is

@@ -167,6 +167,9 @@ and `test/cortexProcess.test.ts` when changing those boundaries. Run the opt-in
 `scripts/probe-cortex-runtime.ts` for native runtime drift, as documented in
 `docs/spec-testing.md`; it is not yet a full Cockpit adapter/UI suite. Retain
 generation-safe reusable shutdown and identity-checked descendant cleanup.
+Keep descendant scans at the normal 250 ms POSIX / 1 s Windows cadence until
+runtime close, including cached idle sessions. Prompt completion does not prove
+background tools finished; slowing scans can lose a detached child's ancestry.
 CoCo event, interaction, model, error, usage, attachment and artifact ownership
 lives in the focused `cortex*.ts` modules. Review the corresponding focused
 tests and run opt-in `scripts/probe-cortex-events.ts` for native mapping drift.
