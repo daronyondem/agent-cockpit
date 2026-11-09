@@ -107,6 +107,12 @@ affects:
   - src/contracts/streams.ts
   - src/routes/chat/streamRoutes.ts
   - scripts/probe-cortex-chat.ts
+  - scripts/run-cortex-code-compat.ts
+  - scripts/cortexCompatReports.ts
+  - scripts/cortexCompatProcess.ts
+  - test/cortexIntegration.test.ts
+  - docs/research/cortex-code-capability-decisions.md
+  - docs/user/cortex-code.md
   - docs/spec-cortex-code.md
 ---
 
@@ -345,6 +351,21 @@ cancel acknowledgement can leave background shells running. The next explicit
 turn reloads its saved session; old abort handles cannot cancel newer owners.
 Native macOS and desktop/mobile queue acceptance verify cleanup without replay.
 
+C54/C55 consolidate real native compatibility and complete workflow acceptance
+through a pinned executable, serialized ownership, short private temporary roots,
+bounded output/deadlines and observed descendant/private PM2 draining. Validate
+fixed individual workflow outcomes; never share raw logs/account/OAuth data or
+count a partial catalog as a full pass. Browser servers are isolated and
+PM2-managed; service fixtures use real adapters in isolated in-process HTTP/WS.
+Keep empty-config expected failure separate from real-account workflow evidence.
+
+C56 explicitly defers native goals, subagent cards, unsolicited steering,
+additional native media, billing and account isolation. Keep existing guards;
+native terminal capabilities/current vendor documentation do not establish
+versioned Cockpit API semantics. Core/tool-enabled workflows can be reviewed
+without enabling strict Memory or these additional features. Each deferral's
+required evidence is recorded in the capability decision document.
+
 ## Alternatives Considered
 
 - **Reuse Kiro/Grok unchanged:** incompatible configuration, MCP, interaction
@@ -367,13 +388,16 @@ Native macOS and desktop/mobile queue acceptance verify cleanup without replay.
 - Initial evidence is macOS arm64 only. Native Windows/Linux, account isolation,
   additional media, goals/subagents and billing require separate certification.
 - Userspace descendant polling has observation races; it is not OS containment.
-- This ADR remains Proposed while implementation contracts and managed-runtime
-  choices are reviewed. Add production modules to `affects` when they exist.
+- C59 reviews the implemented ownership/contracts and mobile impact. This ADR
+  remains Proposed until merge under ADR-0001; completing implementation or
+  local acceptance does not mark it Accepted or certify residual gates.
 
 ## References
 
 - [Implementation tracker](../design/cortex-code-implementation-plan.md)
 - [Authenticated native evaluation](../research/cortex-code-acp-evaluation.md)
+- [Capability decisions](../research/cortex-code-capability-decisions.md)
+- [User setup and limits](../user/cortex-code.md)
 - [Phase 0 native probe](../../scripts/probe-cortex-phase0.ts)
 - [Versioned wire excerpts](../../test/fixtures/cortex/1.2.35/README.md)
 - [Adapter system](../spec-backend-services.md#42-backend-adapter-system)

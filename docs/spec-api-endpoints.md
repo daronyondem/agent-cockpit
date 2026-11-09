@@ -972,3 +972,14 @@ are actionable; full installed/stable distribution versions and existing
 await CoCo cleanup before the existing 400 response; active chat still returns
 409. Fresh activation/version verifies success. See
 [C49](spec-cortex-code.md#native-cli-updates-p8-c49).
+
+
+CoCo final scope (C56): goal get/set/resume/pause/clear operations remain
+unsupported and return 400 before native adapter goal methods or runtime startup.
+Exact pending question/plan replies remain supported; unsolicited active-turn
+input is rejected with 409 and cannot become another native prompt. Existing
+queues handle follow-ups. Valid server-owned PDF/audio/video references may
+enter the message stream (200/streamReady), but CoCo emits a terminal
+unsupported-format error/done before session/prompt or tool/usage events. Invalid
+or cross-conversation upload references still fail request validation with 400.
+No endpoint/body/schema is added; see [scope decisions](research/cortex-code-capability-decisions.md).

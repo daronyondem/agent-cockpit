@@ -371,5 +371,15 @@ job/HTTP/React suites and native saved-auth UI probe are listed in
 [spec-testing.md](spec-testing.md#cortex-shared-authentication-setup-p4).
 P5 registered chat and managed MCP are specified in the same canonical spec.
 P6 ephemeral tool-enabled/sequential execution and PNG OCR are specified in the
-same canonical spec. Actual human remote-browser setup (C26), full native client/platform
-acceptance, CLI installation and update compatibility remain pending.
+same canonical spec. C48–C51 and C54/C55 record scoped installation/update/macOS
+and native client/workflow acceptance. Human remote-browser setup (C26), strict
+Memory and native Ubuntu/Windows remain separate. C56 decisions and C59 review
+are in the linked research/design records.
+
+C56–C59 guard/documentation coverage: `test/cortexIntegration.test.ts` verifies
+all goal routes reject before native/adapter invocation and direct PDF/audio/video
+never reaches a native prompt. Existing backend/model/attachment/interaction/
+processor/usage/client suites retain the other gates. Public setup is in
+[user/cortex-code.md](user/cortex-code.md), explicit deferrals in
+[research/cortex-code-capability-decisions.md](research/cortex-code-capability-decisions.md),
+and review/evidence in [design/cortex-code-review.md](design/cortex-code-review.md).

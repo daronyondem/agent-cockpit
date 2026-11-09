@@ -148,6 +148,7 @@ passkeys, recovery codes, and optional legacy OAuth compatibility.
 | **Kiro** | `kiro-cli` | Fully supported |
 | **OpenCode** | `opencode` | Fully supported, self-configured provider credentials |
 | **Grok Build** | `grok` | Supported; verified on macOS, Windows/Linux validation pending |
+| **Cortex Code (CoCo)** | `cortex` | Verified on 1.2.35/macOS arm64; Ubuntu acceptance pending; Windows runtime unavailable |
 
 See [BACKENDS.md](BACKENDS.md) and [docs/user/backends.md](docs/user/backends.md)
 for feature differences, auth notes, and setup guidance.
@@ -179,6 +180,7 @@ This has three important consequences:
     `npm install -g @openai/codex`)
   - [Kiro CLI](https://kiro.dev) (`kiro-cli`)
   - [OpenCode CLI](https://opencode.ai/docs/cli/) (`opencode`)
+  - [Cortex Code CLI](docs/user/cortex-code.md) (`cortex`, official standalone installer; Snowflake connection/auth required)
   - [Grok Build CLI](https://docs.x.ai/build/overview) (`grok`, install with
     the official installer or `npm install -g @xai-official/grok`)
 - Optional: [LibreOffice](https://www.libreoffice.org/) and/or

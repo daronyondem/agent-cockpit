@@ -1,6 +1,6 @@
 # Backend Capabilities
 
-Agent Cockpit supports Claude Code, OpenAI Codex, Kiro, OpenCode, and Grok Build. The exact
+Agent Cockpit supports Claude Code, OpenAI Codex, Kiro, OpenCode, Grok Build, and Cortex Code. The exact
 feature surface differs because each CLI harness exposes different protocols and
 metadata.
 
@@ -82,3 +82,21 @@ page summarizes the user-facing shape.
 
 Native compatibility is verified on Grok Build 1.0.52, macOS arm64. See the
 [Grok implementation specification](../spec-grok-build.md) for platform limits.
+
+## Cortex Code (CoCo)
+
+- dedicated ACP sessions, thinking/tools, questions and revised plan approval;
+- named Snowflake connection with shared terminal auth and manual remote OAuth;
+- saved-session load, queues, safe Stop/reset/reconnect and explicit file delivery;
+- private native plugins for Cockpit Memory/KB MCP, with no global plugin edits;
+- tool-enabled sequential processors, KB ingestion/digestion/dreaming, Workspace
+  Context, Routines and PNG OCR;
+- PNG image input only on the tested claude-sonnet-4-6 / CoCo 1.2.35 combination;
+- input/output/cache tokens and separate context snapshots; USD cost unavailable;
+- strict Memory processors, native goals, subagent cards, unsolicited steering,
+  additional native media, billing and account isolation remain gated/deferred.
+
+Compatibility evidence is macOS arm64/1.2.35; native Ubuntu/Windows and physical
+mobile platforms remain separate. See [setup](../user/cortex-code.md),
+[capability decisions](../research/cortex-code-capability-decisions.md) and
+[the implemented contract](../spec-cortex-code.md).

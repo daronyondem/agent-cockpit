@@ -30,3 +30,23 @@ CODEX_SANDBOX_MODE=danger-full-access
 ```
 
 Set stricter values only when you intentionally want a restricted deployment.
+
+## Cortex Code native environment
+
+CoCo requires no new global Cockpit secret. Store a named connection in the CLI
+profile; native Snowflake configuration owns credentials. Normal setup retains
+the server user's terminal HOME and Snowflake home. Executable/update discovery
+is separate from account configuration.
+
+| Variable | Cockpit behavior |
+| --- | --- |
+| `SNOWFLAKE_HOME` | Native connection/config home; normally `~/.snowflake`. Explicit non-setup profile `configDir` maps here. Separate-home/two-account isolation is not certified. Setup profiles retain shared terminal auth instead of creating isolated homes. |
+| `CORTEX_OAUTH_MANUAL` | Managed native runtime/login sets `1` for the manual URL/loopback redirect handoff. OAuth URLs/state/codes belong only to the active job. |
+| `CORTEX_ENABLE_MEMORY` | Managed runtime forces `0`; use Cockpit Memory MCP with an eligible separate processor. |
+| `CORTEX_ACP_TEST_MODE` | Managed runtime forces `0`. Fake native mode is never authentication/compatibility evidence. |
+
+Developer-only `CORTEX_CODE_E2E=1` authorizes real compatibility runs;
+`CORTEX_TEST_COMMAND` and `CORTEX_TEST_CONNECTION` optionally select the retained
+executable and saved connection. They are not production setup requirements.
+The expected-failure auth-control catalog never selects a saved connection.
+See [the testing specification](../spec-testing.md#coco-consolidated-compatibility-runners-p9-c54).

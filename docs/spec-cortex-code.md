@@ -2,17 +2,18 @@
 
 [← Back to index](SPEC.md)
 
-**Implemented scope:** P1 profiles, P2 transport/runtime, and P3 internal
-events/interactions/models/usage/attachments/artifacts, P4 connection/auth
-setup, P5 durable chat/managed MCP, P6 C33/C34/C36–C41 background workflows and processor selection,
-and P7 C42–C45 desktop profile/catalog, decision, queue/reconnect and usage
-display controls, November 7, 2026.
+**Implemented scope (2026-11-08):** P1–P5 profiles/runtime/chat/setup,
+P6 C33/C34/C36–C41 tool-enabled workflows and processor selection, P7 C42–C47
+desktop/mobile decisions/queues/usage/media/auth controls, P8 C48–C51 optional
+installation/update/migration/macOS acceptance, and C54/C55 native compatibility
+and complete workflow catalogs. C56 records explicit capability deferrals.
 Native acceptance baseline is CoCo 1.2.35, macOS arm64.
 **Runtime status:** `CortexCodeAdapter` is registered in `server.ts` for chat.
-CoCo setup/authentication, durable chat, tool-enabled ephemeral execution and
-verified PNG OCR, native KB conversion/digestion/dreaming, Workspace Context
-and Routine workflows are available. Full desktop/mobile acceptance
-and CLI installation/update support remain pending.
+Fresh saved-auth inference, durable chat/MCP, sequential tool-enabled processors,
+PNG OCR, KB, Workspace Context, Routines and production desktop/mobile browser
+workflows have native acceptance. Strict Memory, native goals/subagents/steering,
+additional media, billing and account isolation remain gated/deferred. Native
+Ubuntu/Windows and physical-device acceptance are separate.
 The actual remote-browser setup
 through Cockpit is still an open acceptance gate (C26).
 See [the implementation tracker](design/cortex-code-implementation-plan.md),
@@ -1884,3 +1885,26 @@ rejects before prompt; a separate low-level prompt verifies native no-connection
 failure. This leaves auth success, account isolation and human OAuth distinct.
 See [workflow fixture specification](spec-testing.md#coco-complete-workflow-fixtures-p9-c55)
 for prerequisites, exact coverage/deadlines, mandatory report checks and limits.
+
+## P9 C56 — Explicit capability decisions
+
+The [capability decision record](research/cortex-code-capability-decisions.md)
+defers goals, subagent cards, unsolicited steering, additional native media,
+Snowflake billing and account isolation for the 1.2.35/macOS baseline. Existing
+metadata/role/media/usage guards remain unchanged. C35 remains conditional on a
+complete native zero-tool boundary; upstream code mode still permits tools and
+is not that proof. Current upstream documentation does not certify a new native
+contract or CLI version for Cockpit.
+
+All goal HTTP operations reject with 400 before calling adapter goal methods or
+starting native work. Valid uploaded PDF/audio/video references can enter the
+existing message stream, but emit a terminal unsupported-format error/done before
+session/prompt, tool activity or usage. This is distinct from request-boundary
+400s for invalid/cross-conversation references. Exact pending decision answers
+remain valid while unsolicited input cannot start another prompt. Existing
+integration/model/attachment/processor/usage tests enforce these boundaries.
+
+Public setup is documented in [the user guide](user/cortex-code.md); native
+homes/environment/bundles in [environment variables](reference/environment-variables.md)
+and [data layout](reference/data-layout.md). These documents add no API fields,
+persisted schema, runtime flags or newly enabled capability.

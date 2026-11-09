@@ -1,6 +1,6 @@
 # Cortex Code (CoCo) harness implementation plan
 
-**Status:** P0–P3, P5 and P7 complete. P4 C21–C25 setup implemented; C26 actual remote-browser acceptance remains pending. P6 C33/C34/C36–C41 complete; C35 remains conditional on G1. P8 C48/C49 optional installation/doctor and native update management are complete; C50 migration verification is next.
+**Status:** Implemented macOS arm64/CoCo 1.2.35 core and tool-enabled background scope, P7/P8 C48–C51 and C54–C59 autonomous review/verification complete. Four items remain: C26 human OAuth, conditional C35 zero-tool Memory, C52 native Ubuntu and C53 Windows runtime/native acceptance. No PR or release has been published.
 **Created:** 2026-11-05.
 **Planning baseline:** Agent Cockpit `0.4.166`, revision `11d14825e955f6c83364c3917558b4d3068a4bac`, plus the uncommitted CoCo research/guidance documents.
 **Native compatibility baseline:** Cortex Code `1.2.35`, distribution `1.2.35+191333.f82de3d91715`, macOS arm64.
@@ -34,8 +34,9 @@ Planning assumptions:
 - Deliver core chat before optional parity work. Unverified features remain
   explicitly unavailable; do not emulate native goals or silently reroute work
   to a different profile to make a selector appear functional.
-- C01–C25, C27–C34 and C36–C47 are implemented as recorded below. C26, conditional
-  C35 and C48–C59 remain open and do not describe shipped support.
+- Implemented slices and native acceptance are recorded below. C26, conditional
+  C35 and native C52/C53 remain open. C56 defers optional parity without claiming
+  it is implemented; final review does not authorize a PR or release.
 
 Track work as follows:
 
@@ -1406,7 +1407,7 @@ P7 C47 evidence (November 7 local / November 8 UTC, 2026; changes following
   can be checked locally. Official native CoCo install/update and credential-
   store/new-login evidence remain additional gates; managed updates stay macOS-
   only. See [the runbook](../research/cortex-code-linux-acceptance.md). C52 stays
-  unchecked and the remaining task count stays 10. Local V8 preparation checks:
+  unchecked pending native evidence. Local V8 preparation checks:
   178 suites / 2,979 tests pass; coverage floors raised without a native Linux
   claim. Backend/client/probe types, lint, specs and installer regressions pass.
 - [ ] C53 — Implement and run native Windows x64 executable discovery/auth/
@@ -1433,7 +1434,7 @@ P7 C47 evidence (November 7 local / November 8 UTC, 2026; changes following
   the lifecycle guard, alongside 180 suites / 3,002 tests and required gates.
   Branch coverage floor raised; activation/executable snapshots are unchanged.
   C26, conditional C35, Ubuntu/Windows and full workflows remain independent.
-  Nine tasks remain; C55 is next while C52/C53 await native environments.
+  At C54 completion, nine tasks remained; C55 was next while C52/C53 awaited native environments.
 - [x] C55 — Add real Cockpit workflow fixtures for core and each enabled
   processor. Browser fixture server must be isolated and PM2-managed; preserve
   normal server data/auth. Separate missing-auth fixtures from real-account runs.
@@ -1453,35 +1454,59 @@ P7 C47 evidence (November 7 local / November 8 UTC, 2026; changes following
   uses a separate Claude CLI, Routine outreach is a stub, and service fixtures
   are in-process while the browser server is PM2-managed. No claim that all
   workflows ran through a browser, strict CoCo Memory, human OAuth, native other
-  platforms or physical mobile are certified. Eight tasks remain; C56 is next.
-- [ ] C56 — Resolve or explicitly defer native goals (G6), subagents (G7),
+  platforms or physical mobile are certified. At C55 completion, eight tasks
+  remained and C56 was next.
+- [x] C56 — Resolve or explicitly defer native goals (G6), subagents (G7),
   steering, additional media (G4), billing (G10), and account isolation (G5).
   Update capabilities/tests/specs only for positively verified behavior.
-- [ ] C57 — Update canonical specs, backend comparison/public setup docs,
+  **Complete:** [decision record](../research/cortex-code-capability-decisions.md)
+  explicitly defers all six areas for 1.2.35/macOS, retains existing guards and
+  defines unlock criteria. Native current-vendor docs are not version evidence.
+  Six focused suites / 53 tests pass, including all five goal HTTP actions
+  rejected before adapter/runtime invocation and direct PDF/audio/video denied
+  before prompt. No capability or runtime setting was enabled; C35 stays open.
+- [x] C57 — Update canonical specs, backend comparison/public setup docs,
   reference env/data docs and test inventory for implemented scope. Update
   `AGENTS.md` and project memory only when actual recurring workflow changes;
   save durable notes through Memory, never local fallback on tool failure.
-- [ ] C58 — Run required checks/regression suites, review residual gates and
+  **Complete:** public CoCo setup/remote OAuth/workflow/limits guide, README,
+  backend matrix, capability/env/data/doctor references, canonical scope/gate
+  summaries, actual test-command inventory, historical-research banner and ADR
+  review references updated. No schema, runtime switch or capability expanded.
+  Local link-target validation excludes pre-existing code/sample links.
+- [x] C58 — Run required checks/regression suites, review residual gates and
   capture compatibility evidence. Raise Jest thresholds if meaningful added
   coverage raises the baseline; never lower them to accommodate regressions.
-- [ ] C59 — Evaluate ADR completeness/mobile impact and prepare a ready-for-
+  **Complete:** final frozen 180 suites / 3,005 tests passed at raised floors
+  (88.72 statements/lines, 77.00 branches, 93.90 functions); measured
+  88.75/77.04/93.94. Fresh full native backend 3/3, UI 5/5 and separate
+  missing-auth 1/1 passed on macOS arm64/Node26/CoCo1.2.35, with private PM2/
+  observed process cleanup and activation/executable preservation. All required
+  type/lint/maintainability/spec/ADR/build/budget checks pass. C55 full workflows
+  retained against unchanged production sources; see the C59 review for reports.
+- [x] C59 — Evaluate ADR completeness/mobile impact and prepare a ready-for-
   review PR when requested. Use non-closing issue references unless explicitly
   authorized; follow normal release notes/release workflow separately.
+  **Complete for the requested autonomous scope:**
+  [ADR/mobile assessment and local PR text](cortex-code-review.md) prepared;
+  ADR-0093 remains Proposed until merge under ADR-0001. No new mobile source/
+  schema or flow in this batch. No PR/push/merge/release/normal-server restart
+  performed. C26, conditional C35 and native C52/C53 remain unchecked.
 
 ## 10. Verification plan
 
-### 10.1 Proposed focused tests
+### 10.1 Implemented verification inventory
 
-| Proposed tests | Behavior to prove |
+| Checks | Behavior verified |
 |---|---|
-| `test/cortexProtocol.test.ts`, `test/fixtures/cortex-acp.cjs` | Framing, RPC IDs including 0, reverse requests, malformed stdout/EOF/timeouts, versioned fixtures |
+| `test/cortexProtocol.test.ts`, `test/fixtures/cortex/acp.cjs` | Framing, RPC IDs including 0, reverse requests, malformed stdout/EOF/timeouts, versioned fixtures |
 | `test/cortexRuntime.test.ts`, `test/cortexProcess.test.ts` | Resolution, env/cwd/argv, serialization, runtime generations, idle/reset/shutdown, descendant ownership |
 | `test/cortexEvents.test.ts`, `test/cortexInteractions.test.ts` | Text/thinking/tools/artifacts, replay suppression, questions/free text/plans/revision and exact reverse ownership |
-| `test/cortexModels.test.ts`, `test/cortexUsage.test.ts` | Config options, auto/effort reset, model evidence, counters/context, missing cost, errors-as-text fixtures |
+| `test/cortexModels.test.ts`, `test/cortexEvents.test.ts`, `test/cortexUsageUi.test.ts` | Config options, auto/effort reset, model evidence, counters/context, missing cost, errors-as-text fixtures |
 | `test/cortexPlugin.test.ts`, `test/cortexAuth.test.ts` | MCP manifest/env/scopes/refresh/cleanup; TOML/auth jobs/redirect validation/redaction/timeouts |
 | `test/cortexBackend.test.ts`, `test/cortexIntegration.test.ts` | Facade methods, two-turn continuity, persistence/recovery/queue, eligibility and unsupported operations |
-| `test/cortexBuild.e2e.test.ts`, `test/cortexWorkflows.e2e.test.ts` | Opt-in authenticated native adapter and real isolated Memory/KB/Context/Routine service paths |
-| `test/e2e/cortexCode.ui.pw.ts` | Opt-in real desktop/mobile conversations, questions/revised plans, auth setup where practical, reload/abort/artifacts/usage |
+| `npm run e2e:cortex-code`, `npm run e2e:cortex-code-workflows` | Opt-in authenticated native adapter and real isolated Memory/KB/Context/Routine service paths |
+| `npm run e2e:cortex-code-ui`, `npm run e2e:cortex-code-auth-control` | Opt-in real desktop/mobile conversations, questions/revised plans, auth setup where practical, reload/abort/artifacts/usage |
 
 Extend existing relevant tests instead of replacing them: `backends`,
 `cliProfileAuthService`, `chat.cliProfileAuth`, `cliProfileConfigDir`, settings/
@@ -1524,7 +1549,7 @@ npm run lint
 npm run maintainability:check
 npm run spec:drift
 npm run adr:lint
-npm test -- --runInBand
+# Runs the full Jest suite with coverage thresholds
 npm run test:coverage
 npm run web:typecheck
 npm run mobile:typecheck
@@ -1534,30 +1559,34 @@ npm run web:budget
 ```
 
 Run focused tests during each phase, full checks before the implementation PR,
-and the proposed opt-in CoCo native suites once added. These commands are not a
-claim that any future tests exist or have already passed. No production restart
+and the implemented opt-in CoCo native catalogs after full Jest. Use
+`CORTEX_CODE_E2E=1 npm run e2e:cortex-code`, `e2e:cortex-code-ui`,
+`e2e:cortex-code-workflows` and `e2e:cortex-code-auth-control`; see the testing
+specification for each scope/prerequisite and --probe/--list behavior. A command
+listing is not evidence that a native/platform gate passed. No production restart
 or release is required to validate this planning document.
 
 ## 11. Gate and decision register
 
 | Gate | Current status | Required experiment / resolution | Release effect |
 |---|---|---|---|
-| G1 — Strict tool-free execution | Gated after Phase 0: three native calls still emitted with unmatched allowlist; source confirms allowlist does not remove declarations | Demonstrate native zero-tool boundary across every invocation path, including default/deferred/MCP tools, hooks, skills, slash commands and sequential calls | Blocks CoCo Memory processor and restricted titles/summaries; deterministic fallbacks permit core chat |
-| G2 — Root-exit/descendant cleanup | Dedicated P2 macOS runtime passed native sleeper cancel/root death/unrelated preservation; timeout fallback and identity races covered by focused tests | Retain userspace sampling limitation; verify full adapter/background finalization and each additional OS | Blocks core release on that OS until full adapter cleanup policy is tested |
-| G3 — Recovery and terminal errors | Native evidence partial; no adapter | Test saved-session load/replay, missing-session-only fallback, error-as-text classification, abort and durable job recovery through Cockpit | Blocks reliable core chat/restart claims |
-| G4 — Media and artifacts | PNG input verified on one model; broader formats/output unverified | Model-specific image/OCR/KB pipeline evidence first; separate native PDF/audio/video/generation experiments | Only verified modality/model/transport combinations enabled |
-| G5 — Account isolation and refresh | Shared auth works across days; expiry/two accounts unverified | Real two-account auth home/cache/Keychain tests and expiry refresh under the actual server user | Blocks isolation claim/automatic isolated profile setup; shared-auth core remains possible |
-| G6 — Native goals | Unverified | Discover actual API/notifications and test set/status/clear/pause/resume, budgets and autonomous completion/cancel; decide support explicitly | Goals false until certified; no synthesized control loop |
-| G7 — Subagents/late work | Unverified | Verify child identity/demux, foreground/background completion, cancellation and usage attribution/draining | Agents false; if native delegation occurs by default, finalization/cleanup must still be proven or delegation disabled for core |
-| G8 — Install/update/platform support | macOS install known; managed paths/other OS not certified | Review official packaging/update commands, native OS launch/auth/install/update/cleanup and existing platform compatibility regressions | Doctor/update action and OS support limited to tested paths |
-| G9 — Managed runtime policy | Phase 0 selected direct ACP plus explicit-discovery flags/native memory off; clean startup/instructions/empty-home error passed; source shows separate update dispatch | Verify actual adapter system-prompt delivery, expired-token behavior, hooks/skills/delegation, and version-specific update/discovery policy | Remaining acceptance required before supervised core runtime support |
-| G10 — Snowflake billing | Tokens known; account cost/quota not reconciled | Obtain a documented/native Snowflake usage source and reconcile unit/cache/Auto model semantics; use focused pricing calculator if added | No cost estimate/account panel until evidence; tokens/context still supported |
+| G1 — Strict tool-free execution | Gated; C35 remains conditional. Phase 0 still emitted native calls with an unmatched allowlist; C56 code-mode review does not establish zero tools | Prove zero definitions/operations across native/deferred/MCP/tools/hooks/skills/slashes/sequences, then run strict Memory workflows | CoCo Memory unavailable; deterministic title/summary fallbacks; separate eligible Memory processor |
+| G2 — Root-exit/descendant cleanup | Verified in scoped macOS runtime/chat/processor/PM2 fixtures through C51/C54/C55 | Retain userspace sampling limits; validate every added OS and native semantic delegation separately | macOS scoped ownership supported; not OS containment or subagent certification |
+| G3 — Recovery and terminal errors | Implemented P3/P5; native saved-session/restart/relocation/Stop/recovery and durable HTTP/WS/browser evidence in C54/C55 | Retain missing-session-only recovery and error-as-text classification; no prompt resend for auth/transport failures | Enabled scoped core chat/restart; arbitrary error/version behavior is not certified |
+| G4 — Media and artifacts | Verified PNG/claude-sonnet-4-6/1.2.35, real KB rasterization/OCR and delivered files; C56 broader media deferred | Per-model/transport/format native evidence before direct PDF/audio/video/additional images or generation | Only existing verified subset enabled; KB conversions do not prove native PDF input |
+| G5 — Account isolation and refresh | Shared fresh inference verified; isolation/expiry/refresh explicitly deferred by C56 | Two real accounts, cache/credential store, expiry/refresh, concurrency and service-user checks | No isolation promise or automatic isolated setup; named connection/shared-auth setup remains |
+| G6 — Native goals | Explicitly deferred by C56; all five goal actions reject before adapter/native work | Versioned set/status/clear/pause/resume/budget/lifecycle/autonomous completion evidence | Goals false; no synthesized goal loop |
+| G7 — Subagents/late work | Explicitly deferred by C56; generic tool activity/descendant cleanup is not semantic child certification | Verify stable child identity/demux, background/late finalization, usage and cancellation/draining | Agents false; native delegation is not an advertised Cockpit child/goal workflow |
+| G8 — Install/update/platform support | C48–C51 macOS arm64 install/update/migration/packaged fixture passed; native Ubuntu/Windows remain C52/C53 | Run actual additional-OS install/auth/service/cache/update/cleanup; certify new layouts/versions separately | Managed updates only verified macOS 1.2.35 layout; no automatic cross-platform claim |
+| G9 — Managed runtime policy | Implemented dedicated adapter/plugin/auth/processor ownership; C54/C55 enabled native catalogs passed | Keep exact ACP/update prefixes, shared auth, explicit discovery, private shims, physical executable pin and version drift review | Supported scoped macOS runtime; no tool sandbox, upgrade containment or unverified hook/delegation certification |
+| G10 — Snowflake billing | Token/cache/context supported; account cost/quota explicitly deferred by C56 | Attributable native/documented usage and account reconciliation, including units/cache/Auto semantics | No USD estimate/account panel; unavailable pricing is not free usage |
 
-Proposed ADR-0093 now records profile/capability names, managed discovery/update
-policy and pending-interaction behavior. Remaining implementation decisions:
-ordinary native approval details; auth transport and connection TOML strategy;
-model-media evidence source; platform release scope. Proposed choices require
-their adapter acceptance checks before being advertised as implemented behavior.
+Proposed ADR-0093 records the implemented ownership/contracts and remains
+Proposed until merge under ADR-0001. C56's explicit deferrals and unlock criteria
+are in [the capability decision record](../research/cortex-code-capability-decisions.md).
+[C59 review preparation](cortex-code-review.md) records mobile/ADR review and
+remaining evidence. Native task completion never silently expands capability,
+platform, account-isolation or public-release claims.
 
 ## 12. Documentation and change inventory
 

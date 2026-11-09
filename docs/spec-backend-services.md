@@ -2232,3 +2232,17 @@ omission falls back to saved conversation selection. Neither override mutates
 stored chat model/effort or enables an unverified CoCo media model/version.
 Desktop and mobile pass current composer values. Profile locking/repair,
 conversation-owned path checks and processor retry/deadline policies stay intact.
+
+
+## CoCo capability deferrals and final review (C56–C59)
+
+The dedicated adapter retains goals:false, agents:false, stdinInput:false and
+oneShot.restrictedText:false. Direct native PDF/audio/video transports and
+Snowflake pricing/account panels are not enabled. The complete rationale,
+required evidence and enabled PNG/tool-enabled workflow boundaries are in
+[the CoCo capability decisions](research/cortex-code-capability-decisions.md).
+Goal routes reject before adapter invocation; deferred media fails before native
+prompt, and valid decision replies remain separate from unsolicited steering.
+Shared terminal credentials are the supported setup path; explicit custom homes
+are not a two-account isolation claim. No service ownership, protocol or schema
+changes are introduced by this review.

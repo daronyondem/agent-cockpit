@@ -38,6 +38,7 @@ Optional checks include:
 - OpenAI Codex CLI;
 - Kiro CLI;
 - Grok Build CLI;
+- Cortex Code CLI (official standalone installation; a responding version is not login proof);
 - Pandoc;
 - LibreOffice;
 - mobile PWA build;
@@ -60,6 +61,12 @@ On Windows, Claude Code, Codex, and Grok Build install actions use Agent
 Cockpit's per-user `cli-tools` prefix and the installer-recorded private Node
 runtime when present.
 That keeps the welcome flow independent of global Node/npm/PM2 installs.
+
+CoCo optional installation uses the official stable installer on eligible POSIX
+systems, downloads before executing, and skips PATH edits. Shell-completion
+setup is disclosed. Native acceptance is macOS arm64/1.2.35; Windows is
+documentation-only and Linux action policy is not native Linux certification.
+See [CoCo setup](../user/cortex-code.md) before choosing a connection or login.
 
 ## Related Specs
 

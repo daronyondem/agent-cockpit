@@ -479,6 +479,15 @@ private report material and full-Jest-before-browser ordering. See the C55
 matrix in `docs/spec-testing.md`; no full browser coverage of every workflow,
 physical mobile, human OAuth or additional platform support is implied.
 
+C56's explicit capability deferrals and evidence needed to lift them live in
+`docs/research/cortex-code-capability-decisions.md`. Keep current vendor docs,
+native terminal features and Cockpit's version-tested contracts distinct. Never
+enable goals/agents/steering, additional media, pricing, account isolation or
+strict Memory from a documentation claim alone. Public setup is documented in
+`docs/user/cortex-code.md`; C59 ADR/mobile/PR preparation and final evidence live
+in `docs/design/cortex-code-review.md`. ADR-0093 remains Proposed until merge
+under ADR-0001. Review preparation does not publish a PR or release.
+
 # Server Management
 
 NEVER run `node server.js` directly. This causes orphan processes and port conflicts.

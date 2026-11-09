@@ -41,6 +41,38 @@ posix('Cortex durable Cockpit chat integration', () => {
   }
   const calls = async () => (await fs.readFile(trace, 'utf8').catch(() => '')).trim().split('\n').filter(Boolean).map(line => JSON.parse(line));
 
+  test('all native goal endpoints reject CoCo without invoking goal methods or starting a runtime', async () => {
+    const conv = await conversation();
+    const guarded = ['getGoal', 'setGoalObjective', 'resumeGoal', 'pauseGoal', 'clearGoal'] as const;
+    const spies = guarded.map(method => jest.spyOn(adapter, method));
+    const base = `/api/chat/conversations/${conv.id}/goal`;
+    const requests = [
+      ['GET', base, undefined], ['POST', base, { objective: 'Unverified native goal' }],
+      ['POST', `${base}/resume`, {}], ['POST', `${base}/pause`, {}], ['DELETE', base, undefined],
+    ] as const;
+    for (const [method, route, body] of requests) {
+      const response = await env.request(method, route, body);
+      expect(response.status).toBe(400); expect(response.body.error).toMatch(/not support/i);
+    }
+    for (const spy of spies) expect(spy).not.toHaveBeenCalled();
+    expect(await calls()).toEqual([]);
+    expect((await env.chatService.getConversation(conv.id))!.messages).toEqual([]);
+    expect((await env.request('GET', '/api/chat/active-streams')).body.ids).not.toContain(conv.id);
+  });
+
+  test('uploaded PDF, audio and video cannot become unverified native media prompts', async () => {
+    const conv = await conversation(), root = path.join(env.chatService.artifactsDir, conv.id);
+    await fs.mkdir(root, { recursive: true });
+    for (const name of ['fixture.pdf', 'fixture.wav', 'fixture.mp4']) {
+      await fs.writeFile(path.join(root, name), 'Synthetic unsupported media');
+      const events = await send(conv.id, 'Inspect the attached media', [{ name }]);
+      expect(events.some(event => event.type === 'error' && /format is not supported/i.test(event.error))).toBe(true);
+      expect(events.some(event => ['usage', 'tool_activity', 'artifact'].includes(event.type))).toBe(false);
+    }
+    expect((await calls()).filter(call => call.method === 'session/prompt')).toEqual([]);
+    expect((await env.chatService.getConversation(conv.id))!.messages.filter(message => message.role === 'user')).toHaveLength(3);
+  });
+
   test('explicit uploaded PNG references reach native image blocks while prose paths stay text', async () => {
     const conv = await conversation(), root = path.join(env.chatService.artifactsDir, conv.id);
     await fs.mkdir(root, { recursive: true });

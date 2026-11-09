@@ -2536,9 +2536,10 @@ existing service facade. Optional `CliAuthJobSnapshot.cortex` is transient:
 version?, authorizationUrl?, expiresAt?}`. It exists only while a CoCo job is
 running and disappears after submission/completion/cancel/timeout as specified
 in [CoCo P4](spec-cortex-code.md#shared-connection-and-authentication-setup-p4).
-`CortexConnectionSummary` is `{name,manualOAuth,browserTimeoutMs}`; account,
-user and all native credentials stay in the native TOML file. Request validators
-and browser-safe handoff declarations live in `src/contracts/cortexAuth.ts`.
+`CortexConnectionSummary` is `{name,manualOAuth,browserTimeoutMs}`; account and
+user metadata stays in native connection TOML; credential storage/cache remains
+native-owned and machine-dependent, not a Cockpit profile credential field.
+Request validators and browser-safe handoff declarations live in `src/contracts/cortexAuth.ts`.
 These API objects are not a persisted settings/history schema.
 
 CoCo C46 selection clarification: conversation `effort` still uses the existing

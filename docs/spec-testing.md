@@ -1434,3 +1434,37 @@ Root/web/mobile/strict tooling types, zero-warning lint, maintainability,
 189-route spec drift and 92 ADR checks pass. Both clients were rebuilt after
 Jest by the workflow runner; desktop bundle budget passes. C26, conditional C35,
 native Ubuntu/Windows, physical devices and C56–C59 remain separate.
+
+
+### CoCo final scope and guard review (C56–C59)
+
+`test/cortexIntegration.test.ts` adds behavior checks for all five native-goal
+HTTP actions: 400 unsupported responses, no adapter goal invocation, no native
+startup and no persisted prompt. Valid uploaded PDF/audio/video references emit
+an unsupported-format terminal error/done without a native `session/prompt`,
+tool activity or usage; request validation is distinct from native media admission. Existing
+interaction/queue suites retain supported questions/plans and reject unsolicited
+steering. Model/attachment/processor/usage suites preserve the versioned PNG,
+strict Memory and unknown Snowflake cost gates. The 6-suite/53-test focused set
+passed before frozen full coverage.
+
+C56 decisions are [recorded separately](research/cortex-code-capability-decisions.md).
+C57 public/reference docs describe the implemented scope without new runtime
+switches or schemas. C59 [review preparation](design/cortex-code-review.md)
+records ADR/mobile impact, residual gates and local PR text. Full C58 commands
+run before browser probes; the final review records exact results and selected
+native catalogs. Existing C55 workflow evidence remains applicable only while
+production runtime/client/scripts/config match the tested tree. A fresh UI pass
+does not replace workflow/platform/human OAuth evidence.
+
+
+C58 final acceptance: raised-floor frozen full V8 passed 180 suites/3,005 tests
+(20 opt-in tests skipped), 88.75% statements/lines, 77.04% branches and 93.94%
+functions. Floors are 88.72/77.00/93.90 respectively. Fresh full native backend
+3/3, UI 5/5 and separate missing-auth 1/1 passed on retained 1.2.35/macOS arm64,
+with no omitted probes, observed process/private PM2 drain and unchanged native
+activation/executable. Both UI assets were rebuilt after full Jest. Exact report
+roots, metadata, retained C55 workflow scope, type/lint/spec/ADR/budget checks
+and residual gates are recorded in [the final review](design/cortex-code-review.md#final-c58-validation).
+This review does not certify C26, C35, native Ubuntu/Windows, physical devices,
+new CLI versions or the deferred C56 feature set.

@@ -1,5 +1,10 @@
 # Cortex Code (CoCo) ACP evaluation
 
+> Historical research snapshot. The adapter and scoped native client/workflow
+> acceptance are now implemented; see [the current spec](../spec-cortex-code.md)
+> and [C56 decisions](cortex-code-capability-decisions.md). Statements below
+> about future implementation describe the original evaluation date.
+
 **Evaluated:** 2026-11-02, with UTC evidence dated 2026-11-03.
 **Repository revision:** `11d14825e955f6c83364c3917558b4d3068a4bac`.
 **CLI:** Cortex Code `1.2.35`, distribution

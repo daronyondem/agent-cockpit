@@ -268,6 +268,26 @@ tool is unavailable.
   Eight tasks remain; C56 is next. Durable note:
   `notes/note_2026-11-08T21-12-43-644Z_cortex-code-c55-workflows.md`.
 
+
+- CoCo C56–C59 autonomous scope is complete. Capability decisions and unlock
+  criteria live in `docs/research/cortex-code-capability-decisions.md`; goals,
+  subagent cards, steering, broader native media/generation, billing and account
+  isolation remain deferred. Keep strict Memory gated and shared terminal auth.
+  Current upstream docs or code mode are not version-tested zero-tool proof.
+  Public setup is in `docs/user/cortex-code.md`; final ADR/mobile assessment,
+  local PR text and native evidence are in `docs/design/cortex-code-review.md`.
+  All goal routes reject before native/adapter work; unsupported PDF/audio/video
+  never reaches a native prompt. Final 180 suites/3,005 tests passed at raised
+  floors (88.72 statements/lines, 77.00 branches, 93.90 functions); fresh native
+  backend 3/3, UI 5/5 and auth control 1/1 passed with process/private PM2 drain
+  and unchanged native activation/executable. C55 workflows retain their scope
+  against unchanged production sources. Finish frozen full Jest before browser
+  builds; raw reports remain private. ADR-0093 stays Proposed until merge per
+  ADR-0001. No PR/release action or version bump is implied. Four tracker tasks
+  remain: C26, C35, C52, C53; physical devices/new CLI/other platform and historical
+  C49/C51 causes remain unclaimed. Durable note:
+  `notes/note_2026-11-09T02-15-20-945Z_cortex-code-c56-c59-review.md`.
+
 ## Mobile PWA
 
 - Mobile direction is PWA-only. Native iOS/Expo work was evaluated but the
