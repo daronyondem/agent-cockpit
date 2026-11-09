@@ -4,6 +4,9 @@ import { csrfGuard } from '../../middleware/csrf';
 import type { ChatService } from '../../services/chatService';
 import type { BackendRegistry } from '../../services/backends/registry';
 import type { BaseBackendAdapter } from '../../services/backends/base';
+import { assertCopilotSelection } from '../../services/backends/copilotCatalog';
+import { copilotChatTransport, resolveCopilotCliRuntime } from '../../services/backends/copilotRuntime';
+import { copilotMessageInput } from '../../services/backends/copilotMedia';
 import { ACTIVE_STREAM_JOB_STATES } from '../../services/streamJobRegistry';
 import { StreamJobSupervisor, type PendingMessageSend } from '../../services/streamJobSupervisor';
 import type { MemoryMcpServer } from '../../services/memoryMcp';
@@ -25,7 +28,7 @@ import type {
 } from '../../types';
 import { logger } from '../../utils/logger';
 import { buildMemoryMcpAddendum, buildMemoryMcpResumeReminder } from './memoryPrompt';
-import { conversationHasMissingCliProfile, isCliProfileResolutionError, param } from './routeUtils';
+import { conversationHasMissingCliProfile, isCliProfileResolutionError, param, sendError } from './routeUtils';
 
 const log = logger.child({ module: 'stream-routes' });
 
@@ -185,6 +188,9 @@ export function createStreamRouter(opts: StreamRoutesOptions): express.Router {
     let conv = await chatService.getConversation(convId);
     if (!conv) return res.status(404).json({ error: 'Conversation not found' });
     let executionDir = conversationExecutionDir(conv);
+    if (streamSupervisor.isResetting(convId, chatService.getWorkspaceIdForConv(convId))) {
+      return res.set('Retry-After', '1').status(503).json({ error: 'Session is resetting. Try again shortly.' });
+    }
     if (hasInFlightTurn(convId)) {
       return res.status(409).json({ error: 'Conversation is already streaming' });
     }
@@ -262,6 +268,13 @@ export function createStreamRouter(opts: StreamRoutesOptions): express.Router {
     const backendId = runtime.backendId;
     if (cliProfileId && backend && backend !== backendId) {
       return res.status(400).json({ error: `CLI profile backend ${backendId} does not match requested backend ${backend}` });
+    }
+    if (backendId === 'copilot') {
+      try {
+        const metadata = await backendRegistry.get(backendId)!.getMetadata({ cliProfile: runtime.profile });
+        assertCopilotSelection(metadata, { model: conv.model, effort: conv.effort }, resolveCopilotCliRuntime(runtime.profile).env);
+        copilotMessageInput(content, metadata.models || [], conv.model, resolveCopilotCliRuntime(runtime.profile).env, copilotChatTransport(runtime.profile));
+      } catch (error) { return sendError(res, 400, error); }
     }
     await streamSupervisor.markPreparing(jobId, {
       backend: backendId,
@@ -496,6 +509,15 @@ export function createStreamRouter(opts: StreamRoutesOptions): express.Router {
     if (!conv) return res.status(404).json({ error: 'Conversation not found' });
 
     const entry = activeStreams.get(convId);
+    const correlated = body.requestId !== undefined || body.turnId !== undefined;
+    if (entry?.deliverInput && (streamActive || correlated)) {
+      if (entry.abortRequested || entry.abortFinalizing || entry.terminalFinalizing) return res.status(409).json({ error: 'This input is no longer active.' });
+      try {
+        const result = await entry.deliverInput(body);
+        return result.accepted ? res.json({ mode: 'stdin' }) : res.status(result.status).json({ error: result.error });
+      } catch { return res.status(503).json({ error: 'Input delivery failed. Do not automatically resend this input.' }); }
+    }
+    if (correlated || entry?.backend === 'copilot') return res.status(409).json({ error: 'This input is no longer active; your draft was preserved.' });
     if (streamActive && entry?.sendInput) {
       log.debug('Delivering interaction input via active stream', { conversationId: convId });
       if (entry.deferPlanApprovalInput) {

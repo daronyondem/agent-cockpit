@@ -102,3 +102,33 @@ test('catalog projections preserve protocol identity, labels and effort defaults
   expect(catalog.defaultModelId(backend.models)).toBe('sonnet'); expect(catalog.defaultModelId([])).toBeUndefined();
   expect(catalog.defaultEffortFor(['low', 'high'])).toBe('high'); expect(catalog.defaultEffortFor(['low'])).toBe('low');
 });
+
+
+test('Copilot picker retains unavailable models, shows fallback provenance and publishes profile-local goal controls', async () => {
+  const metadata = { id: 'copilot', label: 'GitHub Copilot', capabilities: { goals: { set: true } },
+    modelCatalog: { source: 'fallback', reason: 'Account catalog unavailable' },
+    models: [{ id: 'replacement', label: 'Replacement', default: true, supportedEffortLevels: [] }] };
+  api.getCliProfileMetadata.mockResolvedValue(metadata);
+  const onProfileMetadata = jest.fn();
+  const copilotProps = { ...props, backends: [{ ...metadata, models: [] }],
+    cliProfiles: [{ id: 'copilot', name: 'Copilot', harness: 'copilot' }], composerCliProfileId: 'copilot',
+    composerBackend: 'copilot', composerModel: 'retired', onProfileMetadata };
+  await render(copilotProps);
+  expect(select('Model').value).toBe('retired'); expect(select('Model').selectedOptions[0].disabled).toBe(true);
+  expect(select('Model').selectedOptions[0].textContent).toContain('unavailable');
+  expect(container.textContent).toContain('Fallback models');
+  expect(store.setComposerModel).not.toHaveBeenCalled();
+  expect(onProfileMetadata).toHaveBeenLastCalledWith({ profileId: 'copilot', backend: metadata });
+  expect(store.setComposerEffort).toHaveBeenCalledWith('conversation', null);
+  const next = { ...metadata, modelCatalog: { source: 'native' }, models: [{ id: 'native', default: true }] };
+  api.getCliProfileMetadata.mockResolvedValue(next);
+  await act(async () => { window.dispatchEvent(new Event('focus')); });
+  expect(onProfileMetadata).toHaveBeenLastCalledWith({ profileId: 'copilot', backend: next });
+  expect(container.textContent).not.toContain('Fallback models');
+  expect(Array.from(select('Model').options).map(option => option.value)).toEqual(['retired', 'native']);
+  await render();
+  expect(onProfileMetadata.mock.calls.at(-1)?.[0].profileId).toBe('copilot');
+  const count = api.getCliProfileMetadata.mock.calls.length;
+  await act(async () => { window.dispatchEvent(new Event('focus')); });
+  expect(api.getCliProfileMetadata).toHaveBeenCalledTimes(count);
+});

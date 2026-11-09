@@ -8,17 +8,20 @@ const DEFAULT_BUILD_DIR = path.join(ROOT, 'public', 'v2-built');
 const KIB = 1024;
 
 const DEFAULT_BUDGETS = {
-  totalJs: 914 * KIB,
+  // Combined Cortex/Copilot UI and current release dependencies measure 923.2 KiB.
+  totalJs: 924 * KIB,
   totalCss: 230 * KIB,
   maxJsAsset: 230 * KIB,
   maxCssAsset: 230 * KIB,
   assets: {
-    'index.js': 260 * KIB,
+    // Patched Vite 8.1.6 adds 41 bytes to the measured 267.0 KiB entry.
+    'index.js': 267.1 * KIB,
     'react-vendor.js': 230 * KIB,
     'markdown-vendor.js': 160 * KIB,
     'kbBrowser.js': 115 * KIB,
     'workspaceSettings.js': 95 * KIB,
-    'settingsScreen.js': 80 * KIB,
+    // Combined native auth/profile controls measure 80.8 KiB.
+    'settingsScreen.js': 81 * KIB,
     'memoryProcessorSelect.js': 6 * KIB,
     'settingsMigrationTab.js': 20 * KIB,
     'cortexSetup.js': 8 * KIB,

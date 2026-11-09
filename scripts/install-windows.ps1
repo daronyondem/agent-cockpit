@@ -20,6 +20,7 @@ $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
 
 $NodeMajor = 22
+$NodeMinimumVersion = [version]'22.12.0'
 $TaskName = 'AgentCockpit'
 $AppName = 'agent-cockpit'
 $NodeRuntimeSource = ''
@@ -227,13 +228,13 @@ function Resolve-Node {
     $systemNpx = Command-Path 'npx.cmd'
     if ($systemNode -and $systemNpm -and $systemNpx) {
       try {
-        $major = Invoke-NativeOutput $systemNode @('-p', "process.versions.node.split('.')[0]")
-        if ([int]$major -ge $NodeMajor) {
+        $version = Invoke-NativeOutput $systemNode @('-p', 'process.versions.node')
+        if ([version]$version -ge $NodeMinimumVersion) {
           $script:NodeExe = $systemNode
           $script:NpmCmd = $systemNpm
           $script:NpxCmd = $systemNpx
           $script:NodeRuntimeSource = 'system'
-          $script:NodeRuntimeVersion = Invoke-NativeOutput $systemNode @('-p', 'process.versions.node')
+          $script:NodeRuntimeVersion = $version
           $script:NodeRuntimeNpmVersion = Invoke-NativeOutput $systemNpm @('-v')
           $script:NodeRuntimeBinDir = Split-Path -Parent $systemNode
           $script:NodeRuntimeDir = ''
@@ -247,7 +248,7 @@ function Resolve-Node {
   }
 
   if ($NoInstallNode) {
-    Fail 'Node.js 22+ and npm are required. Re-run without -NoInstallNode to let the installer install a private Node runtime, or install Node from https://nodejs.org.'
+    Fail 'Node.js 22.12.0+ and npm are required. Re-run without -NoInstallNode to let the installer install a private Node runtime, or install Node from https://nodejs.org.'
   }
 
   Install-PrivateNode
@@ -269,8 +270,7 @@ function Use-PrivateNodeRuntime {
     if ($ExpectedVersion -and $actualVersion -ne $ExpectedVersion) {
       return $false
     }
-    $actualMajor = [int](Invoke-NativeOutput $nodeExe @('-p', "process.versions.node.split('.')[0]"))
-    if ($actualMajor -lt $NodeMajor) {
+    if ([version]$actualVersion -lt $NodeMinimumVersion) {
       return $false
     }
     $npmVersion = Invoke-NativeOutput $nodeExe @($npmCli, '--version')

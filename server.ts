@@ -18,6 +18,7 @@ import { GrokBuildAdapter } from './src/services/backends/grok';
 import { CodexAdapter } from './src/services/backends/codex';
 import { OpenCodeAdapter } from './src/services/backends/opencode';
 import { CortexCodeAdapter } from './src/services/backends/cortex';
+import { CopilotAdapter } from './src/services/backends/copilot';
 import { UpdateService } from './src/services/updateService';
 import { CliUpdateService } from './src/services/cliUpdateService';
 import { ClaudePlanUsageService } from './src/services/claudePlanUsageService';
@@ -44,6 +45,14 @@ if (pendingImport.applied) {
 }
 
 const app = express();
+let shuttingDown = false;
+app.use((_req: Request, res: Response, next: NextFunction) => {
+  if (shuttingDown) {
+    res.status(503).json({ error: 'Server is shutting down.' });
+    return;
+  }
+  next();
+});
 
 app.set('trust proxy', 1);
 
@@ -115,6 +124,7 @@ backendRegistry.register(new CodexAdapter({
 }));
 backendRegistry.register(new OpenCodeAdapter({ workingDir: config.DEFAULT_WORKSPACE }));
 backendRegistry.register(new CortexCodeAdapter({ workingDir: config.DEFAULT_WORKSPACE }));
+backendRegistry.register(new CopilotAdapter({ workingDir: config.DEFAULT_WORKSPACE }));
 
 const chatService = new ChatService(__dirname, {
   defaultWorkspace: config.DEFAULT_WORKSPACE,
@@ -292,7 +302,6 @@ chatService.initialize().then(async () => {
   });
   setWsFunctions(wsFns);
 
-  let shuttingDown = false;
   async function shutdown(signal: string) {
     if (shuttingDown) return;
     shuttingDown = true;
@@ -303,17 +312,19 @@ chatService.initialize().then(async () => {
       process.exit(1);
     }, 10000);
     forceExitTimer.unref();
+    const httpClosed = new Promise<void>(resolve => {
+      server.close(() => {
+        console.log('[shutdown] HTTP server closed');
+        resolve();
+      });
+    });
 
     await chatShutdown();
-    // Await owned CLI process cleanup; the force-exit timer above still bounds it.
-    await backendRegistry.shutdownAll();
+    await backendRegistry.shutdownAll({ permanent: true });
     wsFns.shutdown();
-
-    server.close(() => {
-      console.log('[shutdown] HTTP server closed');
-      clearTimeout(forceExitTimer);
-      process.exit(0);
-    });
+    await httpClosed;
+    clearTimeout(forceExitTimer);
+    process.exit(0);
   }
 
   process.on('SIGTERM', () => { void shutdown('SIGTERM'); });

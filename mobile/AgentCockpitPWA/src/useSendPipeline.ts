@@ -56,6 +56,7 @@ type UseSendPipelineOptions = {
   selectedServiceTier: ServiceTier | 'default' | undefined;
   serviceTierEnabled: boolean;
   isStreaming: boolean;
+  inputTurnId?: string | null;
   startStream: (conversationID: string) => void;
   markStreamFinished: (conversationID: string) => void;
   recoverActiveStream: (conversationID: string, options?: { onlyIfServerActive?: boolean }) => Promise<boolean>;
@@ -90,14 +91,20 @@ export function useSendPipeline(options: UseSendPipelineOptions) {
   const latest = useRef(options);
   latest.current = options;
   const [isSending, setIsSending] = useState(false);
+  const [steeringPending, setSteeringPending] = useState(false);
   const [isResponding, setIsResponding] = useState(false);
   const interactionInFlight = useRef(false);
   const interactionOwner = useRef({ conversationId: options.activeConversation?.id, interaction: options.pendingInteraction });
   interactionOwner.current = { conversationId: options.activeConversation?.id, interaction: options.pendingInteraction };
-  const interactionKey = JSON.stringify([options.activeConversation?.id, options.pendingInteraction?.decisionId,
+  const interactionKey = JSON.stringify([options.activeConversation?.id, options.pendingInteraction?.decisionId, options.pendingInteraction?.kind === 'question' ? options.pendingInteraction.requestId : undefined,
     options.pendingInteraction?.kind, options.pendingInteraction?.prompt]);
   const setInteractionAnswer = options.setInteractionAnswer;
-  useEffect(() => { setInteractionAnswer(''); }, [interactionKey, setInteractionAnswer]);
+  const previousInteraction = useRef({ key: interactionKey, interaction: options.pendingInteraction });
+  const pendingInteraction = options.pendingInteraction;
+  useEffect(() => {
+    if (previousInteraction.current.key !== interactionKey || previousInteraction.current.interaction !== pendingInteraction) setInteractionAnswer('');
+    previousInteraction.current = { key: interactionKey, interaction: pendingInteraction };
+  }, [interactionKey, pendingInteraction, setInteractionAnswer]);
 
   async function sendDraft() {
     if (sendInFlightRef.current || queueInFlightRef.current
@@ -245,7 +252,7 @@ export function useSendPipeline(options: UseSendPipelineOptions) {
         backend: options.selectedBackend,
         cliProfileId: options.selectedCliProfileId,
         model: options.selectedModel,
-        effort: options.selectedEffort,
+        effort: runtimeSelection.backend === 'copilot' ? options.selectedEffort ?? null : options.selectedEffort,
         claudeCodeMode: options.claudeCodeModeForRequest,
         serviceTier: options.serviceTierEnabled ? options.selectedServiceTier : undefined,
       });
@@ -420,8 +427,11 @@ export function useSendPipeline(options: UseSendPipelineOptions) {
     interactionInFlight.current = true;
     setIsResponding(true);
     try {
-      const response = await options.clientRef.current.sendInput(conversation.id, answer, options.isStreaming || options.loading, interaction.decisionId);
+      const requestId = interaction.kind === 'question' ? interaction.requestId : undefined;
+      const response = await options.clientRef.current.sendInput(conversation.id, answer, options.isStreaming || options.loading,
+        { ...(interaction.decisionId ? { decisionId: interaction.decisionId } : {}), ...(requestId ? { requestId } : {}) });
       if (!ownsInteraction()) return;
+      if (requestId && response.mode !== 'stdin') throw new Error('This question is no longer accepting an answer.');
       options.setPendingInteraction((current) => current === interaction ? null : current);
       options.setInteractionAnswer('');
       if (response.mode === 'message') {
@@ -435,9 +445,39 @@ export function useSendPipeline(options: UseSendPipelineOptions) {
     }
   }
 
+  async function steerDraft() {
+    const conversation = options.activeConversation;
+    if (!conversation || !options.isStreaming || !options.inputTurnId || sendInFlightRef.current
+      || options.pendingInteraction || options.hasUploadingAttachments) return;
+    const draft = options.draft;
+    const attachments = options.pendingAttachments;
+    const content = wireContent({ content: draft.trim(), attachments: completedAttachmentMetas(attachments) });
+    if (!content) return;
+    sendInFlightRef.current = true;
+    setSteeringPending(true);
+    options.setErrorMessage(null);
+    try {
+      const response = await options.clientRef.current.sendInput(conversation.id, content, true,
+        { turnId: options.inputTurnId, inputId: `${Date.now()}-${Math.random()}` });
+      if (response.mode !== 'stdin') throw new Error('Steering was not confirmed. Your draft was preserved.');
+      if (options.activeConversationRef.current?.id === conversation.id) {
+        options.setDraft(current => current === draft ? '' : current);
+        options.setPendingAttachments(current => current.filter(attachment => !attachments.includes(attachment)));
+      }
+    } catch (error) {
+      if (options.activeConversationRef.current?.id === conversation.id) options.onError(error);
+    } finally {
+      sendInFlightRef.current = false;
+      setSteeringPending(false);
+    }
+  }
+
   return {
     isSending,
     isResponding,
+    interactionPending: isResponding,
+    steeringPending,
+    steerDraft,
     sendDraft,
     drainNextQueuedMessage,
     submitInteraction,

@@ -144,7 +144,7 @@ export function InteractionCard({ convId, interaction, respondPending, backend }
     return <PlanApprovalCard key={(interaction.decisionId || '') + ':' + interaction.planContent} convId={convId} decisionId={interaction.decisionId} planContent={interaction.planContent} respondPending={respondPending} allowFeedback={allowPlanFeedback}/>;
   }
   if (interaction.type === 'userQuestion') {
-    return <QuestionCard key={(interaction.decisionId || '') + ':' + interaction.question} convId={convId} decisionId={interaction.decisionId} question={interaction.question} options={interaction.options} respondPending={respondPending}/>;
+    return <QuestionCard key={(interaction.requestId || interaction.decisionId || '') + ':' + interaction.question} convId={convId} decisionId={interaction.decisionId} question={interaction.question} options={interaction.options} allowFreeform={interaction.allowFreeform} respondPending={respondPending}/>;
   }
   return null;
 }
@@ -201,7 +201,7 @@ function PlanApprovalCard({ convId, decisionId, planContent, respondPending, all
   );
 }
 
-function QuestionCard({ convId, decisionId, question, options, respondPending }){
+function QuestionCard({ convId, decisionId, question, options, allowFreeform, respondPending }){
   const [text, setText] = React.useState('');
   const inputRef = React.useRef(null);
   React.useEffect(() => { if (inputRef.current) inputRef.current.focus(); }, []);
@@ -211,6 +211,7 @@ function QuestionCard({ convId, decisionId, question, options, respondPending })
     StreamStore.respond(convId, text.trim(), decisionId);
   }
   function pick(label){
+    if (allowFreeform === false) { StreamStore.respond(convId, label); return; }
     setText(label);
     if (inputRef.current) inputRef.current.focus();
   }
@@ -241,7 +242,7 @@ function QuestionCard({ convId, decisionId, question, options, respondPending })
           })}
         </div>
       ) : null}
-      <input
+      {allowFreeform !== false ? <><input
         ref={inputRef}
         type="text"
         value={text}
@@ -269,6 +270,7 @@ function QuestionCard({ convId, decisionId, question, options, respondPending })
           onClick={submit}
         >{respondPending ? 'Sending…' : 'Send'}</button>
       </div>
+      </> : null}
     </div>
   );
 }

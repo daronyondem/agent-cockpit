@@ -311,7 +311,7 @@ results above do not settle this processor boundary.
 ## Phase 0 follow-up — 2026-11-05
 
 The implementation preparation is now recorded in
-[Proposed ADR-0093](../adr/0093-integrate-cortex-code-through-its-native-acp-interface.md).
+[Proposed ADR-0099](../adr/0099-integrate-cortex-code-through-its-native-acp-interface.md).
 Seven [sanitized native protocol excerpts](../../test/fixtures/cortex/1.2.35/README.md)
 preserve initialization/configuration, tools/usage, questions/free text,
 revised plans, load replay and terminal error-as-text shapes. These excerpts

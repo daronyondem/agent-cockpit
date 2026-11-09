@@ -32,6 +32,198 @@ function createRepoWithRemote(name: string): string {
 }
 
 describe('worktree isolation routes', () => {
+  test('drains the backend before changing the session branch and blocks new work during cleanup', async () => {
+    const repo = createRepoWithRemote('reset-cleanup-repo');
+    const conv = await env.chatService.createConversation('Reset cleanup', repo);
+    const enabled = await env.request('PUT', `/api/chat/workspaces/${conv.workspaceId}/worktree-isolation`, {
+      enabled: true, confirmedSessionReset: true,
+    });
+    expect(enabled.status).toBe(200);
+    const before = (await env.chatService.getConversation(conv.id))!;
+    const branch = git(before.executionDir!, ['branch', '--show-current']).trim();
+    let release!: () => void;
+    let started!: () => void;
+    const cleanup = new Promise<void>(resolve => { release = resolve; });
+    const entered = new Promise<void>(resolve => { started = resolve; });
+    jest.spyOn(env.mockBackend, 'onSessionReset').mockImplementation(async () => {
+      started();
+      await cleanup;
+    });
+    const reset = env.request('POST', `/api/chat/conversations/${conv.id}/reset`, {});
+    try {
+      await entered;
+      expect(git(before.executionDir!, ['branch', '--show-current']).trim()).toBe(branch);
+      expect((await env.chatService.getConversation(conv.id))!.sessionNumber).toBe(before.sessionNumber);
+      const send = await env.request('POST', `/api/chat/conversations/${conv.id}/message`, { content: 'too early' });
+      expect(send.status).toBe(503);
+      expect(send.headers['retry-after']).toBe('1');
+      expect(send.body.error).toContain('resetting');
+      for (const action of ['goal', 'goal/resume']) {
+        expect((await env.request('POST', `/api/chat/conversations/${conv.id}/${action}`, { objective: 'too early' })).status).toBe(503);
+      }
+      expect((await env.request('POST', `/api/chat/conversations/${conv.id}/reset`, {})).status).toBe(409);
+      expect((await env.request('DELETE', `/api/chat/conversations/${conv.id}`)).status).toBe(409);
+      expect((await env.request('PATCH', `/api/chat/conversations/${conv.id}/archive`)).status).toBe(409);
+      expect(fs.existsSync(before.executionDir!)).toBe(true);
+      expect((await env.request('PUT', `/api/chat/workspaces/${conv.workspaceId}/worktree-isolation`, {
+        enabled: false, confirmedSessionReset: true,
+      })).status).toBe(409);
+    } finally {
+      release();
+      expect((await reset).status).toBe(200);
+    }
+    expect(git(before.executionDir!, ['branch', '--show-current']).trim()).not.toBe(branch);
+  });
+
+  test.each([true, false])('drains every backend before changing worktree mode to %s', async enabled => {
+    const repo = createRepoWithRemote(`mode-cleanup-${enabled}`);
+    const first = await env.chatService.createConversation('First cleanup', repo);
+    const second = await env.chatService.createConversation('Second cleanup', repo);
+    if (!enabled) {
+      expect((await env.request('PUT', `/api/chat/workspaces/${first.workspaceId}/worktree-isolation`, {
+        enabled: true, confirmedSessionReset: true,
+      })).status).toBe(200);
+    }
+    const before = (await env.chatService.getConversation(first.id))!;
+    let release!: () => void;
+    let started!: () => void;
+    const cleanup = new Promise<void>(resolve => { release = resolve; });
+    const entered = new Promise<void>(resolve => { started = resolve; });
+    const resetHook = jest.spyOn(env.mockBackend, 'onSessionReset').mockImplementation(async () => {
+      started();
+      await cleanup;
+    });
+    const change = env.request('PUT', `/api/chat/workspaces/${first.workspaceId}/worktree-isolation`, {
+      enabled, confirmedSessionReset: true,
+    });
+    try {
+      await entered;
+      expect((await env.chatService.getWorkspaceWorktreeIsolationStatus(first.workspaceId)).enabled).toBe(!enabled);
+      expect((await env.chatService.getConversation(first.id))!.sessionNumber).toBe(before.sessionNumber);
+      for (const conv of [first, second]) {
+        expect((await env.request('POST', `/api/chat/conversations/${conv.id}/message`, { content: 'too early' })).status).toBe(503);
+        for (const action of ['goal', 'goal/resume']) {
+          expect((await env.request('POST', `/api/chat/conversations/${conv.id}/${action}`, { objective: 'too early' })).status).toBe(503);
+        }
+        expect((await env.request('POST', `/api/chat/conversations/${conv.id}/reset`, {})).status).toBe(409);
+        expect((await env.request('DELETE', `/api/chat/conversations/${conv.id}`)).status).toBe(409);
+        expect((await env.request('PATCH', `/api/chat/conversations/${conv.id}/archive`)).status).toBe(409);
+      }
+    } finally {
+      release();
+      expect((await change).status).toBe(200);
+    }
+    expect(resetHook).toHaveBeenCalledWith(first.id);
+    expect(resetHook).toHaveBeenCalledWith(second.id);
+    expect((await env.chatService.getConversation(first.id))!.sessionNumber).toBe(before.sessionNumber + 1);
+  });
+
+  test.each(['delete', 'archive'])('%s reserves the conversation and drains cleanup before changing it', async action => {
+    const repo = createRepoWithRemote(`${action}-cleanup`);
+    const conv = await env.chatService.createConversation('Lifecycle cleanup', repo);
+    const modeUrl = `/api/chat/workspaces/${conv.workspaceId}/worktree-isolation`;
+    expect((await env.request('PUT', modeUrl, { enabled: true, confirmedSessionReset: true })).status).toBe(200);
+    const before = (await env.chatService.getConversation(conv.id))!;
+    let release!: () => void;
+    let started!: () => void;
+    const cleanup = new Promise<void>(resolve => { release = resolve; });
+    const entered = new Promise<void>(resolve => { started = resolve; });
+    jest.spyOn(env.mockBackend, 'onSessionReset').mockImplementation(async () => { started(); await cleanup; });
+    const change = action === 'delete'
+      ? env.request('DELETE', `/api/chat/conversations/${conv.id}`)
+      : env.request('PATCH', `/api/chat/conversations/${conv.id}/archive`);
+    try {
+      await entered;
+      expect((await env.chatService.getConversation(conv.id))!.archived).not.toBe(true);
+      expect(fs.existsSync(before.executionDir!)).toBe(true);
+      expect((await env.request('POST', `/api/chat/conversations/${conv.id}/message`, { content: 'too early' })).status).toBe(503);
+      expect((await env.request('POST', `/api/chat/conversations/${conv.id}/reset`, {})).status).toBe(409);
+      expect((await env.request('DELETE', `/api/chat/conversations/${conv.id}`)).status).toBe(409);
+      expect((await env.request('PATCH', `/api/chat/conversations/${conv.id}/archive`)).status).toBe(409);
+      expect((await env.request('PUT', modeUrl, { enabled: false, confirmedSessionReset: true })).status).toBe(409);
+    } finally {
+      release();
+      expect((await change).status).toBe(200);
+    }
+    if (action === 'delete') {
+      expect(await env.chatService.getConversation(conv.id)).toBeNull();
+      expect(fs.existsSync(before.executionDir!)).toBe(false);
+    } else {
+      expect((await env.chatService.getConversation(conv.id))!.archived).toBe(true);
+      expect((await env.request('POST', `/api/chat/conversations/${conv.id}/reset`, {})).status).toBe(200);
+    }
+  });
+
+  test.each(['delete', 'archive'])('%s keeps the conversation and releases admission when cleanup fails', async action => {
+    const repo = createRepoWithRemote(`${action}-failed-cleanup`);
+    const conv = await env.chatService.createConversation('Failed lifecycle cleanup', repo);
+    expect((await env.request('PUT', `/api/chat/workspaces/${conv.workspaceId}/worktree-isolation`, {
+      enabled: true, confirmedSessionReset: true,
+    })).status).toBe(200);
+    const before = (await env.chatService.getConversation(conv.id))!;
+    jest.spyOn(env.mockBackend, 'onSessionReset').mockRejectedValueOnce(new Error('Fixture cleanup failed'));
+    const change = () => action === 'delete'
+      ? env.request('DELETE', `/api/chat/conversations/${conv.id}`)
+      : env.request('PATCH', `/api/chat/conversations/${conv.id}/archive`);
+    expect((await change()).status).toBe(500);
+    expect((await env.chatService.getConversation(conv.id))!.archived).not.toBe(true);
+    expect(fs.existsSync(before.executionDir!)).toBe(true);
+    expect((await change()).status).toBe(200);
+  });
+
+  test.each(['session', 'workspace'])('preserves checkouts and releases the %s reservation when cleanup fails', async operation => {
+    const repo = createRepoWithRemote(`failed-cleanup-${operation}`);
+    const conv = await env.chatService.createConversation('Failed cleanup', repo);
+    const url = `/api/chat/workspaces/${conv.workspaceId}/worktree-isolation`;
+    if (operation === 'session') {
+      expect((await env.request('PUT', url, { enabled: true, confirmedSessionReset: true })).status).toBe(200);
+    }
+    const before = (await env.chatService.getConversation(conv.id))!;
+    const branch = git(before.executionDir || repo, ['branch', '--show-current']);
+    jest.spyOn(env.mockBackend, 'onSessionReset').mockImplementationOnce(async () => {
+      throw new Error('Fixture cleanup failed');
+    });
+    const mutate = () => operation === 'session'
+      ? env.request('POST', `/api/chat/conversations/${conv.id}/reset`, {})
+      : env.request('PUT', url, { enabled: true, confirmedSessionReset: true });
+    expect((await mutate()).status).toBe(500);
+    expect((await env.chatService.getConversation(conv.id))!.sessionNumber).toBe(before.sessionNumber);
+    expect(git(before.executionDir || repo, ['branch', '--show-current'])).toBe(branch);
+    expect((await env.chatService.getWorkspaceWorktreeIsolationStatus(conv.workspaceId)).enabled).toBe(operation === 'session');
+    expect((await mutate()).status).toBe(200);
+  });
+
+  test.each(['invalid body', 'backend mismatch', 'runtime failure'])('reset admission recovers after %s before cleanup starts', async failure => {
+    const repo = createRepoWithRemote(`reset-prepare-${failure.replace(/ /g, '-')}`);
+    const conv = await env.chatService.createConversation('Preparation failure', repo);
+    const cleanup = jest.spyOn(env.mockBackend, 'onSessionReset');
+    if (failure === 'runtime failure') {
+      jest.spyOn(env.chatService, 'resolveCliProfileRuntimeForSessionReset').mockRejectedValueOnce(new Error('Runtime unavailable'));
+    }
+    const body = failure === 'invalid body' ? { cliProfileId: 42 }
+      : failure === 'backend mismatch' ? { backend: 'codex' } : {};
+    const response = await env.request('POST', `/api/chat/conversations/${conv.id}/reset`, body);
+    expect(response.status).toBe(failure === 'runtime failure' ? 500 : 400);
+    expect(cleanup).not.toHaveBeenCalled();
+    expect((await env.chatService.getConversation(conv.id))!.sessionNumber).toBe(conv.sessionNumber);
+    expect((await env.request('POST', `/api/chat/conversations/${conv.id}/reset`, {})).status).toBe(200);
+  });
+
+  test.each(['CLI profile unavailable', 'Runtime unavailable'])('workspace reservation releases after preparation fails: %s', async message => {
+    const repo = createRepoWithRemote(`workspace-prepare-${message.replace(/ /g, '-')}`);
+    const conv = await env.chatService.createConversation('Preparation failure', repo);
+    const cleanup = jest.spyOn(env.mockBackend, 'onSessionReset');
+    jest.spyOn(env.chatService, 'resolveCliProfileRuntime').mockRejectedValueOnce(new Error(message));
+    const change = () => env.request('PUT', `/api/chat/workspaces/${conv.workspaceId}/worktree-isolation`, {
+      enabled: true, confirmedSessionReset: true,
+    });
+    expect((await change()).status).toBe(message.startsWith('CLI profile') ? 400 : 500);
+    expect(cleanup).not.toHaveBeenCalled();
+    expect((await env.chatService.getConversation(conv.id))!.sessionNumber).toBe(conv.sessionNumber);
+    expect((await env.chatService.getWorkspaceWorktreeIsolationStatus(conv.workspaceId)).enabled).toBe(false);
+    expect((await change()).status).toBe(200);
+  });
+
   test('reports unavailable for a non-Git workspace', async () => {
     const workspace = path.join(env.tmpDir, 'plain');
     fs.mkdirSync(workspace, { recursive: true });

@@ -11,7 +11,9 @@ import {
 } from './appModel';
 import { useVisibleStreamResume } from './useMobileLifecycle';
 import type { AgentCockpitAPI } from './api';
-import type { Conversation, ConversationListItem, PendingInteraction, StreamEvent, ThreadGoal } from './types';
+import type { Conversation, ConversationArtifact, ConversationListItem, PendingInteraction, StreamEvent, ThreadGoal, ToolActivity } from './types';
+import { applyLiveToolFrame } from './liveToolActivities';
+import { appendLiveArtifact } from './liveArtifacts';
 
 type UseChatStreamConnectionOptions = {
   activeConversationRef: RefObject<Conversation | null>;
@@ -35,6 +37,9 @@ export function useChatStreamConnection(options: UseChatStreamConnectionOptions)
   const [streamText, setStreamText] = useState('');
   const [showStreamPlaceholder, setShowStreamPlaceholder] = useState(false);
   const [isStreaming, setIsStreamingState] = useState(false);
+  const [inputTurnId, setInputTurnId] = useState<string | null>(null);
+  const [streamTools, setStreamTools] = useState<ToolActivity[]>([]);
+  const [streamArtifacts, setStreamArtifacts] = useState<ConversationArtifact[]>([]);
 
   resumeStreamConnectionRef.current = resumeStreamConnection;
 
@@ -46,11 +51,13 @@ export function useChatStreamConnection(options: UseChatStreamConnectionOptions)
   });
 
   function setIsStreaming(value: boolean) {
+    if (!value) { setInputTurnId(null); setStreamTools([]); setStreamArtifacts([]); }
     setIsStreamingState(value);
     isStreamingRef.current = value;
   }
 
   function closeStreamSocket() {
+    setInputTurnId(null);
     const socket = socketRef.current;
     socketRef.current = null;
     socket?.close();
@@ -58,6 +65,8 @@ export function useChatStreamConnection(options: UseChatStreamConnectionOptions)
 
   function startStream(conversationID: string) {
     closeStreamSocket();
+    setStreamTools([]);
+    setStreamArtifacts([]);
     setShowStreamPlaceholder(true);
     setIsStreaming(true);
     options.setActiveStreamIDs((current) => new Set(current).add(conversationID));
@@ -199,6 +208,25 @@ export function useChatStreamConnection(options: UseChatStreamConnectionOptions)
       case 'set-pending-interaction':
         options.setPendingInteraction(action.interaction);
         break;
+      case 'clear-stream-tools':
+        setStreamTools([]);
+        break;
+      case 'update-stream-tools':
+        setStreamTools(current => applyLiveToolFrame(current, action.frame, Date.now()));
+        break;
+      case 'clear-stream-artifacts':
+        setStreamArtifacts([]);
+        break;
+      case 'append-stream-artifact':
+        setStreamArtifacts(current => appendLiveArtifact(current, action.artifact));
+        break;
+      case 'set-input-turn':
+        setInputTurnId(action.turnId);
+        break;
+      case 'resolve-input-requests':
+        options.setPendingInteraction(current => current?.kind === 'question' && current.requestId
+          && action.requestIds.includes(current.requestId) ? null : current);
+        break;
       case 'update-title':
         options.setActiveConversation((current) => (current && current.id === conversationID ? { ...current, title: action.title || current.title } : current));
         options.setConversations((items) => items.map((item) => (item.id === conversationID ? { ...item, title: action.title || item.title } : item)));
@@ -234,8 +262,7 @@ export function useChatStreamConnection(options: UseChatStreamConnectionOptions)
 
   function markStreamFinished(conversationID: string) {
     if (options.activeConversationRef.current?.id !== conversationID) return;
-    // Decision-bound cards cannot be answered after their turn ends.
-    options.setPendingInteraction(current => current?.decisionBound ? null : current);
+    options.setPendingInteraction(current => current?.decisionBound || (current?.kind === 'question' && current.requestId) ? null : current);
     clearStreamReconnectTimer();
     streamReconnectAttemptsRef.current = 0;
     setIsStreaming(false);
@@ -250,10 +277,13 @@ export function useChatStreamConnection(options: UseChatStreamConnectionOptions)
 
   return {
     streamText,
+    streamTools,
+    streamArtifacts,
     setStreamText,
     showStreamPlaceholder,
     setShowStreamPlaceholder,
     isStreaming,
+    inputTurnId,
     setIsStreaming,
     closeStreamSocket,
     startStream,

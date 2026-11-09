@@ -1,4 +1,5 @@
 import { UsageProjection } from './usageProjection.ts';
+import { CopilotUsageDetails } from './chat/copilotUsage.jsx';
 import { GrokBillingSection } from './chat/grokBillingSection.jsx';
 import { CortexTokenCard } from './chat/cortexUsage.jsx';
 import { isUsageCostUnavailable, usageTokenTotal as _usageTotalTokens } from '../../../src/contracts/usagePresentation';
@@ -645,6 +646,10 @@ const CHIP_RENDERERS = {
       return isUsageCostUnavailable(usage, 'cortex-code') ? `${base} · cost n/a` : _withCostSuffix(base, usage);
     },
     renderTooltipCard(usage){ return <CortexTokenCard usage={usage}/>; },
+  },
+  'copilot': {
+    renderChipText(usage) { return CHIP_RENDERERS.codex.renderChipText({ ...usage, costUsd: 0, estimatedCostUsd: 0 }) || 'Copilot usage'; },
+    renderTooltipCard(usage, opts) { return <><CodexTokenCard usage={{ ...usage, costUsd: 0, estimatedCostUsd: 0 }}/><CopilotUsageDetails usage={usage} quota={opts?.planUsage}/></>; },
   },
   'grok-build': {
     renderChipText(usage){ return CHIP_RENDERERS.codex.renderChipText(usage); },

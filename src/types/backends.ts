@@ -2,7 +2,7 @@
 
 import type { EffortLevel, ClaudeCodeMode, ServiceTier, CliProfile } from './cliProfiles';
 import type { SessionRecoveryOptions } from './sessionRecovery';
-import type { StreamEvent } from './streams';
+import type { BackendInputRequest, BackendInputResult, StreamEvent } from './streams';
 import type { AttachmentMeta } from './attachments';
 
 export interface BackendCapabilities {
@@ -103,6 +103,11 @@ export interface BackendMetadata {
   capabilities: BackendCapabilities;
   resumeCapabilities: BackendResumeCapabilities;
   models?: ModelOption[];
+  modelCatalog?: {
+    source: 'runtime' | 'fallback';
+    reason?: string;
+    fetchedAt?: string;
+  };
 }
 
 /**
@@ -161,10 +166,13 @@ export interface SendMessageOptions {
   /** Server-validated conversation uploads, never arbitrary model/user paths. */
   attachments?: AttachmentMeta[];
   attachmentRoot?: string;
+  /** Explicit native Copilot goal credit window, required on resume. */
+  goalAiCreditLimit?: number;
 }
 
 export interface SendMessageResult {
   stream: AsyncGenerator<StreamEvent>;
   abort: () => void;
   sendInput: (text: string, decisionId?: string) => void | boolean;
+  deliverInput?: (input: BackendInputRequest) => Promise<BackendInputResult>;
 }

@@ -158,6 +158,9 @@
 }
 .subagent-head .title{ flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .subagent-head .elapsed{ font-family: var(--mono-font); font-size: 10.5px; color: var(--text-3); }
+.agent-summary{ padding: 8px 12px; font-size: 12px; overflow-wrap: anywhere; }
+.agent-summary summary{ cursor: pointer; color: var(--text-3); }
+.agent-summary > div{ white-space: pre-wrap; margin-top: 6px; }
 
 /* progress breadcrumb — collapses a run of turn:'progress' assistant
    segments into one foldable bubble */

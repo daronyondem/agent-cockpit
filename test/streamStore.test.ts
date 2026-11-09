@@ -478,6 +478,59 @@ test('respond() with mode:stdin clears pendingInteraction without a fresh send',
   expect(state.uiState).toBeNull();
 });
 
+test('delegated tool outcomes retain summary and ownership without mutating an earlier live message', async () => {
+  const ws = await openWs('c1');
+  const Store = (window as any).StreamStore;
+  await startAcceptedStream('c1', ws);
+  ws.dispatch({ type: 'tool_activity', tool: 'Agent', id: 'scoped-agent', isAgent: true, description: 'Delegate' });
+  ws.dispatch({ type: 'tool_activity', tool: 'Bash', id: 'scoped-tool', parentAgentId: 'scoped-agent', description: 'Child command' });
+  const before = Store.getState('c1').messages.at(-1);
+  ws.dispatch({ type: 'tool_outcomes', outcomes: [{ toolUseId: 'scoped-agent', outcome: 'done', status: 'success', summary: 'Child summary' }] });
+  const blocks = Store.getState('c1').messages.at(-1).contentBlocks;
+  expect(before.contentBlocks.find((block: any) => block.activity?.id === 'scoped-agent').activity.summary).toBeUndefined();
+  expect(blocks.find((block: any) => block.activity?.id === 'scoped-agent').activity).toMatchObject({ summary: 'Child summary', outcome: 'done', isAgent: true });
+  expect(blocks.find((block: any) => block.activity?.id === 'scoped-tool').activity.parentAgentId).toBe('scoped-agent');
+});
+
+test('correlated question answers keep their request identity after reload and never use message fallback', async () => {
+  const ws = await openWs('c1');
+  const Store = (window as any).StreamStore;
+  const api = (global as any).AgentApi;
+  ws.dispatch({ type: 'tool_activity', isQuestion: true, inputRequestId: 'exact-question', questions: [{ question: 'Choose', allowFreeform: false }] });
+  api.fetch.mockResolvedValueOnce(makeResponse({ mode: 'message' }));
+  await Store.respond('c1', 'Beta');
+  expect(api.fetch).toHaveBeenCalledTimes(1);
+  expect(api.fetch.mock.calls[0][1].body).toEqual({ text: 'Beta', streamActive: false, requestId: 'exact-question' });
+  expect(Store.getState('c1').pendingInteraction.requestId).toBe('exact-question');
+  expect(Store.getState('c1').inputError).toContain('no longer accepting');
+});
+
+test.each([true, false])('steering holds its draft/files until consumed and preserves newer edits (accepted: %s)', async accepted => {
+  const ws = await openWs('c1');
+  const Store = (window as any).StreamStore;
+  await startAcceptedStream('c1', ws);
+  const api = (global as any).AgentApi;
+  ws.dispatch({ type: 'input_ready', turnId: 'owned-turn' });
+  Store.setInput('c1', 'Correct it');
+  const attachment = { id: 'file', status: 'done', result: { name: 'input.txt', path: '/tmp/input.txt' } };
+  Store.getState('c1').pendingAttachments.push(attachment);
+  let settle!: (value: unknown) => void;
+  let reject!: (error: Error) => void;
+  api.fetch.mockImplementationOnce(() => new Promise((yes, no) => { settle = yes; reject = no; }));
+  const pending = Store.steer('c1');
+  await Store.steer('c1');
+  expect(api.fetch).toHaveBeenCalledTimes(1);
+  expect(api.fetch.mock.calls[0][1].body).toMatchObject({ text: 'Correct it\n\n[Uploaded files: /tmp/input.txt]', turnId: 'owned-turn', inputId: expect.any(String), streamActive: true });
+  expect(Store.getState('c1')).toMatchObject({ input: 'Correct it', steeringPending: true, pendingAttachments: [attachment] });
+  Store.setInput('c1', 'A newer draft');
+  if (accepted) settle(makeResponse({ mode: 'stdin' })); else reject(new Error('The turn finished before consuming your steering'));
+  await pending;
+  expect(Store.getState('c1')).toMatchObject({ input: 'A newer draft', steeringPending: false, pendingAttachments: accepted ? [] : [attachment] });
+  if (!accepted) expect(Store.getState('c1').inputError).toContain('before consuming');
+  expect(Store.getState('c1').queue).toEqual([]);
+  expect(api.fetch).toHaveBeenCalledTimes(1);
+});
+
 test.each([
   {
     label: 'next question with the same tool ID',
@@ -574,6 +627,17 @@ test('send() forwards uploaded filename references alongside the existing wire t
   api.fetch.mockResolvedValueOnce(makeResponse({ userMessage: null }));
   await Store.send('c1', 'image');
   expect(api.fetch.mock.calls[0][1].body).toMatchObject({ content: 'image\n\n[Uploaded files: /uploads/c1/safe.png]', attachments: [{ name: 'safe.png' }] });
+});
+
+test('Copilot sends an explicit effort clear when the selected model has no effort control', async () => {
+  await openWs('c1');
+  const Store = (window as any).StreamStore;
+  const api = (global as any).AgentApi;
+  Store.setComposerCliProfile('c1', 'profile-copilot', 'copilot');
+  Store.setComposerModel('c1', 'text-model');
+  api.fetch.mockResolvedValueOnce(makeResponse({ userMessage: null }));
+  await Store.send('c1', 'text only');
+  expect(api.fetch.mock.calls[0][1].body).toMatchObject({ backend: 'copilot', model: 'text-model', effort: null });
 });
 
 test('reset() replaces stale composer profile selections with the reset conversation profile', async () => {
@@ -720,6 +784,29 @@ test('ocrAttachment() posts the selected replacement profile and updates convers
   });
   expect(Store.getState('c1').messages).toEqual(expect.arrayContaining([recoveryMessage]));
   expect(Store.getState('c1').conv.messages).toEqual(expect.arrayContaining([recoveryMessage]));
+});
+
+test.each([false, true])('late initial history preserves replayed delegated work (completed: %s)', async completed => {
+  const Store = (window as any).StreamStore;
+  const api = (global as any).AgentApi;
+  let history!: (response: ReturnType<typeof makeResponse>) => void;
+  api.fetch.mockImplementationOnce(() => new Promise(resolve => { history = resolve; }));
+  const loading = Store.load('c1');
+  const ws = await openWs('c1');
+  ws.dispatch({ type: 'replay_start' });
+  ws.dispatch({ type: 'tool_activity', tool: 'Agent', id: 'agent', isAgent: true, description: 'Background child' });
+  ws.dispatch({ type: 'tool_activity', tool: 'Bash', id: 'child', parentAgentId: 'agent', description: 'Child command' });
+  const final = { id: 'final', role: 'assistant', backend: 'copilot', content: 'Root answer', timestamp: '', contentBlocks: Store.getState('c1').messages.at(-1).contentBlocks };
+  if (completed) ws.dispatch({ type: 'assistant_message', message: final });
+  ws.dispatch({ type: 'replay_end' });
+  history(makeResponse({ id: 'c1', backend: 'copilot', messages: [{ id: 'user', role: 'user', content: 'Delegate' }], messageQueue: [] }));
+  await loading;
+  const messages = Store.getState('c1').messages;
+  expect(messages).toHaveLength(2);
+  expect(messages[0].id).toBe('user');
+  expect(messages[1].contentBlocks.map((block: any) => block.activity.id)).toEqual(['agent', 'child']);
+  if (completed) expect(messages[1].id).toBe('final');
+  else expect(messages[1].id).toBe(Store.getState('c1').streamingMsgId);
 });
 
 test('replay_start wipes placeholder contentBlocks so replayed frames rebuild cleanly', async () => {
@@ -1202,6 +1289,23 @@ describe('queue', () => {
     expect(Store.getState('c1').queue).toEqual([]);
   });
 
+  test('Copilot queued sends retain an explicit effort clear', async () => {
+    const ws = await openWs('c1');
+    const Store = (window as any).StreamStore;
+    const api = (global as any).AgentApi;
+    Store.setComposerCliProfile('c1', 'profile-copilot', 'copilot');
+    await startAcceptedStream('c1', ws);
+    api.fetch.mockClear();
+    api.fetch.mockResolvedValueOnce(makeResponse({ ok: true }))
+      .mockResolvedValueOnce(makeResponse({ userMessage: null }))
+      .mockResolvedValueOnce(makeResponse({ ok: true }));
+    await Store.enqueue('c1', 'queued text', []);
+    ws.dispatch({ type: 'done' });
+    await new Promise(resolve => setTimeout(resolve, 5));
+    const post = api.fetch.mock.calls.find((call: unknown[]) => call[0] === 'conversations/c1/message');
+    expect(post?.[1].body).toMatchObject({ backend: 'copilot', effort: null });
+  });
+
   test('queued send success persists edits made to later queue items while head is in flight', async () => {
     const ws = await openWs('c1');
     const Store = (window as any).StreamStore;
@@ -1232,12 +1336,12 @@ describe('queue', () => {
     expect(bodies[bodies.length - 1]).toEqual([{ content: 'edited tail', attachments: [] }]);
   });
 
-  test('queued send 409 restores original head with attachments and active-stream state', async () => {
+  test.each([409, 503])('queued send %s restores the queue and only attaches a real active stream', async status => {
     const ws = await openWs('c1');
     const Store = (window as any).StreamStore;
     const api = (global as any).AgentApi;
-    const err = new Error('Conversation is already streaming') as Error & { status?: number };
-    err.status = 409;
+    const err = new Error(status === 409 ? 'Conversation is already streaming' : 'Session is resetting. Try again shortly.') as Error & { status?: number };
+    err.status = status;
 
     await startAcceptedStream('c1', ws);
     api.fetch
@@ -1253,9 +1357,9 @@ describe('queue', () => {
     const state = Store.getState('c1');
     expect(state.queue).toEqual([{ content: 'queued text', attachments: [attachment] }]);
     expect(api.fetch.mock.calls.find((call: any[]) => call[0] === 'conversations/c1/message' && call[1]?.body?.content?.includes('queued text'))[1].body.attachments).toEqual([{ name: 'x.png' }]);
-    expect(state.streaming).toBe(true);
-    expect(state.uiState).toBe('streaming');
-    expect(state.streamError).toBeNull();
+    expect(state.streaming).toBe(status === 409);
+    expect(state.uiState).toBe(status === 409 ? 'streaming' : 'error');
+    expect(state.streamError).toBe(status === 409 ? null : err.message);
     expect(state.messages.some((m: any) => String(m.id).startsWith('pending-'))).toBe(false);
   });
 
@@ -1576,11 +1680,13 @@ describe('stopStream', () => {
 
     await Store.send('c1', 'hello');
     expect(Store.getState('c1').streaming).toBe(true);
+    ws.dispatch({ type: 'input_ready', turnId: 'old-turn' });
 
     await Store.stopStream('c1');
 
     expect(api.abortConversation).toHaveBeenCalledWith('c1');
     expect(Store.getState('c1').streaming).toBe(false);
+    expect(Store.getState('c1').inputTurnId).toBeNull();
     expect(Store.getState('c1').streamError).toBe('Aborted by user');
     expect(Store.getState('c1').streamErrorSource).toBe('abort');
     expect(Store.getState('c1').uiState).toBe('error');
@@ -1868,23 +1974,23 @@ describe('draft persistence', () => {
     expect(JSON.parse(raw!)).toEqual({ text: 'my message', attachments: [] });
   });
 
-  test('POST 409 rolls back optimistic send and returns to active-stream state', async () => {
+  test.each([409, 503])('POST %s preserves the draft and only attaches a real active stream', async status => {
     await openWs('c1');
     const Store = (window as any).StreamStore;
     const api = (global as any).AgentApi;
 
     Store.setInput('c1', 'raced message');
-    const err = new Error('Conversation is already streaming') as Error & { status?: number };
-    err.status = 409;
+    const err = new Error(status === 409 ? 'Conversation is already streaming' : 'Session is resetting. Try again shortly.') as Error & { status?: number };
+    err.status = status;
     api.fetch.mockRejectedValueOnce(err);
 
     await Store.send('c1', 'raced message');
 
     const state = Store.getState('c1');
     expect(state.input).toBe('raced message');
-    expect(state.streaming).toBe(true);
-    expect(state.uiState).toBe('streaming');
-    expect(state.streamError).toBeNull();
+    expect(state.streaming).toBe(status === 409);
+    expect(state.uiState).toBe(status === 409 ? 'streaming' : 'error');
+    expect(state.streamError).toBe(status === 409 ? null : err.message);
     expect(state.messages.some((m: any) => String(m.id).startsWith('pending-'))).toBe(false);
   });
 

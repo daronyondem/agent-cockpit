@@ -2,7 +2,7 @@ import type { CliCommunicationProtocol, CliHarness, CliProfile, Settings } from 
 import { hasRequiredCliProfileConfig } from '../contracts/cliProfiles';
 export { hasRequiredCliProfileConfig } from '../contracts/cliProfiles';
 
-export const SUPPORTED_CLI_HARNESSES: CliHarness[] = ['claude-code', 'kiro', 'codex', 'opencode', 'grok-build', 'cortex-code'];
+export const SUPPORTED_CLI_HARNESSES: CliHarness[] = ['claude-code', 'kiro', 'codex', 'opencode', 'grok-build', 'cortex-code', 'copilot'];
 export const CLAUDE_CODE_INTERACTIVE_BACKEND_ID = 'claude-code-interactive';
 export const CLAUDE_CODE_STANDARD_PROTOCOL: CliCommunicationProtocol = 'standard';
 export const CLAUDE_CODE_INTERACTIVE_PROTOCOL: CliCommunicationProtocol = 'interactive';
@@ -16,6 +16,7 @@ const HARNESS_LABELS: Record<CliHarness, string> = {
   opencode: 'OpenCode',
   'grok-build': 'Grok Build',
   'cortex-code': 'Cortex Code (CoCo)',
+  copilot: 'GitHub Copilot',
 };
 
 export function isCliHarness(value: string | undefined | null): value is CliHarness {

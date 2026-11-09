@@ -10,6 +10,7 @@ const api = { settings: { get: jest.fn(), backends: jest.fn(), save: jest.fn(), 
 const { SettingsScreen } = loadFrontendModule('web/AgentCockpitWeb/src/screens/settingsScreen.jsx', {
   react: { ...require('react'), lazy: () => () => null }, 'react/jsx-runtime': require('react/jsx-runtime'),
   '../profileCatalog.js': catalog, './processorProfiles': projection, './cliProfileConfigDir.js': configField,
+  './cliProfileAuthState.js': require('../web/AgentCockpitWeb/src/screens/cliProfileAuthState.js'),
   './usageStats.js': require('../web/AgentCockpitWeb/src/screens/usageStats.js'),
   '../../../../src/contracts/usagePresentation': require('../src/contracts/usagePresentation'),
   '../../../../src/contracts/cliProfiles': { hasRequiredCliProfileConfig }, '../useProfileBackends.js': { useProfileBackends: () => [{}, () => {}] },

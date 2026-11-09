@@ -8,6 +8,7 @@ import type { UpdateService } from './updateService';
 import { resolveCliCommandForRuntime, windowsCliCommandCandidates, windowsCmdCommandLine } from './cliCommandResolver';
 import { cortexInstallCommand, CORTEX_INSTALL_DOCS } from './cortexInstallation';
 import { ensureWindowsCliToolWrappersForInstall } from './windowsCliToolWrappers';
+import { nodeRuntimeMeetsRequirement } from './nodeRuntimeRequirement';
 import { persistWindowsUserPathEntry, prependProcessPathEntry } from './windowsUserPath';
 import { detectLibreOffice, resetLibreOfficeDetection, type LibreOfficeStatus } from './knowledgeBase/libreOffice';
 import { detectPandoc, resetPandocDetection, type PandocStatus } from './knowledgeBase/pandoc';
@@ -16,7 +17,7 @@ import { resolveGrokCliRuntime } from './backends/grokRuntime';
 const execFileAsync = promisify(execFile);
 const INSTALL_TIMEOUT_MS = 10 * 60 * 1000;
 const WINDOWS_CLI_TOOLS_DIR = 'cli-tools';
-const NODE_REMEDIATION = 'Install Node.js 22+ from nodejs.org, or rerun the platform installer without the no-install-node option so it can install a private runtime.';
+const NODE_REMEDIATION = 'Install Node.js 22.12.0+ from nodejs.org, or rerun the platform installer without the no-install-node option so it can install a private runtime.';
 const CLAUDE_CLI_REMEDIATION = 'Install Claude Code only if you want to use that backend. Run `npm i -g @anthropic-ai/claude-code` when npm is available, then run `claude` and finish browser sign-in. Restart Agent Cockpit if the command is still not detected.';
 const CODEX_CLI_REMEDIATION = 'Install Codex only if you want to use that backend. Run `npm i -g @openai/codex`, then run `codex` and sign in with ChatGPT or an API key. Restart Agent Cockpit if the command is still not detected.';
 function kiroCliRemediation(): string {
@@ -341,8 +342,7 @@ export class InstallDoctorService {
 
   private checkNode(): InstallDoctorCheck {
     const version = process.versions.node;
-    const major = Number(version.split('.')[0]);
-    if (Number.isFinite(major) && major >= 22) {
+    if (nodeRuntimeMeetsRequirement(version)) {
       return check('node', 'Node.js', 'ok', true, `Node.js ${version} is running.`);
     }
     return check('node', 'Node.js', 'error', true, `Node.js ${version} is too old.`, undefined, NODE_REMEDIATION);

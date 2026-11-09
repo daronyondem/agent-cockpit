@@ -1,10 +1,10 @@
 {
   "name": "agent-cockpit",
-  "version": "0.4.166",
+  "version": "0.4.168",
   "private": true,
   "license": "Apache-2.0",
   "engines": {
-    "node": ">=22"
+    "node": ">=22.12.0"
   },
   "scripts": {
     "start": "tsx server.ts",
@@ -12,6 +12,11 @@
     "lint": "eslint . --max-warnings=0",
     "test": "node --experimental-vm-modules node_modules/jest/bin/jest.js",
     "test:coverage": "node --experimental-vm-modules node_modules/jest/bin/jest.js --coverage --runInBand",
+    "e2e:copilot": "COPILOT_E2E=1 npm test -- test/copilotBackend.e2e.test.ts --runInBand",
+    "e2e:copilot-workflows": "tsx scripts/run-copilot-workflows.ts",
+    "e2e:copilot-ui": "tsx scripts/run-copilot-ui-e2e.ts",
+    "e2e:copilot-sdk": "tsx scripts/run-copilot-sdk-compat.ts",
+    "e2e:copilot-auth": "tsx scripts/run-copilot-auth-compat.ts",
     "e2e:claude-interactive": "CLAUDE_INTERACTIVE_E2E=1 npm test -- test/claudeCodeInteractive.e2e.test.ts --runInBand --forceExit",
     "e2e:claude-interactive:report": "tsx scripts/run-claude-interactive-compat.ts",
     "e2e:claude-interactive-ui": "CLAUDE_INTERACTIVE_UI_E2E=1 playwright test test/e2e/claudeCodeInteractive.ui.pw.ts --config playwright.config.ts --project chromium",
@@ -41,20 +46,21 @@
   },
   "dependencies": {
     "@electric-sql/pglite": "^0.4.4",
+    "@github/copilot-sdk": "1.0.28",
     "@napi-rs/canvas": "^0.1.97",
     "@simplewebauthn/server": "^13.3.0",
     "adm-zip": "^0.6.0",
     "better-sqlite3": "^12.8.0",
     "dompurify": "^3.4.2",
     "dotenv": "^16.4.7",
-    "express": "^4.21.2",
+    "express": "^4.22.3",
     "express-rate-limit": "^8.5.1",
     "express-session": "^1.18.1",
     "fast-xml-parser": "^5.7.3",
     "helmet": "^8.0.0",
     "highlight.js": "^11.11.1",
     "marked": "^18.0.3",
-    "multer": "^2.1.1",
+    "multer": "^2.5.0",
     "node-pty": "^1.1.0",
     "on-headers": "^1.0.2",
     "passport": "^0.7.0",
@@ -66,6 +72,7 @@
     "session-file-store": "^1.5.0",
     "smol-toml": "^1.9.1",
     "unpdf": "^1.4.0",
+    "vscode-jsonrpc": "8.2.1",
     "ws": "^8.20.1",
     "yauzl": "^3.3.1",
     "yazl": "^3.3.1"
@@ -73,7 +80,11 @@
   "overrides": {
     "basic-ftp": "6.2.3",
     "js-yaml": "4.3.2",
-    "qs": "6.16.0"
+    "qs": "6.16.1",
+    "body-parser": "1.20.9",
+    "zod": "4.6.6",
+    "glob@>=9.0.0 <15.0.0": "14.0.2",
+    "minimatch@>=7.0.0 <12.0.0": "11.0.1"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
@@ -103,6 +114,6 @@
     "tsx": "^4.21.0",
     "typescript": "^6.0.2",
     "typescript-eslint": "^8.61.0",
-    "vite": "^8.0.16"
+    "vite": "^8.1.6"
   }
 }

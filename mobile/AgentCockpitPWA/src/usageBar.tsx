@@ -1,11 +1,13 @@
 import type { Usage } from './types';
 import { formatPercent } from './appModel';
+import { CopilotUsage } from './copilotUsage';
 import { isUsageCostUnavailable, usageTokenTotal } from '../../../src/contracts/usagePresentation';
 
 export function UsageBar({ usage, backend }: { usage?: Usage; backend?: string }) {
   if (!usage) {
     return null;
   }
+  if (backend === 'copilot') return <CopilotUsage usage={usage} />;
   const tokens = usageTokenTotal(usage);
   const context = usage.contextUsagePercentage ?? 0;
   const cortex = backend === 'cortex-code';

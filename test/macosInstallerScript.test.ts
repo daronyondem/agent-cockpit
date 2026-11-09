@@ -24,7 +24,8 @@ describe('macOS installer script', () => {
     expect(source).toContain('This installer currently supports macOS only.');
     expect(source).toContain('arm64|x86_64');
     expect(source).toContain('process.versions.node.split');
-    expect(source).toContain('-ge 22');
+    expect(source).toContain('-gt 22');
+    expect(source).toContain('-ge 12');
     expect(source).toContain('install_private_node');
     expect(source).toContain('latest-v${NODE_MAJOR}.x/SHASUMS256.txt');
     expect(source).toContain('node-v${node_version}');

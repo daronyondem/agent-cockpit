@@ -38,6 +38,7 @@ const INSTRUCTION_HARNESS_LABELS: Record<CliHarness, string> = {
   opencode: 'OpenCode',
   'grok-build': 'Grok Build',
   'cortex-code': 'Cortex Code (CoCo)',
+  copilot: 'GitHub Copilot',
 };
 
 const HARNESS_INSTRUCTION_SOURCE: Record<CliHarness, WorkspaceInstructionSourceId> = {
@@ -47,6 +48,7 @@ const HARNESS_INSTRUCTION_SOURCE: Record<CliHarness, WorkspaceInstructionSourceI
   opencode: 'agents',
   'grok-build': 'agents',
   'cortex-code': 'agents',
+  copilot: 'agents',
 };
 
 function relPath(absPath: string, workspacePath: string): string {

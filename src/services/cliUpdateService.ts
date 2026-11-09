@@ -11,6 +11,7 @@ import {
 import { resolveCodexCliRuntime } from './backends/codex';
 import { resolveOpenCodeCliRuntime } from './backends/opencode';
 import { resolveGrokCliRuntime } from './backends/grok';
+import { resolveCopilotCliRuntime } from './backends/copilot';
 import { buildCliCommandInvocation, windowsCmdCommandLine, type CliCommandResolution } from './cliCommandResolver';
 import { serverConfiguredCliProfileId } from './cliProfiles';
 import { cortexInstalledUpdateVersion, probeCortexUpdateInstallation, resolveCortexUpdateRuntime } from './cortexUpdates';
@@ -38,6 +39,7 @@ const HARNESS_LABELS: Record<CliHarness, string> = {
   opencode: 'OpenCode',
   'grok-build': 'Grok Build',
   'cortex-code': 'Cortex Code (CoCo)',
+  copilot: 'GitHub Copilot',
 };
 
 const HARNESS_DEFAULT_COMMANDS: Record<CliHarness, string> = {
@@ -47,12 +49,14 @@ const HARNESS_DEFAULT_COMMANDS: Record<CliHarness, string> = {
   opencode: 'opencode',
   'grok-build': 'grok',
   'cortex-code': 'cortex',
+  copilot: 'copilot',
 };
 
 const HARNESS_NPM_PACKAGES: Partial<Record<CliHarness, string>> = {
   'claude-code': '@anthropic-ai/claude-code',
   codex: '@openai/codex',
   'grok-build': '@xai-official/grok',
+  copilot: '@github/copilot',
 };
 
 interface CliRuntimeTarget extends CliCommandResolution {
@@ -278,6 +282,7 @@ export class CliUpdateService {
       else delete env.GROK_HOME;
       return { ...runtime, env };
     }
+    if (profile.harness === 'copilot') return resolveCopilotCliRuntime(profile);
     return {
       command: HARNESS_DEFAULT_COMMANDS.kiro,
       env: { ...process.env },
@@ -397,7 +402,7 @@ export class CliUpdateService {
         }
       }
     }
-    if (target.harness === 'kiro' || target.harness === 'opencode' || target.harness === 'grok-build') {
+    if (target.harness === 'kiro' || target.harness === 'opencode' || target.harness === 'grok-build' || target.harness === 'copilot') {
       return { installMethod: 'self-update', resolvedPath };
     }
     return { installMethod: resolvedPath ? 'unknown' : 'missing', resolvedPath };
@@ -433,7 +438,7 @@ export class CliUpdateService {
     if (target.harness === 'opencode' && probe.installMethod === 'self-update') {
       return [target.command, ...(target.argsPrefix || []), 'upgrade'];
     }
-    if (target.harness === 'grok-build' && probe.installMethod === 'self-update') {
+    if ((target.harness === 'grok-build' || target.harness === 'copilot') && probe.installMethod === 'self-update') {
       return [target.command, ...(target.argsPrefix || []), 'update'];
     }
     return null;
@@ -518,7 +523,7 @@ export class CliUpdateService {
 }
 
 function isCliHarnessValue(value: unknown): value is CliHarness {
-  return value === 'codex' || value === 'claude-code' || value === 'kiro' || value === 'opencode' || value === 'grok-build' || value === 'cortex-code';
+  return value === 'codex' || value === 'claude-code' || value === 'kiro' || value === 'opencode' || value === 'grok-build' || value === 'cortex-code' || value === 'copilot';
 }
 
 function inferNpmPrefixFromPackagePath(resolvedPath: string, npmPackage: string): string | null {
@@ -581,19 +586,30 @@ function isSubpath(child: string, parent: string): boolean {
 }
 
 export function parseVersion(output: string | null | undefined): string | null {
-  const match = String(output || '').match(/\b(\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?)\b/);
+  const match = String(output || '').match(/\b(\d+\.\d+\.\d+(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?)\b/);
   return match ? match[1] : null;
 }
 
 export function isNewerVersion(remote: string | null, local: string | null): boolean {
   if (!remote || !local) return false;
-  const r = remote.split(/[-+]/)[0].split('.').map(Number);
-  const l = local.split(/[-+]/)[0].split('.').map(Number);
-  for (let i = 0; i < Math.max(r.length, l.length); i += 1) {
-    const rv = r[i] || 0;
-    const lv = l[i] || 0;
-    if (rv > lv) return true;
-    if (rv < lv) return false;
+  const pattern = /^(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/;
+  const r = remote.match(pattern);
+  const l = local.match(pattern);
+  if (!r || !l) return false;
+  for (let i = 1; i <= 3; i += 1) {
+    if (BigInt(r[i]) !== BigInt(l[i])) return BigInt(r[i]) > BigInt(l[i]);
+  }
+  if (!r[4] || !l[4]) return !r[4] && Boolean(l[4]);
+  const rp = r[4].split('.');
+  const lp = l[4].split('.');
+  for (let i = 0; i < Math.max(rp.length, lp.length); i += 1) {
+    if (rp[i] === undefined || lp[i] === undefined) return lp[i] === undefined;
+    if (rp[i] === lp[i]) continue;
+    const rn = /^\d+$/.test(rp[i]);
+    const ln = /^\d+$/.test(lp[i]);
+    if (rn && ln) return BigInt(rp[i]) > BigInt(lp[i]);
+    if (rn !== ln) return !rn;
+    return rp[i] > lp[i];
   }
   return false;
 }

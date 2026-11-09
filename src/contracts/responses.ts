@@ -1,4 +1,5 @@
 import type { ExplorerEntry, ExplorerPreviewResponse, ExplorerTreeResponse, FilePreviewResponse } from './explorer';
+import type { CopilotUsage, ContextWindowUsage } from './copilotUsage';
 
 export type EffortLevel = 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max' | 'ultra';
 export type ServiceTier = 'fast';
@@ -37,6 +38,8 @@ export interface Usage {
   credits?: number;
   pricingTier?: string;
   contextUsagePercentage?: number;
+  contextWindow?: ContextWindowUsage;
+  copilot?: CopilotUsage;
 }
 
 export interface UsageLedgerRecord {
@@ -65,6 +68,7 @@ export interface ToolActivity {
   subagentType?: string;
   parentAgentId?: string;
   outcome?: string;
+  summary?: string;
   status?: string;
   batchIndex?: number;
 }
@@ -238,7 +242,7 @@ export interface CurrentUserResponse {
 export interface CliProfile {
   id: string;
   name: string;
-  harness: 'codex' | 'claude-code' | 'kiro' | 'opencode' | 'grok-build' | 'cortex-code';
+  harness: 'codex' | 'claude-code' | 'kiro' | 'opencode' | 'grok-build' | 'cortex-code' | 'copilot';
   protocol?: 'standard' | 'interactive';
   opencode?: {
     provider?: string;
@@ -301,6 +305,11 @@ export interface BackendMetadata {
   icon?: string;
   capabilities?: BackendCapabilities;
   models?: ModelOption[];
+  modelCatalog?: {
+    source: 'runtime' | 'fallback';
+    reason?: string;
+    fetchedAt?: string;
+  };
 }
 
 export interface WorkspaceContextGlobalSettings {
@@ -343,7 +352,7 @@ export interface ConversationInputResponse {
   mode: 'stdin' | 'message';
 }
 
-export type ThreadGoalBackend = 'codex' | 'claude-code' | 'claude-code-interactive' | 'grok-build';
+export type ThreadGoalBackend = 'codex' | 'claude-code' | 'claude-code-interactive' | 'grok-build' | 'copilot';
 export type ThreadGoalStatus = 'active' | 'paused' | 'budgetLimited' | 'complete' | 'cleared' | 'unknown';
 export type ThreadGoalSource = 'native' | 'transcript' | 'runtime' | 'unknown';
 
@@ -361,6 +370,11 @@ export interface ThreadGoal {
   objective: string;
   status: ThreadGoalStatus;
   supportedActions?: ThreadGoalSupportedActions;
+  /** Native Copilot objective identity within this session. */
+  objectiveId?: number;
+  /** Copilot AI-credit window; independent of token budgets and USD. */
+  aiCreditLimit?: number | null;
+  aiCreditsUsed?: number | null;
   tokenBudget?: number | null;
   tokensUsed?: number | null;
   timeUsedSeconds?: number | null;

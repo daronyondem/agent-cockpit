@@ -51,3 +51,24 @@ Developer-only `CORTEX_CODE_E2E=1` authorizes real compatibility runs;
 executable and saved connection. They are not production setup requirements.
 The expected-failure auth-control catalog never selects a saved connection.
 See [the testing specification](../spec-testing.md#coco-consolidated-compatibility-runners-p9-c54).
+
+## GitHub Copilot Server Configuration
+
+Copilot profiles reuse the server process's native CLI/provider environment.
+Settings does not store profile-local environment or config-directory overrides
+for this harness. These variables therefore affect every shared Copilot profile:
+
+| Variable | Meaning |
+| --- | --- |
+| `COPILOT_HOME` | Native CLI configuration/state home; normally the CLI's `~/.copilot`. Changing it does not establish isolated OS-keychain credentials or independent accounts. |
+| `COPILOT_GITHUB_TOKEN`, `GH_TOKEN`, `GITHUB_TOKEN` | Native GitHub credential overrides. Configured tokens take precedence over cached terminal login; guided device login does not replace an environment token. |
+| `COPILOT_MODEL` | Default model when the turn omits a model or selects `auto`; an explicit turn selection wins. The effective model still passes catalog/effort/media validation. |
+| `COPILOT_PROVIDER_BASE_URL` | Explicit custom-provider endpoint. When set, SDK create/resume receives custom-provider configuration instead of assuming hosted GitHub routing. |
+| `COPILOT_PROVIDER_TYPE` | Custom-provider type: `openai` (default), `anthropic` or `azure`. Provider support does not imply verified image/PDF support. |
+| `COPILOT_PROVIDER_API_KEY` | Optional custom-provider API key, passed only when configured. Provider credentials remain server configuration rather than GitHub device-login credentials. |
+
+Custom-provider catalogs are marked as fallbacks, Copilot account quota is
+unavailable, and guided GitHub login is not used to certify provider keys.
+Opaque wrapper commands whose provider environment is hidden retain JSONL
+compatibility. See the [runtime contract](../spec-backend-services.md#copilot-sdk-runtime-foundation)
+and [known capability gaps](backend-capabilities.md#copilot-known-capability-gaps).

@@ -7,6 +7,7 @@ import { WebBuildService, type WebBuildStatus } from './webBuildService';
 import { MobileBuildService, type MobileBuildStatus } from './mobileBuildService';
 import { persistWindowsUserPathEntry } from './windowsUserPath';
 import { ensureWindowsCliToolWrappers } from './windowsCliToolWrappers';
+import { nodeRuntimeMeetsRequirement } from './nodeRuntimeRequirement';
 
 const DEFAULT_REQUIRED_NODE_MAJOR = 22;
 
@@ -628,16 +629,16 @@ export class UpdateService {
   ): Promise<InstallNodeRuntime | null> {
     const required = this._requiredNodeRuntime(manifest, appDir);
     const current = await this._readCurrentNodeRuntime(installStatus, required.minimumMajor);
-    if (this._nodeMajor(current.version) >= required.minimumMajor) {
+    if (nodeRuntimeMeetsRequirement(current.version, required.minimumMajor, required.engine)) {
       if (current.source === 'private') {
-        const validation = await this._validatePrivateNodeRuntime(current, required.minimumMajor);
+        const validation = await this._validatePrivateNodeRuntime(current, required.minimumMajor, required.engine);
         if (!validation.ok) {
           steps.push({
             name: 'verify Node.js runtime',
             success: false,
             output: `${validation.output}; installing a private runtime`,
           });
-          const updated = await this._installPrivateNodeRuntime(installStatus, required.minimumMajor, steps);
+          const updated = await this._installPrivateNodeRuntime(installStatus, required.minimumMajor, steps, required.engine);
           this._prependPath(updated.binDir || '');
           return updated;
         }
@@ -659,7 +660,7 @@ export class UpdateService {
       success: false,
       output: `Node.js ${current.version || 'unknown'} does not satisfy ${required.engine || `>=${required.minimumMajor}`}; installing a private runtime`,
     });
-    const updated = await this._installPrivateNodeRuntime(installStatus, required.minimumMajor, steps);
+    const updated = await this._installPrivateNodeRuntime(installStatus, required.minimumMajor, steps, required.engine);
     this._prependPath(updated.binDir || '');
     return updated;
   }
@@ -748,7 +749,7 @@ export class UpdateService {
     };
   }
 
-  private async _installPrivateNodeRuntime(installStatus: InstallStatus, requiredMajor: number, steps: UpdateStep[]): Promise<InstallNodeRuntime> {
+  private async _installPrivateNodeRuntime(installStatus: InstallStatus, requiredMajor: number, steps: UpdateStep[], engine: string | null): Promise<InstallNodeRuntime> {
     if (!installStatus.installDir) {
       throw new Error('Production install manifest is missing installDir; cannot update private Node.js runtime.');
     }
@@ -820,7 +821,7 @@ export class UpdateService {
         runtimeDir: runtime.runtimeDir,
         requiredMajor,
         updatedAt: null,
-      }, requiredMajor);
+      }, requiredMajor, engine);
       if (!validation.ok) {
         throw new Error(validation.output);
       }
@@ -868,12 +869,6 @@ export class UpdateService {
     return { platform: 'darwin', extensionPattern: 'tar[.]gz', tarFlag: '-xzf', label: 'macOS' };
   }
 
-  private _nodeMajor(version: string | null): number {
-    if (!version) return 0;
-    const major = Number(version.replace(/^v/, '').split('.')[0]);
-    return Number.isFinite(major) ? major : 0;
-  }
-
   private _prependPath(binDir: string): void {
     if (!binDir) return;
     const parts = (process.env.PATH || '').split(path.delimiter).filter(Boolean);
@@ -898,7 +893,7 @@ export class UpdateService {
     };
   }
 
-  private async _validatePrivateNodeRuntime(runtime: InstallNodeRuntime, requiredMajor: number): Promise<{
+  private async _validatePrivateNodeRuntime(runtime: InstallNodeRuntime, requiredMajor: number, engine: string | null): Promise<{
     ok: boolean;
     output: string;
     version: string | null;
@@ -946,10 +941,10 @@ export class UpdateService {
 
     try {
       const version = (await this._exec(files.nodePath, ['-p', 'process.versions.node'], 5000)).trim() || runtime.version || null;
-      if (this._nodeMajor(version) < requiredMajor) {
+      if (!nodeRuntimeMeetsRequirement(version, requiredMajor, engine)) {
         return {
           ok: false,
-          output: `Node.js ${version || 'unknown'} does not satisfy >=${requiredMajor}`,
+          output: `Node.js ${version || 'unknown'} does not satisfy ${engine || `>=${requiredMajor}`}`,
           version,
           npmVersion: runtime.npmVersion || null,
         };

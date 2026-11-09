@@ -27,6 +27,9 @@ function selectChatComposerState(s){
     sending: s.sending,
     streaming: s.streaming,
     pendingInteraction: s.pendingInteraction,
+    inputTurnId: s.inputTurnId,
+    steeringPending: s.steeringPending,
+    inputError: s.inputError,
     composerCliProfileId: s.composerCliProfileId,
     composerBackend: s.composerBackend,
     composerModel: s.composerModel,
@@ -69,12 +72,15 @@ function normalizeGoalCapability(capability, backendId){
   return { set: false, clear: false, pause: false, resume: false, status: 'none' };
 }
 
-function goalCapabilityForBackend(backends, backendId){
-  const backend = (backends || []).find(b => b && b.id === backendId);
+function goalCapabilityForBackend(backends, backendId, metadata){
+  const backend = metadata || (backends || []).find(b => b && b.id === backendId);
   return normalizeGoalCapability(backend?.capabilities?.goals, backendId);
 }
 
 function GoalStrip({ convId, goal, streaming, sending }){
+  const [creditLimit, setCreditLimit] = React.useState('');
+  const copilotGoal = goal?.backend === 'copilot';
+  const validCreditLimit = !copilotGoal || (Number.isFinite(Number(creditLimit)) && Number(creditLimit) > 0);
   const status = goal?.status || 'active';
   const hasGoal = !!goal;
   const goalThreadId = goal?.threadId || null;
@@ -109,16 +115,18 @@ function GoalStrip({ convId, goal, streaming, sending }){
       <div className="goal-strip-main">
         <span className="goal-dot" aria-hidden="true"/>
         <span className="goal-status">{goalStatusLabel(status)}</span>
-        {elapsed !== '0s' ? <span className="goal-elapsed">{elapsed}</span> : null}
+        {!copilotGoal && elapsed !== '0s' ? <span className="goal-elapsed">{elapsed}</span> : null}
         {objective ? <span className="goal-objective" title={objective}>{objective}</span> : null}
         {goal.backend === 'grok-build' && typeof goal.tokenBudget === 'number' ? <span className="goal-elapsed" title="Grok checks token budgets between work steps, so execution can exceed the budget.">Soft budget: {goal.tokenBudget.toLocaleString()}</span> : null}
       </div>
       <div className="goal-strip-actions">
+        {copilotGoal && typeof goal.aiCreditLimit === 'number' ? <span>AI credits: {goal.aiCreditsUsed ?? '—'} / {goal.aiCreditLimit}</span> : null}
+        {copilotGoal && status === 'paused' ? <label>Fresh AI credit limit <input aria-label="Fresh AI credit limit" type="number" min="0" step="any" inputMode="decimal" value={creditLimit} onChange={event => setCreditLimit(event.target.value)} style={{width:80}} /></label> : null}
         {canPause ? (
           <button type="button" onClick={() => StreamStore.pauseGoal(convId)} disabled={sending} title="Pause goal">Pause</button>
         ) : null}
         {status === 'paused' && goalSupportsAction(goal, 'resume') ? (
-          <button type="button" onClick={() => StreamStore.resumeGoal(convId)} disabled={sending || !canResume} title="Resume goal">Resume</button>
+          <button type="button" onClick={() => StreamStore.resumeGoal(convId, copilotGoal ? Number(creditLimit) : undefined)} disabled={sending || !canResume || !validCreditLimit} title="Resume goal">Resume</button>
         ) : null}
         {canClear ? (
           <button
@@ -141,6 +149,7 @@ export const ChatComposer = React.memo(function ChatComposer({ convId, profileLo
   const toast = useToasts();
   const fileInputRef = React.useRef(null);
   const composerTextRef = React.useRef(null);
+  const [goalProfileMetadata, setGoalProfileMetadata] = React.useState(null);
   if (!state || !state.conv) return null;
 
   const conv = state.conv;
@@ -168,18 +177,21 @@ export const ChatComposer = React.memo(function ChatComposer({ convId, profileLo
     : profileLocked
       ? conv.backend
       : (state.composerBackend || conv.backend);
-  const goalCapability = goalCapabilityForBackend(backends, topbarBackendId);
-  const canSteer = checkBackendRoleEligibility(backends.find(backend => backend.id === topbarBackendId), { role: 'steering' }).ok;
+  const goalCapability = goalCapabilityForBackend(backends, topbarBackendId,
+    goalProfileMetadata?.profileId === topbarCliProfileId ? goalProfileMetadata.backend : null);
+  const canSteer = checkBackendRoleEligibility(
+    (goalProfileMetadata?.profileId === topbarCliProfileId && goalProfileMetadata.backend)
+      || backends.find(backend => backend.id === topbarBackendId), { role: 'steering' }).ok;
   const goalCapable = goalCapability.set === true;
   const goalMode = goalCapable && !!state.goalMode;
   const activeGoal = state.goal || null;
   const hasContent = !!input.trim() || hasDoneFiles;
   const effectiveHasContent = goalMode ? !!input.trim() : hasContent;
-  const canSend = effectiveHasContent && !sending && !streaming && !awaiting && !hasUploadingFiles;
+  const canSend = effectiveHasContent && !sending && !state.steeringPending && !streaming && !awaiting && !hasUploadingFiles;
   /* While the agent is streaming, Enter enqueues instead of sending. The
      send button turns into a stop-styled affordance; clicking it enqueues
      whatever is in the composer so the user can stack follow-ups. */
-  const canEnqueue = hasContent && !sending && !awaiting && !hasUploadingFiles && streaming;
+  const canEnqueue = hasContent && !sending && !state.steeringPending && !awaiting && !hasUploadingFiles && streaming;
 
   function openFilePicker(){ if (fileInputRef.current) fileInputRef.current.click(); }
 
@@ -401,6 +413,7 @@ export const ChatComposer = React.memo(function ChatComposer({ convId, profileLo
           />
         ) : null}
         <div className="composer-box">
+          {state.inputError ? <div role="alert" className="u-warn" style={{padding:'8px 12px'}}>{state.inputError}</div> : null}
           <textarea
             ref={composerTextRef}
             rows={3}
@@ -467,6 +480,7 @@ export const ChatComposer = React.memo(function ChatComposer({ convId, profileLo
             <React.Suspense fallback={<span className="picks"/>}><ComposerPicks
               convId={convId}
               backends={backends}
+              onProfileMetadata={setGoalProfileMetadata}
               cliProfiles={cliProfiles}
               composerCliProfileId={state.composerCliProfileId || conv.cliProfileId || null}
               composerBackend={state.composerBackend || conv.backend || null}
@@ -514,9 +528,14 @@ export const ChatComposer = React.memo(function ChatComposer({ convId, profileLo
                 <span>Goal</span>
               </label>
             ) : null}
+            {streaming && state.inputTurnId && hasContent && !awaiting ? (
+              <button className="btn" disabled={!canEnqueue} onClick={() => StreamStore.steer(convId)} title="Redirect the current run">
+                {state.steeringPending ? 'Steering…' : 'Steer'}
+              </button>
+            ) : null}
             {streaming ? (
               <>
-              {hasContent ? (
+              {hasContent && !state.steeringPending && !awaiting ? (
                 <button
                   className="send"
                   onClick={doEnqueue}

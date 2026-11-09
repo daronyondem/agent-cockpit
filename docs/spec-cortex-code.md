@@ -21,7 +21,7 @@ The actual remote-browser setup
 through Cockpit is still an open acceptance gate (C26).
 See [the implementation tracker](design/cortex-code-implementation-plan.md),
 [native evaluation](research/cortex-code-acp-evaluation.md), and
-[Proposed ADR-0093](adr/0093-integrate-cortex-code-through-its-native-acp-interface.md).
+[Proposed ADR-0099](adr/0099-integrate-cortex-code-through-its-native-acp-interface.md).
 
 ## Restricted text processors (P6 C35)
 

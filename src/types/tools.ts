@@ -10,6 +10,7 @@ export interface ToolActivity {
   subagentType?: string;
   parentAgentId?: string;
   outcome?: string;
+  summary?: string;
   status?: string;
   /**
    * Incremented by the server every time a CLI `user` event (tool_result)
@@ -30,6 +31,7 @@ export interface ToolQuestionOption {
 export interface ToolQuestion {
   question: string;
   options?: ToolQuestionOption[];
+  allowFreeform?: boolean;
 }
 
 export interface ToolOutcome {
@@ -37,6 +39,7 @@ export interface ToolOutcome {
   isError: boolean;
   outcome: string | null;
   status: string | null;
+  summary?: string;
 }
 
 export interface ToolDetail {

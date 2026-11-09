@@ -1,6 +1,5 @@
 import { promises as fsp } from 'fs';
 import path from 'path';
-import * as napiCanvas from '@napi-rs/canvas';
 import { DngPreviewExtractionError, extractDngPreviewJpegFromFile } from './dngPreview';
 
 export const CHAT_UPLOAD_IMAGE_MAX_LONG_EDGE_PX = 2576;
@@ -40,6 +39,7 @@ async function previewBufferForHarness(buffer: Buffer, width: number, height: nu
   const longEdge = Math.max(width, height);
   if (longEdge <= CHAT_UPLOAD_IMAGE_MAX_LONG_EDGE_PX) return buffer;
 
+  const napiCanvas = await import('@napi-rs/canvas');
   let img: Awaited<ReturnType<typeof napiCanvas.loadImage>>;
   try {
     img = await napiCanvas.loadImage(buffer);

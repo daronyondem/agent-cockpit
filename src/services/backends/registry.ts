@@ -1,5 +1,6 @@
 import { BaseBackendAdapter } from './base';
 import type { BackendMetadata } from '../../types';
+import { logger } from '../../utils/logger';
 
 /**
  * Registry that maps backend IDs to adapter instances.
@@ -36,7 +37,13 @@ export class BackendRegistry {
    * cleanup. Used by graceful server shutdown and CLI updates; one adapter's
    * failure does not stop the others.
    */
-  async shutdownAll(): Promise<void> {
-    await Promise.allSettled([...this._adapters.values()].map(async adapter => adapter.shutdown()));
+  async shutdownAll(options?: { permanent?: boolean }): Promise<void> {
+    const adapters = [...this._adapters.values()];
+    const results = await Promise.allSettled(adapters.map(async adapter => adapter.shutdown(options)));
+    for (const [index, result] of results.entries()) {
+      if (result.status === 'rejected') {
+        logger.error('Backend shutdown failed', { backend: adapters[index].metadata.id, error: String(result.reason) });
+      }
+    }
   }
 }

@@ -8,7 +8,7 @@ installed and the first owner account exists.
 - [Quickstart](quickstart.md) explains the first run from install to first
   conversation.
 - [Supported backends](backends.md) explains Claude Code, OpenAI Codex, Kiro,
-  OpenCode, Grok Build, and Cortex Code setup differences.
+  OpenCode, Grok Build, GitHub Copilot, and Cortex Code setup differences and known capability gaps.
 - [Cortex Code (CoCo)](cortex-code.md) covers named connections, remote OAuth,
   supported workflows and the tested platform/version limits.
 - [Open source models with Ollama and OpenCode](ollama-opencode.md) explains

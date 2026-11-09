@@ -45,6 +45,29 @@ describe('CliUpdateService helpers', () => {
     expect(isNewerVersion('2.1.88', '2.1.89')).toBe(false);
     expect(isNewerVersion(null, '1.0.0')).toBe(false);
   });
+
+  test.each([
+    ['1.0.103', '1.0.103-0', true],
+    ['1.0.103-1', '1.0.103-0', true],
+    ['1.0.103-10', '1.0.103-2', true],
+    ['1.0.103-beta', '1.0.103-99', true],
+    ['1.0.103-beta.2', '1.0.103-beta', true],
+    ['1.0.103-beta.11', '1.0.103-beta.2', true],
+    ['1.0.103-beta.2', '1.0.103-beta.11', false],
+    ['1.0.103-alpha', '1.0.103-beta', false],
+    ['1.0.103-1', '1.0.103', false],
+    ['1.0.103+build.2', '1.0.103+build.1', false],
+    ['1.0.103-1+build.2', '1.0.103-1+build.1', false],
+    ['1.1.0-0', '1.0.999', true],
+    ['garbage', '1.0.0', false],
+    ['1.0.0', 'garbage', false],
+  ])('compares %s against %s with semver precedence', (remote, local, expected) => {
+    expect(isNewerVersion(remote, local)).toBe(expected);
+  });
+
+  test('preserves prerelease and build identifiers while parsing versions', () => {
+    expect(parseVersion('Copilot 1.0.103-rc.2+build.123.')).toBe('1.0.103-rc.2+build.123');
+  });
 });
 
 describe('CliUpdateService', () => {
@@ -129,6 +152,64 @@ describe('CliUpdateService', () => {
       updateAvailable: true,
       updateSupported: true,
       updateCommand: ['npm', 'i', '-g', '@openai/codex@latest'],
+    });
+  });
+
+  test('includes GitHub Copilot profile targets and exposes its self-updater', async () => {
+    const copilotBin = path.join(tmpDir, 'copilot');
+    fs.writeFileSync(copilotBin, '#!/bin/sh\n');
+    settings = {
+      theme: 'system',
+      sendBehavior: 'enter',
+      systemPrompt: '',
+      cliProfiles: [{
+        id: 'profile-copilot',
+        name: 'GitHub Copilot',
+        harness: 'copilot',
+        authMode: 'server-configured',
+        command: copilotBin,
+        createdAt: '2026-06-04T00:00:00.000Z',
+        updatedAt: '2026-06-04T00:00:00.000Z',
+      }],
+    };
+    const service = new CliUpdateService(tmpDir);
+    mockExecFile((cmd, args) => {
+      if (cmd === copilotBin && args.join(' ') === '--version') return 'GitHub Copilot CLI 1.0.48-2.';
+      return new Error(`unexpected command: ${cmd} ${args.join(' ')}`);
+    });
+
+    const status = await service.checkNow(async () => settings);
+
+    expect(status.items).toHaveLength(1);
+    expect(status.items[0]).toMatchObject({
+      harness: 'copilot',
+      label: 'GitHub Copilot',
+      command: copilotBin,
+      resolvedPath: copilotBin,
+      profileIds: ['profile-copilot'],
+      profileNames: ['GitHub Copilot'],
+      installMethod: 'self-update',
+      currentVersion: '1.0.48-2',
+      updateSupported: true,
+      updateCommand: [copilotBin, 'update'],
+    });
+  });
+
+  test.each(['1.0.103', '1.0.103-1'])('discovers npm Copilot updates from 1.0.103-0 to %s', async latest => {
+    const bin = path.join(npmRoot, '@github', 'copilot', 'npm-loader.js');
+    fs.mkdirSync(path.dirname(bin), { recursive: true });
+    fs.writeFileSync(bin, '');
+    settings.defaultBackend = 'copilot';
+    settings.cliProfiles = [{ ...settings.cliProfiles![0], id: 'copilot', harness: 'copilot', command: bin }];
+    mockExecFile((command, args) => {
+      if (command === bin && args.join(' ') === '--version') return 'GitHub Copilot CLI 1.0.103-0.';
+      if (command === 'npm' && args.join(' ') === 'view @github/copilot version') return latest;
+      return new Error(`unexpected command: ${command} ${args.join(' ')}`);
+    });
+    const status = await new CliUpdateService(tmpDir).checkNow(async () => settings);
+    expect(status.items[0]).toMatchObject({
+      harness: 'copilot', installMethod: 'npm-global', currentVersion: '1.0.103-0',
+      latestVersion: latest, updateAvailable: true, updateCommand: ['npm', 'i', '-g', '@github/copilot@latest'],
     });
   });
 
@@ -245,6 +326,7 @@ describe('CliUpdateService', () => {
   test('triggerUpdate runs the supported updater and refreshes status', async () => {
     const service = new CliUpdateService(tmpDir);
     let npmInstallCalled = false;
+    let runtimeCleanupFinished = false;
     let version = '0.125.0';
     mockExecFile((cmd, args) => {
       if (cmd === 'codex' && args.join(' ') === '--version') return `codex-cli ${version}`;
@@ -263,10 +345,15 @@ describe('CliUpdateService', () => {
     const result = await service.triggerUpdate(checked.items[0].id, {
       loadSettings: async () => settings,
       hasActiveStreams: () => false,
+      onUpdated: async () => {
+        await new Promise(resolve => setTimeout(resolve, 20));
+        runtimeCleanupFinished = true;
+      },
     });
 
     expect(result.success).toBe(true);
     expect(npmInstallCalled).toBe(true);
+    expect(runtimeCleanupFinished).toBe(true);
     expect(result.item?.currentVersion).toBe('0.128.0');
     expect(result.item?.updateAvailable).toBe(false);
   });

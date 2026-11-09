@@ -13,7 +13,23 @@ describe('mobile chat stream event projections', () => {
       expect(unbound.find((action: { type: string }) => action.type === 'set-pending-interaction').interaction.decisionBound).toBeUndefined();
     }
     expect(events.chatStreamEventActions({ type: 'tool_outcomes', outcomes: [{ toolUseId: 'toolu_current' }, {}] }))
-      .toEqual([{ type: 'complete-decision', decisionId: 'toolu_current' }]);
+      .toEqual([{ type: 'complete-decision', decisionId: 'toolu_current' },
+        { type: 'resolve-input-requests', requestIds: ['toolu_current', undefined] },
+        { type: 'update-stream-tools', frame: { type: 'tool_outcomes', outcomes: [{ toolUseId: 'toolu_current' }, {}] } }]);
+  });
+
+  test('shows persisted artifact descriptors live once and clears them when history replaces the stream', () => {
+    const { appendLiveArtifact } = loadMobileModule('liveArtifacts.ts');
+    const artifact = { filename: 'report.pdf', path: '/artifacts/report.pdf', kind: 'pdf', sourceToolId: 'scoped-tool' };
+    expect(events.chatStreamEventActions({ type: 'artifact', artifact })).toEqual([
+      { type: 'set-stream-placeholder', value: false }, { type: 'append-stream-artifact', artifact },
+    ]);
+    expect(events.chatStreamEventActions({ type: 'artifact' })).toEqual([]);
+    const current = appendLiveArtifact([], artifact);
+    expect(appendLiveArtifact(current, { ...artifact })).toBe(current);
+    expect(appendLiveArtifact(current, { ...artifact, filename: 'second.pdf' })).toHaveLength(2);
+    expect(events.chatStreamEventActions({ type: 'assistant_message' })).toContainEqual({ type: 'clear-stream-artifacts' });
+    expect(events.chatStreamEventActions({ type: 'replay_start' })).toContainEqual({ type: 'clear-stream-artifacts' });
   });
 
   test('projects incremental text and assistant messages for the open chat', () => {
@@ -31,10 +47,14 @@ describe('mobile chat stream event projections', () => {
       { type: 'upsert-message', message },
       { type: 'set-stream-text', value: '' },
       { type: 'set-stream-placeholder', value: false },
+      { type: 'clear-stream-tools' },
+      { type: 'clear-stream-artifacts' },
     ]);
     expect(events.chatStreamEventActions({ type: 'assistant_message' })).toEqual([
       { type: 'set-stream-text', value: '' },
       { type: 'set-stream-placeholder', value: false },
+      { type: 'clear-stream-tools' },
+      { type: 'clear-stream-artifacts' },
     ]);
   });
 
@@ -104,9 +124,21 @@ describe('mobile chat stream event projections', () => {
       { type: 'refresh-after-stream' },
     ]);
     expect(events.chatStreamEventActions({ type: 'replay_start' })).toEqual([
+      { type: 'set-input-turn', turnId: null },
+      { type: 'clear-stream-tools' },
+      { type: 'clear-stream-artifacts' },
       { type: 'set-stream-text', value: '' },
       { type: 'set-stream-placeholder', value: true },
     ]);
+  });
+
+  test('projects correlated questions, readiness and exact question resolution for reload and other browsers', () => {
+    expect(events.chatStreamEventActions({ type: 'tool_activity', isQuestion: true, inputRequestId: 'question',
+      questions: [{ question: 'Choose', options: [{ label: 'Beta' }], allowFreeform: false }] })[0])
+      .toEqual({ type: 'set-pending-interaction', interaction: { kind: 'question', prompt: 'Choose', options: [{ label: 'Beta' }], requestId: 'question', allowFreeform: false } });
+    expect(events.chatStreamEventActions({ type: 'input_ready', turnId: 'turn' })).toEqual([{ type: 'set-input-turn', turnId: 'turn' }]);
+    const outcome = { type: 'tool_outcomes', outcomes: [{ toolUseId: 'question' }] };
+    expect(events.chatStreamEventActions(outcome)).toEqual([{ type: 'complete-decision', decisionId: 'question' }, { type: 'resolve-input-requests', requestIds: ['question'] }, { type: 'update-stream-tools', frame: outcome }]);
   });
 
   test('projects list stream monitor events without open-chat side effects', () => {

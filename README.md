@@ -7,7 +7,7 @@
 </p>
 
 <p align="center">
-  <em>A local browser cockpit for Claude Code, OpenAI Codex, Kiro, OpenCode, Grok Build, and future command-line AI agents.</em>
+  <em>A local browser cockpit for Claude Code, OpenAI Codex, Kiro, OpenCode, Grok Build, GitHub Copilot, and future command-line AI agents.</em>
 </p>
 
 <p align="center">
@@ -21,7 +21,7 @@
     <img alt="License" src="https://img.shields.io/github/license/daronyondem/agent-cockpit?label=license" />
   </a>
   <a href="#prerequisites">
-    <img alt="Node >=22" src="https://img.shields.io/badge/node-%3E%3D22-339933?logo=nodedotjs&logoColor=white" />
+    <img alt="Node >=22.12.0" src="https://img.shields.io/badge/node-%3E%3D22.12.0-339933?logo=nodedotjs&logoColor=white" />
   </a>
   <a href="https://github.com/daronyondem/agent-cockpit/releases">
     <img alt="Release downloads" src="https://img.shields.io/github/downloads/daronyondem/agent-cockpit/total?label=release%20downloads&logo=github" />
@@ -85,7 +85,7 @@ data from the vendor interface you happen to use today.
 ## Core Capabilities
 
 **Unified CLI interface**
-Run Claude Code, OpenAI Codex, Kiro, OpenCode, and Grok Build from a
+Run Claude Code, OpenAI Codex, Kiro, OpenCode, Grok Build, and GitHub Copilot from a
 browser-based chat surface. Switch backends per conversation while keeping the
 same workspace and interaction model.
 
@@ -149,6 +149,7 @@ passkeys, recovery codes, and optional legacy OAuth compatibility.
 | **OpenCode** | `opencode` | Fully supported, self-configured provider credentials |
 | **Grok Build** | `grok` | Supported; verified on macOS, Windows/Linux validation pending |
 | **Cortex Code (CoCo)** | `cortex` | Verified on 1.2.35/macOS arm64; Ubuntu acceptance pending; Windows x64 runtime implemented, native acceptance pending |
+| **GitHub Copilot** | `copilot` | SDK chat and shared login; [known capability gaps](docs/reference/backend-capabilities.md#copilot-known-capability-gaps) |
 
 See [BACKENDS.md](BACKENDS.md) and [docs/user/backends.md](docs/user/backends.md)
 for feature differences, auth notes, and setup guidance.
@@ -170,7 +171,7 @@ This has three important consequences:
 
 ## Prerequisites
 
-- Node.js 22+ for manual development installs. The macOS, Linux, and Windows
+- Node.js 22.12.0+ for manual development installs. The macOS, Linux, and Windows
   release installers can install a private Node.js runtime automatically when
   Node/npm are missing.
 - At least one CLI backend installed and authenticated on the same machine:
@@ -183,6 +184,8 @@ This has three important consequences:
   - [Cortex Code CLI](docs/user/cortex-code.md) (`cortex`, official standalone installer; Snowflake connection/auth required)
   - [Grok Build CLI](https://docs.x.ai/build/overview) (`grok`, install with
     the official installer or `npm install -g @xai-official/grok`)
+  - [GitHub Copilot CLI](https://www.npmjs.com/package/@github/copilot) (`copilot`, install with
+    `npm install -g @github/copilot`)
 - Optional: [LibreOffice](https://www.libreoffice.org/) and/or
   [Pandoc](https://pandoc.org/) on `PATH` for broader Knowledge Base document
   conversion.

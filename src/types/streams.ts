@@ -39,6 +39,7 @@ export interface ToolActivityEvent {
   questions?: ToolQuestion[];
   /** Answerable only through the live turn; a matching outcome resolves it. */
   decisionBound?: boolean;
+  inputRequestId?: string;
 }
 
 export interface ToolOutcomesEvent {
@@ -136,6 +137,7 @@ export interface BackendRuntimeEvent {
 }
 
 export type StreamEvent =
+  | { type: 'input_ready'; turnId: string | null }
   | TextEvent
   | ThinkingEvent
   | ToolActivityEvent
@@ -203,10 +205,21 @@ export interface StreamJobFile {
   jobs: DurableStreamJob[];
 }
 
+export interface BackendInputRequest {
+  text: string;
+  requestId?: string;
+  turnId?: string;
+  inputId?: string;
+}
+
+export type BackendInputResult = { accepted: true }
+  | { accepted: false; status: 400 | 409 | 503; error: string };
+
 export interface ActiveStreamEntry {
   stream: AsyncGenerator<StreamEvent>;
   abort: () => void;
   sendInput: (text: string, decisionId?: string) => void | boolean;
+  deliverInput?: (input: BackendInputRequest) => Promise<BackendInputResult>;
   backend: string;
   needsTitleUpdate: boolean;
   titleUpdateMessage: string | null;

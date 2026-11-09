@@ -231,6 +231,42 @@ version bookkeeping workflow. It bumps the patch version on pushes to `main`,
 commits the package files, and pushes `main`; it does not create or force-push
 `v*` tags. GitHub Releases are the only production release signal.
 
+The publish job rebuilds both production clients after its full Jest run and
+rechecks the desktop bundle budget before packaging. This prevents test fixture
+assets from replacing the production build in the release archives. The smoke
+jobs continue to build their clients before platform packaging/installation.
+`test/releaseWorkflow.test.ts` guards the final test/build/budget/package order.
+
+### Locked dependency security
+
+Release preparation audits both the root and mobile package locks. Updates must
+preserve the selected Copilot SDK protocol version and the Node >=22.12.0 floor;
+do not accept audit suggestions that downgrade the SDK, Jest or ESLint.
+
+The v0.4.167 dependency set uses Express 4.22.3, Multer 2.5.0, Vite 8.1.6 in
+both package roots, and follow-redirects 1.16.2. Root npm overrides retain
+`basic-ftp:6.2.3` and `js-yaml:4.3.2`, and apply these security floors:
+
+| Override | Version | Purpose |
+| --- | --- | --- |
+| `qs` | 6.16.1 | Request/query serialization denial-of-service fix. |
+| `body-parser` | 1.20.9 | Compressed request-body teardown fix; Express's exact dependency otherwise retains an older parser. |
+| `zod` | 4.6.6 | Oversized constrained-collection validation fix, including the dependency of pinned Copilot SDK 1.0.28. |
+| `glob@>=9.0.0 <15.0.0` | 14.0.2 | Filesystem traversal cancellation fix in test tooling; retain unaffected older glob branches. |
+| `minimatch@>=7.0.0 <12.0.0` | 11.0.1 | Pattern amplification fix in lint/test tooling; retain unaffected older minimatch branches. |
+
+The glob/minimatch replacements retain CommonJS and ESM entrypoints and support
+the application's Node floor. Validate the full test suite, lint, coverage,
+client builds and native Copilot SDK cases after changing these overrides.
+The selector ranges include the replacement versions so npm 10 and npm 11
+accept the same deduplicated lockfile. Check clean-install compatibility with
+both npm versions when changing these ranges.
+The remaining low-severity `deepmerge` advisory
+[GHSA-gcqx-w48m-w2h4](https://github.com/advisories/GHSA-gcqx-w48m-w2h4) has no
+patched release. It is reached through Jest configuration processing, not the
+running application; configuration input is trusted repository content.
+Recheck availability of a patch during the next dependency/release audit.
+
 ## macOS Installer
 
 The first supported installer is `scripts/install-macos.sh`. It is included in
@@ -252,7 +288,7 @@ and `current` is a symlink to the active release. Mutable runtime data lives
 under `<install-root>/data`.
 
 The installer exits unless `uname -s` is `Darwin`, the CPU is `arm64` or
-`x86_64`, and `curl`, `tar`, and `shasum` are available. When Node.js 22+ and
+`x86_64`, and `curl`, `tar`, and `shasum` are available. When Node.js 22.12.0+ and
 npm are already available on `PATH`, the installer uses them. Otherwise it
 downloads the latest official Node.js 22 macOS tarball for the detected
 architecture from `https://nodejs.org/dist/latest-v22.x/`, downloads
@@ -368,7 +404,7 @@ under `<install-root>/data`.
 The installer exits unless `uname -s` is `Linux`, `uname -m` is `x86_64`, and
 `curl`, `tar`, and `sha256sum` are available. It rejects musl-based systems when
 `ldd --version` reports musl, because the first supported runtime path uses
-official glibc-linked Node.js Linux binaries. When Node.js 22+ and npm are
+official glibc-linked Node.js Linux binaries. When Node.js 22.12.0+ and npm are
 already available on `PATH`, the installer uses them. Otherwise it downloads the
 latest official Node.js 22 Linux x64 tarball from
 `https://nodejs.org/dist/latest-v22.x/`, downloads `SHASUMS256.txt`, verifies
@@ -439,7 +475,7 @@ Node.js runtimes live under `runtime\node-v<version>-win-x64`.
 
 The Windows installer exits unless it is running on Windows x64. Windows arm64
 is rejected until runtime dependencies and backend CLIs are validated there.
-When Node.js 22+ and npm are already available on `PATH`, the installer uses
+When Node.js 22.12.0+ and npm are already available on `PATH`, the installer uses
 them unless `-InstallNode` is supplied. Otherwise it downloads the latest
 official Node.js 22 Windows ZIP from `https://nodejs.org/dist/latest-v22.x/`,
 downloads `SHASUMS256.txt`, verifies the ZIP with `Get-FileHash -Algorithm

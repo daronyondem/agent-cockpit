@@ -10,8 +10,8 @@ export function useProfileBackends(){
     window.addEventListener('agent-cockpit-settings-saved', reset);
     return () => { scope.generation++; scope.pending.clear(); window.removeEventListener('agent-cockpit-settings-saved', reset); };
   }, [scope]);
-  const load = React.useCallback((profileId, key = profileId) => {
-    if (!profileId || Object.hasOwn(catalogs, key) || scope.pending.has(key)) return;
+  const load = React.useCallback((profileId, key = profileId, refresh = false) => {
+    if (!profileId || (!refresh && Object.hasOwn(catalogs, key)) || scope.pending.has(key)) return;
     scope.pending.add(key);
     const owner = scope.generation;
     const accept = backend => {

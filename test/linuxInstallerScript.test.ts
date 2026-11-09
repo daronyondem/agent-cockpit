@@ -28,7 +28,8 @@ describe('Linux installer script', () => {
     expect(source).toContain('x86_64');
     expect(source).toContain('Ubuntu 24.04 LTS x64 is the validated Linux target.');
     expect(source).toContain('process.versions.node.split');
-    expect(source).toContain('-ge 22');
+    expect(source).toContain('-gt 22');
+    expect(source).toContain('-ge 12');
     expect(source).toContain('install_private_node');
     expect(source).toContain('latest-v${NODE_MAJOR}.x/SHASUMS256.txt');
     expect(source).toContain('node-v${node_version}');

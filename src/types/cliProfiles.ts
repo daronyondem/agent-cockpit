@@ -9,7 +9,7 @@ export type ClaudeCodeMode = 'ultracode';
 /** Backend service tier override. Omit to use the selected CLI profile's own configuration. */
 export type ServiceTier = 'fast';
 
-export type CliHarness = 'codex' | 'claude-code' | 'kiro' | 'opencode' | 'grok-build' | 'cortex-code';
+export type CliHarness = 'codex' | 'claude-code' | 'kiro' | 'opencode' | 'grok-build' | 'cortex-code' | 'copilot';
 
 export type CliAuthMode = 'server-configured' | 'account';
 

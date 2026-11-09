@@ -16,6 +16,7 @@ export interface ToolQuestionOption {
 export interface ToolQuestion {
   question: string;
   options?: ToolQuestionOption[];
+  allowFreeform?: boolean;
 }
 
 export interface ToolOutcome {
@@ -23,6 +24,7 @@ export interface ToolOutcome {
   isError: boolean;
   outcome: string | null;
   status: string | null;
+  summary?: string;
 }
 
 export interface BrowserMemoryUpdateFrame {
@@ -60,10 +62,12 @@ export type BrowserStreamFrame =
       questions?: ToolQuestion[];
       /** Answerable only through the live turn; a matching outcome resolves it. */
       decisionBound?: boolean;
+      inputRequestId?: string;
     })
   | { type: 'tool_outcomes'; outcomes?: ToolOutcome[] }
   | { type: 'artifact'; artifact?: ConversationArtifact }
   | { type: 'assistant_message'; message: Message }
+  | { type: 'input_ready'; turnId: string | null }
   | { type: 'title_updated'; title?: string }
   | { type: 'usage'; usage: Usage; sessionUsage?: Usage }
   | { type: 'error'; error?: string; terminal?: boolean; source?: StreamErrorSource }

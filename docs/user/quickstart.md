@@ -35,6 +35,7 @@ least one of these should be installed and authenticated:
 | Kiro | `kiro-cli` |
 | OpenCode | `opencode` |
 | Grok Build | `grok` |
+| GitHub Copilot | `copilot` |
 
 See [Supported Backends](backends.md) for setup notes and feature differences.
 

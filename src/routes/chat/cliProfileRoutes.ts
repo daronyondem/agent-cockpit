@@ -10,6 +10,8 @@ import { isCliProfileResolutionError, param, sendError } from './routeUtils';
 import { GrokBillingCache } from '../../services/backends/grokBilling';
 import type { GrokBillingResponse } from '../../contracts/grokBilling';
 import { validateCortexConnectionCreate, validateCortexRedirect, validateCortexSetup } from '../../contracts/cortexAuth';
+import type { CopilotQuotaResponse } from '../../contracts/copilotUsage';
+import { CopilotAdapter } from '../../services/backends/copilot';
 
 export interface CliProfileRoutesOptions {
   chatService: ChatService;
@@ -40,6 +42,21 @@ export function createCliProfileRouter(opts: CliProfileRoutesOptions): express.R
       const { generation, redirectUrl } = validateCortexRedirect(req.body);
       res.json({ job: cliProfileAuth.cortexAuth.redirect(param(req, 'jobId'), generation, redirectUrl) });
     } catch (error) { sendError(res, 400, error); }
+  });
+
+  router.get('/cli-profiles/:profileId/copilot-quota', async (req: Request, res: Response) => {
+    try {
+      const profileId = param(req, 'profileId');
+      const runtime = await chatService.resolveCliProfileRuntime(profileId);
+      if (runtime.backendId !== 'copilot') return res.status(400).json({ error: 'Copilot quota requires a Copilot profile' });
+      const adapter = backendRegistry.get('copilot');
+      if (!(adapter instanceof CopilotAdapter)) return res.status(503).json({ error: 'Copilot is unavailable' });
+      const quota = await adapter.getQuota({ cliProfile: runtime.profile });
+      const response: CopilotQuotaResponse = { profileId: runtime.cliProfileId || profileId, quota };
+      res.json(response);
+    } catch (error) {
+      sendError(res, isCliProfileResolutionError(error) ? 400 : 503, error);
+    }
   });
 
   router.get('/cli-profiles/:profileId/grok-billing', async (req: Request, res: Response) => {
@@ -124,10 +141,12 @@ export function createCliProfileRouter(opts: CliProfileRoutesOptions): express.R
         const runtime = await chatService.resolveCliProfileRuntime(profile.id);
         const adapter = backendRegistry.get(runtime.backendId);
         if (adapter) {
-          const metadata = await adapter.getMetadata({ cliProfile: runtime.profile });
-          const modelCount = Array.isArray(metadata.models) ? metadata.models.length : 0;
-          result.modelsAvailable = modelCount > 0;
-          result.modelCount = modelCount;
+          const metadata = await adapter.getMetadata({ cliProfile: runtime.profile, ...(runtime.backendId === 'copilot' ? { refreshModels: true } : {}) });
+          if (runtime.backendId !== 'copilot') {
+            const modelCount = Array.isArray(metadata.models) ? metadata.models.length : 0;
+            result.modelsAvailable = modelCount > 0;
+            result.modelCount = modelCount;
+          }
         }
       } catch (metadataErr: unknown) {
         result.modelListError = (metadataErr as Error).message || String(metadataErr);

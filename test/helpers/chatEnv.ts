@@ -14,6 +14,7 @@ import type { ActiveStreamEntry } from '../../src/types';
 import type { StreamJobRegistry } from '../../src/services/streamJobRegistry';
 import type { WorkspaceContextService } from '../../src/services/workspaceContext/service';
 import type { SessionFinalizerQueue } from '../../src/services/sessionFinalizerQueue';
+import type { MemoryMcpServer } from '../../src/services/memoryMcp';
 import { MockBackendAdapter } from './mockBackendAdapter';
 
 export const DEFAULT_WORKSPACE = '/tmp/test-workspace';
@@ -39,6 +40,7 @@ export interface ChatRouterEnv {
   streamJobs: StreamJobRegistry;
   workspaceContextService: WorkspaceContextService;
   sessionFinalizers: SessionFinalizerQueue;
+  memoryMcp: MemoryMcpServer;
   reconcileInterruptedJobs: () => Promise<{ interrupted: number; removed: number }>;
   chatShutdown: () => Promise<void>;
   wsFns: WsFunctions;
@@ -273,7 +275,7 @@ export async function createChatRouterEnv(opts: CreateChatRouterEnvOpts = {}): P
     });
   };
 
-  return { tmpDir, chatService, mockBackend, backendRegistry, app, server, baseUrl, activeStreams, streamJobs, workspaceContextService, sessionFinalizers, reconcileInterruptedJobs, chatShutdown, wsFns: wsResult, wsShutdown, request, multipartRequest, connectWs, readWsEvents };
+  return { tmpDir, chatService, mockBackend, backendRegistry, app, server, baseUrl, activeStreams, streamJobs, workspaceContextService, sessionFinalizers, memoryMcp: chatResult.memoryMcp, reconcileInterruptedJobs, chatShutdown, wsFns: wsResult, wsShutdown, request, multipartRequest, connectWs, readWsEvents };
 }
 
 async function removeTmpDirWithRetry(tmpDir: string): Promise<void> {

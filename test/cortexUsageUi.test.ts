@@ -6,16 +6,18 @@ import { isUsageCostUnavailable, usageTokenTotal } from '../src/contracts/usageP
 import { loadFrontendModule, loadMobileModule } from './mobileModuleLoader';
 
 const contract = { isUsageCostUnavailable, usageTokenTotal };
-const react = { 'react/jsx-runtime': require('react/jsx-runtime') };
+const react = { react: require('react'), 'react/jsx-runtime': require('react/jsx-runtime') };
+const copilotDesktop = loadFrontendModule('web/AgentCockpitWeb/src/chat/copilotUsage.jsx', react);
+const copilotMobile = loadMobileModule('copilotUsage.tsx', react);
 const cortex = loadFrontendModule('web/AgentCockpitWeb/src/chat/cortexUsage.jsx', {
   ...react, '../../../../src/contracts/usagePresentation': contract,
 });
 const { getChipRenderer } = loadFrontendModule('web/AgentCockpitWeb/src/chip-renderers.jsx', {
-  ...react, './usageProjection.ts': {}, './chat/grokBillingSection.jsx': {}, './chat/cortexUsage.jsx': cortex,
+  ...react, './usageProjection.ts': {}, './chat/grokBillingSection.jsx': {}, './chat/cortexUsage.jsx': cortex, './chat/copilotUsage.jsx': copilotDesktop,
   '../../../src/contracts/usagePresentation': contract,
 });
 const { UsageBar } = loadMobileModule('usageBar.tsx', {
-  ...react, './appModel': loadMobileModule('appModel.ts'), '../../../src/contracts/usagePresentation': contract,
+  ...react, './copilotUsage': copilotMobile, './appModel': loadMobileModule('appModel.ts'), '../../../src/contracts/usagePresentation': contract,
 });
 const stats = loadFrontendModule('web/AgentCockpitWeb/src/screens/usageStats.js', { '../../../../src/contracts/usagePresentation': contract });
 const usage: Usage = { inputTokens: 1200, outputTokens: 31, cacheReadTokens: 2300, cacheWriteTokens: 47,

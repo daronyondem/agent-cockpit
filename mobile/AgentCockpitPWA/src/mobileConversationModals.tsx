@@ -399,6 +399,9 @@ export function RunSettingsModal(props: {
           {props.profiles.map((profile) => <Choice key={profile.id} label={profile.name} selected={props.selectedCliProfileId === profile.id} disabled={props.locked} onClick={() => props.onProfile(profile.id)} />)}
         </div>
         <strong>Model</strong>
+        {props.selectedBackendMetadata?.modelCatalog?.source === 'fallback' ? <p className="meta">Fallback models. {props.selectedBackendMetadata.modelCatalog.reason}</p> : null}
+        {props.selectedBackendMetadata?.id === 'copilot' && props.selectedModel && !props.selectedBackendMetadata.models?.some(model => model.id === props.selectedModel)
+          ? <p className="meta">{props.selectedModel} is unavailable for this profile. Choose a model from the current list.</p> : null}
         <div className="choice-grid">
           {(props.selectedBackendMetadata?.models || []).map((model) => <Choice key={model.id} label={modelDisplayLabel(model)} selected={props.selectedModel === model.id} onClick={() => props.onModel(model.id)} />)}
         </div>

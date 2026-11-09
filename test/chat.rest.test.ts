@@ -684,6 +684,20 @@ describe('Codex goal endpoints', () => {
     expect(res.body.message.goalEvent.objective).toBe('Research the benefits of banana');
   });
 
+  test('repeated Codex goals with identical text keep one achievement card per run', async () => {
+    env.backendRegistry.register(new CodexGoalMockBackend());
+    const conv = await env.chatService.createConversation('Repeated goal', '/tmp/repeated-goal', 'codex');
+    for (let run = 0; run < 2; run++) {
+      const response = await env.request('POST', `/api/chat/conversations/${conv.id}/goal`, { objective: 'Repeat validation' });
+      expect(response.status).toBe(200);
+      const deadline = Date.now() + 3000;
+      while (env.activeStreams.has(conv.id) && Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, 10));
+      expect(env.activeStreams.has(conv.id)).toBe(false);
+    }
+    const saved = await env.chatService.getConversation(conv.id);
+    expect(saved?.messages.filter(message => message.goalEvent?.kind === 'achieved')).toHaveLength(2);
+  });
+
   test('persists a terminal goal event discovered by status polling', async () => {
     const codexBackend = new CodexGoalMockBackend();
     env.backendRegistry.register(codexBackend);

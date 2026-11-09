@@ -189,11 +189,66 @@ The PWA currently covers:
 - Current-user display via `GET /api/me`.
 - Settings/default loading via `GET /api/chat/settings`.
 - Backend metadata loading via `GET /api/chat/backends`.
-- Profile-specific backend metadata loading via `GET /api/chat/cli-profiles/:profileId/metadata`.
+- Profile-specific backend metadata loading via `GET /api/chat/cli-profiles/:profileId/metadata`. Copilot refreshes selected-profile metadata on a 60-second timer and window focus, cancels stale selection/unmount callbacks, and derives effort choices from that model's runtime list. Run Settings displays **Fallback models** and its reason when discovery is unavailable/custom. A saved Copilot model missing from the current catalog remains selected; Run Settings explains that it is unavailable and asks the user to choose from the list. No catalog render writes a replacement to saved conversation state. Copilot sends `effort:null` when the effort control is absent/cleared, removing an old stored effort rather than retaining it on the next message. The server rejects unavailable model/effort requests before adding a user message. There are no PWA asset, manifest, or service-worker changes.
+- GitHub Copilot profiles use the same metadata-driven model picker, assistant
+  label/icon, thinking/text/tool frames, session recovery notices, and usage
+  counters as desktop. `auto` is the default model; Haiku/auto do not show
+  reasoning-effort choices. SDK profiles support native questions and explicit
+  steering and grouped delegated tools/summaries; opaque JSONL profiles do not. Copilot SDK goals expose native set/status/pause/resume; Clear and plan mode remain unavailable. Per-turn token/credit accounting
+  is performed on the server, and `costSource:'none'` keeps mobile cost `n/a`.
+  No Copilot-specific PWA assets, manifest, or service-worker changes are needed.
+  Gemini's unverified effort options are also hidden. Auto routing is not
+  eligible for media processors. Exact verified provider/model capabilities
+  govern images/PDFs; custom OpenAI `gpt-6.1-sol` images and Anthropic
+  `claude-sonnet-4.6` images/PDFs are verified. Hosted SDK PDFs stay gated.
+  Delegated prose cannot contaminate the root answer; SDK child tools and
+  summaries render within Agent cards, while JSONL keeps root-only activity.
+  Production sends use owned SDK sessions for the normal CLI and server-visible
+  custom providers, retaining JSONL for opaque overrides. Both paths reuse the
+  shared frame union; delegated outcomes add optional summary. Server-side
+  profile checks distinguish credentials from catalog access, while CLI-profile
+  authentication/account administration stays in full web Settings. PWA metadata,
+  service worker and static assets are unchanged. The current browser suite
+  covers PWA lifecycle/questions/steering/delegation/goals/usage/artifacts and full
+  web auth at narrow widths; injected auth/catalog cases are not hosted-account
+  proof. The [testing spec](spec-testing.md#copilot-published-ci-evidence)
+  records 40 passing macOS and Ubuntu SDK browser cases separately from earlier
+  JSONL evidence and platform auth/application limits. See the
+  [known gaps](reference/backend-capabilities.md#copilot-known-capability-gaps).
+  Session reset waits for backend cleanup before replacing its session/checkout.
+  During that interval, sends and goal starts/resume return temporary `503` with
+  `Retry-After: 1`; repeat resets and worktree changes retain busy `409`. The
+  mobile send pipeline preserves the draft/attachments, removes optimistic
+  bubbles, and finishes local streaming when no server stream exists. A
+  workspace mode change reserves all its conversations.
+  Archive/delete use the same reservation and wait for backend cleanup; conflicts
+  return `409`, and concurrent sends retain their draft through the existing
+  temporary `503` handling. A send immediately following Copilot Stop waits for
+  the old workers before a new CLI process can start.
+  The PWA retains streaming state through abort completion and refreshes before exposing Send; the native browser suite holds the abort request to verify that boundary.
 - Active/archived conversation list via `GET /api/chat/conversations`.
 - Workspace-level archives are respected by the shared conversation-list contract: archived workspaces are excluded from the mobile active and archived conversation lists unless a caller explicitly asks for `includeArchivedWorkspaces`, which the PWA does not do. The PWA does not expose workspace archive management, remapping, file snapshot restore, or archived-data deletion; those remain desktop filesystem-management workflows.
 - Flat latest-first conversation list with a workspace select filter. `All conversations` is the default; choosing a workspace filters the list to that `workspaceId` without introducing collapsible workspace groups. Each card renders the workspace label in the header and keeps the timestamp in the footer beside message count/live status so the date appears only once.
 - Conversation-list previews strip uploaded-file/file-delivery wire markers. Attachment-only previews render as human labels such as `Attachment: IMG_3021.PNG` rather than exposing absolute artifact paths.
+- Live tool/delegated presentation is owned by `liveToolActivities.ts` and
+  `agentTools.tsx`. `useChatStreamConnection` stores `streamTools` separately
+  from root text, forwards ordinary tool frames/outcomes through the pure
+  immutable reducer, ignores duplicate IDs and excludes question/plan frames.
+  Clear live tools on replay start, saved assistant messages, new turns and
+  terminal state. Outcome patches carry status, duration and optional summary.
+  `App` passes these tools into `ChatScreen`; a live bubble exists even before
+  root text when tools are active. Tool state participates in the scroll key.
+- `AgentToolsProvider` indexes both saved messages (ordered blocks, legacy
+  activity fallback) and live tools by Agent ID. Known child rows are suppressed
+  at top level and shown once inside the ancestor card, including cross-message
+  children and flattened nested agents. Agent headers show type and running or
+  terminal outcome (legacy duration-only activities fall back to done), with
+  error/warning styling. Ordinary child rows show tool,
+  description and outcome. Escaped plain-text Summary disclosures preserve
+  whitespace; no child content becomes a parent message. Read-only session
+  screens use the same provider/view. Files without summaries remain compatible.
+  This changes the built PWA client and CSS; `public/mobile`, manifest, service
+  worker and offline policy require no changes.
 - Active-stream summary hydration via `GET /api/chat/active-streams`.
 - Conversation-list running badges update automatically from passive WebSocket monitors and REST fallback refreshes; the manual Refresh icon button remains a recovery control for explicit user-triggered reconciliation.
 - Open conversation via `GET /api/chat/conversations/:id`.
@@ -206,10 +261,13 @@ The PWA currently covers:
 - Read-only session viewer via `GET /api/chat/conversations/:id/sessions/:num/messages`. Tapping `View` closes the sheet and opens a full-screen frozen transcript with a `Sessions` back button, session share action, read-only turn marker, compact message action pills, pinned-state strips, a three-cell session meter, and a locked read-only footer. The current session view uses the already-loaded active conversation messages; historical sessions load from the session messages endpoint.
 - The conversation action sheet's **Share Markdown** action opens a picker with **All sessions** and **Current session**. All sessions opens `GET /api/chat/conversations/:id/download`; current session opens `GET /api/chat/conversations/:id/sessions/:sessionNumber/download` for the active session shown in the chat screen.
 - Send message via `POST /api/chat/conversations/:id/message`. Submitting a normal chat message clears the composer immediately, appends a local pending user bubble, patches the open conversation's runtime metadata to the selected profile/backend/model/effort/Claude Code mode/Codex speed for that turn, marks the conversation as streaming, and shows an assistant live bubble with animated three-dot placeholder before the REST response returns. A synchronous send-in-flight guard prevents a second tap or stale render from issuing another normal send while the first POST is unresolved. This optimistic runtime patch makes the live assistant heading use the newly selected CLI identity during the first turn after changing profiles on an empty session. The request includes `claudeCodeMode: "ultracode"` only for Claude Code-family models that support `xhigh`, includes `claudeCodeMode: null` when the user explicitly chooses Default, and omits the field for other backends/models. When the server acknowledges the message, the pending user bubble is replaced with the returned `userMessage`; if the request fails before any active server stream is visible, the pending bubble is removed, the draft/attachments are restored, and the conversation runtime metadata reverts to the pre-send snapshot. `409 { error: "Conversation is already streaming" }` is a recoverable active-stream collision: the PWA removes only the optimistic pending message, restores the draft/attachments, keeps or re-enters active streaming state, clears the inline error banner, and reconnects through the normal WebSocket replay path instead of requiring the user to leave and reopen the conversation. For non-conflict send failures, the PWA first checks `GET /api/chat/active-streams`; when the server is still active, it treats the turn as accepted, keeps the composer cleared, keeps the optimistic user bubble visible, reconnects the stream, and fetches the server conversation to replace the optimistic bubble with the persisted user message when it is already available. The assistant placeholder switches to streamed Markdown on the first `text`/`thinking` frame and clears when an `assistant_message`, terminal `done`, abort, or non-streaming send completion finishes the turn.
-- Stop stream via `POST /api/chat/conversations/:id/abort`.
+- Stop stream via `POST /api/chat/conversations/:id/abort`. Close the local stream socket immediately, but retain streaming state until the abort request and conversation/goal/list refreshes complete. Send must remain unavailable while the server is still finalizing the aborted turn, including a delayed abort response, so immediate replacement does not collide with the old stream.
 - WebSocket replay and live streaming for text, assistant messages, title updates, usage, errors, done, and replay start, with automatic active-stream polling/reconnect on mobile browser resume, network return, and transient socket errors.
 - Assistant message text, assistant content-block text, thinking blocks, and live streaming text render through `marked` with GitHub Flavored Markdown and hard line breaks enabled, then pass through DOMPurify before insertion. Assistant markdown prose uses the same General Sans body typography as the desktop web UI `.prose` treatment, while markdown headings keep the serif prose font. Fenced and indented Markdown code blocks render as bounded monospace panels with a language label, per-block **Copy** button, preserved line breaks, and long-line wrapping (`white-space: pre-wrap` plus break-word/anywhere wrapping) so CLI-supplied text does not create horizontal overflow on narrow screens. Thinking blocks render as full-width dashed Markdown panels rather than inline flex chips so multi-paragraph Claude Code reasoning keeps normal line flow on narrow mobile screens. Assistant/live CLI message headings use the message backend's metadata label and inline SVG icon from `GET /api/chat/backends`, falling back to the Agent Cockpit logo when no backend icon is available. System messages without `goalEvent`, including native-session recovery notices, use the Agent Cockpit logo and **Agent Cockpit** heading instead of the selected harness identity. User-authored message text remains plain text after uploaded-file marker stripping, preserving line breaks and avoiding accidental interpretation of user text as HTML/Markdown.
 - Plan approval and clarifying-question cards from `tool_activity` meta-events, answered through `POST /api/chat/conversations/:id/input`. Plan decisions come only from the explicit approve/reject buttons, so free text is never interpreted as approval; `useSendPipeline.submitInteraction(answer?)` sends a button's decision instead of the typed draft. It captures the submitted interaction object before awaiting the input response and uses a functional state update to clear only that same object after acknowledgement. On `{ mode: 'message' }` it sends the answer as a normal message with `clearComposer:false` and `restoreDraftOnFailure:false`, preserving the separate composer draft/uploads on success and failure, including edits made while the answer is sending; those uploads are not included in the answer request; `sendMessageNow` lets only that same interaction object past its pending-card guard, because the cleared state has not re-rendered yet, while a newer card still blocks the send. A subsequent question or replacement plan received while the HTTP request is pending stays visible and answerable, even when questions reuse one native tool ID.
+- Correlated questions retain `inputRequestId` as `PendingInteraction.requestId` and submit it through the optional fourth identity argument of `api.sendInput`. Duplicate submissions are locked while pending; an old acknowledgement never clears a newer question's typed answer. A new request resets the answer, including repeated identical prompts. `allowFreeform:false` hides the textarea/Answer button and submits choices directly; otherwise choices prefill an editable answer. Stale correlated inputs never fall back to a normal message. Active replay reconstructs unanswered questions; matching tool outcomes resolve only their exact ID. Done/terminal errors clear correlated questions while legacy post-stream interactions keep their fallback behavior.
+- `useChatStreamConnection` owns `inputTurnId`, accepts only the current socket/conversation's frames, and clears readiness on reconnect, socket closure and terminal state. `chatStreamEvents.ts` projects input readiness and exact request outcomes. A current Copilot token exposes **Steer** in the composer metadata row and selects the streaming composer hint even when static Copilot metadata leaves steering disabled; the ordinary Send action remains Queue during streaming. `useSendPipeline.steerDraft` posts the normal text/file wire content with current turn ID and a unique input ID, holds the draft/files until confirmed consumption, and blocks duplicate send/queue/steer operations. Stop stays available in the top bar. On success it removes only submitted unchanged text/files; on refusal/network error it preserves them and shows the existing error banner, without automatic resend or queue append. A conversation switch prevents a late acknowledgement from clearing another conversation's draft.
+- Hosted qualification is scoped to the [owner's clean `9cb25d6` report](https://github.com/daronyondem/agent-cockpit/pull/571#issuecomment-6658673116): a narrow Chrome client on macOS, not a physical phone. Chat/questions, Stop followed by a new send, reload/recall, model/effort, files and retained delegated cards passed. Steering during a running command in an existing hosted conversation failed with `No response was returned`; its input HTTP/native trace was not captured, so this remains an open, unclassified finding. New fixed-model browser coverage exercises that running-tool/resumed-session sequence and cold-resume without replay, but does not establish a hosted fix. Physical-device behavior, live PWA delegation and hosted goal pause/reload/fresh-limit resume remain unconfirmed. No PWA implementation, metadata, manifest or service-worker change accompanies this qualification update.
 - Browser Notification API prompts and hidden-tab notifications for stream done/error and interaction-needed events when permission is granted. This is not remote push.
 - Queue read/write/clear via `GET`, `PUT`, and `DELETE /api/chat/conversations/:id/queue`.
 - Queue auto-drain after clean `done` frames when no plan/question interaction is pending. The queue drainer sends the head without clearing the live composer draft/attachments; if the follow-up send is blocked by a still-active server stream or another send failure, the original queued item is restored at the queue head and persisted back to the server.
@@ -372,3 +430,109 @@ P8 C49 CLI Update remains desktop server administration. CoCo update/runtime
 cleanup is shared backend behavior; the PWA adds no update control, route/body,
 manifest, service-worker or source asset change. Mobile chat uses fresh runtimes
 after the existing reusable backend shutdown; interrupted tool work is not replayed.
+
+Current Copilot browser qualification passes 40 combined desktop/PWA and narrow
+Settings Chromium cases on macOS and Ubuntu with the real SDK runtime, fixed
+local replies and isolated auth/data. The Windows SDK startup failure and
+remaining hosted/platform auth limits are recorded in the
+[testing spec](spec-testing.md#copilot-published-ci-evidence). The catalog,
+structured-input and delegation checkpoint counts below are implementation
+history, not the current total or a claim of hosted authentication.
+
+Copilot browser regression coverage in `test/e2e/copilot.ui.pw.ts` uses the real
+CLI with fixed local replies and an isolated PM2 fixture server. Mobile cases
+exercise profile selection, streamed Memory tool/result presentation, native
+Stop followed by immediate send and reload, draft/attachment preservation on a
+temporary reset rejection, and reset/archive/restore/delete navigation. Memory
+management panels and live Memory bubbles are outside the current PWA scope;
+this coverage does not add those surfaces. See `npm run e2e:copilot-ui` and the testing spec.
+
+The runtime model-catalog checkpoint adds a browser case per client using an
+injected account/fallback catalog, including exact effort choices, missing saved
+IDs, explicit effort clearing on send, and post-navigation fallback status.
+Ten combined Chromium cases pass locally on macOS: eight real SDK/local-provider
+workflows plus these two catalog fixtures. This does not certify a successful
+hosted catalog or new mobile media transport.
+
+The structured-input checkpoint expands the shared Chromium suite to eighteen
+cases (sixteen real SDK/local-provider workflows plus two catalog fixtures).
+Both clients pass repeated questions after reload, stale answer rejection,
+freeform input, Stop during a question with a retained draft/file, native
+steering consumption, and late-steering draft/file preservation. The CLI is
+1.0.105 on macOS arm64; these checks do not certify hosted access or native
+Windows/Linux SDK behavior. No public/mobile assets, manifest, service-worker,
+or offline caching behavior changes are required.
+
+
+The delegated-work checkpoint expands that suite to twenty-two Chromium cases:
+twenty real SDK/local-provider workflows and two catalog fixtures, all passing
+on CLI 1.0.105/macOS arm64. The new case per client holds a real background
+child after its tool, keeps the parent stream active through an early reply,
+reopens the active stream without duplicated cards/children, releases completion
+and verifies saved summaries after reload. A second case stops a real delegated
+worker, checks cancelled history and cold resume without replay. Desktop
+initial history hydration now preserves live/replayed rows; Stop checks expand
+the existing desktop progress disclosure. Both clients retain legacy completed
+activities without explicit outcomes. No PWA metadata/offline-policy changes.
+
+### Copilot native goal controls
+
+SDK profile metadata enables the shared goal composer, slash commands, strip and
+persisted lifecycle cards. Opaque JSONL profiles keep goals unavailable. Copilot
+Clear stays hidden. A paused goal shows a labeled **Fresh AI credit limit** number
+input; Resume stays disabled until its value is finite and positive, then sends
+`{aiCreditLimit:number}`. API actions also validate before optimistic streaming.
+No default window is chosen. Native `aiCreditsUsed / aiCreditLimit` is labeled
+**AI credits**, independently of token budgets and USD. Copilot omits an unreported
+elapsed timer. Reload reads the native saved objective; Stop/pause retains it.
+Intentional Pause saves a paused lifecycle card without a stream-failure notice.
+See [backend control semantics](spec-backend-services.md#copilot-native-goals-copilotgoalsts).
+
+### Copilot usage visibility
+
+`copilotUsage.tsx` owns the mobile Copilot usage and quota panels, composed by
+`mobileChatScreen.tsx`. Show all four disjoint token buckets, AI credits with
+complete/partial/unavailable provenance, Copilot-only premium requests, unavailable
+USD cost/estimate, measured context counts/limit and observation time. Do not
+reuse another harness's credits or dollar totals as Copilot billing.
+`AgentCockpitAPI.getCopilotQuota(profileId)` reads the shared quota contract.
+The account panel refreshes on profile/message changes and every minute, ignores
+late responses from the previous profile, clears visible data on HTTP failure,
+and cancels its timer on unmount. Label stale account readings and unknown quota
+units; retain native percentage, unlimited and reset metadata. Account timestamps
+explicitly allow delayed service aggregation. Context persists through reload.
+Usage and account quota use separate collapsed disclosures to preserve chat/composer space. Expanded usage has two columns; quota uses full-width rows. Values wrap, and expanded contents scroll within 180px rather than truncating measurement times or unknown-unit labels. No manifest, service worker, PWA installation or public asset policy changes.
+
+### Copilot media and live artifacts
+
+The existing upload/send pipeline keeps its wire format and draft/file retention
+on an actionable media-admission `400`. SDK image/PDF eligibility is exact to
+the effective model and provider, with unknown transports gated server-side.
+PDF support is not implied by a vision flag.
+
+`chatStreamEvents.ts` accepts a stored descriptor from an `artifact` browser
+frame and emits `append-stream-artifact` plus removal of the writing placeholder.
+`useChatStreamConnection.ts` owns `streamArtifacts`; the pure `liveArtifacts.ts`
+append helper deduplicates by filename and sourceToolId without mutating prior
+state. Starting/replaying a stream, receiving its saved assistant message, or
+ending the stream clears live artifacts. Stale sockets/conversations retain the
+existing event guards. Saved assistant content blocks replace live cards, so
+reconnect/reload and Stop do not duplicate outputs.
+
+ChatScreen renders live artifact FileCards with the same artifact references,
+Preview and Share behavior as saved history. Artifact filename changes participate
+in scroll-follow signatures; cards alone keep the streaming response visible.
+Already-delivered files are persisted by the server before the frame is sent.
+Normal FILE_DELIVERY cards and the composer remain available. No PWA manifest,
+service-worker, static public/mobile, or installation behavior changes.
+
+### Copilot guided auth impact
+
+Copilot device login is managed in the full web app's Global Settings → CLI
+Profiles, like the existing account-auth administration flows. The mobile PWA
+continues selecting shared self-configured Copilot profiles; it does not expose
+an independent-account/login screen or store credentials. No mobile request,
+manifest, service-worker or public/mobile asset contract changes are needed.
+The full web auth controls are verified at desktop and narrow browser widths;
+that narrow test is not a mobile-PWA auth feature. Existing desktop/mobile chat
+qualification continues covering profile selection, reload and native workflows.

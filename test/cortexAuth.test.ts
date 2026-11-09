@@ -64,7 +64,7 @@ authSuite('Cortex auth job ownership and lifecycle', () => {
     expect((await facade.checkProfile(profile)).authenticated).toBe(true);
     const job = await facade.startAuth(profile); await cortexAuth.drain();
     expect(facade.getJob(job.id)?.status).toBe('succeeded');
-    expect(facade.cancelJob(job.id).status).toBe('succeeded'); facade.shutdown();
+    expect(facade.cancelJob(job.id).status).toBe('succeeded'); await facade.shutdown();
     await expect(cortexAuth.start(explicit)).rejects.toThrow('isolated');
     await expect(cortexAuth.start({ ...profile, disabled: true })).rejects.toThrow('enabled');
   });

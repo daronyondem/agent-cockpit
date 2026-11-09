@@ -91,6 +91,20 @@ describe('ConversationUsageStore', () => {
     expect(writes).toBe(1);
   });
 
+  it('retains unknown historical Copilot credit coverage without relabeling other harness credits', async () => {
+    const conv = index.conversations[0];
+    conv.usage = makeUsage({ credits: 52 });
+    conv.usageByBackend = { copilot: makeUsage({ credits: 2 }), kiro: makeUsage({ credits: 50 }) };
+    conv.sessions[0].usage = makeUsage({ credits: 52 });
+    conv.sessions[0].usageByBackend = { copilot: makeUsage({ credits: 2 }), kiro: makeUsage({ credits: 50 }) };
+    const next = makeUsage({ credits: 1, copilot: { tokensStatus: 'complete', aiCreditsStatus: 'complete', aiCredits: 3, premiumRequests: 1 } });
+    const result = await createStore().addUsage('conv-1', next, emptyCatalog, 'copilot', 'gpt-4');
+    expect(result?.conversationUsage.copilot).toEqual({ tokensStatus: 'partial', aiCreditsStatus: 'partial', aiCredits: 3, premiumRequests: 3 });
+    expect(result?.sessionUsage.copilot?.premiumRequests).toBe(3);
+    expect(conv.usageByBackend.copilot.copilot?.premiumRequests).toBe(3);
+    expect(conv.usageByBackend.kiro.credits).toBe(50);
+  });
+
   it('uses explicit backend/model overrides and accumulates repeated usage', async () => {
     const store = createStore();
 

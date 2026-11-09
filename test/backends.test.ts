@@ -96,6 +96,29 @@ describe('BackendRegistry', () => {
     registry = new BackendRegistry();
   });
 
+  test('awaits asynchronous cleanup even when another adapter fails synchronously', async () => {
+    let release!: () => void;
+    const cleanup = new Promise<void>(resolve => { release = resolve; });
+    const stops: string[] = [];
+    class CleanupAdapter extends BaseBackendAdapter {
+      constructor(private id: string, private stop: () => void | Promise<void>) { super(); }
+      get metadata(): BackendMetadata {
+        return { id: this.id, label: this.id, icon: null, capabilities: {} as any, resumeCapabilities: TEST_RESUME_CAPABILITIES };
+      }
+      shutdown(): void | Promise<void> { stops.push(this.id); return this.stop(); }
+    }
+    registry.register(new CleanupAdapter('failing', () => { throw new Error('cleanup failed'); }));
+    registry.register(new CleanupAdapter('pending', () => cleanup));
+    let finished = false;
+    const shutdown = registry.shutdownAll().then(() => { finished = true; });
+    await Promise.resolve();
+    expect(stops).toEqual(['failing', 'pending']);
+    expect(finished).toBe(false);
+    release();
+    await shutdown;
+    expect(finished).toBe(true);
+  });
+
   test('register and get adapter', () => {
     const adapter = new ClaudeCodeAdapter({ workingDir: '/tmp' });
     registry.register(adapter);

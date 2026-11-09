@@ -1,3 +1,4 @@
+import { parseGoalAiCreditLimit } from '../../../src/contracts/goals';
 /* Agent Cockpit v2 — per-conversation stream store.
 
    Lifts streaming state out of the ChatLive view so that switching
@@ -16,8 +17,9 @@ import { PlanUsageStore } from './planUsageStore.js';
 import { KiroPlanUsageStore } from './kiroPlanUsageStore.js';
 import { GrokPlanUsageStore } from './grokPlanUsageStore.js';
 import { CodexPlanUsageStore } from './codexPlanUsageStore.js';
+import { CopilotPlanUsageStore } from './copilotPlanUsageStore.js';
 import { cleanGoalObjectiveText, goalSnapshotTimeMs, isActiveGoal } from './goalState.js';
-import { reduceStreamFrame } from './stream/streamFrameReducer.ts';
+import { reduceStreamFrame, mergeInitialStreamMessages } from './stream/streamFrameReducer.ts';
 
   /** @typedef {import('../../../src/contracts/streams').ConversationInputRequest} ConversationInputRequest */
   /** @typedef {import('../../../src/contracts/streams').SendMessageRequest} SendMessageRequest */
@@ -259,6 +261,9 @@ import { reduceStreamFrame } from './stream/streamFrameReducer.ts';
       uiState: null,
       unread: false,
       pendingInteraction: null,
+      inputTurnId: null,
+      inputError: null,
+      steeringPending: false,
       respondPending: false,
       composerCliProfileId: null,
       composerBackend: null,
@@ -370,7 +375,7 @@ import { reduceStreamFrame } from './stream/streamFrameReducer.ts';
 
   function optimisticGoalActions(backend){
     const isClaude = isClaudeCodeBackend(backend);
-    return { clear: true, stopTurn: true, pause: !isClaude, resume: !isClaude };
+    return { clear: backend !== 'copilot', stopTurn: true, pause: !isClaude, resume: !isClaude };
   }
 
   function isClaudeCodeBackend(backend){
@@ -706,7 +711,7 @@ import { reduceStreamFrame } from './stream/streamFrameReducer.ts';
       update(convId, cur => ({
         ...cur,
         conv: data,
-        messages,
+        messages: mergeInitialStreamMessages(messages, cur.messages),
         messageWindow,
         pinnedMessages,
         loadingOlder: false,
@@ -736,7 +741,7 @@ import { reduceStreamFrame } from './stream/streamFrameReducer.ts';
           ? hydrateAttachmentsFromDraft(draft.attachments)
           : cur.pendingAttachments,
       }));
-      if ((data.backend === 'codex' || data.backend === 'claude-code' || data.backend === 'claude-code-interactive' || data.backend === 'grok-build') && AgentApi.conv && AgentApi.conv.getGoal) {
+      if ((data.backend === 'codex' || data.backend === 'claude-code' || data.backend === 'claude-code-interactive' || data.backend === 'grok-build' || data.backend === 'copilot') && AgentApi.conv && AgentApi.conv.getGoal) {
         AgentApi.conv.getGoal(convId)
           .then(goalData => {
             const goal = goalData && goalData.goal ? goalData.goal : null;
@@ -772,7 +777,7 @@ import { reduceStreamFrame } from './stream/streamFrameReducer.ts';
     const s = states.get(convId);
     if (!s || !AgentApi.conv || !AgentApi.conv.getGoal) return null;
     const backend = (s.conv && s.conv.backend) || s.composerBackend || null;
-    if (backend && backend !== 'codex' && backend !== 'claude-code' && backend !== 'claude-code-interactive' && backend !== 'grok-build') {
+    if (backend && backend !== 'codex' && backend !== 'claude-code' && backend !== 'claude-code-interactive' && backend !== 'grok-build' && backend !== 'copilot') {
       applyGoalSnapshot(convId, null);
       return null;
     }
@@ -874,6 +879,8 @@ import { reduceStreamFrame } from './stream/streamFrameReducer.ts';
       streamingMsgId: null,
       pendingInteraction: null,
       goal: freshSession ? null : next.goal,
+      inputTurnId: null,
+      inputError: freshSession ? null : next.inputError,
       goalMode: freshSession ? false : next.goalMode,
       planModeActive: false,
       replayActive: false,
@@ -1189,6 +1196,7 @@ import { reduceStreamFrame } from './stream/streamFrameReducer.ts';
       : conv.backend === 'kiro'        ? KiroPlanUsageStore
       : conv.backend === 'codex'       ? CodexPlanUsageStore
       : conv.backend === 'grok-build'  ? GrokPlanUsageStore
+      : conv.backend === 'copilot'     ? CopilotPlanUsageStore
       : null;
     if (!store || typeof store.refresh !== 'function') return;
     store.refresh(cliProfileId);
@@ -1285,7 +1293,7 @@ import { reduceStreamFrame } from './stream/streamFrameReducer.ts';
        wiped state. On POST failure we keep this copy intact for refresh. */
     flushDraftNow(convId);
 
-    update(convId, { sending: true, streamError: null, streamErrorSource: null, pendingInteraction: null, pendingAttachments: [] });
+    update(convId, { sending: true, streamError: null, streamErrorSource: null, pendingInteraction: null, pendingAttachments: [], inputTurnId: null, inputError: null });
 
     try {
       await ensureWsOpen(convId);
@@ -1327,7 +1335,7 @@ import { reduceStreamFrame } from './stream/streamFrameReducer.ts';
       if (sendCliProfileId) body.cliProfileId = sendCliProfileId;
       if (sendBackend) body.backend = sendBackend;
       if (sendModel)   body.model   = sendModel;
-      if (sendEffort)  body.effort  = sendEffort;
+      if (sendEffort || sendBackend === 'copilot') body.effort = sendEffort;
       if (sendClaudeCodeMode.shouldSend) body.claudeCodeMode = sendClaudeCodeMode.bodyValue;
       if (sendBackend === 'codex' && sendServiceTier) body.serviceTier = sendServiceTier;
       const res = await AgentApi.fetch('conversations/' + encodeURIComponent(convId) + '/message', {
@@ -1347,7 +1355,7 @@ import { reduceStreamFrame } from './stream/streamFrameReducer.ts';
             cliProfileId: sendCliProfileId || cur.conv.cliProfileId,
             backend: sendBackend || cur.conv.backend,
             model:   sendModel   !== null ? sendModel   : cur.conv.model,
-            effort:  sendEffort  !== null ? sendEffort  : cur.conv.effort,
+            effort:  sendBackend === 'copilot' ? (sendEffort || undefined) : sendEffort !== null ? sendEffort : cur.conv.effort,
             claudeCodeMode: sendClaudeCodeMode.persistedValue,
             serviceTier: sendServiceTier === 'fast' ? 'fast' : undefined,
           } : cur.conv,
@@ -1407,7 +1415,7 @@ import { reduceStreamFrame } from './stream/streamFrameReducer.ts';
     if (!objective) return;
     flushDraftNow(convId);
 
-    update(convId, { sending: true, streamError: null, streamErrorSource: null, pendingInteraction: null, pendingAttachments: [] });
+    update(convId, { sending: true, streamError: null, streamErrorSource: null, pendingInteraction: null, pendingAttachments: [], inputTurnId: null, inputError: null });
 
     try {
       await ensureWsOpen(convId);
@@ -1427,7 +1435,7 @@ import { reduceStreamFrame } from './stream/streamFrameReducer.ts';
       ? s.composerServiceTier
       : (s.conv && s.conv.serviceTier) || null;
     const goalStartedAtMs = Date.now();
-    const optimisticBackend = (sendBackend === 'codex' || sendBackend === 'claude-code' || sendBackend === 'claude-code-interactive' || sendBackend === 'grok-build') ? sendBackend : undefined;
+    const optimisticBackend = (sendBackend === 'codex' || sendBackend === 'claude-code' || sendBackend === 'claude-code-interactive' || sendBackend === 'grok-build' || sendBackend === 'copilot') ? sendBackend : undefined;
     const optimisticGoal = {
       backend: optimisticBackend,
       objective,
@@ -1679,7 +1687,7 @@ import { reduceStreamFrame } from './stream/streamFrameReducer.ts';
       composerBackend: value || null,
       composerClaudeCodeMode: isClaudeCodeBackend(value) ? s.composerClaudeCodeMode : null,
       composerServiceTier: value === 'codex' ? s.composerServiceTier : null,
-      goalMode: (value === 'codex' || value === 'claude-code' || value === 'claude-code-interactive' || value === 'grok-build') ? s.goalMode : false,
+      goalMode: (value === 'codex' || value === 'claude-code' || value === 'claude-code-interactive' || value === 'grok-build' || value === 'copilot') ? s.goalMode : false,
     });
   }
   function setComposerCliProfile(convId, profileId, backendId){
@@ -1692,7 +1700,7 @@ import { reduceStreamFrame } from './stream/streamFrameReducer.ts';
       composerEffort: null,
       composerClaudeCodeMode: isClaudeCodeBackend(backendId) ? s.composerClaudeCodeMode : null,
       composerServiceTier: backendId === 'codex' ? s.composerServiceTier : null,
-      goalMode: (backendId === 'codex' || backendId === 'claude-code' || backendId === 'claude-code-interactive' || backendId === 'grok-build') ? s.goalMode : false,
+      goalMode: (backendId === 'codex' || backendId === 'claude-code' || backendId === 'claude-code-interactive' || backendId === 'grok-build' || backendId === 'copilot') ? s.goalMode : false,
     });
   }
   function setComposerModel(convId, value){
@@ -1913,6 +1921,7 @@ import { reduceStreamFrame } from './stream/streamFrameReducer.ts';
         streamingMsgId: null,
         pendingInteraction: null,
         planModeActive: false,
+        inputTurnId: null,
         replayActive: false,
         uiState: 'error',
         messages: cur.streamingMsgId
@@ -1957,11 +1966,13 @@ import { reduceStreamFrame } from './stream/streamFrameReducer.ts';
     }
   }
 
-  async function resumeGoal(convId){
+  async function resumeGoal(convId, aiCreditLimit){
     const s = states.get(convId);
     if (!s || s.sending || s.streaming) return;
     const prevGoal = s.goal;
-    update(convId, { sending: true, streamError: null, streamErrorSource: null, pendingInteraction: null });
+    try { aiCreditLimit = parseGoalAiCreditLimit(aiCreditLimit, (prevGoal?.backend || s.conv?.backend) === 'copilot'); }
+    catch (error) { update(convId, { streamError: error.message }); return; }
+    update(convId, { sending: true, streamError: null, streamErrorSource: null, pendingInteraction: null, inputTurnId: null, inputError: null });
     try {
       await ensureWsOpen(convId);
     } catch (err) {
@@ -1983,7 +1994,7 @@ import { reduceStreamFrame } from './stream/streamFrameReducer.ts';
     }));
 
     try {
-      const data = await AgentApi.conv.resumeGoal(convId);
+      const data = await AgentApi.conv.resumeGoal(convId, aiCreditLimit === undefined ? {} : { aiCreditLimit });
       if (data && data.goal) applyGoalSnapshot(convId, data.goal);
     } catch (err) {
       if (err && err.status === 409) {
@@ -2091,7 +2102,7 @@ import { reduceStreamFrame } from './stream/streamFrameReducer.ts';
       persistQueue(convId, restoredQueue).catch(() => {});
     };
 
-    update(convId, { sending: true, streamError: null, streamErrorSource: null, pendingInteraction: null });
+    update(convId, { sending: true, streamError: null, streamErrorSource: null, pendingInteraction: null, inputTurnId: null, inputError: null });
     try {
       await ensureWsOpen(convId);
     } catch (err) {
@@ -2136,7 +2147,7 @@ import { reduceStreamFrame } from './stream/streamFrameReducer.ts';
       if (sendCliProfileId) body.cliProfileId = sendCliProfileId;
       if (sendBackend) body.backend = sendBackend;
       if (sendModel)   body.model   = sendModel;
-      if (sendEffort)  body.effort  = sendEffort;
+      if (sendEffort || sendBackend === 'copilot') body.effort = sendEffort;
       if (sendClaudeCodeMode.shouldSend) body.claudeCodeMode = sendClaudeCodeMode.bodyValue;
       if (sendBackend === 'codex' && sendServiceTier) body.serviceTier = sendServiceTier;
       const res = await AgentApi.fetch('conversations/' + encodeURIComponent(convId) + '/message', {
@@ -2154,7 +2165,7 @@ import { reduceStreamFrame } from './stream/streamFrameReducer.ts';
             cliProfileId: sendCliProfileId || cur.conv.cliProfileId,
             backend: sendBackend || cur.conv.backend,
             model: sendModel !== null ? sendModel : cur.conv.model,
-            effort: sendEffort !== null ? sendEffort : cur.conv.effort,
+            effort: sendBackend === 'copilot' ? (sendEffort || undefined) : sendEffort !== null ? sendEffort : cur.conv.effort,
             claudeCodeMode: sendClaudeCodeMode.persistedValue,
             serviceTier: sendServiceTier === 'fast' ? 'fast' : undefined,
           } : cur.conv,
@@ -2223,23 +2234,25 @@ import { reduceStreamFrame } from './stream/streamFrameReducer.ts';
     const interaction = s.pendingInteraction;
     if (decisionId !== undefined && interaction.decisionId !== decisionId) return;
 
-    update(convId, { respondPending: true });
+    update(convId, { respondPending: true, inputError: null });
 
     let mode;
     try {
       const streamActive = s.streaming || s.sending;
       /** @type {ConversationInputRequest} */
-      const body = { text, streamActive, ...(interaction.decisionId ? { decisionId: interaction.decisionId } : {}) };
+      const body = { text, streamActive, ...(interaction.decisionId ? { decisionId: interaction.decisionId } : {}),
+        ...(interaction.requestId ? { requestId: interaction.requestId } : {}) };
       const res = await AgentApi.fetch(
         'conversations/' + encodeURIComponent(convId) + '/input',
         { method: 'POST', body }
       );
       const data = await res.json();
       mode = data && data.mode;
+      if (interaction.requestId && mode !== 'stdin') throw new Error('This question is no longer accepting an answer.');
     } catch (err) {
-      update(convId, cur => cur.pendingInteraction === interaction
-        ? { ...cur, streamError: err.message || String(err), streamErrorSource: null, respondPending: false, uiState: 'error' }
-        : { ...cur, respondPending: false });
+      update(convId, cur => cur.pendingInteraction !== interaction ? { ...cur, respondPending: false }
+        : interaction.requestId ? { ...cur, inputError: err.message || String(err), respondPending: false }
+        : { ...cur, streamError: err.message || String(err), streamErrorSource: null, respondPending: false, uiState: 'error' });
       return;
     }
 
@@ -2265,6 +2278,34 @@ import { reduceStreamFrame } from './stream/streamFrameReducer.ts';
     }
     update(convId, { pendingInteraction: null, respondPending: false, uiState: null });
     await send(convId, text);
+  }
+
+  async function steer(convId){
+    const s = states.get(convId);
+    if (!s?.streaming || !s.inputTurnId || s.steeringPending || s.pendingInteraction) return;
+    const draft = s.input;
+    const attachments = s.pendingAttachments || [];
+    if (attachments.some(attachment => attachment.status === 'uploading')) return;
+    const text = composeWireContent({ content: draft.trim(), attachments: attachments.filter(attachment => attachment.status === 'done').map(attachment => attachment.result).filter(Boolean) });
+    if (!text) return;
+    flushDraftNow(convId);
+    update(convId, { steeringPending: true, inputError: null });
+    try {
+      const res = await AgentApi.fetch('conversations/' + encodeURIComponent(convId) + '/input', {
+        method: 'POST', body: { text, streamActive: true, turnId: s.inputTurnId, inputId: Date.now() + '-' + Math.random() },
+      });
+      const data = await res.json();
+      if (data?.mode !== 'stdin') throw new Error('Steering was not confirmed. Your draft was preserved.');
+      update(convId, cur => ({ ...cur,
+        input: cur.input === draft ? '' : cur.input,
+        pendingAttachments: cur.pendingAttachments.filter(attachment => !attachments.includes(attachment)),
+      }));
+      scheduleDraftSave(convId);
+    } catch (err) {
+      update(convId, { inputError: err.message || String(err) });
+    } finally {
+      update(convId, { steeringPending: false });
+    }
   }
 
   function patchConv(convId, patch){
@@ -2462,6 +2503,7 @@ export const StreamStore = {
     setGoalMode,
     refreshGoal,
     respond,
+    steer,
     setInput,
     setComposerCliProfile,
     setComposerBackend,

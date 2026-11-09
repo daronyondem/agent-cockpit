@@ -18,7 +18,7 @@ section.
 | Platform lifecycle | Optional official standalone install, narrow proven macOS update layout, passive full-bundle import checks and reserved runtime exclusions. Ubuntu preparation is not a native pass. Windows x64 runtime is implemented with simulated tests; native acceptance remains pending and install/update remain manual. |
 | Compatibility and reporting | Isolated synthetic data, PM2 browser fixtures, fixed native checks, bounded deadlines/cleanup and private raw evidence. A subset pass or expected-auth failure is never full capability/auth certification. |
 
-ADR-0093 describes these ownership boundaries, rejected alternatives and
+ADR-0099 describes these ownership boundaries, rejected alternatives and
 consequences, including C54/C55/C56. It remains **Proposed** until merge under
 ADR-0001's lifecycle. No superseding ADR is needed: the final implementation
 keeps the original native ACP/shared-auth/strict-role scope decisions. Deferred
@@ -108,7 +108,7 @@ Markdown targets resolve. The two new integration guards passed in the focused
 no Codex native suite is invented as part of this validation.
 
 C56–C59 review/preparation is complete with the four tracker items C26, C35,
-C52 and C53 still open. ADR-0093 stays Proposed. PR text is ready locally;
+C52 and C53 still open. ADR-0099 stays Proposed. PR text is ready locally;
 publication, merge and release remain separate requested actions.
 
 ## C53 autonomous follow-up (2026-11-09)
@@ -164,7 +164,7 @@ literal prompt wrapping and full-distribution validation form the boundary.
 Actual captured zero-schema/resource requests and real Memory governance,
 extraction, consolidation proposal/draft/apply, sequential continuity and active
 cancel/drain/fresh inference passed. See [C35 evidence](../research/cortex-code-restricted-processors.md).
-ADR-0093 remains Proposed; the proven native headless protocol is recorded there
+ADR-0099 remains Proposed; the proven native headless protocol is recorded there
 as the reason for this separate restricted boundary.
 
 Mobile impact: processor execution stays server-side; no mobile REST/WS, stream,

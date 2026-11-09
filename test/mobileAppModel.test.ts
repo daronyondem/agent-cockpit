@@ -242,13 +242,16 @@ describe('mobile app model helpers', () => {
       { id: 'codex-profile', name: 'Codex', harness: 'codex' },
       { id: 'claude-profile', name: 'Claude Interactive', harness: 'claude-code', protocol: 'interactive' },
       { id: 'open-profile', name: 'OpenCode', harness: 'opencode', opencode: { provider: 'openrouter' } },
+      { id: 'copilot-profile', name: 'GitHub Copilot', harness: 'copilot' },
     ];
 
     expect(model.workspaceRef({ workspaceId: 'workspace-1', workspaceHash: 'legacy-hash' })).toBe('workspace-1');
     expect(model.workspaceRef({ workspaceHash: 'legacy-hash' })).toBe('legacy-hash');
     expect(model.backendIdForProfile(profiles[1])).toBe('claude-code-interactive');
     expect(model.backendIdForProfile(profiles[0])).toBe('codex');
+    expect(model.backendIdForProfile(profiles[3])).toBe('copilot');
     expect(model.profileForID(profiles, 'open-profile')).toBe(profiles[2]);
+    expect(model.profileForID(profiles, 'copilot-profile')).toBe(profiles[3]);
     expect(model.profileForID(profiles, 'missing')).toBeNull();
     expect(model.opencodeProviderLabel('ollama')).toBe('Ollama');
     expect(model.opencodeProviderLabel('openrouter')).toBe('OpenRouter');

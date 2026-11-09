@@ -366,6 +366,38 @@ describe('settings', () => {
     expect(saved.defaultBackend).toBe('opencode');
   });
 
+  test('saving a GitHub Copilot profile forces self-configured auth and drops isolated config', async () => {
+    const settings = await service.getSettings();
+    const saved = await service.saveSettings({
+      ...settings,
+      cliProfiles: [
+        ...(settings.cliProfiles || []),
+        {
+          id: 'profile-copilot',
+          name: 'GitHub Copilot',
+          harness: 'copilot',
+          authMode: 'account',
+          command: '/opt/custom/copilot',
+          configDir: '/tmp/copilot-account',
+          env: { GITHUB_TOKEN: 'should-be-dropped' },
+          protocol: 'interactive',
+          createdAt: '2026-06-17T00:00:00.000Z',
+          updatedAt: '2026-06-17T00:00:00.000Z',
+        },
+      ],
+    } as any);
+
+    const profile = saved.cliProfiles!.find((p) => p.id === 'profile-copilot')!;
+    expect(profile.harness).toBe('copilot');
+    expect(profile.authMode).toBe('server-configured');
+    expect(profile.protocol).toBeUndefined();
+    expect(profile.command).toBe('/opt/custom/copilot');
+    expect(profile.configDir).toBeUndefined();
+    expect(profile.env).toBeUndefined();
+    expect((profile as { opencode?: unknown }).opencode).toBeUndefined();
+    expect(saved.defaultBackend).toBe('copilot');
+  });
+
   test('saving a non-OpenCode profile drops OpenCode metadata', async () => {
     const settings = await service.getSettings();
     const saved = await service.saveSettings({

@@ -15,7 +15,7 @@ export type StreamUiState = 'streaming' | 'awaiting' | 'error' | null;
 
 export type PendingInteraction =
   | { type: 'planApproval'; planContent: string; decisionId?: string; decisionBound?: boolean }
-  | { type: 'userQuestion'; question: string; options: Array<{ label: string; description?: string }>; decisionId?: string; decisionBound?: boolean };
+  | { type: 'userQuestion'; question: string; options: Array<{ label: string; description?: string }>; decisionId?: string; decisionBound?: boolean; requestId?: string; allowFreeform?: boolean };
 
 export interface StreamMemoryUpdateMessage {
   id: string;
@@ -31,6 +31,13 @@ export interface StreamMemoryUpdateMessage {
 }
 
 export type StreamStoreMessage = Message | StreamMemoryUpdateMessage;
+
+/** Initial HTTP history can arrive after WebSocket replay has built live rows. */
+export function mergeInitialStreamMessages(saved: StreamStoreMessage[], current: StreamStoreMessage[]): StreamStoreMessage[] {
+  const live = new Map(current.map(message => [message.id, message]));
+  const ids = new Set(saved.map(message => message.id));
+  return [...saved.map(message => live.get(message.id) || message), ...current.filter(message => !ids.has(message.id))];
+}
 
 export type StreamConversationStatus = Record<string, unknown>;
 
@@ -60,6 +67,8 @@ export interface StreamReducerState {
   uiState: StreamUiState;
   unread: boolean;
   pendingInteraction: PendingInteraction | null;
+  inputTurnId?: string | null;
+  inputError?: string | null;
   goal: ThreadGoal | null;
   goalUpdatedAtMs: number | null;
   queue: QueuedMessage[];
@@ -141,13 +150,13 @@ export function reduceStreamFrame(
       return withEffects({
         ...next,
         pendingInteraction: {
-          type: 'userQuestion',
-          question: question.question,
-          options: question.options,
+          ...question,
           ...(frame.id ? { decisionId: frame.id } : {}),
           ...(frame.decisionBound ? { decisionBound: true } : {}),
+          ...(frame.inputRequestId ? { requestId: frame.inputRequestId } : {}),
         },
         uiState: 'awaiting',
+        inputError: null,
       });
     }
     return withEffects(pushToolBlock(next, {
@@ -164,11 +173,14 @@ export function reduceStreamFrame(
   if (frame.type === 'tool_outcomes') {
     const outcomes = Array.isArray(frame.outcomes) ? frame.outcomes : [];
     const interaction = next.pendingInteraction;
-    if (interaction?.decisionBound && interaction.decisionId && outcomes.some(outcome => outcome.toolUseId === interaction.decisionId)) {
+    const requestId = interaction?.type === 'userQuestion' ? interaction.requestId : undefined;
+    if ((interaction?.decisionBound && interaction.decisionId && outcomes.some(outcome => outcome.toolUseId === interaction.decisionId))
+      || (requestId && outcomes.some(outcome => outcome.toolUseId === requestId))) {
       next = { ...next, pendingInteraction: null, uiState: next.streamError ? 'error' : next.streaming ? 'streaming' : null };
     }
     return withEffects(patchToolOutcomes(next, outcomes, context.nowMs));
   }
+  if (frame.type === 'input_ready') return withEffects({ ...next, inputTurnId: frame.turnId });
   if (frame.type === 'artifact') {
     return withEffects(pushArtifactBlock(next, frame.artifact, context));
   }
@@ -230,10 +242,14 @@ export function reduceStreamFrame(
       streamErrorSource: typeof frame.source === 'string' ? frame.source : null,
       uiState: 'error',
       pendingInteraction: null,
+      inputTurnId: null,
       planModeActive: false,
     });
   }
   if (frame.type === 'done') {
+    if (next.pendingInteraction?.type === 'userQuestion' && next.pendingInteraction.requestId) {
+      next = { ...next, pendingInteraction: null };
+    }
     const wasLocallyStreaming = !!state.streaming;
     const markUnread = wasLocallyStreaming
       && state.convId !== context.activeConvId
@@ -254,6 +270,7 @@ export function reduceStreamFrame(
         ))
         : next.messages,
       streaming: false,
+      inputTurnId: null,
       streamingMsgId: null,
       planModeActive: false,
       replayActive: false,
@@ -421,6 +438,7 @@ function patchToolOutcomes(
           ...block.activity,
           outcome: outcome.outcome || undefined,
           status: outcome.status || undefined,
+          ...(outcome.summary !== undefined ? { summary: outcome.summary } : {}),
           duration,
         },
       };
@@ -473,6 +491,7 @@ function applyAssistantMessage(state: StreamReducerState, message: Message): Str
 }
 
 function applyReplayStart(state: StreamReducerState): StreamReducerState {
+  state = { ...state, inputTurnId: null, pendingInteraction: null };
   if (!state.streamingMsgId) return { ...state, replayActive: true };
   return {
     ...state,
@@ -502,7 +521,7 @@ function firstQuestion(frame: Extract<BrowserStreamFrame, { type: 'tool_activity
     return { type: 'userQuestion', question: first, options: [] };
   }
   if (first && typeof first === 'object') {
-    const record = first as { question?: unknown; options?: unknown };
+    const record = first as { question?: unknown; options?: unknown; allowFreeform?: unknown };
     return {
       type: 'userQuestion',
       question: typeof record.question === 'string' && record.question
@@ -511,6 +530,7 @@ function firstQuestion(frame: Extract<BrowserStreamFrame, { type: 'tool_activity
       options: Array.isArray(record.options)
         ? record.options.filter(isQuestionOption)
         : [],
+      ...(typeof record.allowFreeform === 'boolean' ? { allowFreeform: record.allowFreeform } : {}),
     };
   }
   return {

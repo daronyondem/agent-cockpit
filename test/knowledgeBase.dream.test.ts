@@ -1093,27 +1093,34 @@ describe('KbDreamService', () => {
     expect(mockDb.clearNeedsSynthesis).toHaveBeenCalledWith(['entry-1']);
   });
 
-  test('writes parse-failure debug log when both attempts fail to parse', async () => {
+  test.each(['second garbled output', ''])('retains pending entries and writes a debug log after a failed parse retry (%s)', async second => {
     mockDb.listNeedsSynthesisEntryIds.mockReturnValue(['entry-1']);
     mockDb.listTopicSummaries.mockReturnValue([]);
     mockChatService.getWorkspaceKbEmbeddingConfig.mockResolvedValue(undefined);
     mockChatService.getKbKnowledgeDir.mockReturnValue('/tmp/kb/knowledge');
 
     (dreamOpsMod.parseDreamOutput as jest.Mock)
-      .mockReturnValueOnce({ operations: [], warnings: ['JSON parse error: foo'] })
-      .mockReturnValueOnce({ operations: [], warnings: ['No JSON object found in output.'] });
+      .mockReturnValueOnce({ operations: [], warnings: ['JSON parse error: foo'] });
+    if (second) {
+      (dreamOpsMod.parseDreamOutput as jest.Mock)
+        .mockReturnValueOnce({ operations: [], warnings: ['No JSON object found in output.'] });
+    }
 
     mockAdapter.runOneShot
       .mockResolvedValueOnce('first garbled output')
-      .mockResolvedValueOnce('second garbled output');
+      .mockResolvedValueOnce(second);
 
     const mkdirSpy = jest.spyOn(fs, 'mkdirSync').mockImplementation(() => undefined);
     const writeSpy = jest.spyOn(fs, 'writeFileSync').mockImplementation(() => undefined);
 
     try {
-      await service.dream('ws-hash');
+      const result = await service.dream('ws-hash');
 
       expect(mockAdapter.runOneShot).toHaveBeenCalledTimes(2);
+      expect(result.processedEntries).toBe(0);
+      expect(result.skippedBatches).toBe(1);
+      expect(result.errors).toEqual([expect.stringContaining('Invalid cold-start output after retry')]);
+      expect(mockDb.clearNeedsSynthesis).not.toHaveBeenCalled();
       expect(mkdirSpy).toHaveBeenCalledWith(
         expect.stringContaining('_dream_debug'),
         expect.objectContaining({ recursive: true }),
@@ -1122,8 +1129,11 @@ describe('KbDreamService', () => {
       const [filepath, contents] = writeSpy.mock.calls[0] as [string, string, string];
       expect(filepath).toMatch(/_dream_debug\/parse-failure-cold-start-.*\.txt$/);
       expect(contents).toContain('first garbled output');
-      expect(contents).toContain('second garbled output');
-      expect(contents).toContain('ATTEMPT BOUNDARY');
+      expect(contents).toContain(`Attempts: ${second ? 2 : 1}`);
+      if (second) {
+        expect(contents).toContain(second);
+        expect(contents).toContain('ATTEMPT BOUNDARY');
+      }
     } finally {
       mkdirSpy.mockRestore();
       writeSpy.mockRestore();

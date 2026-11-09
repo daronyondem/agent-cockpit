@@ -1,0 +1,632 @@
+# Copilot SDK parity evaluation
+
+Observed 2026-11-03 on macOS arm64, Node 26.0.0 and 22.23.4, Copilot CLI 1.0.105 and official
+TypeScript SDK 1.0.28. The npm SDK package identifies its runtime snapshot as
+1.0.105 and requires Node ^20.19.0 or >=22.12.0. Evaluation starts from PR #571
+commit 557ad8a. Probes isolate HOME/COPILOT_HOME and use fixed local
+OpenAI-compatible model replies; they establish transport/runtime behavior,
+not hosted model quality or Copilot account access.
+
+The implemented integration is documented with its current limitations rather
+than a promise to close every parity gap in this PR. The consolidated
+[known capability gaps and qualification scope](../reference/backend-capabilities.md#copilot-known-capability-gaps)
+cover shared-only accounts, plan mode/goal Clear, gated media, image generation,
+USD pricing, interrupted turns, native memory, JSONL-only profiles/processors,
+updates and mobile administration. Historical checkpoints below preserve what
+was tested at each revision; remaining hosted/platform evidence is a validation
+limit, not evidence that those unsupported features are implemented.
+
+## Native results
+
+| Surface | Evidence | Remaining qualification |
+| --- | --- | --- |
+| Headless protocol | SDK getStatus reports CLI 1.0.105/protocol 3 | Real Windows/Linux CLI runs |
+| Account status and login | Empty auth reports isAuthenticated:false; normal GitHub CLI credentials report true; guided shared device login and native cancellation are implemented | Successful hosted OAuth/access, real expired credentials, independent accounts and native Windows/Linux auth |
+| Catalog | models.list rejects unauthenticated access; normal authenticated credentials return an explicit HTTP 403 | Successful account-dependent model lists |
+| Session create/resume | Same native ID resumes and answers another prompt; JSONL-created session resumes through SDK with original history; facade dispatch uses SDK | Hosted account and platform qualification |
+| Conversation owner | Production facade cold-resumes ID/history across owned processes; cancellation reaps a real tool worker before immediate replacement | Windows/Linux SDK qualification |
+| Questions | Production UUID-correlated callbacks handle repeated questions/freeform, stale refusal, active reload and Stop in desktop/mobile | Hosted models and Windows/Linux |
+| Steering | Production consumption correlation, paused boundary withdrawal and cold resume prevent late follow-up execution; desktop/mobile draft/file preservation passes | Hosted models and Windows/Linux |
+| Delegation | Production parallel/nested/background cards, scoped tools, final summaries, child failure, cancellation and usage-once checks pass on CLI 1.0.105 | Hosted-model and Windows/Linux qualification |
+| Context | Production root usage_info snapshots persist counts, limit and observation time; native metadata.contextInfo confirms measurement on 1.0.105 | Other supported versions, hosted models and Windows/Linux qualification |
+| Usage | Production live/final checkpoints preserve disjoint tokens and separate premium requests/AI-credit availability; native unknown-zero and no-auth quota probes pass | Hosted billing/entitlements, two-account and Windows/Linux qualification |
+| Goal set/status | Public command effect plus send completes through native task_complete; replacement/cold status retain objective ID and text | Hosted and Windows/Linux qualification |
+| Goal pause | Native off plus owned cleanup stops actual workers and preserves paused state | Hosted and Windows/Linux qualification |
+| Goal resume | Explicit --max-ai-credits N resumes the same paused objective and completes after interrupted work without replay; on alone leaves it paused | Hosted credit charging and Windows/Linux qualification |
+| Goal clear | CLI 1.0.105 reports Clear removed; state remains paused; workspace-file deletion is not canonical clear | Explicit upstream limitation; product action stays unavailable |
+| ACP | Initialization, session/new with local BYOK, session/prompt and end_turn succeed | SDK provides the richer planned control surface |
+
+A separate read-only check of normal shared terminal credentials returned
+isAuthenticated:true through GitHub CLI auth, while models.list returned HTTP
+403 with a not-authorized response. An authenticated identity is therefore not
+evidence of Copilot entitlement or catalog access. No hosted inference request
+was made. The production profile-auth service reproduces this distinction:
+installed and authenticated, catalog unavailable, status error with HTTP 403.
+Successful access and two-account tests remain pending.
+
+SDK custom-provider configuration must be supplied explicitly on create/resume
+for these probes. Passing only COPILOT_PROVIDER environment values to the
+headless process did not establish the session provider. In contrast, the ACP
+probe accepted its process-level BYOK environment. This difference matters to
+existing local-provider fixture wrappers during chat migration.
+
+Native steering can move an in-flight shell into the background. Its later
+completion can then generate another model call before session.idle. Assert
+the correction's single user.message with delivery:steering, not a fixed count
+of model requests. A first assistant reply or tool-loop turn end is not a
+sufficient stream-completion boundary.
+
+The production `CopilotConversations` owner now has executable RPC-fixture coverage
+for concurrent owners, late startup after reset/shutdown, immediate replacement,
+pre-start iterator closure, admission ordering, request deadlines, process/orphan
+exit, and failed cleanup as an admission barrier. Missing-session recovery is
+limited to a failed resume before observable work or prompt submission. Native
+checks cold-resume through this owner and retain actual history, then separately
+abort a TERM-resistant native tool worker and immediately resume the same native session without starting that worker again.
+Normal production chat now uses SDK; explicit opaque command overrides retain
+JSONL. The subsequent structured-input checkpoint exposes questions and explicit
+steering in both clients. The delegated-work checkpoint also adds grouped
+child tools and summaries without promoting child prose to the root answer.
+
+The published SDK's generated checkpoint schema differs from the older JSONL
+accounting shape. A measured native 1.0.105 probe supplied 120 input tokens,
+30 output tokens and 40 cache-read tokens per request. The saved transcript
+contained `session.usage_record` and `session.shutdown` records, without a live
+usage checkpoint. `usage.getMetrics` recovered 120/30/40 after the first process
+and 240/60/80 after resume. Thus SDK chat queries that API before submission and
+after idle instead of guessing a native transcript path. Provider/model metrics
+already include children; agent metrics overlap those totals. Model input
+includes cache tokens, so Cockpit reports 80 fresh input + 40 cache-read for
+this fixture. A three-call delegated turn reports 240 fresh input, 90 output
+and 120 cache-read, once, after subtraction of prior turns.
+
+Native `totalPremiumRequestCost` remains the existing premium-request counter.
+Neither nano-AIU nor model API pricing is mapped to that field or to USD.
+Missing counters/failed metrics remain unavailable, and historical checkpoint
+notifications do not charge a new prompt. Local BYOK evidence does not establish
+hosted billable units, entitlement or currency conversion.
+
+A second native check confirms that enabling config discovery alone does not
+make SDK sessions inherit a headless wrapper's private provider environment.
+The facade therefore selects JSONL for opaque explicit command overrides,
+unless the merged runtime environment supplies a provider base URL. Selection
+precedes execution; an SDK error never retries the prompt through JSONL.
+Settings still strips Copilot profile-local env/config homes. Native application
+and browser fixtures set the isolated server's provider environment, preserve
+the headless connection token in their wrapper, and assert SDK dispatch. Native
+managed `AGENTS.md` instructions are discovered with SDK config discovery.
+
+The shared desktop/mobile Chromium runner also passes all eight lifecycle cases
+on macOS with SDK chat, recording eight headless runtime launches. Earlier
+Ubuntu browser evidence covers JSONL; no new Windows/Linux SDK result or hosted
+account evidence is implied.
+
+## Process ownership
+
+The SDK's stdio mode owns its spawn and does not expose a public owned-stream
+injection point. Its URI mode connects without spawning a runtime. A native
+probe launched headless Copilot through spawnCopilotProcess and attached the
+SDK to the announced port using a fresh COPILOT_CONNECTION_TOKEN.
+
+- lsof confirmed 127.0.0.1-only listening on an ephemeral port.
+- An SDK client with an incorrect token failed with AUTHENTICATION_FAILED.
+- The correctly authenticated client created a session and received a model reply.
+- SDK disconnect left the server process under Cockpit ownership.
+- Awaited scope.stop terminated the owned server.
+
+This path preserves the existing Windows wrapper's invocation-through-stdin
+contract: the headless server carries RPC over TCP and requires no duplex
+stdin changes. Real Windows and Linux SDK/CLI behavior remains a qualification
+step, distinct from the existing native Windows process fixtures.
+
+## Architecture outcome
+
+Use the official SDK with a Cockpit-owned, authenticated headless runtime as a
+chat transport, with explicit JSONL compatibility for opaque command overrides
+and unchanged processor one-shots. See [ADR-0098](../adr/0098-connect-copilot-interactive-sessions-through-an-owned-sdk-runtime.md).
+
+Keep SDK and CLI versions explicit. Current upstream main documentation is not
+proof that a released version implements a feature or preserves goal semantics.
+Do not claim set/clear/pause/resume parity from the presence of autopilot mode.
+
+## Reproduction artifacts
+
+The initial probes and temporary progress tracker are under
+`/tmp/agent-cockpit-copilot-parity/`. SDK and owned-runtime evidence is written
+to per-run temporary folders referenced by `sdk-evidence-path.txt` and
+`owned-evidence-path.txt`; ACP evidence is referenced by
+`acp-evidence-path.txt`. These temporary paths are not shipped data stores.
+
+`npm run e2e:copilot-sdk` retains twenty reproducible native cases and emits a
+temporary compatibility report with CLI/SDK/OS/Node/revision/dirty metadata,
+plus per-case local requests and native events (or explicitly labeled Cockpit
+frames for the conversation-owner/facade cases). The twenty-case run passes on
+Node 22.23.4/macOS arm64. The test workflow adds a pinned 1.0.105 matrix on
+macOS 15, Ubuntu 24.04 and Windows; until those jobs run, their presence is not
+platform certification. Machine-local evidence does not substitute for
+platform/account qualification.
+
+## Runtime catalog implementation checkpoint — 2026-11-04
+
+The selected SDK 1.0.28 exposes `ModelInfo.id/name/policy`, native vision and
+reasoning-effort flags, and `supportedReasoningEfforts` including `max`. Runtime
+projection and a profile/runtime/auth-scoped bounded cache now feed metadata,
+SDK session configuration, restricted JSONL one-shots, HTTP admission and both
+clients. Policy-disabled/unconfigured models are excluded, and new IDs do not
+inherit media or effort from names. Fallback provenance is explicit; a native
+vision flag is insufficient to certify a new Cockpit image/PDF selection.
+
+Executable RPC-peer evidence verifies distinct profile catalogs, exact efforts
+for new IDs, validation before session/prompt creation, direct media gates,
+cache reuse/refresh, Stop during discovery, and update shutdown. It establishes
+application behavior with public SDK types and transport, not real hosted
+account availability. Nine native SDK cases still pass on CLI 1.0.105 / Node
+22.23.4 / macOS arm64, including the isolated unauthenticated-catalog fallback.
+The native wrapper case caught an over-strict fallback check: an explicitly
+configured COPILOT_MODEL absent from the curated list must remain available as
+a text-only compatibility entry. Authoritative account catalogs remain strict.
+
+A fresh read-only normal-terminal account probe reports authenticated via
+GitHub CLI and a catalog HTTP 403. The production catalog returns a generic,
+clearly marked fallback without native response bodies/headers. No inference
+was performed. Successful hosted account catalogs and a genuine two-account
+comparison remain unverified. The implementation adds no new image/PDF model
+qualification or Windows/Linux native certification.
+
+Protocol references: the [official Node SDK model API](https://github.com/github/copilot-sdk/blob/main/nodejs/README.md)
+and [BYOK model listing guidance](https://docs.github.com/en/copilot/how-tos/copilot-sdk/auth/byok).
+Installed 1.0.28 type declarations and selected 1.0.105 runtime results, rather
+than newer upstream main behavior, define this checkpoint.
+
+Qualification for this checkpoint: 155 normal-CI suites / 2,886 tests pass;
+coverage is 88.66% lines/statements, 76.17% branches and 93.71% functions. Nine
+native SDK checks and six real application workflows pass. Ten rebuilt
+desktop/mobile browser cases pass; the two new catalog cases inject model lists
+and reject their probe sends without inference, while the existing eight retain
+real SDK/local-provider behavior. Production web JS totals 898.5 KiB under the
+unchanged 900 KiB total budget. Browser screenshots show the unavailable
+selection/fallback status without layout overflow.
+
+## Structured input implementation checkpoint — 2026-11-04
+
+SDK 1.0.28 / CLI 1.0.105 confirms two queue boundaries which are not implied
+by a successful send RPC. First, initial send admission can arrive before
+native execution starts; pausing queue drain immediately after admission stalls
+the initial prompt. Wait for root `assistant.turn_start` as well. Second,
+unconsumed immediate input is promoted into the native follow-up lane at idle.
+Pause that lane, correlate the correction's native steering-delivery ID, and
+withdraw unconsumed input with `queue.withdrawMessage` before ending the owned
+runtime. Native tests prove the final-boundary fixture performs one model call,
+rejects the late input, and cold-resumes without that correction in history or
+an automatic second execution. Normal steering can still produce background
+shell iterations before root idle.
+
+Production callback tests prove repeated identical prompts have distinct IDs,
+old IDs resolve no later question, and choice/freeform answers reach the native
+model. Stop while a question was pending initially exposed an extra model
+request: graceful detach allowed the callback's cancellation error to reach the
+native tool. Force-close SDK transport before rejecting callbacks. The native
+regression now proves Stop plus cold resume makes only the intended initial
+and replacement calls, with no cancelled input replay.
+
+Fourteen native SDK checks, six native application workflows and eighteen
+rebuilt Chromium cases pass locally. The browser cases include active reload,
+repeated requests, freeform answers, Stop with a retained draft/file, consumed
+steering and refused late steering on desktop/mobile. The first browser run
+revealed idle-placeholder assumptions in test selectors; target the composer
+independently of its current status. Choices-only enforcement and failure races
+also have deterministic controller/client coverage. Full CI-style coverage
+passes 2,915 tests at 88.71% statements/lines, 76.32% branches and 93.68%
+functions. The feature adds about 2.4 KiB minified desktop JS; budgets become
+903 KiB total / 263 KiB entry, with other limits unchanged.
+
+The [official steering and queueing documentation](https://github.com/github/copilot-sdk/blob/main/docs/features/steering-and-queueing.md)
+and installed public SDK declarations inform the integration; the selected
+native runtime establishes actual queue semantics. Successful hosted accounts,
+auth isolation and real Windows/Linux qualification remain outstanding.
+
+## Delegated-work implementation checkpoint — 2026-11-04
+
+Native SDK 1.0.28 / CLI 1.0.105 probes establish that `subagent.started`'s
+**envelope** `agentId` names the new child, while `data.toolCallId` belongs to
+the spawning parent's tool scope. `data.parentId` supplies nested ancestry.
+Child messages/tools carry their own `agentId`; deprecated `parentToolCallId`
+refers to the immediate spawn. Completion/failure uses the same child identity.
+The production reducer now scopes tool IDs by fresh turn/owner/raw ID, projects
+parallel/nested tools under Agent cards, and stores bounded final child summaries
+without adding child prose to the root answer or restricted one-shot output.
+
+A native background `task` returns its tool acknowledgement before the child
+finishes. The parent can answer early, but `session.idle` waits for the child
+and subsequent native completion notifications. Card completion follows native
+`subagent.completed`, not task acknowledgement. Native child model HTTP 400
+produces `subagent.failed`; it does not inherently fail the parent. Tests retain
+that diagnostic on the card and allow the parent's final answer.
+
+This exposed a phase-5 interaction: pausing the queue throughout a turn also
+blocks the native background-completion lane. Readiness now probes and releases
+queue control after initial acknowledgement plus root start. Each pending
+steering transaction holds its own pause. Polling `queue.pendingItems()` finds
+an exact promoted correction even before idle; withdraw that message with
+`expectedPrompt` and verify removal before releasing native background work.
+Only confirmed consumption accepts input. Failed inspection/withdrawal/release
+stops without retry; Stop force-closes the transport. The native combined
+background/steering case proves the work can finish without an unexpected
+queued correction. The earlier structured-input counts above record the
+preceding checkpoint rather than this queue-policy revision.
+
+Twenty native SDK cases pass on Node 22.23.4/macOS arm64. The six new cases
+cover parallel, nested, held background, background plus steering, child failure,
+and stopping a delegated worker followed by cold resume without replay. Measured
+successful local responses contribute 80 fresh input, 30 output and 40 cache-read
+tokens each; child usage is included once and a failed HTTP response adds no
+invented tokens. Native reports preserve CLI/SDK/OS/revision and dirty state.
+Six real-CLI Memory/Workspace Context application workflows also pass. Final
+coverage and rebuilt desktop/mobile browser qualification are recorded below. Hosted account/model behavior, two-account auth isolation and
+native Windows/Linux qualification remain separate outstanding work.
+
+The first delegated browser run passed twenty of twenty-two cases, including
+both mobile additions. Desktop reload exposed a real initialization race:
+WebSocket replay rebuilt the running tools before initial HTTP history returned;
+the late response replaced those rows with saved history only. Initial
+hydration now merges the current rows by ID through a pure projection, with
+running/final regression tests. The Stop assertion also needed to expand the
+existing collapsed progress section before inspecting its cancelled card;
+no product expansion policy changed. Failure screenshots/traces are retained.
+The final rebuilt qualification passes after this correction.
+
+Final local qualification: 159 suites / 2,937 normal-CI tests pass, with 54
+opt-in/platform tests skipped. Coverage is 88.74% statements/lines, 76.49%
+branches and 93.70% functions; the branch floor rises to 76.3%, with other
+floors retained. Twenty native SDK checks and six application workflows pass.
+All twenty-two rebuilt desktop/mobile Chromium cases pass, with twenty-two
+headless launches observed. Final focused client checks pass 123 cases. Web JS
+is 901.6 KiB / 903 and CSS 201.7 / 230, with no further budget changes. All
+three typechecks, zero-warning lint, maintainability, spec drift and ADR lint
+pass. Screenshots were reviewed; fixture PM2/workers and 29 recorded SDK runtime
+PIDs are stopped. Reports retain their pre-commit revision plus dirty state,
+rather than being relabeled after commit. Successful hosted accounts, genuine
+two-account isolation and native Windows/Linux remain unverified.
+
+## Native goal integration evidence (2026-11-04)
+
+CLI 1.0.105 / SDK 1.0.28 / Node 22.23.4 on macOS arm64 supports native
+objective set, canonical reads, pause and explicit credit-window resume.
+The production facade now uses those public APIs through the existing owned
+conversation path. Initial set uses `[--max-ai-credits N ]-- <objective>`: the
+delimiter preserves reserved command text and embedded flag text literally.
+Public commands.invoke returns the native agent prompt; public send admits it
+once. No private finalizeInvocationEffect API is needed or used. Completed
+objectives retain status/summary on a fresh owned process. Replacing an objective
+changes its native session-local ID without replacing the session.
+
+`autopilot off` pauses active native state, but stopping actual tool workers still
+requires awaited owner cleanup. Intentional Pause ends the owned stream with
+canonical paused state after cleanup rather than a fabricated stream failure. Native Pause, ordinary Stop and reset all retain
+the objective; a cold resume with continuePendingWork:false changes an interrupted
+active objective to paused with reason resumed_session. Resume requires an explicit
+fresh --max-ai-credits N window, returns a continuation prompt, and retains the
+objective ID/text/turn count. `autopilot on` merely changes mode and leaves a paused
+objective paused. Local-provider credit usage is known zero for these fixtures,
+not evidence of hosted charging. Native credit-window fields stay separate from
+Copilot premium requests, token usage, lifetime nano-AIU and USD estimates.
+
+Ordinary session.idle can leave an objective active. Tests use public send and
+observe idle directly; SDK sendAndWait can keep waiting for the objective. Neither
+a root reply nor idle fabricates achievement. The actual native task_complete
+transition is authoritative. Attached background child work must still drain
+before stream/process closure, including parent completion ahead of a child.
+Fixed responses must stop calling task_complete after the first successful call,
+because native interactive continuation reports that tool as inapplicable.
+The fixture bounds requests and has an external cancellation deadline.
+
+The removed `goal clear` command only returns an explanatory notice. A separate
+probe of the public workspace-objective deletion helper returned deleted:true
+without removing the active canonical runtime objective. That storage helper is
+not a Clear implementation and is never used by product controls.
+
+Desktop/mobile lifecycle checks also caught a concurrent poll/stream card race
+and a normal-idle close/read race. Shared atomic goal-event persistence now
+serializes check/append, including native session/objective identity; read-only
+status can reattach after draining normal cleanup. Neither fix retries model work.
+Canonical specs document the protocol and client behavior.
+
+Primary references: [CLI goal command/credit-window reference](https://docs.github.com/en/copilot/reference/copilot-cli-reference/cli-command-reference),
+[Autopilot behavior](https://docs.github.com/en/copilot/how-tos/copilot-cli/use-copilot-cli/use-autopilot-mode).
+Installed declarations and actual native results take precedence over upstream
+main documentation for the selected version. Final checkpoint reports retain
+the revision and dirty flag at execution; hosted/two-account/native Windows and
+Linux certification remain separate work.
+
+The completed native goal checkpoint passes all 26 SDK compatibility cases;
+report `copilot-sdk-compat-uIwMvj` records CLI 1.0.105, SDK 1.0.28, Node 22.23.4,
+macOS arm64 and pre-commit revision f0b2188 with dirty:true. The first goal case
+also verifies that a later normal question still exposes ask_user after cold
+status/control attaches. All 39 recorded owned runtime PIDs are stopped.
+
+## Context, quota and billing visibility — 2026-11-04
+
+CLI 1.0.105 / SDK 1.0.28 on macOS arm64 emits root `session.usage_info`
+with context token counts/limit and `assistant.usage` with disjoint-cache source
+metadata. In the isolated fixed-provider probe, the event reported 12,631 current
+tokens / 128,000 context tokens; metadata.contextInfo returned a fresh breakdown
+with 11,863 total tokens. These are independent observation times, not additive
+charges. The runtime explicitly returned totalNanoAiu:0 and
+aiCreditsStatus:unavailable for a successful local-provider call. Numeric zero
+therefore cannot certify known free usage. Empty session.quota.get snapshots and
+a rejected unauthenticated account.getQuota did not establish exhausted quota.
+
+Production now reconciles native metrics while calls complete and after idle,
+advancing one charged checkpoint per emitted delta. Native cold-resume and all
+parallel/nested/background delegation checks pass without recharging history or
+counting children twice. Preserve complete/partial/unavailable AI-credit coverage,
+convert explicitly reported nano-AIU to AI credits only via 1e9, and retain premium
+requests as their own counter. No underlying model price or currency conversion
+is used. Context-only frames persist snapshots and skip the daily ledger.
+
+Quota uses a bounded profile/runtime/auth-scoped read with owned cleanup and no
+session/inference. Its legacy compatibility API does not establish units for
+token-based/unknown accounts; UI displays unknown units rather than guessing AI
+credits or premium requests. Whitelisted nonnegative amounts, explicit unlimited
+state and supplied reset/percentage metadata are retained; numeric values do not
+infer an access or exhaustion verdict. Failed same-identity refreshes may show
+stale data; different identities cannot inherit that data. Hosted quota/billing
+success, genuine two-account behavior and native Windows/Linux remain unqualified.
+
+Initial full native report: `copilot-sdk-compat-uJqEl9` in the system temp folder,
+27/27 checks, Node 22.23.4. The independent context probe is
+`copilot-sdk-compat-9Kz7Lm`. Reports retain their actual revision/dirty evidence.
+Browser and final regression qualification are tracked separately.
+
+Sources: [official SDK usage APIs](https://github.com/github/copilot-sdk/blob/main/docs/features/usage-and-billing.md)
+and the installed 1.0.28 generated session-event/RPC contracts. Upstream main is
+not a substitute for the selected-version native probes.
+
+Final phase 8 qualification: 28 native SDK cases pass in
+`copilot-sdk-compat-xj8cgU`; 30 rebuilt desktop/mobile Chromium cases pass in
+`cockpit-copilot-ui-A1P284`, with 57 SDK headless launches. Browser cases confirm
+measured two-turn totals persist as 160 fresh input / 60 output / 80 cache-read
+tokens, with available measured context and unavailable local-provider AI-credit
+amounts. Stale and unavailable quota rendering uses injected data, separately
+from hosted-account entitlement evidence. Screenshots are reviewed. All 39
+recorded native runtime PIDs, the browser fixture PM2 daemon and three tool
+workers are stopped. Complete regression passes 2,995 cases and raised coverage
+floors, with clean exit after deferring the skipped media suite's native canvas
+import. Successful hosted billing and real two-account/Windows/Linux validation
+remain outstanding. Reports retain their actual pre-commit revision plus dirty
+state.
+
+## Phase 9 media and artifact findings
+
+Pinned 1.0.105/SDK 1.0.28 probes distinguish input attachment metadata from actual
+model-facing bytes. OpenAI-compatible gpt-6.1-sol sends explicit PNG data URLs,
+including attachment-only sends, first chat turns and cold resume. PDF path and
+blob inputs on that provider did not become native documents: path inputs became
+tagged_files references with supportedNativeDocumentMimeTypes empty, despite zero
+available tools. Those successful fixed text replies are not PDF evidence.
+Anthropic claude-sonnet-4.6 sends actual PDF base64 document blocks and image
+bytes without tools; restricted CLI PDF one-shots also send those bytes with
+zero tools. Hosted SDK PDF remains gated independently of earlier CLI evidence.
+Azure and unverified provider/model combinations remain media-disabled.
+
+A real MCP tool returns an image and an embedded PDF resource in both
+result.contents and binaryResultsForLlm. Projection must deduplicate those views
+per owned tool. Invalid PNG fixture bytes were correctly omitted by native CLI
+normalization; the final fixture uses a valid deterministic 32px PNG, without
+loading native canvas in skipped suites. URI links, omitted/asset-only references
+and arbitrary tool prose are not deliverable bytes. No native image-generation
+API is enabled or claimed.
+
+Normal-CI SDK-peer/route tests cover scoped root/delegated output, overlapping
+views and repeated completions, late/ended events, saved copies, cancellation and
+reload. Native provider checks cover actual bytes and shared MCP config discovery.
+Desktop/mobile browser checks cover input resume, PDF refusal with retained
+draft/files, live output, Stop, saved downloads/reload and ordinary FILE_DELIVERY.
+The fixed-provider evidence does not certify hosted reasoning, entitlement, or
+native Windows/Linux SDK media.
+
+Phase 9 qualified native report `copilot-sdk-compat-HVrO0s` passes all 34 cases
+on 1.0.105/1.0.28/Node 22.23.4/macOS arm64. All 44 recorded runtime PIDs are
+gone. Browser report `cockpit-copilot-ui-lecidK` passes all 38 desktop/mobile
+Chromium cases, recording 71 SDK launches with Node 26.0.0; its PM2 daemon and
+three recorded tool workers are stopped. Full CI-style coverage exits normally
+with 3,018 passing tests and raised floors; six native application workflows
+pass. Reports retain f6c694e plus dirty state. The scoped public JSON-RPC
+compatibility layer also has a deterministic actual-SDK subprocess exit check
+for a truncated frame; this addresses a real reader timer leak exposed during
+media qualification, independently of model output quality.
+
+## Guided shared-terminal login (2026-11-04)
+
+Pinned Copilot 1.0.105 `login --help` advertises `--device-code`, with native
+OAuth credential storage in the OS credential store and config fallback when
+that store is unavailable. `help environment` confirms token precedence and
+that COPILOT_HOME changes configuration/state storage. GitHub's
+[authentication documentation](https://docs.github.com/en/copilot/how-tos/copilot-cli/set-up-copilot-cli/authenticate-copilot-cli)
+identifies the keychain service as `copilot-cli` and describes shared account
+switching. These facts do not establish credential isolation between config
+homes, so Settings continues offering only shared self-configured profiles.
+
+A temporary-HOME native probe confirmed that
+`--no-auto-update login --device-code` prints the verification URL and code to
+piped stdout with ignored stdin. It was cancelled before browser authorization;
+normal credentials were not replaced. Production guided auth now uses that
+native command through the existing process scope and job endpoints, drains
+login descendants before a fresh SDK credential/catalog probe, and invalidates
+catalog/quota caches on every outcome. Custom-provider credentials remain a
+separate server configuration path. No native plaintext-storage consent is
+automatically accepted.
+
+Two opt-in auth cases pass on CLI 1.0.105 / SDK 1.0.28 / Node 22.23.4 / macOS
+arm64 in report `copilot-auth-compat-d5LDcs`: logged-out fresh status and two real
+device-code/cancel cycles followed by another logged-out status. All eight
+recorded root/descendant PIDs exited. `deviceLoginAuthorized`,
+`hostedEntitlementVerified` and `twoAccountsVerified` are explicitly false.
+The first run (`copilot-auth-compat-fpUxDT`) exposed a test assumption that a dead
+PID meant the service reservation had already drained; immediate replacement
+now awaits the completion boundary, matching the owned cleanup guarantee.
+
+Normal-CI executable-peer HTTP tests exercise successful login verification,
+expired/missing credentials, denied HTTP 403 access, no inference/session work,
+shared profile persistence and detached-child cancellation/retry. These are
+protocol fixtures, not real hosted accounts. Direct tests cover shutdown,
+timeout/late success, split-token redaction and cleanup failure barriers.
+Browser auth state cases use injected job responses and retain that limitation
+separately from native CLI evidence. Successful OAuth completion, entitlement,
+real expired credentials, genuine independent accounts, and native Linux/Windows
+keychain/storage paths remain outstanding.
+
+A fresh read-only check of the normal shared terminal account on 2026-11-04
+still reports authenticated credentials but model catalog HTTP 403
+(`unauthorized: not authorized to use this Copilot feature`). No hosted inference
+was attempted. No Docker/Colima, Multipass, Parallels or VirtualBox CLI is
+available on this macOS host, so it supplies no new native Linux/Windows result.
+The pinned cross-platform SDK job is configured in the test workflow but has
+not run this local branch; configured jobs are not qualification evidence.
+
+Final shared-auth qualification passes 3,052 normal-CI cases, 34 native SDK
+cases (`copilot-sdk-compat-DX4F2G`), two native auth cases
+(`copilot-auth-compat-A0bPMd`), six native Memory/Context workflows and 40 browser
+cases (`cockpit-copilot-ui-Ijs6Wz`, 71 SDK launches). The auth runner's CLI
+metadata launch now uses the shared runtime resolver, and the final router
+shutdown regression proves auth cleanup failure cannot skip other backend
+cleanup. These results do not add native KB/Routine, Windows/Linux, real expired
+credential or successful hosted-account evidence. See the qualified checkpoint
+in [the testing spec](../spec-testing.md#copilot-shared-authentication-qualification).
+
+
+## Native KB/Routine application qualification — 2026-11-04
+
+The shared application runner now passes twelve native workflows: the six
+Memory/Workspace Context scenarios and six KB/Routine scenarios. Final report
+`copilot-workflows-compat-Gll9d6` records CLI 1.0.105, SDK 1.0.28, Node 26.0.0,
+macOS arm64 and revision `88f3d5b` plus dirty state; all 72 recorded PIDs
+exited. An earlier complete run also passes all twelve cases. Digestion, base transcript-replay gleaning, malformed-output recovery,
+dreaming and durable topic/entry markdown run through the production JSONL
+one-shot path. A fresh SDK chat retrieves that persisted topic and its entry
+IDs through production KB MCP. Routine opt-in, proposal containment, real native
+output creation, final/history persistence, overlap and interrupted-run recovery
+are covered. Both cancellation cases prove native workers and detached
+children exit before retry.
+
+Fixed local OpenAI-compatible model responses choose the tools and outputs;
+file reads/writes and persistence are real. This closes the local native
+KB/Routine integration gap without claiming hosted reasoning, embedding search
+quality, account entitlement/isolation or Windows/Linux qualification. The
+runner retains installed SDK and selected CLI evidence, JSON test results, file
+receipts and PID cleanup; see the [testing specification](../spec-testing.md#copilot-native-kb-and-routine-qualification).
+
+Final normal CI remains 3,052 passing cases (172 suites, 70 opt-in skips), with
+88.96% statements/lines, 77.31% branches and 93.83% functions against unchanged
+floors. Types, lint, maintainability/spec/ADR checks and post-Jest client
+production builds/budgets pass. No product, API or PWA behavior changes were
+needed for this qualification.
+
+## Published platform evidence and documented scope — 2026-11-04
+
+The integration's remaining capability gaps are documented as current scope
+limits; full Codex parity is not claimed. See the consolidated
+[capability/evidence reference](../reference/backend-capabilities.md#copilot-known-capability-gaps)
+for independent accounts, plan approval/Clear, media/image generation, pricing,
+interrupted turns, memory import, compatibility profiles, updates and mobile
+administration. No additional feature implementation is included in this
+documentation pass.
+
+Published [CI run 41954476405](https://github.com/daronyondem/agent-cockpit/actions/runs/41954476405)
+for head `9fb54f7` records clean PR merge revision `88fd464`, Node 22.23.4 and
+SDK 1.0.28. Both Ubuntu 24.04 x64 (`copilot-sdk-compat-t2gCB7`) and macOS 15
+arm64 (`copilot-sdk-compat-T3gQum`) pass all 34 SDK cases with native CLI 1.0.105
+and protocol 3. Ubuntu Chromium passes 40 cases (`cockpit-copilot-ui-VzWe3e`,
+68 SDK launches), extending Ubuntu evidence beyond the earlier JSONL suite.
+
+The initial Windows SDK job failed 33 cases at headless startup. The native
+fixture had stripped OS initialization variables along with credentials;
+preserving the OS environment while isolating auth restored startup. A second
+failure exposed Windows cleanup returning before wrapper close. After awaiting
+that close, [run 41959562270](https://github.com/daronyondem/agent-cockpit/actions/runs/41959562270/job/127022547483)
+passes all **33 applicable Windows SDK cases**, with one POSIX wrapper case
+skipped. Report `copilot-sdk-compat-UBnntO` records CLI 1.0.105 / protocol 3 /
+SDK 1.0.28 / Node 22.23.4 / clean merge revision `a722ecc7` / exit 0 (source
+head `f5dbe5e`). Ubuntu and macOS SDK jobs each pass 34 cases on that run.
+
+The initial coverage job passed 3,052 tests but missed the statement/line gate
+at 88.81% against 88.85%. Additional HTTP and Windows completion regressions
+retain the same floors. Browser follow-ups retain streaming state through mobile
+abort completion, await persisted summaries and wait for discovered goal controls
+before submitting native goals. These CI fixes preserve the documented feature
+limits; they do not add independent accounts or hosted qualification. The
+[testing specification](../spec-testing.md#copilot-published-ci-evidence) and
+[PR checks](https://github.com/daronyondem/agent-cockpit/pull/571/checks) retain
+qualification details and current quality-gate status.
+
+Passing fixed-model SDK/browser results do not establish successful hosted auth,
+account entitlement/billing, two-account/keychain isolation or the full
+application workflows on Windows/Linux. Historical paragraphs above retain the
+evidence available at their earlier checkpoints; this published snapshot
+updates their platform boundary without changing capability claims.
+
+## Owner-reported hosted validation — 2026-11-05
+
+[The PR owner's report](https://github.com/daronyondem/agent-cockpit/pull/571#issuecomment-6658673116)
+tests clean `9cb25d6933038a10c24de76cb267bc411723459b`, Agent Cockpit 0.4.166,
+CLI 1.0.105 / SDK 1.0.28 / Node 25.9.0 / macOS 26.7.1 arm64. This used the
+normal hosted provider, existing shared terminal credentials, and an isolated
+app without custom-provider/injected-token overrides. Chrome's version and the
+account plan/organization policy were not recorded. The PWA was a narrow macOS
+browser, not a physical phone. No repository changes were made during that run.
+
+These manual observations extend the earlier local-provider evidence; they do
+not turn older failed account probes into successful OAuth tests.
+
+| Scenario | Reported result and precise scope |
+| --- | --- |
+| Shared login/access | PASS: 20 enabled models, hosted replies, access after app restart, and normal terminal `TERMINAL-OK`. Browser/device OAuth challenge completion is unconfirmed. |
+| Models/admission | PASS: `gpt-6.1-sol` / Low and repaired `gpt-6-sol` / Low selections persist. Invalid saved selection returns API/UI 400 before any saved user message, active stream or native session, without substitution. |
+| Chat, tools, files, Stop | PASS on web and narrow PWA: hosted replies, real source reads/output writes, reload/context recall, retained files, confirmed heartbeat cancellation and immediate follow-up without replay. |
+| Native questions | PASS on both clients: choosing a native answer card resumes the same work. |
+| Steering | Web PASS on explicit retest; narrow PWA FAIL during a running command. The earlier interrupted web attempt is unclassified. Neither idle delivery nor the passing retest resolves the failure. |
+| Delegation | PASS: two hosted read-only tasks, grouped child tools/results and summaries after reload. Narrow PWA retained-card viewing passes; live PWA delegation was not run. |
+| Goals | PASS for native set/status/natural completion on `auto`. Pause → reload → fresh-limit Resume was not run. |
+| Usage/context/quota | Two controlled turns including reload/resume add two premium requests and about 1.94447 explicit AI credits; input/output/cache-read/cache-write deltas +6/+16/+26752/+6639. Context stays separate at 17523/272000, USD unavailable, and fresh native quota with unknown units remains unknown. Observation consistency, not a billing audit. |
+| Memory/Context | PASS: actual Memory MCP save/search/persistence; maintenance folds a synthetic fact into Context, removes the consumed inbox entry, retains other entries, and a fresh chat recalls it through Context. |
+| KB | PASS: markdown ingestion/digestion, retained entries and actual KB MCP exact/keyword recall with a source citation. Embedding quality is unqualified. |
+| Routine | PASS: explicitly enabled workspace, proposal, manual-only run with notifications off, correct inputs/output and retained history/files. Scheduling/notification delivery is unqualified. |
+| Media | PASS: explicit hosted `gpt-6.1-sol` describes three yellow circles on blue; image thumbnail/preview and ordinary delivered files survive reload. No general PDF/image-generation qualification. |
+
+The hosted steering reproduction uses an existing conversation with earlier
+chat/tool work, `gpt-6.1-sol` / Low, and a foreground
+`node -e "setTimeout(()=>console.log('WAIT_DONE'),60000)"`. While it runs, the
+user explicitly selects Steer with: `Correction: after the current command
+finishes, reply exactly PWA-STEERED instead. Do not start another command.`
+Instead of the corrected reply, the persisted terminal error is
+`{message:"No response was returned. Send your message again to retry.",source:"backend"}`.
+No active stream or queued messages remain, and no automatic resend was made.
+The `/input` status/native delivery trace was not captured. `backend` is the
+application's default source for an error without a more specific source; it
+does not identify the defect's origin. Authentication/catalog access succeeded.
+The finding remains open and is not established as PWA-only.
+
+The local follow-up adds native and desktop/PWA cases that warm a conversation
+with a real shell tool, resume it, steer during a running second tool, then
+cold-resume without replay. CLI 1.0.105 moves the foreground command into the
+background on immediate steering; an automatic read/completion can add another
+root response. These cases check actual correction consumption and shell
+execution counts instead of assuming one model response. Fixed replies and a
+release-file worker control the timing; they do not reproduce hosted model
+reasoning or establish a fix for the reported no-response error.
+
+The extended native run `copilot-sdk-compat-c6QMWO` passes all 36 cases, including
+300 ms and 61-second completion delays after steering. It records CLI 1.0.105 /
+SDK 1.0.28 / protocol 3 / Node 22.23.4 / macOS arm64 / source `d1d4675` with
+uncommitted follow-up changes. A fresh local shared-auth/catalog probe at
+2026-11-05 16:16 UTC still reports authenticated credentials but HTTP 403 and no
+available models. It performs no inference and changes no login. The owner did
+not record an account identity/policy, so these are separate observations and
+must not be presented as the same account's contradictory results.
+
+Unconfirmed/not-run cases remain full OAuth authorization, hosted goal
+pause/reload/fresh-limit resume, physical-device PWA, live PWA delegation,
+expired/revoked/denied real credentials, and a second account. Profiles still
+share native authentication. Plan mode, Goal Clear, hosted SDK PDF and native
+image-generation gates are unchanged. The isolated hosted app/PM2 manager was
+stopped, its port closed, and its test data/shared login preserved.

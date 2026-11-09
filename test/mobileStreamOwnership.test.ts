@@ -6,6 +6,7 @@ const sockets: any[] = [];
 function socket() { const value: any = { readyState: 1, close: jest.fn(() => value.onclose?.()), send: jest.fn() }; sockets.push(value); return value; }
 const events = loadMobileModule('chatStreamEvents.ts');
 const { useChatStreamConnection } = loadFrontendModule('mobile/AgentCockpitPWA/src/useChatStreamConnection.ts', { react: require('react'), './chatStreamEvents': events,
+  './liveToolActivities': loadMobileModule('liveToolActivities.ts'), './liveArtifacts': loadMobileModule('liveArtifacts.ts'),
   './appModel': { tryCreateWebSocket: socket, streamReconnectDelayMs: () => 1000 }, './useMobileLifecycle': { useVisibleStreamResume: () => {} } }, { window, WebSocket: { OPEN: 1, CONNECTING: 0 } });
 
 test('mobile reconnect keeps decision ownership, clears matched completions, and ignores superseded sockets', async () => {

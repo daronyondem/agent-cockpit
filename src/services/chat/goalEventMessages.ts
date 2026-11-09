@@ -90,6 +90,7 @@ export function goalEventDedupeKey(event: GoalEvent): string {
     event.status || '',
     event.objective || '',
     event.reason || '',
+    ...(event.backend === 'copilot' ? [event.goal?.threadId || event.goal?.sessionId || '', event.goal?.objectiveId ?? ''] : []),
   ].join('|');
 }
 
@@ -150,6 +151,6 @@ function goalStatusTitle(status: ThreadGoalStatus): string {
 }
 
 function normalizeGoalBackend(backendId: string): ThreadGoalBackend | undefined {
-  if (backendId === 'codex' || backendId === 'claude-code' || backendId === 'grok-build') return backendId;
+  if (backendId === 'codex' || backendId === 'claude-code' || backendId === 'grok-build' || backendId === 'copilot') return backendId;
   return undefined;
 }

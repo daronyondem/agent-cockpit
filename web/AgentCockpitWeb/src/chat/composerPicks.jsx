@@ -10,7 +10,7 @@ import { backendIdForProfile, cliHarnessForBackend, isClaudeBackend } from './ch
    Values flush to the server with the next /message POST (see StreamStore.send).
    Each chip wraps a transparent native <select> so we get native dropdown
    UX, keyboard/a11y for free, and the chip's styled shell. */
-export default function ComposerPicks({ convId, backends, cliProfiles, composerCliProfileId, composerBackend, composerModel, composerEffort, composerClaudeCodeMode, composerServiceTier, profileLocked, disabled }){
+export default function ComposerPicks({ convId, backends, cliProfiles, onProfileMetadata, composerCliProfileId, composerBackend, composerModel, composerEffort, composerClaudeCodeMode, composerServiceTier, profileLocked, disabled }){
   const activeProfiles = Array.isArray(cliProfiles) ? cliProfiles.filter(p => p && !p.disabled && (hasRequiredCliProfileConfig(p) || p.id === composerCliProfileId)) : [];
   const exactProfile = activeProfiles.find(p => p.id === composerCliProfileId) || null;
   const canRepairMissingProfile = profileLocked && !!composerCliProfileId && !exactProfile;
@@ -27,8 +27,17 @@ export default function ComposerPicks({ convId, backends, cliProfiles, composerC
   const [catalogs, loadProfileBackend] = useProfileBackends();
   const profileBackend = catalogs[selectedProfileKey];
   React.useEffect(() => {
-    if (selectedProfileId) loadProfileBackend(selectedProfileId, selectedProfileKey);
-  }, [selectedProfileId, selectedProfileKey, loadProfileBackend]);
+    if (!selectedProfileId) return;
+    loadProfileBackend(selectedProfileId, selectedProfileKey);
+    if (selectedProfile?.harness !== 'copilot') return;
+    const refresh = () => loadProfileBackend(selectedProfileId, selectedProfileKey, true);
+    const timer = window.setInterval(refresh, 60_000);
+    window.addEventListener('focus', refresh);
+    return () => { window.clearInterval(timer); window.removeEventListener('focus', refresh); };
+  }, [selectedProfileId, selectedProfileKey, selectedProfile?.harness, loadProfileBackend]);
+  React.useEffect(() => {
+    onProfileMetadata?.({ profileId: selectedProfileId, backend: profileBackend || null });
+  }, [selectedProfileId, profileBackend, onProfileMetadata]);
   React.useEffect(() => {
     if (!canChangeProfile || !selectedProfileId || !effectiveBackendId) return;
     if (composerCliProfileId !== selectedProfileId || composerBackend !== effectiveBackendId) {
@@ -46,14 +55,15 @@ export default function ComposerPicks({ convId, backends, cliProfiles, composerC
   const fallbackModel = profileMetadataPending
     ? null
     : (backendModels.find(m => m.default) || backendModels[0] || null);
-  const pendingModel = (profileMetadataPending || effectiveBackendId === 'cortex-code') && composerModel
-    ? { id: composerModel, label: composerModel }
+  const unavailableModel = effectiveBackendId === 'copilot' && !profileMetadataPending && composerModel && !modelFromCatalog;
+  const pendingModel = (profileMetadataPending || effectiveBackendId === 'cortex-code' || unavailableModel) && composerModel
+    ? { id: composerModel, label: composerModel + (unavailableModel ? ' (unavailable)' : '') }
     : null;
   const model = modelFromCatalog
     || pendingModel
     || fallbackModel
     || null;
-  const modelOptions = (profileMetadataPending || effectiveBackendId === 'cortex-code') && !modelFromCatalog && pendingModel
+  const modelOptions = (profileMetadataPending || effectiveBackendId === 'cortex-code' || unavailableModel) && !modelFromCatalog && pendingModel
     ? [{ value: pendingModel.id, label: modelDisplayLabel(pendingModel), disabled: true }]
     : backendModels.map(m => ({ value: m.id, label: modelDisplayLabel(m) + costTierDot(m.costTier) }));
   if (!profileMetadataPending && pendingModel && !modelFromCatalog) modelOptions.push(...backendModels.map(m => ({ value: m.id, label: modelDisplayLabel(m) })));
@@ -137,6 +147,7 @@ export default function ComposerPicks({ convId, backends, cliProfiles, composerC
           title="Model"
         />
       ) : null}
+      {backend?.modelCatalog?.source === 'fallback' ? <span className="meta" title={backend.modelCatalog.reason}>Fallback models</span> : null}
       {effortLevels.length > 0 ? (
         <PickChip
           label="Effort"

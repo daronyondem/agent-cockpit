@@ -684,7 +684,7 @@ Together these guarantee that a workspace index always parses on disk and that c
     id: string,                 // UUIDv4
     title: string,              // Auto-set from first user message (max 80 chars)
     titleManuallySet?: boolean, // true once `renameConversation()` has run. Locks the title against all automatic mutations (resetSession, addMessage's first-message snapshot, generateAndUpdateTitle). Absent when the title is still auto-managed.
-    backend: string,            // Internal backend id: 'claude-code' | 'claude-code-interactive' | 'kiro' | 'codex' | 'opencode' | 'grok-build'. Kept for back-compat and transcript rendering. Some backends share a physical CLI harness/profile.
+    backend: string,            // Internal backend id: 'claude-code' | 'claude-code-interactive' | 'kiro' | 'codex' | 'opencode' | 'grok-build' | 'copilot'. Kept for back-compat and transcript rendering. Some backends share a physical CLI harness/profile.
     cliProfileId?: string,      // Runtime CLI profile selected for this conversation. When present, runtime adapter selection is derived from Settings.cliProfiles[id].harness plus Claude Code's optional protocol while command/auth/config still come from the physical profile.
     model?: string,             // Full model ID (e.g. 'claude-opus-5[1m]', 'claude-fable-5', 'claude-sonnet-5', 'claude-haiku-4-5'); absent = backend default
     effort?: string,            // Adaptive reasoning effort: 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max' | 'ultra'; absent = model default. Supported values are backend/model-specific. Stale unsupported values are reconciled to `high` when available, then the first supported level, or removed when the model has no effort support.
@@ -732,9 +732,19 @@ Together these guarantee that a workspace index always parses on disk and that c
         longContextThresholdTokens?: number, // Present when token estimate used long-context rates.
         usdPerCredit?: number
       },
-      credits?: number,                // Kiro only: accumulated credits consumed (fractional)
+      credits?: number,                // Harness-specific accumulated Kiro credits or Copilot premium requests
       pricingTier?: string,            // Raw event pricing tier before aggregation; not meaningful on cumulative totals.
-      contextUsagePercentage?: number  // Kiro/Codex: context window usage snapshot (0–100)
+      contextUsagePercentage?: number, // Kiro/Codex/Copilot: context window snapshot (0–100)
+      contextWindow?: {                // Copilot measured snapshot; replace, never sum
+        status: 'available'|'unavailable', observedAt: string,
+        usedTokens?: number, tokenLimit?: number
+      },
+      copilot?: {                       // Separate from other harness credits and USD
+        tokensStatus: 'complete'|'partial'|'unavailable',
+        aiCreditsStatus: 'complete'|'partial'|'unavailable',
+        aiCredits?: number,             // Partial = reported subtotal; absent = unknown
+        premiumRequests?: number        // Native premium-request counter, independent of AI credits
+      }
     }|null,
     usageByBackend: {            // Per-backend usage breakdown (keyed by backend id)
       [backendId]: Usage
@@ -1059,14 +1069,14 @@ Audits are append-only review records. They do not change `snapshot.json` direct
   workspacePath: string,
   sources: [{
     id: 'agents' | 'claude' | 'kiro',
-    harness: 'codex' | 'claude-code' | 'kiro' | 'opencode' | 'grok-build',
+    harness: 'codex' | 'claude-code' | 'kiro' | 'opencode' | 'grok-build' | 'copilot',
     label: string,
     expectedPath: string,
     present: boolean,
     paths: string[]        // workspace-relative files detected for that source
   }],
   harnesses: [{
-    harness: 'codex' | 'claude-code' | 'kiro' | 'opencode' | 'grok-build' | 'cortex-code',
+    harness: 'codex' | 'claude-code' | 'kiro' | 'opencode' | 'grok-build' | 'cortex-code' | 'copilot',
     label: string,
     sourceId: 'agents' | 'claude' | 'kiro',
     expectedPath: string,
@@ -1123,7 +1133,7 @@ Detection is filesystem-based and read-only: `AGENTS.md` covers Codex, OpenCode,
                                 //   `contentBlocks` existed.
     tool: string,               // Tool name: 'Read', 'Write', 'Bash', 'Agent', etc.
     description: string,        // Human-readable description
-    id: string|null,            // Block ID from CLI event
+    id: string|null,            // Native block ID or adapter-scoped projection ID (Copilot scopes by turn/owner/raw ID)
     isAgent?: boolean,          // true for Agent tool invocations
     subagentType?: string,      // 'Explore', 'general-purpose', etc. (when isAgent)
     parentAgentId?: string,     // ID of parent agent (when tool runs inside a sub-agent)
@@ -1131,6 +1141,7 @@ Detection is filesystem-based and read-only: `AGENTS.md` covers Codex, OpenCode,
     duration: number|null,      // Estimated duration in milliseconds
     startTime: number,          // Unix timestamp ms when event was received
     outcome?: string,           // Short outcome summary (e.g. 'exit 0', '4 matches', 'not found')
+    summary?: string,           // Optional plain-text delegated result; Copilot caps at 4,000 chars plus ellipsis
     status?: string             // 'success' | 'error' | 'warning' (derived from tool result)
   }],
   contentBlocks?: ContentBlock[] // Assistant only. Ordered interleaving of text, thinking,
@@ -1283,7 +1294,9 @@ Ordering rules:
   prompts are **not** persisted as tool blocks (matching the existing
   `toolActivity[]` filtering behavior).
 - `tool_outcomes` patches the matching tool block in place by
-  `activity.id`, updating `outcome` and `status`.
+  `activity.id`, updating `outcome`, `status` and optional `summary`. The same
+  values persist in the legacy `toolActivity[]` projection. Missing summaries
+  leave prior values intact; existing sessions require no migration.
 
 ### Stream Error Events
 
@@ -1673,7 +1686,7 @@ type CliInstallMethod = 'npm-global' | 'self-update' | 'unknown' | 'missing';
 
 interface CliUpdateStatus {
   id: string;
-  harness: 'claude-code' | 'codex' | 'kiro' | 'opencode' | 'grok-build' | 'cortex-code';
+  harness: 'claude-code' | 'codex' | 'kiro' | 'opencode' | 'grok-build' | 'cortex-code' | 'copilot';
   label: string;
   command: string;
   resolvedPath: string | null;
@@ -1799,7 +1812,7 @@ is introduced. See [KB workflows](spec-cortex-code.md#knowledge-base-workflows-p
 }
 ```
 
-`cliProfiles` is the global list of runnable CLI harness identities. Fresh settings start with an empty `cliProfiles` array and no provider default; the app does not create a Claude Code profile until a user configures Claude Code, selects a Claude backend explicitly, or a legacy settings/conversation migration requires it ([ADR-0061](adr/0061-use-configured-cli-profiles-as-default-runtime.md)). The current implementation supports server-configured and account/custom profiles for Codex, Claude Code, and Grok Build, self-configured profiles for Kiro, and self-configured profiles for OpenCode ([ADR-0076](adr/0076-add-opencode-cli-profiles.md)). It resolves `cliProfileId → CliProfile` for command/auth/config plus the runtime communication path. Claude Code profiles also carry `protocol: "standard" | "interactive"`: `standard` maps to internal backend `claude-code`, while `interactive` maps to internal backend `claude-code-interactive`. `claude-code-interactive` is therefore not a separate profile harness; it shares `harness: "claude-code"` for `command`, `env`, `CLAUDE_CONFIG_DIR`, auth, plan usage, and CLI update targets.
+`cliProfiles` is the global list of runnable CLI harness identities. Fresh settings start with an empty `cliProfiles` array and no provider default; the app does not create a Claude Code profile until a user configures Claude Code, selects a Claude backend explicitly, or a legacy settings/conversation migration requires it ([ADR-0061](adr/0061-use-configured-cli-profiles-as-default-runtime.md)). The current implementation supports server-configured and account/custom profiles for Codex, Claude Code, and Grok Build, self-configured profiles for Kiro, self-configured profiles for OpenCode ([ADR-0076](adr/0076-add-opencode-cli-profiles.md)), and self-configured profiles for GitHub Copilot ([ADR-0093](adr/0093-add-github-copilot-cli-backend.md)). It resolves `cliProfileId → CliProfile` for command/auth/config plus the runtime communication path. Claude Code profiles also carry `protocol: "standard" | "interactive"`: `standard` maps to internal backend `claude-code`, while `interactive` maps to internal backend `claude-code-interactive`. `claude-code-interactive` is therefore not a separate profile harness; it shares `harness: "claude-code"` for `command`, `env`, `CLAUDE_CONFIG_DIR`, auth, plan usage, and CLI update targets.
 
 Claude Code profiles may also carry `claudeCode.provider`, normalized to `"anthropic"` when missing and currently either `"anthropic"` or `"bedrock"` ([ADR-0090](adr/0090-represent-claude-code-bedrock-as-a-cli-profile-provider.md)). Anthropic profiles use the static Claude Code model catalog, where `claude-sonnet-5-5` is the default and models such as `claude-opus-5-5[1m]` and `claude-sonnet-5-5` support `low`, `medium`, `high`, `xhigh`, and `max` effort. Bedrock profiles keep AWS/Claude runtime values in the existing `env` object (`CLAUDE_CODE_USE_BEDROCK`, `AWS_REGION`/`AWS_DEFAULT_REGION`, `AWS_PROFILE`, bearer-token env vars, etc.) and store model routing separately at `claudeCode.bedrock.inferenceProfiles[]`. Each inference profile row is `{ id, name, inferenceProfileId, baseModelId?, default? }`: `name` is the user-facing model label, `inferenceProfileId` is the exact Bedrock inference profile ID or ARN passed to Claude Code as `--model`, `baseModelId` optionally points at a known static Claude model such as `claude-opus-5[1m]` or `claude-fable-5` so Agent Cockpit can inherit capabilities/effort metadata, and only one row can be default. `SettingsService.saveSettings()` trims row strings, drops all-empty rows, generates stable missing row IDs from the name/profile id, keeps only the first `default:true`, and marks the first row default when none is selected.
 
@@ -2557,3 +2570,28 @@ Chat request upload references are optional `{name}` objects in the browser-safe
 stream contract. Actual attachment paths/kinds/sizes come from the server upload
 directory. Existing message wire text and persisted queued AttachmentMeta objects
 are unchanged; this adds no on-disk schema or migration.
+
+### Copilot native goal fields
+
+`ThreadGoal` (server declaration `src/types/goals.ts`, browser contract
+`src/contracts/responses.ts`) accepts `backend:'copilot'` and optional
+`objectiveId:number`, `aiCreditLimit:number|null`, `aiCreditsUsed:number|null`.
+The ID is native and session-local; credit fields describe the native objective
+window and are separate from token counters and USD. Unreported time/timestamps
+are omitted. Supported actions are clear:false, stopTurn/pause/resume:true.
+`ResumeGoalRequest` and `parseGoalAiCreditLimit` in `src/contracts/goals.ts`
+share the explicit positive-finite resume window across server and clients.
+See [native control/projection semantics](spec-backend-services.md#copilot-native-goals-copilotgoalsts).
+
+### Copilot tool output lineage
+
+Copilot uses the existing ConversationArtifact and artifact ContentBlock shapes;
+no migration or new browser frame is introduced. `sourceToolId` is the scoped
+`copilot:<turn UUID>:<owner/raw ID pair>` tool ID. Explicit native image/resource
+bytes are copied to `chat/artifacts/<conversationId>/`; resource URI basenames
+are sanitized by the shared store and other names include a SHA256 prefix.
+Overlapping native views are deduplicated within each tool. Distinct subsequent
+tools/turns may intentionally produce separate files; normal store collision
+suffixing is preserved. Backend base64 payloads and native resource URIs are not
+stored as browser-frame artifact descriptors. Saved blocks retain path, filename,
+kind, size, MIME, title and sourceToolId after Stop or reload.

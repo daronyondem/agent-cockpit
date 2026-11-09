@@ -56,7 +56,7 @@ test('desktop resets identical question/plan drafts for a fresh decision and bin
 test.each(['plan', 'question'])('mobile %s controls disable all submissions while a reply is pending', async kind => {
   const onSubmit = jest.fn();
   await act(async () => root.render(createElement(Mobile, { backend: { id: 'cortex-code', label: 'CoCo', capabilities: { planMode: true, planRevision: true } },
-    interaction: { kind, prompt: 'Fixture', options: [{ label: 'Blue' }] }, answer: 'Blue', respondPending: true, setAnswer: jest.fn(), onSubmit })));
+    interaction: { kind, prompt: 'Fixture', options: [{ label: 'Blue' }] }, answer: 'Blue', pending: true, setAnswer: jest.fn(), onSubmit })));
   expect(Array.from(container.querySelectorAll('button')).every(node => node.disabled)).toBe(true);
   expect(container.querySelector('textarea')!.disabled).toBe(true);
   await act(async () => Array.from(container.querySelectorAll('button')).forEach(node => node.click())); expect(onSubmit).not.toHaveBeenCalled();

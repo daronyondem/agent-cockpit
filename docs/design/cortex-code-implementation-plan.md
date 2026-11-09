@@ -1,6 +1,6 @@
 # Cortex Code (CoCo) harness implementation plan
 
-**Status:** Implemented macOS arm64/CoCo 1.2.35 core and tool-enabled background scope, P7/P8 C48–C51 and C54–C59 autonomous review/verification complete. Windows x64 runtime preparation is implemented with simulated tests. C35 strict Memory is implemented/certified on the exact macOS arm64 distribution. Three acceptance items remain: C26 human OAuth, C52 native Ubuntu and C53 native Windows. No release has been published.
+**Status:** Implemented macOS arm64/CoCo 1.2.35 core and tool-enabled background scope, P7/P8 C48–C51 and C54–C59 autonomous review/verification complete. Windows x64 runtime preparation is implemented with simulated tests. C35 strict Memory is implemented/certified on the exact macOS arm64 distribution. Three acceptance items remain: C26 human OAuth, C52 native Ubuntu and C53 native Windows. Review is open in [PR #581](https://github.com/daronyondem/agent-cockpit/pull/581). No release has been published.
 **Created:** 2026-11-05.
 **Planning baseline:** Agent Cockpit `0.4.166`, revision `11d14825e955f6c83364c3917558b4d3068a4bac`, plus the uncommitted CoCo research/guidance documents.
 **Native compatibility baseline:** Cortex Code `1.2.35`, distribution `1.2.35+191333.f82de3d91715`, macOS arm64.
@@ -289,7 +289,7 @@ Image one-shot transport is added only after the actual one-shot path passes;
 model `input.image:true` is independently required. Do not mark every returned
 model image-capable because the ACP server advertises image content support.
 
-Proposed ADR-0093 records optional `BackendCapabilities.oneShot` role support
+Proposed ADR-0099 records optional `BackendCapabilities.oneShot` role support
 (`restrictedText`, `toolEnabled`, `sequential`) and `planRevision`, with steering
 distinguished from pending replies. Add these fields in P1 with shared contracts.
 Existing adapters retain existing
@@ -319,7 +319,7 @@ fixtures. This intentionally skips ambient plugins/global skills/user MCP and
 plugin auto-update without modifying user config. Project/bundled skills remain;
 ordinary tools and selected Snowflake auth are retained. Verify effective hooks,
 delegation and discovery behavior in adapter acceptance; these switches do not
-establish restricted processor isolation. See Proposed ADR-0093 and the research
+establish restricted processor isolation. See Proposed ADR-0099 and the research
 follow-up for installed-source evidence that direct ACP dispatch bypasses the
 main binary updater. Do not prepend unsupported global update flags.
 
@@ -588,7 +588,7 @@ Do not publish a half-registered harness as usable before core gates pass.
 
 Phase 0 evidence: seven versioned excerpts in `test/fixtures/cortex/1.2.35`,
 the real `scripts/probe-cortex-phase0.ts` run on 2026-11-05, and
-[Proposed ADR-0093](../adr/0093-integrate-cortex-code-through-its-native-acp-interface.md).
+[Proposed ADR-0099](../adr/0099-integrate-cortex-code-through-its-native-acp-interface.md).
 Read the [research follow-up](../research/cortex-code-acp-evaluation.md#phase-0-follow-up--2026-11-05)
 for results and limitations. C02 completion records experiments and scope
 decisions; it does not close the production release gates below.
@@ -1515,9 +1515,25 @@ P7 C47 evidence (November 7 local / November 8 UTC, 2026; changes following
   authorized; follow normal release notes/release workflow separately.
   **Complete for the requested autonomous scope:**
   [ADR/mobile assessment and local PR text](cortex-code-review.md) prepared;
-  ADR-0093 remains Proposed until merge under ADR-0001. No new mobile source/
+  ADR-0099 remains Proposed until merge under ADR-0001. No new mobile source/
   schema or flow in this batch. No PR/push/merge/release/normal-server restart
   performed. C26, conditional C35 and native C52/C53 remain unchecked.
+
+### Main reconciliation — 2026-11-09
+
+- [x] Reconcile the CoCo branch with `main` at `6cbbb3b`, retaining Copilot SDK
+  behavior and current release/security dependencies. Resolve all shared
+  registration/profile/input/client/spec conflicts; renumber CoCo's Proposed
+  ADR to 0099 without changing Accepted Copilot ADRs.
+- [x] Verify shared auth admission/draining, separate decision/request ownership,
+  profile-local controls and retained mobile drafts/queues. Full backend coverage
+  passes 224 suites / 3,581 tests with raised floors; Copilot native SDK/auth and
+  all 42 desktop/mobile browser cases pass. Selected CoCo native runtime and
+  interaction/queue/saved-auth probes pass. Exact reports and scope are in
+  [the integration checkpoint](../spec-testing.md#cococopilot-main-integration-2026-11-09).
+
+PR #581 carries this integration; release and the C26/C52/C53 acceptance gates
+remain separate.
 
 ## 10. Verification plan
 
@@ -1607,7 +1623,7 @@ or release is required to validate this planning document.
 | G9 — Managed runtime policy | Implemented dedicated adapter/plugin/auth/processor ownership; C54/C55 enabled native catalogs passed | Keep exact ACP/update prefixes, shared auth, explicit discovery, private shims, physical executable pin and version drift review | Supported scoped macOS runtime; no tool sandbox, upgrade containment or unverified hook/delegation certification |
 | G10 — Snowflake billing | Token/cache/context supported; account cost/quota explicitly deferred by C56 | Attributable native/documented usage and account reconciliation, including units/cache/Auto semantics | No USD estimate/account panel; unavailable pricing is not free usage |
 
-Proposed ADR-0093 records the implemented ownership/contracts and remains
+Proposed ADR-0099 records the implemented ownership/contracts and remains
 Proposed until merge under ADR-0001. C56's explicit deferrals and unlock criteria
 are in [the capability decision record](../research/cortex-code-capability-decisions.md).
 [C59 review preparation](cortex-code-review.md) records mobile/ADR review and
