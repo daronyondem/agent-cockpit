@@ -48,6 +48,8 @@ export function resolveCliCommandForRuntime(
     return existing || { command, displayCommand: command };
   }
 
+  if (harness === 'cortex-code') return resolveWindowsCortexCommand(command, env);
+
   const explicit = resolveExplicitWindowsCommand(command, harness, env);
   if (explicit) return explicit;
 
@@ -61,6 +63,22 @@ export function resolveCliCommandForRuntime(
     windowsCmdShim: true,
     displayCommand: command,
   };
+}
+
+/** CoCo ships a standalone executable, not an npm/Node shim. */
+function resolveWindowsCortexCommand(command: string, env: NodeJS.ProcessEnv): CliCommandResolution {
+  env = Object.fromEntries(Object.entries(env).map(([key, value]) => [key.toUpperCase(), value]));
+  if (command.includes('/') || command.includes('\\')) {
+    return { command, displayCommand: command };
+  }
+  if (/\.(?:cmd|bat|ps1|js)$/i.test(command)) return { command, displayCommand: command };
+  const executable = /\.exe$/i.test(command) ? command : `${command}.exe`;
+  const candidates = [
+    ...(/^cortex(?:\.exe)?$/i.test(command) && env.LOCALAPPDATA ? [joinForBase(env.LOCALAPPDATA, 'cortex', executable)] : []),
+    ...windowsPathDirs(env).map(dir => joinForBase(dir, executable)),
+  ];
+  const found = candidates.find(candidate => { try { return fs.statSync(candidate).isFile(); } catch { return false; } });
+  return { command: found || executable, displayCommand: found || executable };
 }
 
 export function windowsCliCommandCandidates(

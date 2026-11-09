@@ -877,8 +877,9 @@ Focused suites:
   removal on failed/cancelled polls. The test module loader accepts optional globals
   to exercise browser timers directly.
 
-Existing CLI auth/service/profile suites remain regression gates. Auth/runtime
-fixture suites follow the POSIX resolver gate and skip native Windows; TOML
+Existing CLI auth/service/profile suites remain regression gates. POSIX
+shebang auth/runtime fixtures skip Windows; the separate C53 simulated-platform
+suites cover Windows runtime behavior. TOML
 symlink checks are POSIX-only because Windows symlink privileges are optional.
 These guards do not establish native Windows support. For native
 saved-login/browser compatibility after building web/mobile assets:
@@ -1468,3 +1469,34 @@ roots, metadata, retained C55 workflow scope, type/lint/spec/ADR/budget checks
 and residual gates are recorded in [the final review](design/cortex-code-review.md#final-c58-validation).
 This review does not certify C26, C35, native Ubuntu/Windows, physical devices,
 new CLI versions or the deferred C56 feature set.
+
+## CoCo Windows runtime preparation (C53)
+
+Native Windows acceptance remains open. The implementation and native checklist
+are in [Windows acceptance preparation](research/cortex-code-windows-acceptance.md).
+
+- `test/cortexWindows.test.ts`: simulated Windows x64 standalone/explicit/PATH
+  discovery, literal argv, environment casing and forced controls, shared/custom
+  auth homes, synthetic OAuth with post-login verification, passive import,
+  responding Install Doctor and manual install/update policy.
+- `test/cortexWindowsLaunch.test.ts`: pinned executable/version/ACP ownership,
+  hidden non-detached piped startup, abort and failed-negotiation draining.
+- `test/cortexWindowsProcess.test.ts`: identity-only snapshot parsing, held-handle
+  script construction, detached/reused/older/unrelated identity handling,
+  enumeration/helper failures, surviving owners and idempotent stop. PowerShell
+  is mocked; script assertions do not prove actual Windows execution.
+- Existing runtime/process/login/auth/connection/migration/update/doctor and
+  Windows/macOS installer/release/private-Node wrapper tests remain regressions.
+  Invalid migrated Windows CoCo commands become per-target errors before any
+  version command, rather than aborting the whole CLI Update check.
+
+No web/mobile source, API, persisted schema or PWA metadata changes. Full Jest
+must finish before rebuilding assets or running native browser checks. The
+existing native CoCo catalogs remain macOS-scoped; no Windows pass is implied.
+
+C53's final frozen full V8 passes 183 suites / 3,028 tests (20 opt-in tests
+skipped): 88.75% statements/lines, 77.21% branches, 93.94% functions. Floors are
+88.74/77.12/93.90. Focused Windows/macOS regressions pass 20 suites / 219 tests;
+the final three Windows-specific suites pass 21 cases. The follow-up in
+[the implementation review](design/cortex-code-review.md#c53-autonomous-follow-up-2026-11-09)
+records exact native subset scope and remaining gates.

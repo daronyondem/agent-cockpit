@@ -9,7 +9,9 @@ const STABLE_VERSION_URL = 'https://sfc-repo.snowflakecomputing.com/cortex-code-
 
 /** Updating the shared executable never adopts a profile's auth home or secrets. */
 export function resolveCortexUpdateRuntime(profile: CliProfile, cwd: string): { command: string; env: NodeJS.ProcessEnv } {
-  const env = { ...process.env, ...(profile.env?.PATH ? { PATH: profile.env.PATH } : {}), CORTEX_CHANNEL: 'stable' };
+  const searchPath = process.platform === 'win32'
+    ? Object.entries(profile.env || {}).filter(([key]) => key.toUpperCase() === 'PATH').at(-1)?.[1] : profile.env?.PATH;
+  const env = { ...process.env, ...(searchPath ? { PATH: searchPath } : {}), CORTEX_CHANNEL: 'stable' };
   const resolved = resolveCliCommandForRuntime('cortex-code', profile.command?.trim() || 'cortex', env).command;
   const command = resolved.includes('/') || resolved.includes('\\') ? path.resolve(cwd, resolved)
     : (env.PATH || '').split(path.delimiter).map(dir => path.resolve(dir, resolved)).find(candidate => {

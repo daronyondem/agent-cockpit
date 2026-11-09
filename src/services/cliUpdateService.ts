@@ -298,6 +298,9 @@ export class CliUpdateService {
   private async _probeTarget(target: CliRuntimeTarget): Promise<CliUpdateStatus> {
     const base = this._emptyStatus(target);
     try {
+      if (target.harness === 'cortex-code' && process.platform === 'win32' && !/\.exe$/i.test(target.command)) {
+        throw new Error('Cortex Code on Windows requires a standalone .exe command');
+      }
       const versionOut = await this._execTarget(target, this._versionArgs(target.harness), EXEC_TIMEOUT_MS);
       const currentVersion = parseVersion(versionOut);
       const resolvedPath = await this._resolveCommand(target);

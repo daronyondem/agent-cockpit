@@ -350,7 +350,7 @@ export class InstallDoctorService {
 
   private async checkCortex(): Promise<InstallDoctorCheck> {
     const actions = this.actionsForCheck('cortex-cli', false);
-    if (!cortexInstallCommand()) return check('cortex-cli', 'Cortex Code (CoCo) CLI', 'warning', false,
+    if (!cortexInstallCommand() && !(process.platform === 'win32' && process.arch === 'x64')) return check('cortex-cli', 'Cortex Code (CoCo) CLI', 'warning', false,
       'Cortex Code runtime is not certified on this platform.', undefined, 'See the official installation guidance. Native platform acceptance is pending.', actions);
     const runtime = resolveCliCommandForRuntime('cortex-code', 'cortex');
     const result = await this.commandRunner(runtime.command, ['--no-auto-update', '--version'], { cwd: this.appRoot, timeoutMs: 5_000 });

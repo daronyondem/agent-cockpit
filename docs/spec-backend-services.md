@@ -1368,8 +1368,12 @@ for exact contracts and remaining adapter/client enforcement boundaries.
 CoCo's P2 internal modules now implement strict JSONL transport
 (`cortexProtocol.ts`), direct executable/env/version/startup and single-session
 ownership (`cortexRuntime.ts`), per-conversation leases/discovery/reset/idle and
-reusable shutdown generations (`cortexSessions.ts`), and identity-checked POSIX
-descendant cleanup (`cortexProcess.ts`). Domain shapes live in `src/types/cortex.ts`.
+reusable shutdown generations (`cortexSessions.ts`), and identity-checked
+descendant cleanup (`cortexProcess.ts`, with Windows PowerShell/handle operations
+in `cortexWindowsProcess.ts`). Windows x64 runtime/discovery/doctor/auth paths
+have simulated-platform coverage; native C53 acceptance is pending. Windows
+CoCo uses standalone executables, manual install/update and case-insensitive
+environment/auth-home handling. Domain shapes live in `src/types/cortex.ts`.
 These modules have no production Grok/Kiro dependency. `CortexCodeAdapter` is
 now registered in server.ts for chat. Session creation and catalog discovery
 are not authentication checks. The [CoCo runtime spec](spec-cortex-code.md#native-transport-and-runtime-ownership)

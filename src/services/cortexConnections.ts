@@ -9,7 +9,9 @@ const MAX_FILE_BYTES = 1024 * 1024;
 export const CORTEX_DEFAULT_BROWSER_TIMEOUT = 120_000;
 
 export function cortexSnowflakeHome(env: NodeJS.ProcessEnv = process.env): string {
-  return path.resolve((env.SNOWFLAKE_HOME || path.join(os.homedir(), '.snowflake')).replace(/^~(?=\/|$)/, os.homedir()));
+  const home = process.platform === 'win32'
+    ? Object.entries(env).filter(([key]) => key.toUpperCase() === 'SNOWFLAKE_HOME').at(-1)?.[1] : env.SNOWFLAKE_HOME;
+  return path.resolve((home || path.join(os.homedir(), '.snowflake')).replace(/^~(?=[\\/]|$)/, os.homedir()));
 }
 
 /** Only names and setup capability cross the API; native credentials stay here. */

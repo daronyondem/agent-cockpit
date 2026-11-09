@@ -8,7 +8,7 @@ import { CortexSessions } from '../src/services/backends/cortexSessions';
 import { CortexCodeAdapter } from '../src/services/backends/cortex';
 import { BackendRegistry } from '../src/services/backends/registry';
 
-// The deterministic executable is a POSIX shebang fixture; Windows launch is gated.
+// The deterministic executable is a POSIX shebang fixture; Windows has separate launch tests.
 const runtimeSuite = process.platform === 'win32' ? describe.skip : describe;
 runtimeSuite('CoCo POSIX runtime foundations', () => {
   let dir: string;
@@ -74,16 +74,11 @@ runtimeSuite('CoCo POSIX runtime foundations', () => {
     expect(runtime.version).toBe('1.2.35');
   });
 
-  test('resolution rejects invalid profiles/platform and command absence without leaking values', () => {
+  test('resolution rejects invalid profiles and command absence without leaking values', () => {
     expect(() => resolveCortexRuntime({ ...options, profile: { ...profile, disabled: true } })).toThrow('enabled');
     expect(() => resolveCortexRuntime({ ...options, profile: { ...profile, cortexCode: undefined } })).toThrow(/connection/);
     expect(() => resolveCortexRuntime({ ...options, profile: { ...profile, command: '/private/no-such-command' } })).toThrow('executable is unavailable');
     expect(() => resolveCortexRuntime({ ...options, profile: { ...profile, command: 'missing-cortex-processor', env: { PATH: dir } } })).toThrow('executable was not found');
-    const platform = Object.getOwnPropertyDescriptor(process, 'platform')!;
-    try {
-      Object.defineProperty(process, 'platform', { value: 'win32' });
-      expect(() => resolveCortexRuntime(options)).toThrow('not certified');
-    } finally { Object.defineProperty(process, 'platform', platform); }
   });
 
   test('version/protocol failures are bounded and cleaned up', async () => {

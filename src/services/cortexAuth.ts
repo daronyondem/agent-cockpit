@@ -179,7 +179,7 @@ export class CortexAuth {
 
   private scope(profile: CliProfile): string {
     if (isSetupAccountCliProfile(profile)) return this.connections.home;
-    return profile.configDir ? path.resolve(profile.configDir.replace(/^~(?=\/|$)/, os.homedir()))
+    return profile.configDir ? path.resolve(profile.configDir.replace(/^~(?=[\\/]|$)/, os.homedir()))
       : cortexSnowflakeHome({ ...process.env, SNOWFLAKE_HOME: this.connections.home, ...profile.env });
   }
 

@@ -3,8 +3,10 @@ import { startCortexLogin, type CortexLoginCallbacks } from '../src/services/cor
 import { CortexProcessScope } from '../src/services/backends/cortexProcess';
 
 describe('Cortex native PTY login ownership', () => {
-  afterEach(() => jest.restoreAllMocks());
-  test('uses manual shared auth without a shell, owns its descendants, and stops idempotently', async () => {
+  const platform = Object.getOwnPropertyDescriptor(process, 'platform')!;
+  afterEach(() => { jest.restoreAllMocks(); Object.defineProperty(process, 'platform', platform); });
+  test.each(['darwin', 'win32'])('uses manual shared auth without a shell, owns descendants, and stops idempotently on %s', async target => {
+    Object.defineProperty(process, 'platform', { value: target });
     let onData!: (text: string) => void;
     let onExit!: (event: { exitCode: number }) => void;
     const dataDispose = jest.fn(), exitDispose = jest.fn(), write = jest.fn();

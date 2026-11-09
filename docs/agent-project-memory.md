@@ -153,6 +153,18 @@ tool is unavailable.
 
 ## Optional CLI Installations
 
+- CoCo C53 Windows x64 runtime preparation is implemented: standalone
+  `%LOCALAPPDATA%\cortex\cortex.exe`/PATH/explicit discovery, hidden direct ACP,
+  case-insensitive env/auth ownership and focused `cortexWindowsProcess.ts`
+  CIM creation snapshots/held-handle termination. Snapshotting must not hide
+  access-denied owners; cleanup failures reject draining. Windows install/update
+  remain manual; preserve other harness private-Node wrappers and appDir/macOS
+  behavior. Simulated tests and passing macOS runtime/queue subsets do not close
+  native Windows PowerShell/ConPTY/auth/process/update acceptance. C26, C35, C52
+  and C53 remain open. See `docs/research/cortex-code-windows-acceptance.md` and
+  the C53 follow-up in `docs/design/cortex-code-review.md`.
+  Durable note: `notes/note_2026-11-09T11-23-24-140Z_cortex-code-c53-windows.md`.
+
 - CoCo optional Install Doctor/Welcome policy is owned by
   `src/services/cortexInstallation.ts`: use the official standalone installer,
   stable/noninteractive/skip-PATH invocation and fresh version detection after

@@ -14,6 +14,8 @@ PNG OCR, KB, Workspace Context, Routines and production desktop/mobile browser
 workflows have native acceptance. Strict Memory, native goals/subagents/steering,
 additional media, billing and account isolation remain gated/deferred. Native
 Ubuntu/Windows and physical-device acceptance are separate.
+Windows x64 runtime implementation and simulated-platform tests are now present;
+native C53 acceptance remains pending. See [Windows preparation](research/cortex-code-windows-acceptance.md).
 The actual remote-browser setup
 through Cockpit is still an open acceptance gate (C26).
 See [the implementation tracker](design/cortex-code-implementation-plan.md),
@@ -1107,12 +1109,30 @@ processor.
 `resolveCortexRuntime(options)` requires an enabled CoCo profile with the P1
 validated connection, a workspace ID and cwd. It resolves cwd to an absolute
 path, uses the profile command override or `cortex`, and invokes the existing
-POSIX CLI command resolver (PATH and common install locations). The discovered
+shared CLI command resolver (PATH/common POSIX locations or the Windows
+standalone executable). The discovered
 executable is pinned to an absolute path. Its real path, size and mtime are part
 of the runtime fingerprint, so replacing the native install invalidates reuse.
 An invalid/missing executable fails without echoing its path or profile values.
-Windows runtime launch is explicitly refused in this phase. macOS arm64 is the
-native acceptance baseline; Linux launch code remains uncertified.
+Windows x64 resolves `%LOCALAPPDATA%\cortex\cortex.exe` before PATH, accepts
+explicit `.exe` paths and custom executable names, and rejects script shims.
+Version and ACP launch use that captured realpath, literal argv and hidden
+console options; Windows does not use detached POSIX process groups. Windows
+environment keys are normalized case-insensitively with managed controls last.
+Auth-home reservation and passive import follow the same native home casing.
+Install Doctor can detect Windows CoCo, while install remains manual and managed
+updates stay macOS-only. Invalid Windows update commands are reported before
+execution. Windows arm64/32-bit is refused. macOS arm64 remains the native
+acceptance baseline; Windows and Linux launch code are uncertified.
+
+`cortexWindowsProcess.ts` provides Windows parent/creation snapshots and
+handle-checked individual termination to `cortexProcess.ts`. Descendants remain
+tracked after root exit; reused PIDs/older parent relationships do not authorize
+termination. It invokes system PowerShell with hidden noninteractive encoded
+scripts and exports identity metadata only. Enumeration/kill failure or known
+survivors reject cleanup. No POSIX group signal or unchecked tree kill is used
+on Windows. Simulated tests do not prove PowerShell/ConPTY behavior; see the
+[native completion checklist](research/cortex-code-windows-acceptance.md).
 
 The child receives the server environment plus profile overrides. Force
 `CORTEX_ENABLE_MEMORY=0`, `CORTEX_ACP_TEST_MODE=0`, and `CORTEX_OAUTH_MANUAL=1`.
@@ -1476,7 +1496,7 @@ Native CLI compatibility suites are not replaced by these foundation tests.
 `src/services/cortexInstallation.ts` owns the official distribution command and
 platform action policy. Install Doctor exposes optional `cortex-cli` alongside
 other harnesses; Welcome includes the check and preserves the dedicated CoCo
-setup panel. Detection resolves `cortex` using the shared POSIX runtime resolver
+setup panel. Detection resolves `cortex` using the shared runtime resolver
 and invokes `--version` on every refresh, including `~/.local/bin` when absent
 from PATH. A responding Cortex version is executable evidence only, never a
 successful login or compatibility certification. Profile command overrides

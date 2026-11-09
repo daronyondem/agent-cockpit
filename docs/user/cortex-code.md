@@ -2,7 +2,9 @@
 
 Agent Cockpit supports Cortex Code as a CLI harness through native ACP. The
 tested baseline is **CoCo 1.2.35 on macOS arm64**. Native Ubuntu and Windows
-acceptance is pending; Windows runtime support is not implemented. Physical
+acceptance is pending; Windows x64 runtime code is implemented with simulated
+tests and remains uncertified. Windows installation and updates are manual.
+Physical
 iOS/Android devices and newer CLI releases are not certified by these tests.
 
 ## Install and select a profile

@@ -35,11 +35,13 @@ test('a missing restored executable is actionable and never falls back to the sh
   expect((await checkCortexMigrationProfile(profile, root)).message).toContain('executable/runtime is unavailable');
 });
 
-test('native Windows remains unavailable rather than claiming runtime compatibility', async () => {
+test('a restored POSIX command remains unavailable on Windows without executing it', async () => {
   const platform = Object.getOwnPropertyDescriptor(process, 'platform')!;
+  const arch = Object.getOwnPropertyDescriptor(process, 'arch')!;
   Object.defineProperty(process, 'platform', { value: 'win32' });
+  Object.defineProperty(process, 'arch', { value: 'x64' });
   try { expect((await checkCortexMigrationProfile(profile, root)).message).toContain('executable/runtime is unavailable'); }
-  finally { Object.defineProperty(process, 'platform', platform); }
+  finally { Object.defineProperty(process, 'platform', platform); Object.defineProperty(process, 'arch', arch); }
 });
 
 test.each(['missing', 'invalid', 'other', 'symlink'])('reports %s native connections with no credential contents', async kind => {

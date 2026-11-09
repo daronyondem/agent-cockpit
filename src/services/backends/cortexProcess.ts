@@ -3,6 +3,7 @@ import { promisify } from 'util';
 import { setTimeout as delay } from 'timers/promises';
 import { logger } from '../../utils/logger';
 import type { CortexProcessIdentity } from '../../types';
+import { readCortexWindowsProcesses, killCortexWindowsProcesses } from './cortexWindowsProcess';
 
 const exec = promisify(execFile);
 
@@ -13,19 +14,20 @@ export function parseCortexProcessTable(text: string): CortexProcessIdentity[] {
   });
 }
 
-/** POSIX ownership tracker; detached native shells may outlive the CLI root. */
+/** Native shells may outlive the CLI root on either platform. */
 export class CortexProcessScope {
   private identities = new Map<number, CortexProcessIdentity>();
   private timer?: NodeJS.Timeout;
   private scanning: Promise<CortexProcessIdentity[]> | null = null;
   private stopping: Promise<void> | null = null;
+  private windows = process.platform === 'win32';
 
   constructor(private child: Pick<ChildProcess, 'pid' | 'exitCode' | 'signalCode' | 'kill'>) {}
 
   watch(): void {
     if (this.timer || this.stopping || !this.child.pid) return;
-    void this.scan();
-    this.timer = setInterval(() => { void this.scan(); }, 250);
+    void this.scan().catch(() => {});
+    this.timer = setInterval(() => { void this.scan().catch(() => {}); }, this.windows ? 1_000 : 250);
     this.timer.unref();
   }
 
@@ -39,13 +41,13 @@ export class CortexProcessScope {
   private async terminate(): Promise<void> {
     if (!this.child.pid) return;
     let table = await this.scan();
-    this.signal(table, 'SIGTERM');
+    await this.signal(table, 'SIGTERM');
     const deadline = Date.now() + 2_000;
     while (this.owned(table).length && Date.now() < deadline) {
       await delay(100);
       table = await this.scan();
     }
-    this.signal(table, 'SIGKILL');
+    await this.signal(table, 'SIGKILL');
     const killedDeadline = Date.now() + 1_000;
     while (this.owned(table).length && Date.now() < killedDeadline) {
       await delay(100);
@@ -53,14 +55,16 @@ export class CortexProcessScope {
     }
     const survivors = this.owned(table).length;
     if (survivors) logger.warn('Cortex process cleanup has surviving owned processes', { survivors });
+    if (survivors && this.windows) throw new Error('Cortex Windows process cleanup is incomplete');
   }
 
   private owned(table: CortexProcessIdentity[]): CortexProcessIdentity[] {
     return table.filter(item => this.identities.get(item.pid)?.started === item.started);
   }
 
-  private signal(table: CortexProcessIdentity[], signal: NodeJS.Signals): void {
+  private async signal(table: CortexProcessIdentity[], signal: NodeJS.Signals): Promise<void> {
     const alive = this.owned(table);
+    if (this.windows) { await killCortexWindowsProcesses(alive); return; }
     // Only signal a whole group when its current leader is verified as ours.
     const groups = new Set(alive.filter(item => alive.some(owner => owner.pid === item.group)).map(item => item.group));
     for (const group of groups) { try { process.kill(-group, signal); } catch { /* already exited */ } }
@@ -69,16 +73,17 @@ export class CortexProcessScope {
 
   private scan(): Promise<CortexProcessIdentity[]> {
     if (this.scanning) return this.scanning;
-    this.scanning = exec('ps', ['-axo', 'pid=,ppid=,pgid=,lstart='], { timeout: 750, maxBuffer: 8 * 1024 * 1024 })
-      .then(({ stdout }) => {
-        const table = parseCortexProcessTable(stdout);
+    const snapshot = this.windows ? readCortexWindowsProcesses()
+      : exec('ps', ['-axo', 'pid=,ppid=,pgid=,lstart='], { timeout: 750, maxBuffer: 8 * 1024 * 1024 }).then(({ stdout }) => parseCortexProcessTable(stdout));
+    this.scanning = snapshot.then(table => {
         const root = table.find(item => item.pid === this.child.pid);
         if (root && this.child.exitCode === null && this.child.signalCode === null && !this.identities.has(root.pid)) this.identities.set(root.pid, root);
         const owned = new Set(this.owned(table).map(item => item.pid));
         let changed = true;
         while (changed) {
           changed = false;
-          for (const item of table) if (owned.has(item.parent) && !owned.has(item.pid)) {
+          for (const item of table) if (owned.has(item.parent) && !owned.has(item.pid)
+            && (!this.windows || BigInt(item.started) >= BigInt(this.identities.get(item.parent)!.started))) {
             owned.add(item.pid); this.identities.set(item.pid, item); changed = true;
           }
         }
@@ -86,9 +91,11 @@ export class CortexProcessScope {
       }).catch(() => {
         // Enumeration failure cannot authorize signals to remembered/reused PIDs.
         if (this.stopping && this.child.exitCode === null && this.child.signalCode === null && this.child.pid) {
-          try { process.kill(-this.child.pid, 'SIGKILL'); } catch { this.child.kill('SIGKILL'); }
+          if (this.windows) this.child.kill('SIGKILL');
+          else { try { process.kill(-this.child.pid, 'SIGKILL'); } catch { this.child.kill('SIGKILL'); } }
         }
         logger.warn('Cortex process enumeration failed');
+        if (this.windows && this.stopping) throw new Error('Cortex Windows process cleanup could not verify ownership');
         return [];
       }).finally(() => { this.scanning = null; });
     return this.scanning;

@@ -16,7 +16,7 @@ const failed: CliAuthCheckResult = { profileId: 'setup-cortex-code-account', har
   status: 'not-authenticated', output: '', error: 'Login required.' };
 const passed: CliAuthCheckResult = { ...failed, authenticated: true, status: 'ok', output: 'Fresh inference verified.' };
 
-// The production resolver deliberately gates native Windows runtime launch.
+// These fixtures use POSIX shebang commands; Windows has separate simulated tests.
 const authSuite = process.platform === 'win32' ? describe.skip : describe;
 authSuite('Cortex auth job ownership and lifecycle', () => {
   let dir: string;

@@ -1,6 +1,6 @@
 # Cortex Code (CoCo) harness implementation plan
 
-**Status:** Implemented macOS arm64/CoCo 1.2.35 core and tool-enabled background scope, P7/P8 C48–C51 and C54–C59 autonomous review/verification complete. Four items remain: C26 human OAuth, conditional C35 zero-tool Memory, C52 native Ubuntu and C53 Windows runtime/native acceptance. No PR or release has been published.
+**Status:** Implemented macOS arm64/CoCo 1.2.35 core and tool-enabled background scope, P7/P8 C48–C51 and C54–C59 autonomous review/verification complete. Windows x64 runtime preparation is implemented with simulated tests. Four acceptance items remain: C26 human OAuth, conditional C35 zero-tool Memory, C52 native Ubuntu and C53 native Windows. No PR or release has been published.
 **Created:** 2026-11-05.
 **Planning baseline:** Agent Cockpit `0.4.166`, revision `11d14825e955f6c83364c3917558b4d3068a4bac`, plus the uncommitted CoCo research/guidance documents.
 **Native compatibility baseline:** Cortex Code `1.2.35`, distribution `1.2.35+191333.f82de3d91715`, macOS arm64.
@@ -1414,6 +1414,21 @@ P7 C47 evidence (November 7 local / November 8 UTC, 2026; changes following
   process tree/update tests. Respect official standalone packaging and existing
   private-Node wrappers for other harnesses; preserve appDir activation and
   current-user PM2 behavior. Mock resolver tests alone do not certify Windows.
+  **Implementation preparation complete:** standalone `%LOCALAPPDATA%\cortex`
+  and PATH/explicit `.exe` discovery; hidden direct version/ACP launch;
+  case-insensitive layered env/auth-home ownership; Windows descendant snapshots
+  and handle-checked termination; responding Install Doctor detection; synthetic
+  OAuth/fresh-check orchestration and passive migration/update policy coverage.
+  Script shims/unsupported Windows architectures are rejected; invalid migrated
+  commands remain individual update errors without execution. Install and
+  managed updates remain manual on Windows. Existing appDir activation and
+  other harness wrappers are unchanged. No Windows native execution occurred;
+  keep C53 unchecked. See [Windows acceptance preparation](../research/cortex-code-windows-acceptance.md).
+  Final local verification: 183 suites / 3,028 tests pass with raised coverage
+  floors (88.74 statements/lines, 77.12 branches, 93.90 functions). Focused
+  Windows/macOS regressions and native macOS runtime (1/3 selected) and UI queue
+  (1/5 selected) subsets pass; both clients rebuilt after final Jest and meet budget.
+  Exact follow-up results are in [the review](cortex-code-review.md#c53-autonomous-follow-up-2026-11-09).
 
 ### P9 — Compatibility suites, parity research, and release
 

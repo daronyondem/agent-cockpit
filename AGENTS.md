@@ -436,6 +436,20 @@ credential-store behavior and new-login acceptance remain separate C52 gates;
 the prepared runner alone does not certify them or enable managed Linux updates.
 See `docs/research/cortex-code-linux-acceptance.md`.
 
+C53 Windows x64 runtime preparation uses the shared CLI resolver for standalone
+`%LOCALAPPDATA%\cortex\cortex.exe`, PATH and explicit `.exe` commands. Never
+route CoCo through npm/Node/script shims. Normalize Windows child env and auth
+scope case-insensitively; keep managed controls last and shared terminal auth.
+Windows identity snapshots/handle-checked termination belong to
+`cortexWindowsProcess.ts`; do not use POSIX groups or unchecked tree kills.
+Cleanup failures must reject draining rather than authorize new work. Review
+`test/cortexWindows.test.ts`, `test/cortexWindowsLaunch.test.ts` and
+`test/cortexWindowsProcess.test.ts` alongside runtime/process/auth/doctor/update/
+migration suites. Native PowerShell/ConPTY/auth/process/update acceptance is
+still pending; simulated tests do not close C53. Keep Windows install/update
+manual, other harness private-Node wrappers and appDir/macOS activation intact.
+See `docs/research/cortex-code-windows-acceptance.md`.
+
 C54 consolidated native commands are `CORTEX_CODE_E2E=1 npm run e2e:cortex-code`
 and `CORTEX_CODE_E2E=1 npm run e2e:cortex-code-ui`. Use `-- --list` without
 opt-in to inspect their catalogs; `-- --probe <id>` is a selected-scope run.

@@ -15,7 +15,7 @@ section.
 | Authentication | Create-only native TOML, shared terminal credentials, native manual OAuth/PTY, exact callback generation/state/issuer/owner and fresh inference. Human remote handoff C26 and account isolation remain unclaimed. |
 | Chat and clients | Existing REST/WS/storage/artifact facades; opaque decision ownership, queues/Stop/reconnect, context vs token usage, unavailable cost, scoped attachments and invocation-only OCR overrides. |
 | Processors | Explicit tool-enabled selection and one deadline, no retry/replay, headless human gates fail, missing saved choices retained. Strict Memory stays unavailable; governed chat Memory uses another eligible processor. |
-| Platform lifecycle | Optional official standalone install, narrow proven macOS update layout, passive full-bundle import checks and reserved runtime exclusions. Ubuntu preparation is not a native pass; Windows runtime remains unimplemented. |
+| Platform lifecycle | Optional official standalone install, narrow proven macOS update layout, passive full-bundle import checks and reserved runtime exclusions. Ubuntu preparation is not a native pass. Windows x64 runtime is implemented with simulated tests; native acceptance remains pending and install/update remain manual. |
 | Compatibility and reporting | Isolated synthetic data, PM2 browser fixtures, fixed native checks, bounded deadlines/cleanup and private raw evidence. A subset pass or expected-auth failure is never full capability/auth certification. |
 
 ADR-0093 describes these ownership boundaries, rejected alternatives and
@@ -40,8 +40,9 @@ outside acceptance. Full Jest must finish before rebuilding/browser probes.
 - C26: a human completes the real remote-browser OAuth handoff through Cockpit.
 - C35/G1: a complete native zero-tool boundary, then real strict Memory workflows.
 - C52: actual Ubuntu 24.04 x64 install/auth/user-service/cache/update/cleanup.
-- C53: native Windows runtime implementation and executable/auth/process/update
-  acceptance, preserving other harness wrappers and macOS behavior.
+- C53: native Windows executable/auth/PowerShell/ConPTY/process/update acceptance.
+  Runtime implementation and simulated tests are complete; other harness wrappers
+  and appDir activation are unchanged. See [Windows preparation](../research/cortex-code-windows-acceptance.md).
 - C56 features are explicitly deferred: native goals/subagent cards/steering,
   broader media/generation, billing and account isolation. This is a scope
   decision, not feature implementation. See [unlock criteria](../research/cortex-code-capability-decisions.md).
@@ -110,3 +111,45 @@ no Codex native suite is invented as part of this validation.
 C56–C59 review/preparation is complete with the four tracker items C26, C35,
 C52 and C53 still open. ADR-0093 stays Proposed. PR text is ready locally;
 publication, merge and release remain separate requested actions.
+
+## C53 autonomous follow-up (2026-11-09)
+
+Windows x64 runtime implementation and simulated-platform verification are
+complete within [the preparation scope](../research/cortex-code-windows-acceptance.md).
+Standalone discovery, literal hidden launch, case-insensitive env/auth ownership,
+passive doctor/import/update handling and focused Windows process cleanup are
+implemented. Native Windows PowerShell/ConPTY/auth/process/install/update
+acceptance is still pending; C53 stays unchecked. Windows install/update remain
+manual. No other harness wrapper, appDir activation, mobile source, persisted
+schema or PWA behavior changes.
+
+Final frozen full V8: **183 suites / 3,028 tests passed**, 3 opt-in suites / 20
+tests skipped, 88.75% statements/lines (56,136/63,247), 77.21% branches
+(13,488/17,467) and 93.94% functions (2,857/3,041). Coverage floors are raised to
+88.74% statements/lines and 77.12% branches; functions remain 93.90%. The focused
+20-suite/219-test Windows/macOS regression run and final Windows-specific
+3-suite/21-test run pass. Backend/web/mobile types, zero-warning lint,
+maintainability, spec and ADR checks pass.
+
+Fresh native macOS runtime subset **1/1, selected 1/3** passed on retained
+1.2.35+191333.f82de3d91715:
+`/tmp/cockpit-cortex-backend-compat-ggqgeH/compatibility-report.json`.
+It records c51c44e with dirty working-tree state, owned process/private PM2 drain,
+unchanged native activation/executable and fresh authenticated inference.
+Events/processors were omitted; this is not a full catalog pass. C53 runtime
+changes mean the earlier C55 report remains historical workflow evidence,
+rather than a fresh complete-workflow acceptance claim for this tree.
+
+After final Jest, both production clients rebuilt and the native desktop/mobile
+queue subset **1/1, selected 1/5** passed:
+`/tmp/cockpit-cortex-ui-compat-tkx841/compatibility-report.json`.
+It covers Stop/descendant drain, reconnect, preserved queues and explicit resume
+without interrupted-work replay. Auth/interactions/usage/mobile catalogs were
+omitted. Metadata records the same retained CLI, macOS arm64, c51c44e/dirty,
+owned/private PM2 drain and unchanged native activation/executable. Desktop
+assets meet budget: JS 913.8/914 KiB, CSS 202.3/230 KiB. These scoped native
+passes do not close C26/C35/C52/C53 or certify every workflow/platform.
+
+Durable Memory note saved before updating the project mirror:
+`notes/note_2026-11-09T11-23-24-140Z_cortex-code-c53-windows.md`.
+Working changes are local; no PR, release, production restart or version bump.

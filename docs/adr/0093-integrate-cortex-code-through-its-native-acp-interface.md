@@ -7,6 +7,11 @@ supersedes: []
 superseded-by: null
 tags: [backends, profiles, protocol, authentication]
 affects:
+  - src/services/backends/cortexWindowsProcess.ts
+  - test/cortexWindows.test.ts
+  - test/cortexWindowsLaunch.test.ts
+  - test/cortexWindowsProcess.test.ts
+  - docs/research/cortex-code-windows-acceptance.md
   - scripts/probe-cortex-macos.ts
   - src/services/cortexMigration.ts
   - src/services/dataMigrationService.ts
@@ -388,6 +393,11 @@ required evidence is recorded in the capability decision document.
 - Initial evidence is macOS arm64 only. Native Windows/Linux, account isolation,
   additional media, goals/subagents and billing require separate certification.
 - Userspace descendant polling has observation races; it is not OS containment.
+- C53 Windows x64 preparation resolves standalone executables and normalizes
+  environment/auth-home casing without changing other harness wrappers. Windows
+  snapshots/held-handle termination live in `cortexWindowsProcess.ts`, with no
+  unchecked tree kills. Simulated tests do not certify native PowerShell,
+  ConPTY, auth or update behavior; Windows install/update remain manual.
 - C59 reviews the implemented ownership/contracts and mobile impact. This ADR
   remains Proposed until merge under ADR-0001; completing implementation or
   local acceptance does not mark it Accepted or certify residual gates.
@@ -397,6 +407,7 @@ required evidence is recorded in the capability decision document.
 - [Implementation tracker](../design/cortex-code-implementation-plan.md)
 - [Authenticated native evaluation](../research/cortex-code-acp-evaluation.md)
 - [Capability decisions](../research/cortex-code-capability-decisions.md)
+- [Windows preparation and native gates](../research/cortex-code-windows-acceptance.md)
 - [User setup and limits](../user/cortex-code.md)
 - [Phase 0 native probe](../../scripts/probe-cortex-phase0.ts)
 - [Versioned wire excerpts](../../test/fixtures/cortex/1.2.35/README.md)

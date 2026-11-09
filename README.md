@@ -148,7 +148,7 @@ passkeys, recovery codes, and optional legacy OAuth compatibility.
 | **Kiro** | `kiro-cli` | Fully supported |
 | **OpenCode** | `opencode` | Fully supported, self-configured provider credentials |
 | **Grok Build** | `grok` | Supported; verified on macOS, Windows/Linux validation pending |
-| **Cortex Code (CoCo)** | `cortex` | Verified on 1.2.35/macOS arm64; Ubuntu acceptance pending; Windows runtime unavailable |
+| **Cortex Code (CoCo)** | `cortex` | Verified on 1.2.35/macOS arm64; Ubuntu acceptance pending; Windows x64 runtime implemented, native acceptance pending |
 
 See [BACKENDS.md](BACKENDS.md) and [docs/user/backends.md](docs/user/backends.md)
 for feature differences, auth notes, and setup guidance.

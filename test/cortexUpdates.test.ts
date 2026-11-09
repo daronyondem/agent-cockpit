@@ -127,6 +127,13 @@ describe('CoCo standalone updates', () => {
     expect(fetcher).not.toHaveBeenCalled();
   });
 
+  test('invalid Windows commands stay visible without executing a migrated script or breaking update checks', async () => {
+    Object.defineProperty(process, 'platform', { value: 'win32' });
+    settings.cliProfiles![0].command = 'C:\\old install\\cortex.cmd';
+    expect(await check()).toMatchObject({ updateSupported: false, installMethod: 'unknown', lastError: expect.stringContaining('standalone .exe') });
+    expect(exec).not.toHaveBeenCalled(); expect(fetcher).not.toHaveBeenCalled();
+  });
+
   test('rejects wrappers, custom aliases, foreign symlinks, mismatched metadata and unknown updater versions', () => {
     const alias = path.join(root, 'custom cortex'); fs.symlinkSync(command, alias);
     expect(cortexInstalledUpdateVersion(alias)).toBeNull();

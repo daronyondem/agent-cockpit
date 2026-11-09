@@ -14,26 +14,33 @@ import { CortexProcessScope } from './cortexProcess';
 
 const exec = promisify(execFile);
 export function resolveCortexRuntime(options: CortexSessionOptions): CortexRuntimeConfig {
-  if (process.platform === 'win32') throw new Error('Cortex runtime requires POSIX; native Windows support is not certified');
+  if (process.platform === 'win32' && process.arch !== 'x64') throw new Error('Cortex Code Windows runtime requires x64');
   const { profile } = options;
   if (profile.harness !== 'cortex-code' || profile.disabled) throw new Error('An enabled Cortex Code profile is required');
   const config = parseCortexCodeProfileConfig(profile.cortexCode);
   const shared = isSetupAccountCliProfile(profile);
   const overrides = Object.fromEntries(Object.entries(profile.env || {}).filter(([key]) => !shared || key.toUpperCase() !== 'SNOWFLAKE_HOME'));
-  const env: NodeJS.ProcessEnv = {
-    ...process.env, ...overrides, ...options.managedEnv, CORTEX_ENABLE_MEMORY: '0', CORTEX_ACP_TEST_MODE: '0', CORTEX_OAUTH_MANUAL: '1',
-  };
-  if (!shared && profile.configDir?.trim()) env.SNOWFLAKE_HOME = path.resolve(profile.configDir.replace(/^~(?=\/|$)/, os.homedir()));
+  const env: NodeJS.ProcessEnv = {};
+  for (const layer of [process.env, overrides, options.managedEnv || {},
+    { CORTEX_ENABLE_MEMORY: '0', CORTEX_ACP_TEST_MODE: '0', CORTEX_OAUTH_MANUAL: '1' }]) for (const [key, value] of Object.entries(layer)) {
+    // Windows env names are case-insensitive; Node otherwise keeps one of two
+    // differently-cased PATH/auth/managed keys according to lexical order.
+    const name = process.platform === 'win32' ? key.toUpperCase() : key;
+    env[name] = value;
+  }
+  if (!shared && profile.configDir?.trim()) env.SNOWFLAKE_HOME = path.resolve(profile.configDir.replace(/^~(?=[\\/]|$)/, os.homedir()));
   const resolved = resolveCliCommandForRuntime('cortex-code', profile.command?.trim() || 'cortex', env);
+  if (process.platform === 'win32' && !/\.exe$/i.test(resolved.command)) throw new Error('Cortex Code on Windows requires a standalone .exe command');
   // Pin the discovered executable; auth directories never participate in discovery.
-  const command = resolved.command.includes('/') ? path.resolve(resolved.command)
-    : (env.PATH || '').split(path.delimiter).map(dir => path.resolve(dir, resolved.command)).find(candidate => {
+  const command = resolved.command.includes('/') || resolved.command.includes('\\') ? path.resolve(resolved.command)
+    : (env.PATH || '').split(process.platform === 'win32' ? ';' : path.delimiter).map(dir => path.resolve(dir, resolved.command)).find(candidate => {
       try { fs.accessSync(candidate, fs.constants.X_OK); return fs.statSync(candidate).isFile(); } catch { return false; }
     });
   if (!command) throw new Error('Cortex Code executable was not found');
   let executable: { path: string; size: number; modified: number };
   try {
     const stat = fs.statSync(command);
+    if (!stat.isFile()) throw new Error('Not a file');
     fs.accessSync(command, fs.constants.X_OK);
     executable = { path: fs.realpathSync(command), size: stat.size, modified: stat.mtimeMs };
   } catch { throw new Error('Cortex Code executable is unavailable'); }
@@ -52,7 +59,7 @@ export function resolveCortexRuntime(options: CortexSessionOptions): CortexRunti
 
 export async function cortexVersion(config: CortexRuntimeConfig, signal?: AbortSignal): Promise<string> {
   try {
-    const { stdout } = await exec(config.command, ['--no-auto-update', '--version'], { cwd: config.cwd, env: config.env, timeout: 20_000, maxBuffer: 64 * 1024, signal });
+    const { stdout } = await exec(config.command, ['--no-auto-update', '--version'], { cwd: config.cwd, env: config.env, timeout: 20_000, maxBuffer: 64 * 1024, signal, windowsHide: true });
     const version = stdout.match(/\bCortex Code v(\d+\.\d+\.\d+(?:[+.-][\w.-]+)?)/)?.[1];
     if (!version) throw new Error('Unexpected version');
     return version;
@@ -126,7 +133,7 @@ export class CortexRuntime {
 export async function startCortexRuntime(config: CortexRuntimeConfig, onClient?: (client: CortexAcpClient) => void, signal?: AbortSignal): Promise<CortexRuntime> {
   const version = await cortexVersion(config, signal);
   if (signal?.aborted) throw new Error('Cortex startup cancelled');
-  const child = spawn(config.command, config.args, { cwd: config.cwd, env: config.env, detached: true, stdio: ['pipe', 'pipe', 'pipe'] });
+  const child = spawn(config.command, config.args, { cwd: config.cwd, env: config.env, detached: process.platform !== 'win32', windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] });
   const scope = new CortexProcessScope(child);
   const client = new CortexAcpClient(child, () => scope.stop());
   scope.watch();
