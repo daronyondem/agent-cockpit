@@ -7,6 +7,8 @@ import { CortexRuntime, cortexVersion, resolveCortexRuntime, startCortexRuntime,
 import { CortexSessions } from '../src/services/backends/cortexSessions';
 import { CortexCodeAdapter } from '../src/services/backends/cortex';
 import { BackendRegistry } from '../src/services/backends/registry';
+import { cortexFixture } from './helpers/cortexFixtures';
+import type { CortexRpcMessage } from '../src/types';
 
 // The deterministic executable is a POSIX shebang fixture; Windows has separate launch tests.
 const runtimeSuite = process.platform === 'win32' ? describe.skip : describe;
@@ -235,10 +237,28 @@ runtimeSuite('CoCo POSIX runtime foundations', () => {
     const first = await sessions.acquire('one', options);
     const pending = sessions.acquire('late', options);
     const rejected = expect(pending).rejects.toThrow(/reset|stopped/);
-    registry.shutdownAll();
+    const stopped = registry.shutdownAll();
     await rejected;
-    await adapter.stopping;
+    await stopped;
     expect(first.client.isClosed).toBe(true);
     expect((await sessions.acquire('one', options)).client.isClosed).toBe(false);
   });
+});
+
+test('descendant scans run fast only while a prompt is pending', async () => {
+  const f = cortexFixture();
+  const pace = jest.fn();
+  const runtime = new CortexRuntime(f.client, '1.2.35', f.runtime.init, f.runtime.config, { pace });
+  runtime.sessionId = 'fixture-session';
+  expect(pace.mock.calls).toEqual([[false]]);
+  let prompt: CortexRpcMessage | undefined;
+  f.onRequest(request => { if (request.method === 'session/prompt') prompt = request; });
+  const pending = runtime.prompt([{ type: 'text', text: 'work' }], 0);
+  expect(pace.mock.calls.at(-1)).toEqual([true]);
+  while (!prompt) await new Promise(resolve => setImmediate(resolve));
+  f.send({ jsonrpc: '2.0', id: prompt.id, result: { stopReason: 'end_turn' } });
+  await pending;
+  await Promise.resolve();
+  expect(pace.mock.calls).toEqual([[false], [true], [false]]);
+  await f.client.close();
 });

@@ -5,6 +5,8 @@ import { cortexHasCompleteUsage } from './cortexUsage';
 /** Only locally authored, value-free validation messages may cross this boundary. */
 export class CortexInputError extends Error {}
 export class CortexMissingSessionError extends Error {}
+/** Locally authored, value-free inactivity watchdog stop. */
+export class CortexInactivityError extends Error {}
 
 /** Exact native load failure observed on 1.2.35; never classify connection/auth errors. */
 export function cortexMissingSession(error: unknown, sessionId: string, version: string): boolean {
@@ -35,6 +37,7 @@ export function cortexTerminalError(value: unknown, text: string, version: strin
 
 export function cortexRuntimeError(error: unknown): ErrorEvent {
   if (error instanceof CortexInputError) return { type: 'error', error: error.message, source: 'backend' };
+  if (error instanceof CortexInactivityError) return { type: 'error', error: error.message, source: 'transport' };
   if (error instanceof Error && error.message === 'Cortex ACP request timed out') {
     return { type: 'error', error: 'Cortex request timed out; its runtime was stopped.', source: 'transport' };
   }

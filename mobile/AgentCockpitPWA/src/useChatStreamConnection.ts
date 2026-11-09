@@ -180,7 +180,7 @@ export function useChatStreamConnection(options: UseChatStreamConnectionOptions)
   function applyChatStreamAction(conversationID: string, action: ChatStreamEventAction) {
     switch (action.type) {
       case 'complete-decision':
-        options.setPendingInteraction(current => current?.decisionId === action.decisionId ? null : current);
+        options.setPendingInteraction(current => current?.decisionBound && current.decisionId === action.decisionId ? null : current);
         break;
       case 'set-stream-placeholder':
         setShowStreamPlaceholder(action.value);
@@ -234,7 +234,8 @@ export function useChatStreamConnection(options: UseChatStreamConnectionOptions)
 
   function markStreamFinished(conversationID: string) {
     if (options.activeConversationRef.current?.id !== conversationID) return;
-    options.setPendingInteraction(current => current?.decisionId?.startsWith('cortex-decision:') ? null : current);
+    // Decision-bound cards cannot be answered after their turn ends.
+    options.setPendingInteraction(current => current?.decisionBound ? null : current);
     clearStreamReconnectTimer();
     streamReconnectAttemptsRef.current = 0;
     setIsStreaming(false);

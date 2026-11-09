@@ -37,6 +37,8 @@ export interface ToolActivityEvent {
   planAction?: 'enter' | 'exit';
   isQuestion?: boolean;
   questions?: ToolQuestion[];
+  /** Answerable only through the live turn; a matching outcome resolves it. */
+  decisionBound?: boolean;
 }
 
 export interface ToolOutcomesEvent {

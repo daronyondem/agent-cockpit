@@ -120,6 +120,22 @@ describe('CoCo profile persistence', () => {
     expect(await fs.readFile(path.join(dir, 'settings.json'), 'utf8')).toBe(original);
   });
 
+  test('repairs malformed stored configuration on read without weakening direct saves', async () => {
+    const extra = { ...profile({ id: 'coco-extra' }), cortexCode: { connection: 'work-connection', token: 'PRIVATE_VALUE' }, vendor: 'cortex-code', harness: undefined };
+    const empty = { ...profile({ id: 'coco-empty' }), cortexCode: { connection: '' } };
+    const valid = profile({ id: 'coco-valid' });
+    await fs.writeFile(path.join(dir, 'settings.json'), JSON.stringify({ ...settings, cliProfiles: [extra, empty, valid], defaultCliProfileId: empty.id }));
+    const warn = jest.spyOn(console, 'warn').mockImplementation(() => {});
+    let logged = '';
+    const loaded = await service.getSettings().finally(() => { logged = warn.mock.calls.flat().join('\n'); warn.mockRestore(); });
+    expect(logged).toContain('coco-extra'); expect(logged).toContain('coco-empty'); expect(logged).not.toContain('PRIVATE_VALUE');
+    expect(loaded.cliProfiles?.map(item => [item.id, item.cortexCode])).toEqual([
+      ['coco-extra', { connection: 'work-connection' }], ['coco-empty', undefined], ['coco-valid', { connection: 'work-connection' }]]);
+    expect(loaded.defaultCliProfileId).not.toBe(empty.id);
+    expect(await fs.readFile(path.join(dir, 'settings.json'), 'utf8')).not.toContain('PRIVATE_VALUE');
+    await expect(service.saveSettings({ ...settings, cliProfiles: [{ ...valid, cortexCode: { connection: '' } }] })).rejects.toThrow(/cortexCode/);
+  });
+
   test('migrates legacy identity and removes only setup-owned auth homes', async () => {
     const setup = { ...profile({ id: 'setup-cortex-code-account', authMode: 'account',
       configDir: '/old/setup-home', env: { snowflake_home: '/old/env-home', KEEP: 'yes' } }), vendor: 'cortex-code', harness: undefined };

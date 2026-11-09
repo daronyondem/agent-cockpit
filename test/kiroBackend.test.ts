@@ -711,12 +711,12 @@ describe('BackendRegistry with KiroAdapter', () => {
     expect(registry.getDefault()?.metadata.id).toBe('claude-code'); // First registered = default
   });
 
-  test('shutdownAll calls shutdown on all adapters', () => {
+  test('shutdownAll calls shutdown on all adapters', async () => {
     const registry = new BackendRegistry();
     const kiro = new KiroAdapter({ workingDir: '/tmp' });
     const shutdownSpy = jest.spyOn(kiro, 'shutdown');
     registry.register(kiro);
-    registry.shutdownAll();
+    await registry.shutdownAll();
     expect(shutdownSpy).toHaveBeenCalled();
   });
 });

@@ -33,10 +33,13 @@ function alive(pid: number): boolean {
   catch (error) { return (error as NodeJS.ErrnoException).code !== 'ESRCH'; }
 }
 
-/** Unknown owners, live/reused PIDs and incomplete startup records are retained. */
+/** Unknown owners, live/reused PIDs and incomplete startup records are retained.
+ * Best-effort: never rejects, because callers cache this once per process. */
 export async function pruneCortexPlugins(): Promise<void> {
   const root = os.tmpdir();
-  for (const name of await fs.readdir(root)) {
+  let names: string[];
+  try { names = await fs.readdir(root); } catch { return; }
+  for (const name of names) {
     if (!name.startsWith(PREFIX)) continue;
     const dir = path.join(root, name);
     try {

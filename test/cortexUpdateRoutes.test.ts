@@ -11,6 +11,7 @@ describe('CLI update route Cortex cleanup', () => {
     let release!: () => void, delivered = false;
     const shutdown = jest.spyOn(adapter, 'shutdown').mockImplementation(() => {
       adapter.stopping = new Promise(resolve => { release = resolve; });
+      return adapter.stopping;
     });
     try {
       const pending = env.request('POST', '/api/chat/cli-updates/cortex-code%3Afixture/update', {}).then(response => { delivered = true; return response; });
@@ -19,7 +20,7 @@ describe('CLI update route Cortex cleanup', () => {
       release(); const response = await pending;
       expect(response.status).toBe(success ? 200 : 400); expect(response.body.success).toBe(success);
     } finally {
-      release?.(); shutdown.mockRestore(); adapter.shutdown(); await adapter.stopping; await destroyChatRouterEnv(env);
+      release?.(); shutdown.mockRestore(); await adapter.shutdown(); await destroyChatRouterEnv(env);
     }
   });
 });

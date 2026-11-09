@@ -615,8 +615,10 @@ tool is unavailable.
 
 ## Process Management
 
-- `BackendRegistry.shutdownAll()` also runs after CLI updates, so adapter
-  shutdown must permit subsequent runtimes and close stale startups after reset.
+- `BackendRegistry.shutdownAll()` also runs after CLI updates and is awaited by
+  server shutdown and the update route, so adapter shutdown must permit
+  subsequent runtimes, return a Promise for asynchronous cleanup, and close
+  stale startups after reset.
 - Grok goal state reads require `sessionId` and workspace `cwd`; native subagent
   IDs differ from child session IDs. Keep fixture request validation strict.
   The macOS native suite covers questions/revised plans and goal

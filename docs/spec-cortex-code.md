@@ -193,7 +193,11 @@ The standalone-image metadata field `aiImagePrepared:true` marks a prepared
 CoCo sibling (format normalization and/or scaling); legacy preparation retains
 `downscaled:true`. No DB migration or conversion-record rewrite is performed.
 Deduplication still returns the original raw ID, preserves converted timestamps/
-bytes and adds locations without starting another conversion.
+bytes and adds locations without starting another conversion. Because CoCo
+catalog discovery starts a whole native runtime, ingestion reuses a profile's
+non-empty metadata for up to 60 seconds across raws (keyed by adapter, profile ID
+and profile snapshot without normalization timestamps). Failed or empty
+discovery is not reused, so the next raw discovers again.
 
 `convertImageToMarkdown` makes one attempt for a no-retry adapter and at most two
 for existing retry-enabled adapters. Both thrown failures and empty output obey
@@ -214,8 +218,11 @@ future user retries retain the existing service behavior.
 Dreaming and re-dreaming keep their existing operations validators, transactional
 application, topic Markdown materialization, run history, retrieval and KB MCP
 session lifetimes. For no-retry adapters, thrown execution errors are rethrown
-after the first call. Empty/whitespace output or any parser validation warning
-fails the batch before operations are applied or `needs_synthesis` is cleared.
+after the first call. Empty/whitespace output, or parser warnings with no usable
+parsed items (unparseable output, the wrong shape or every item invalid), fail
+the batch before operations are applied or `needs_synthesis` is cleared.
+Partially valid output is applied once, like other adapters: valid items proceed
+and per-item warnings are recorded as run errors; nothing is resent.
 Validation failures retain one raw-response debug record under `_dream_debug`;
 empty/execution failures are reported without a second call. Pending entries
 remain available for a later explicit run. Other adapters keep the previous
@@ -534,12 +541,16 @@ An idle queue exposes explicit Resume queue; successful resume removes only the
 queued item. Native work is not automatically retried. Fresh enqueue is an
 explicit action that clears that conversation's suspension, matching desktop.
 
-CoCo `tool_outcomes` use opaque `cortex-decision:` IDs. Desktop's pure stream
-reducer and mobile's internal complete-decision action clear only a matching
-pending card. A later decision survives old/replayed outcomes. This allows another
-client's answer and reconnect replay to resolve a completed card without an HTTP
-acknowledgement. Mobile terminal completion clears remaining CoCo cards; legacy
-harness decisions retain their existing post-turn message behavior. Socket
+CoCo question/plan `tool_activity` frames carry `decisionBound:true`, and their
+`tool_outcomes` reuse the opaque decision ID. Clients key off that frame flag,
+never the ID text. Desktop's pure stream reducer and mobile's internal
+complete-decision action clear only a matching decision-bound pending card; a
+card without the flag (for example a Claude question sharing its tool ID with an
+outcome) is never cleared this way. A later decision survives old/replayed
+outcomes. This allows another client's answer and reconnect replay to resolve a
+completed card without an HTTP acknowledgement. Mobile terminal completion
+clears remaining decision-bound cards; other harness decisions retain their
+existing post-turn message behavior. Socket
 open/message/error handlers check socket ownership; messages also require the
 active conversation. Late events from superseded sockets cannot clear a newer
 card, end its stream or schedule an obsolete reconnect.
@@ -707,7 +718,14 @@ No new instruction file or competing conversation store is created.
 
 Each adapter conversation has one active owner, reserved synchronously when
 `sendMessage` returns its stream/abort/input handles. Pool leases serialize
-native work; every exit releases the matching lease. `CortexTurn` alone owns
+native work; every exit releases the matching lease. Chat prompts carry no
+fixed request deadline (`timeoutMs:0`); Stop, reset and shutdown own
+cancellation. A one-hour inactivity watchdog (`idleTimeoutMs`) re-arms on every
+native message and accepted answer. While a human decision is pending it keeps
+waiting; otherwise it closes the runtime, awaits owned process cleanup before
+`done`, and reports a value-free "no progress" transport error. The next turn
+reloads the saved session in a fresh process. Processors keep their single
+positive deadline. `CortexTurn` alone owns
 the terminal `done` after delegation. Startup failures produce one sanitized
 error and one done; a cancelled owner cannot proceed to a prompt or recovery.
 The adapter emits `external_session` and `backend_runtime` with native session
@@ -783,8 +801,11 @@ retain the tool activity's opaque ID and echo it in replies. CoCo requires an
 exact current `cortex-decision:<generation>:<ordinal>` owned by that live turn.
 `sendInput(text,decisionId)` returns false for absent, stale, duplicate, invalid
 or cancelled replies. REST returns 409 without creating a new user message;
-a stale CoCo decision after stream teardown also returns 409. Other harnesses
-can ignore the optional second argument and preserve existing behavior. Native
+any decision ID after stream teardown also returns 409 when the conversation's
+adapter reports the server-only `decisionsRequireActiveTurn` policy (CoCo:
+true; base default false). The route never inspects the ID text, so stale cached
+clients stay protected. Other harnesses can ignore the optional second argument
+and preserve existing message fallback. Native
 RPC IDs and tool IDs never substitute for a decision generation. Late HTTP
 acknowledgement still clears only the submitted interaction object.
 
@@ -1038,7 +1059,12 @@ No new account credentials or environment fields are added to browser responses.
 
 `SettingsService` uses the same parser during persistence normalization, so
 direct service callers cannot store unknown credential fields in this object.
-A failed save leaves the existing atomic settings file unchanged. Saving a
+A failed save leaves the existing atomic settings file unchanged. Reads repair
+stored data at the file boundary instead of failing every settings read: an
+object with extra fields keeps only its valid `connection`, and a missing or
+invalid connection drops `cortexCode`, leaving an unconfigured draft excluded
+from defaults and execution. The repair logs only the profile ID; the cleaned
+object is written by the next save or legacy migration. Saving a
 CoCo profile preserves its existing command override and supported string env
 values, strips unrelated Claude/OpenCode/protocol metadata, and retains the
 connection object on edit/read/save and legacy identity migration. Existing
@@ -1250,7 +1276,8 @@ unclaimed requests receive -32601 even when notification subscribers exist.
 ends. Duplicate outstanding reverse IDs or subscriber exceptions fail closed.
 No permissions are implicitly approved by these foundations.
 
-Timeout closes the whole runtime because tools may still be running. It rejects
+A request timeout of 0 schedules no deadline; that caller owns cancellation.
+A positive timeout closes the whole runtime because tools may still be running. It rejects
 all pending RPCs, clears reverse ownership/listeners and performs cleanup once;
 there is no retry. EOF (including a truncated final frame), stdout close, pipe
 errors, spawn failure and process exit do the same. Exit is observed separately
@@ -1284,7 +1311,8 @@ stale-model fallback or model mapping exists in P2. Catalog/startup failures
 reject. Discovery or session creation does not establish authentication.
 
 `CortexRuntime.prompt` requires preparation and permits one pending prompt.
-The default deadline is 300 seconds; callers can override it. `cancel()` sends
+The default deadline is 300 seconds; callers can override it, and durable chat
+passes 0 and relies on the turn inactivity watchdog. `cancel()` sends
 the `session/cancel` notification and waits up to 3 seconds for prompt settlement.
 A healthy low-level cancel completion preserves the session; durable chat aborts
 still close that runtime before terminal done (C51), because background shell
@@ -1300,12 +1328,17 @@ released leases; the P5 adapter installs its ten-minute idle scheduler.
 entries. A late version probe/startup cannot reinsert an old entry: it closes
 as soon as a client/runtime appears. Initialization/session failures also close.
 Shutdown is reusable, not a permanent disabled state. The registered adapter's
-`shutdown()` delegates here; the runtime suite verifies the real
-`BackendRegistry.shutdownAll()` boundary with that adapter.
+`shutdown()` delegates here and returns its draining Promise, which
+`BackendRegistry.shutdownAll()` awaits for both server shutdown and CLI updates
+(no adapter-specific special case); the runtime suite verifies that boundary.
 
 ### Owned process cleanup
 
-The POSIX scope samples `ps -axo pid=,ppid=,pgid=,lstart=` every 250 ms. Each
+The POSIX scope samples `ps -axo pid=,ppid=,pgid=,lstart=` every 250 ms (Windows
+snapshots every second) while the runtime starts and while a chat or processor
+prompt is pending, when tools can spawn short-lived parents. A started runtime
+with no pending prompt, such as an idle cached chat lease, samples every 2 seconds;
+a new prompt rescans immediately and restores the fast cadence. Each
 enumeration has a 750 ms deadline and 8 MiB bound. It retains PID/start identities
 for the root and transitive children, including children in detached sessions,
 and continues tracking children of observed owned descendants after root exit.
@@ -1330,7 +1363,7 @@ lease. It exposes a single-use async `stream()`, `pendingId`,
 `input(text,decisionId):boolean`, and awaitable `abort()`. Domain selection/turn
 options are declared in `src/types/cortex.ts`: text, optional model/effort,
 optional standard/plan mode, trusted attachment metadata/root, permission policy
-`allowTools`, and prompt timeout. It configures the runtime, validates attachments,
+`allowTools`, prompt timeout and optional inactivity limit. It configures the runtime, validates attachments,
 subscribes before prompting, routes reverse requests and owned notifications,
 drains asynchronous artifact work, classifies the final result and emits one
 `done`. Every terminal path unsubscribes and cancels pending decisions. Dropping
@@ -1358,7 +1391,10 @@ Omitted model/effort explicitly select native `auto`, including after a prior
 override; omitted mode selects `standard`. Validate every selection against the
 latest response catalog, and re-read returned configOptions after each set.
 An RPC failure, malformed response, or unconfirmed current value clears the
-catalog and rejects; do not send a prompt or silently choose another model.
+catalog, retires (closes) that runtime and rejects; do not send a prompt or
+silently choose another model. The next lease therefore starts a fresh runtime
+that reloads the saved native session and its current catalog instead of
+reusing the emptied one. Selection errors found before any RPC keep the runtime.
 Only standard/plan mode is allowed even if the native catalog advertises bypass.
 Never set `_restricted_session_scope` or another SQL privilege option.
 
@@ -1642,9 +1678,10 @@ execFile with the existing 120-second deadline/output bound. Native 1.2.35 needs
 no unattended flag or input for this command. The native updater verifies its
 manifest/package checksum and manages versioned activation. A single failed
 attempt is returned without automatic retry, fallback installer or prompt replay.
-After success or native execution failure, the existing route callback shuts down
-registered adapters and now awaits `CortexCodeAdapter.stopping`; generation-safe
-native startups, descendants and ephemeral processors drain before the response.
+After success or native execution failure, the existing route callback awaits
+`BackendRegistry.shutdownAll()`, which awaits the draining Promise returned by
+`CortexCodeAdapter.shutdown()`; generation-safe native startups, descendants and
+ephemeral processors drain before the response.
 Later calls can recreate runtimes/idle supervision. Failed attempts also refresh
 cached status because native work may have partially changed files. Exit zero
 is insufficient: a new process and activation metadata must match the selected

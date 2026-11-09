@@ -52,4 +52,12 @@ posix('Cortex managed native plugins', () => {
       await expect(fs.access(dirs.at(-1)!)).rejects.toThrow();
     } finally { await Promise.all(dirs.map(dir => fs.rm(dir, { recursive: true, force: true }))); }
   });
+
+  test('an unreadable temp root never rejects the once-per-process prune', async () => {
+    const readdir = jest.spyOn(fs, 'readdir').mockRejectedValueOnce(Object.assign(new Error('too many open files'), { code: 'EMFILE' }));
+    try {
+      await expect(pruneCortexPlugins()).resolves.toBeUndefined();
+      expect(readdir).toHaveBeenCalledWith(os.tmpdir());
+    } finally { readdir.mockRestore(); }
+  });
 });

@@ -33,6 +33,7 @@ import path from 'path';
 import crypto from 'crypto';
 import { promises as fsp } from 'fs';
 import type {
+  BackendMetadata,
   KbRawEntry,
   KbRawStatus,
   KbStateUpdateEvent,
@@ -44,6 +45,7 @@ import type { KbDatabase } from './db';
 import { normalizeFolderPath } from './db';
 import { buildDocumentStructure } from './documentStructure';
 import type { BackendRegistry } from '../backends/registry';
+import type { BaseBackendAdapter } from '../backends/base';
 import { checkOneShotMediaInput } from '../backends/mediaCapabilities';
 import type { CliProfileRuntime } from '../cliProfiles';
 import type { WorkspaceTaskQueueRegistry } from './workspaceTaskQueue';
@@ -52,6 +54,8 @@ import type { KbVectorStore } from './vectorStore';
 import { logger } from '../../utils/logger';
 
 const kbIngestionLog = logger.child({ module: 'kb-ingestion' });
+/** Bulk conversions reuse a recent non-empty catalog instead of discovering it per raw. */
+const INGESTION_METADATA_TTL_MS = 60_000;
 
 /** Subset of chatService the orchestrator depends on — keeps tests light. */
 export interface KbIngestionChatService {
@@ -209,6 +213,7 @@ export class KbIngestionService {
    * tasks to settle, run alone, then resume normal dispatch.
    */
   private readonly queueRegistry: WorkspaceTaskQueueRegistry;
+  private readonly ingestionMetadata = new Map<string, { profile: string; expires: number; metadata: Promise<BackendMetadata> }>();
 
   constructor(opts: KbIngestionOptions) {
     this.chatService = opts.chatService;
@@ -606,6 +611,24 @@ export class KbIngestionService {
     }
   }
 
+  /**
+   * Native catalog discovery can start a whole CLI runtime (CoCo), so a burst
+   * of conversions shares one result per profile snapshot for a minute.
+   * Failures and empty catalogs are not reused; the next raw discovers again.
+   */
+  private _ingestionAdapterMetadata(adapter: BaseBackendAdapter, profile: CliProfileRuntime['profile']): Promise<BackendMetadata> {
+    const key = `${adapter.metadata.id}\0${profile?.id ?? ''}`;
+    // Settings normalization restamps profile timestamps on every read.
+    const snapshot = JSON.stringify(profile ?? null, (field, value: unknown) => field === 'createdAt' || field === 'updatedAt' ? undefined : value);
+    const cached = this.ingestionMetadata.get(key);
+    if (cached && cached.profile === snapshot && cached.expires > Date.now()) return cached.metadata;
+    const entry = { profile: snapshot, expires: Date.now() + INGESTION_METADATA_TTL_MS, metadata: adapter.getMetadata({ cliProfile: profile }) };
+    this.ingestionMetadata.set(key, entry);
+    const forget = () => { if (this.ingestionMetadata.get(key) === entry) this.ingestionMetadata.delete(key); };
+    void entry.metadata.then(result => { if (!result.models?.length) forget(); }, forget);
+    return entry.metadata;
+  }
+
   /** Run `task` on the workspace's bounded-parallelism queue. */
   private _enqueue<T>(hash: string, task: () => Promise<T>): Promise<T> {
     return this.queueRegistry.get(hash).run(task);
@@ -847,7 +870,7 @@ export class KbIngestionService {
           ingestionBackendRegistered = !!ingestionAdapter;
           if (ingestionAdapter) {
             requireBackendRole(ingestionAdapter.metadata, { role: 'toolEnabled' });
-            const metadata = await ingestionAdapter.getMetadata({ cliProfile: ingestionRuntime.profile });
+            const metadata = await this._ingestionAdapterMetadata(ingestionAdapter, ingestionRuntime.profile);
             const mediaCheck = checkOneShotMediaInput(metadata, settings.knowledgeBase?.ingestionCliModel, 'image');
             if (!mediaCheck.ok) {
               kbIngestionLog.warn('Configured Ingestion CLI profile cannot process image input; skipping AI conversion for this raw.', {

@@ -184,14 +184,16 @@ export function useSendPipeline(options: UseSendPipelineOptions) {
 
   async function sendMessageNow(
     message: QueuedMessage,
-    sendOptions: { clearComposer?: boolean; restoreDraftOnFailure?: boolean; conversationID?: string } = {},
+    sendOptions: { clearComposer?: boolean; restoreDraftOnFailure?: boolean; conversationID?: string; answering?: PendingInteraction } = {},
   ): Promise<SendMessageResult> {
     const options = latest.current;
     const conversation = conversationForSend(options.activeConversation, options.activeConversationRef, sendOptions.conversationID);
     if (!conversation) {
       return { ok: false, reason: 'busy' };
     }
-    if (sendInFlightRef.current || options.pendingInteraction) {
+    // An answered card clears through React state, so the latest render can
+    // still show it. Only that exact interaction may send its answer.
+    if (sendInFlightRef.current || (options.pendingInteraction && options.pendingInteraction !== sendOptions.answering)) {
       return { ok: false, reason: 'busy' };
     }
     sendInFlightRef.current = true;
@@ -423,7 +425,7 @@ export function useSendPipeline(options: UseSendPipelineOptions) {
       options.setPendingInteraction((current) => current === interaction ? null : current);
       options.setInteractionAnswer('');
       if (response.mode === 'message') {
-        await sendMessageNow({ content: answer });
+        await sendMessageNow({ content: answer }, { answering: interaction });
       }
     } catch (error) {
       if (ownsInteraction()) options.onError(error);

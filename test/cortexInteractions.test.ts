@@ -16,7 +16,7 @@ test('native ID zero, sequential questions, exact options and free text answer e
   const requests = cortexWire('questions').filter(frame => frame.method === 'session/request_permission');
   f.send(requests[0]);
   const first = f.interactions.pendingId!;
-  expect(f.events[0]).toMatchObject({ type: 'tool_activity', isQuestion: true, questions: [{ question: 'Which fixture color?' }] });
+  expect(f.events[0]).toMatchObject({ type: 'tool_activity', isQuestion: true, decisionBound: true, questions: [{ question: 'Which fixture color?' }] });
   expect(f.interactions.input('', first)).toBe(false);
   expect(f.interactions.input('Violet fixture', first)).toBe(true);
   expect(f.writes[0]).toMatchObject({ id: 0, result: { outcome: { outcome: 'selected', optionId: 'opt_3', _meta: { freeFormText: 'Violet fixture' } } } });
@@ -46,6 +46,7 @@ test('plan revision/rejection/approval use the prior document and generate a fre
   expect(f.writes[1]).toMatchObject({ id: 1, result: { outcome: { optionId: 'proceed' } } });
   const cards = f.events.filter((event): event is Extract<StreamEvent, { type: 'tool_activity' }> => event.type === 'tool_activity' && event.planAction === 'exit');
   expect(cards).toHaveLength(2);
+  expect(cards.every(card => card.decisionBound === true)).toBe(true);
   expect(cards[1].planContent).toContain('Read the file back');
   f.send(requests[1]);
   expect(f.interactions.input('reject', f.interactions.pendingId!)).toBe(true);

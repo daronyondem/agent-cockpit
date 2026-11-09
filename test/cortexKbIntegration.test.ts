@@ -33,7 +33,7 @@ posix('CoCo KB conversion through the real process adapter', () => {
     bytes = createCanvas(480, 320).toBuffer('image/jpeg');
   });
   afterEach(async () => {
-    adapter.shutdown(); await adapter.stopping;
+    await adapter.shutdown();
     await env.chatService.closeKbVectorStores(); env.chatService.closeKbDatabases(); await destroyChatRouterEnv(env);
   });
   const prompts = async () => (await fs.readFile(trace, 'utf8').catch(() => '')).split('\n').filter(Boolean)
@@ -80,7 +80,7 @@ posix('CoCo KB conversion through the real process adapter', () => {
     const pending = upload('fixture-wait.jpg');
     for (let i = 0; i < 200 && !(await prompts()).length; i++) await new Promise(resolve => setTimeout(resolve, 10));
     expect(await prompts()).toHaveLength(1);
-    adapter.shutdown(); await adapter.stopping;
+    await adapter.shutdown();
     const result = await pending;
     expect(result.meta.metadata).toMatchObject({ source: 'image-only', aiRetries: 0 });
     expect(await prompts()).toHaveLength(1);

@@ -37,7 +37,7 @@ export class CortexAcpClient {
   private failure: Error | null = null;
   private cleanupPromise: Promise<void> | null = null;
   private nextId = 1;
-  private pending = new Map<number, { resolve: (value: unknown) => void; reject: (error: Error) => void; timer: NodeJS.Timeout }>();
+  private pending = new Map<number, { resolve: (value: unknown) => void; reject: (error: Error) => void; timer?: NodeJS.Timeout }>();
   private reverse = new Set<CortexRpcId>();
   private listeners = new Set<(message: CortexRpcMessage) => boolean | void>();
   private decoder = new StringDecoder('utf8');
@@ -79,14 +79,15 @@ export class CortexAcpClient {
     return () => this.listeners.delete(listener);
   }
 
+  /** `timeoutMs` 0 disables the deadline; the caller then owns cancellation. */
   request(method: string, params: CortexRecord = {}, timeoutMs = 45_000): Promise<unknown> {
     if (this.failure) return Promise.reject(this.failure);
     const id = this.nextId++;
     return new Promise((resolve, reject) => {
-      const timer = setTimeout(() => {
+      const timer = timeoutMs > 0 ? setTimeout(() => {
         // A timed-out operation may still be executing tools. Never reuse/retry it.
         void this.close(new Error('Cortex ACP request timed out'));
-      }, timeoutMs);
+      }, timeoutMs) : undefined;
       this.pending.set(id, { resolve, reject, timer });
       this.write({ jsonrpc: '2.0', id, method, params });
     });

@@ -19,7 +19,7 @@ posix('CoCo restricted native process fixture', () => {
     adapter = new CortexCodeAdapter({ workingDir: dir });
   });
   afterEach(async () => {
-    adapter.shutdown(); await adapter.stopping;
+    await adapter.shutdown();
     Object.defineProperty(process, 'platform', platform); Object.defineProperty(process, 'arch', arch);
     await fs.rm(dir, { recursive: true, force: true });
   });
@@ -92,11 +92,11 @@ posix('CoCo restricted native process fixture', () => {
     await until(async () => (await frames()).some(row => row.kind === 'prompt')); abort.abort(); await failed;
     const stopped = adapter.runOneShot('hold', options()); const shutdown = expect(stopped).rejects.toThrow('shutdown');
     await until(async () => (await frames()).filter(row => row.kind === 'prompt').length === 2);
-    adapter.shutdown(); await adapter.stopping; await shutdown;
+    await adapter.shutdown(); await shutdown;
     expect(await adapter.runOneShot('fresh', options())).toBe('ANSWER');
     profile.env!.C35_FIXTURE_INIT = 'hold';
     const starting = adapter.runOneShot('never', options()); const late = expect(starting).rejects.toThrow('shutdown');
-    adapter.shutdown(); await adapter.stopping; await late;
+    await adapter.shutdown(); await late;
     for (const row of (await frames()).filter(row => row.kind === 'start')) await expect(fs.stat(row.home)).rejects.toMatchObject({ code: 'ENOENT' });
   });
 });

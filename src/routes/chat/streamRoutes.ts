@@ -191,12 +191,6 @@ export function createStreamRouter(opts: StreamRoutesOptions): express.Router {
 
     const attachmentRoot = path.join(chatService.artifactsDir, convId);
     let attachments: Awaited<ReturnType<typeof resolveConversationAttachments>>;
-    try {
-      attachments = await resolveConversationAttachments(attachmentRoot, body.attachments || []);
-    } catch (err) {
-      return res.status(400).json({ error: (err as Error).message });
-    }
-
     let jobHandedOff = false;
     let pendingMessageSend: PendingMessageSend | null = null;
     try {
@@ -212,6 +206,13 @@ export function createStreamRouter(opts: StreamRoutesOptions): express.Router {
         workingDir: executionDir,
       });
       const jobId = pendingMessageSend.jobId;
+      // Resolve uploads only after the pending send is registered, so the
+      // in-flight check and registration above stay one synchronous step.
+      try {
+        attachments = await resolveConversationAttachments(attachmentRoot, body.attachments || []);
+      } catch (err) {
+        return res.status(400).json({ error: (err as Error).message });
+      }
 
       try {
         if (cliProfileId) {
@@ -519,7 +520,7 @@ export function createStreamRouter(opts: StreamRoutesOptions): express.Router {
       return res.json({ mode: 'stdin' });
     }
 
-    if (decisionId?.startsWith('cortex-decision:')) {
+    if (decisionId && backendRegistry.get(conv.backend)?.decisionsRequireActiveTurn) {
       return res.status(409).json({ error: 'This interaction is no longer active.' });
     }
 

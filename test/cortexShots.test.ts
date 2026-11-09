@@ -71,7 +71,7 @@ describe('Cortex ephemeral processors', () => {
     });
     adapter = new CortexCodeAdapter({ sessions, workingDir: dir });
   });
-  afterEach(async () => { adapter.shutdown(); await adapter.stopping; await fs.rm(dir, { recursive: true, force: true }); });
+  afterEach(async () => { await adapter.shutdown(); await fs.rm(dir, { recursive: true, force: true }); });
   const options = () => ({ allowTools: true, cliProfile: profile, model: 'claude-sonnet-4-6', effort: 'low' as const });
 
   test('restricted MCP remains rejected, with no tool-enabled startup or changed fallback behavior', async () => {
@@ -140,13 +140,13 @@ describe('Cortex ephemeral processors', () => {
     holdStartup = true;
     const pending = adapter.runOneShot('never', options());
     const rejected = expect(pending).rejects.toThrow('shutdown');
-    adapter.shutdown(); await adapter.stopping; await rejected;
+    await adapter.shutdown(); await rejected;
     expect(fixtures).toHaveLength(0);
     holdStartup = false;
     const active = adapter.runOneShot('hold', options());
     const stopped = expect(active).rejects.toThrow('shutdown');
     await waitFor(() => fixtures.length > 0 && prompts(fixtures[0]).length > 0);
-    adapter.shutdown(); await adapter.stopping; await stopped;
+    await adapter.shutdown(); await stopped;
     expect(await adapter.runOneShot('new', options())).toBe('ANSWER');
   });
 
@@ -164,7 +164,7 @@ describe('Cortex ephemeral processors', () => {
     const rejected = expect(pending).rejects.toThrow('shutdown').finally(() => { settled = true; });
     await waitFor(() => fixtures.length > 0 && prompts(fixtures[0]).length > 0);
     const failure = jest.spyOn(sessions, 'shutdown').mockRejectedValueOnce(new Error('PRIVATE cleanup diagnostic'));
-    adapter.shutdown(); await adapter.stopping;
+    await adapter.shutdown();
     expect(settled).toBe(true);
     expect(fixtures[0].client.isClosed).toBe(true);
     await rejected; failure.mockRestore();

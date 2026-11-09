@@ -77,6 +77,19 @@ describe('processor selections across persistence and execution boundaries', () 
     expect(meta.metadata.source).toBe('image-only'); expect(metadata).not.toHaveBeenCalled(); expect(adapter._oneShotCalls).toHaveLength(0);
   });
 
+  test.each([[true, 1], [false, 2]] as const)('image ingestion reuses a non-empty profile catalog across raws (catalog=%s, discoveries=%s)', async (catalog, discoveries) => {
+    adapter.tools = true;
+    await env.chatService.setWorkspaceKbEnabled(workspaceId, true);
+    await env.chatService.saveSettings({ ...(await env.chatService.getSettings()), knowledgeBase: { ingestionCliProfileId: profile.id, ingestionCliModel: 'sonnet' } });
+    const metadata = jest.spyOn(adapter, 'getMetadata').mockImplementation(async () => ({ ...adapter.metadata, models: catalog ? adapter.metadata.models : [] }));
+    const service = new KbIngestionService({ chatService: env.chatService, backendRegistry: env.backendRegistry, queueRegistry: new WorkspaceTaskQueueRegistry() });
+    for (const [filename, size] of [['first.png', 20], ['second.png', 21]] as const) {
+      await service.enqueueUpload(workspaceId, { filename, mimeType: 'image/png', buffer: createCanvas(size, size).toBuffer('image/png') });
+      await service.waitForIdle(workspaceId);
+    }
+    expect(metadata).toHaveBeenCalledTimes(discoveries);
+  });
+
   test('attachment OCR rejects an unsupported tool role before profile discovery', async () => {
     const conversation = await env.chatService.createConversation('OCR policy', workspace, 'cortex-code', 'sonnet', undefined, profile.id);
     const dir = path.join(env.chatService.artifactsDir, conversation.id); await fs.mkdir(dir, { recursive: true });

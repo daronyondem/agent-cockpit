@@ -843,9 +843,10 @@ legacy `downscaled:true` remains unchanged. The independent native model/version
 PNG byte gates still apply; this does not enable native JPEG/PDF transport.
 
 Dreaming's retry wrappers also honor `allowAutomaticOneShotRetry:false`:
-execution errors never resend, and empty output or parser warnings fail the
-batch before applying operations/clearing pending entries, with a single debug
-response on validation failure. Base defaults preserve other adapters' existing
+execution errors never resend, and empty output or parser warnings with no
+usable parsed items fail the batch before applying operations/clearing pending
+entries, with a single debug response on validation failure. Partially valid
+output applies once with its per-item warnings recorded as run errors. Base defaults preserve other adapters' existing
 retry behavior. Native CoCo KB certification and exact limits are recorded in
 [the KB workflow contract](spec-cortex-code.md#knowledge-base-workflows-p6-c37c38).
 
@@ -1000,7 +1001,7 @@ Shared helpers used by all backend adapters. Extracted for cross-adapter reuse �
 - `get(id)` — returns adapter or `null`
 - `list()` — returns metadata array
 - `getDefault()` — returns first registered or `null`
-- `shutdownAll()` — calls `shutdown()` on all registered adapters (used in graceful server shutdown)
+- `shutdownAll(): Promise<void>` — calls `shutdown()` on all registered adapters and awaits any returned cleanup Promise with `Promise.allSettled`, so one adapter's failure (including a synchronous throw) does not stop the others. Used by graceful server shutdown and after CLI updates. `BaseBackendAdapter.shutdown()` returns `void | Promise<void>`; adapters must stay reusable afterwards.
 
 The backend registry is keyed by internal backend id. Profile resolution sits above it: `CliProfile.harness` chooses the physical CLI identity, and Claude Code's optional `protocol` chooses either the standard `claude-code` adapter or the `claude-code-interactive` adapter. Codex and Claude Code receive resolved profile command/config/env today; OpenCode receives its command override and provider metadata while models remain per-turn/processor selections; Kiro always uses server-configured spawning.
 
@@ -1865,7 +1866,7 @@ On Windows the command uses `npm.cmd` and the inherited `WebBuildService` `.cmd`
   `<installDir>\cli-tools` prefix, the service repairs the terminal wrapper
   after npm completes so `codex.ps1`/`codex.cmd` and `grok.ps1`/`grok.cmd` keep
   calling the private `node.exe` rather than npm's default global-Node shim.
-- On success the route-level caller invokes `backendRegistry.shutdownAll()` so long-lived backend child processes restart on next use with the updated executable.
+- On success the route-level caller awaits `backendRegistry.shutdownAll()` so long-lived backend child processes drain and restart on next use with the updated executable.
 - After the update command, the service re-probes the target and returns `{ success: true, steps, item }`. Failures return `{ success: false, steps, error, item? }` without mutating unrelated status items.
 
 CoCo P8 C49 is delegated to `cortexUpdates.ts`, which owns updater environment,

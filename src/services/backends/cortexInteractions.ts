@@ -117,9 +117,9 @@ export class CortexInteractions {
     if (!current) return;
     if (current.kind === 'plan') {
       this.emit({ type: 'tool_activity', tool: 'EnterPlanMode', id: null, description: 'Preparing plan approval', isPlanMode: true, planAction: 'enter' });
-      this.emit({ type: 'tool_activity', tool: 'ExitPlanMode', id: current.id, description: 'Plan ready for approval', isPlanMode: true, planAction: 'exit', planContent: current.plan });
+      this.emit({ type: 'tool_activity', tool: 'ExitPlanMode', id: current.id, description: 'Plan ready for approval', isPlanMode: true, planAction: 'exit', planContent: current.plan, decisionBound: true });
     } else {
-      this.emit({ type: 'tool_activity', tool: 'AskUserQuestion', id: current.id, description: 'Asking a question', isQuestion: true,
+      this.emit({ type: 'tool_activity', tool: 'AskUserQuestion', id: current.id, description: 'Asking a question', isQuestion: true, decisionBound: true,
         questions: [{ question: current.title, options: current.options.map(option => ({ label: option.name, ...(option.description ? { description: option.description } : {}) })) }] });
     }
   }

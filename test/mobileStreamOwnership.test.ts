@@ -21,7 +21,7 @@ test('mobile reconnect keeps decision ownership, clears matched completions, and
     view = { ...pipeline, interaction, conversation }; return createElement('p', null, interaction?.prompt);
   }
   const frame = (connection: any, data: object) => connection.onmessage({ data: JSON.stringify(data) });
-  const question = (id: string) => ({ type: 'tool_activity', id, isQuestion: true, questions: [{ question: 'Color?', options: [] }] });
+  const question = (id: string) => ({ type: 'tool_activity', id, isQuestion: true, decisionBound: true, questions: [{ question: 'Color?', options: [] }] });
   try {
     await act(async () => root.render(createElement(Harness)));
     await act(async () => view.startStream('fixture')); const original = sockets[0];
@@ -41,3 +41,27 @@ test('mobile reconnect keeps decision ownership, clears matched completions, and
     expect(view.interaction).toBeNull(); expect(view.isStreaming).toBe(false);
   } finally { await act(async () => root.unmount()); jest.useRealTimers(); }
 });
+
+test('mobile keeps unbound cards through matching outcomes and stream end', async () => {
+  (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true; jest.useFakeTimers(); sockets.length = 0;
+  const root = createRoot(document.createElement('div')); let view: any;
+  const api = { websocketURL: () => 'ws://fixture', getActiveStreams: jest.fn(async () => new Set(['fixture'])), sendMessage: jest.fn() };
+  function Harness() {
+    const conversation = useRef({ id: 'fixture' }), [interaction, setInteraction] = useState<any>(null);
+    const pipeline = useChatStreamConnection({ activeConversationRef: conversation, clientRef: { current: api },
+      setActiveConversation: jest.fn(), setActiveStreamIDs: jest.fn(), setConversations: jest.fn(), setErrorMessage: jest.fn(),
+      setPendingInteraction: setInteraction, applyGoalSnapshot: jest.fn(), refreshAfterStream: jest.fn(), notify: jest.fn() });
+    view = { ...pipeline, interaction }; return createElement('p', null, interaction?.prompt);
+  }
+  const frame = (data: object) => sockets[0].onmessage({ data: JSON.stringify(data) });
+  try {
+    await act(async () => root.render(createElement(Harness)));
+    await act(async () => view.startStream('fixture'));
+    await act(async () => frame({ type: 'tool_activity', id: 'toolu_question', isQuestion: true, questions: [{ question: 'Color?', options: [] }] }));
+    await act(async () => frame({ type: 'tool_outcomes', outcomes: [{ toolUseId: 'toolu_question' }] }));
+    expect(view.interaction.decisionId).toBe('toolu_question');
+    await act(async () => frame({ type: 'done' }));
+    expect(view.interaction.decisionId).toBe('toolu_question');
+  } finally { await act(async () => root.unmount()); jest.useRealTimers(); }
+});
+

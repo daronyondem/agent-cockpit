@@ -28,7 +28,7 @@ posix('Cortex durable Cockpit chat integration', () => {
     const settings = await env.chatService.getSettings();
     await env.chatService.saveSettings({ ...settings, cliProfiles: [...(settings.cliProfiles || []), profile] });
   });
-  afterEach(async () => { adapter.shutdown(); await adapter.stopping; await destroyChatRouterEnv(env); });
+  afterEach(async () => { await adapter.shutdown(); await destroyChatRouterEnv(env); });
   const conversation = () => env.chatService.createConversation('Cortex fixture', env.tmpDir, 'cortex-code', 'claude-sonnet-4-6', 'low', profile.id);
   async function send(id: string, content: string, attachments?: Array<{ name: string }>) {
     env.wsFns.clearBuffer(id);
@@ -114,7 +114,7 @@ posix('Cortex durable Cockpit chat integration', () => {
     expect(nativeId).toBeTruthy();
     await sessions.evictIdle(0);
     await send(conv.id, 'fixture-recall');
-    adapter.shutdown(); await adapter.stopping;
+    await adapter.shutdown();
     const third = await send(conv.id, 'fixture-recall');
     expect(third.filter(event => event.type === 'assistant_message').map(event => event.message.content)).toContain('MAPLE_314');
     const saved = (await env.chatService.getConversation(conv.id))!;

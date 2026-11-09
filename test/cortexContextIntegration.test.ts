@@ -54,7 +54,7 @@ posix('CoCo Workspace Context through the real process adapter', () => {
   });
   afterEach(async () => {
     await service.stopWorkspace(workspaceId);
-    adapter.shutdown(); await adapter.stopping;
+    await adapter.shutdown();
     await waitFor(async () => !service.isRunning(workspaceId));
     await destroyChatRouterEnv(env);
   });

@@ -6,10 +6,10 @@ import { loadMobileModule } from './mobileModuleLoader';
 type PendingInteraction = { kind: 'question' | 'plan'; prompt: string; options?: unknown[]; decisionId?: string };
 
 const { useSendPipeline } = loadMobileModule('useSendPipeline.ts', {
-  react: require('react'), './api': {}, './appModel': {},
+  react: require('react'), './api': {}, './appModel': loadMobileModule('appModel.ts'),
 });
 
-async function renderPipeline(first: PendingInteraction, sendInput: jest.Mock) {
+async function renderPipeline(first: PendingInteraction, sendInput: jest.Mock, extra: Record<string, unknown> = {}, client: Record<string, unknown> = {}) {
   (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
   const container = document.createElement('div');
   const root = createRoot(container);
@@ -25,8 +25,8 @@ async function renderPipeline(first: PendingInteraction, sendInput: jest.Mock) {
     const [answer, setAnswer] = useState('Blue');
     const pipeline = useSendPipeline({
       activeConversation: { id: 'fixture' }, pendingInteraction: interaction, interactionAnswer: answer,
-      isStreaming: true, loading: false, clientRef: { current: { sendInput } },
-      setPendingInteraction: setInteraction, setInteractionAnswer: setAnswer, onError,
+      isStreaming: true, loading: false, clientRef: { current: { sendInput, ...client } },
+      setPendingInteraction: setInteraction, setInteractionAnswer: setAnswer, onError, ...extra,
     });
     current = { interaction, setInteraction, answer, setAnswer, isResponding: pipeline.isResponding, submitInteraction: pipeline.submitInteraction };
     return createElement('p', null, interaction?.prompt);
@@ -103,5 +103,44 @@ test.each([false, true])('mobile blocks duplicates/stale callbacks and preserves
     await act(async () => staleSubmit('Blue')); expect(sendInput).toHaveBeenCalledTimes(1);
     sendInput.mockResolvedValueOnce({ mode: 'stdin' });
     await act(async () => view.current.submitInteraction()); expect(sendInput).toHaveBeenLastCalledWith('fixture', 'Violet draft', true, next.decisionId);
+  } finally { await view.close(); }
+});
+
+function messageSendFixture() {
+  const sendMessage = jest.fn().mockResolvedValue({ userMessage: { id: 'server-user', role: 'user', content: 'Blue' }, streamReady: true });
+  const startStream = jest.fn();
+  const extra = { activeConversationRef: { current: null }, isStreaming: false, startStream, markStreamFinished: jest.fn(),
+    recoverActiveStream: jest.fn().mockResolvedValue(false), setDraft: jest.fn(), setPendingAttachments: jest.fn(),
+    setErrorMessage: jest.fn(), setStreamText: jest.fn(), setShowStreamPlaceholder: jest.fn(), setIsStreaming: jest.fn(),
+    setActiveStreamIDs: jest.fn(), setActiveConversation: jest.fn() };
+  return { sendMessage, startStream, extra };
+}
+
+test('mobile sends a message-mode answer before its cleared card re-renders', async () => {
+  const { sendMessage, startStream, extra } = messageSendFixture();
+  const sendInput = jest.fn().mockResolvedValue({ mode: 'message' });
+  const view = await renderPipeline(question, sendInput, extra, { sendMessage });
+  try {
+    await act(async () => { await view.current.submitInteraction('Blue'); });
+    expect(sendInput).toHaveBeenCalledWith('fixture', 'Blue', false, undefined);
+    expect(sendMessage).toHaveBeenCalledWith('fixture', expect.objectContaining({ content: 'Blue' }));
+    expect(startStream).toHaveBeenCalledWith('fixture');
+    expect(view.current.interaction).toBeNull();
+    expect(view.onError).not.toHaveBeenCalled();
+  } finally { await view.close(); }
+});
+
+test('a message-mode answer cannot bypass a newer card', async () => {
+  const { sendMessage, extra } = messageSendFixture();
+  let acknowledge!: (response: { mode: string }) => void;
+  const view = await renderPipeline(question, jest.fn(() => new Promise(resolve => { acknowledge = resolve; })), extra, { sendMessage });
+  try {
+    let answering!: Promise<void>;
+    await act(async () => { answering = view.current.submitInteraction('Blue'); });
+    const next: PendingInteraction = { kind: 'plan', prompt: '# Newer plan' };
+    await act(async () => { view.current.setInteraction(next); });
+    await act(async () => { acknowledge({ mode: 'message' }); await answering; });
+    expect(sendMessage).not.toHaveBeenCalled();
+    expect(view.current.interaction).toBe(next);
   } finally { await view.close(); }
 });

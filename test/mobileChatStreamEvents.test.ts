@@ -6,9 +6,14 @@ describe('mobile chat stream event projections', () => {
   test('retains question and plan decision generations for authenticated replies', () => {
     for (const frame of [{ type: 'tool_activity', isQuestion: true, questions: [{ question: 'Color?', options: [] }] },
       { type: 'tool_activity', isPlanMode: true, planAction: 'exit', planContent: '# Plan' }]) {
-      const actions = events.chatStreamEventActions({ ...frame, id: 'cortex-decision:current' });
-      expect(actions.find((action: { type: string }) => action.type === 'set-pending-interaction').interaction.decisionId).toBe('cortex-decision:current');
+      const actions = events.chatStreamEventActions({ ...frame, id: 'cortex-decision:current', decisionBound: true });
+      expect(actions.find((action: { type: string }) => action.type === 'set-pending-interaction').interaction)
+        .toMatchObject({ decisionId: 'cortex-decision:current', decisionBound: true });
+      const unbound = events.chatStreamEventActions({ ...frame, id: 'toolu_current' });
+      expect(unbound.find((action: { type: string }) => action.type === 'set-pending-interaction').interaction.decisionBound).toBeUndefined();
     }
+    expect(events.chatStreamEventActions({ type: 'tool_outcomes', outcomes: [{ toolUseId: 'toolu_current' }, {}] }))
+      .toEqual([{ type: 'complete-decision', decisionId: 'toolu_current' }]);
   });
 
   test('projects incremental text and assistant messages for the open chat', () => {

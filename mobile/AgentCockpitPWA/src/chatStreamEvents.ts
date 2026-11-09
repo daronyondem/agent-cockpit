@@ -12,6 +12,10 @@ export type StreamEventNotification = {
   body: string;
 };
 
+function decisionIdentity(event: Extract<StreamEvent, { type: 'tool_activity' }>): Pick<PendingInteraction, 'decisionId' | 'decisionBound'> {
+  return { ...(event.id ? { decisionId: event.id } : {}), ...(event.decisionBound ? { decisionBound: true } : {}) };
+}
+
 export type ChatStreamEventAction =
   | { type: 'complete-decision'; decisionId: string }
   | { type: 'set-stream-placeholder'; value: boolean }
@@ -93,12 +97,12 @@ export function chatStreamEventActions(event: StreamEvent): ChatStreamEventActio
       break;
     case 'tool_activity': {
       if (event.isPlanMode && (event.planContent || event.planAction === 'exit')) {
-        actions.push({ type: 'set-pending-interaction', interaction: { kind: 'plan', prompt: event.planContent || 'Plan ready for approval.', ...(event.id ? { decisionId: event.id } : {}) } });
+        actions.push({ type: 'set-pending-interaction', interaction: { kind: 'plan', prompt: event.planContent || 'Plan ready for approval.', ...decisionIdentity(event) } });
       } else if (event.isQuestion && event.questions?.length) {
         const question = event.questions[0];
         actions.push({
           type: 'set-pending-interaction',
-          interaction: { kind: 'question', prompt: question.question, options: question.options || [], ...(event.id ? { decisionId: event.id } : {}) },
+          interaction: { kind: 'question', prompt: question.question, options: question.options || [], ...decisionIdentity(event) },
         });
       }
       const notification = streamEventNotification(event);
@@ -106,8 +110,9 @@ export function chatStreamEventActions(event: StreamEvent): ChatStreamEventActio
       break;
     }
     case 'tool_outcomes':
+      // The handler resolves only a decision-bound card with the same ID.
       for (const outcome of event.outcomes || []) {
-        if (outcome.toolUseId?.startsWith('cortex-decision:')) actions.push({ type: 'complete-decision', decisionId: outcome.toolUseId });
+        if (outcome.toolUseId) actions.push({ type: 'complete-decision', decisionId: outcome.toolUseId });
       }
       break;
     case 'title_updated':

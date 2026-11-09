@@ -7,7 +7,7 @@ import { cortexRestrictedPlatform } from '../src/services/backends/cortexRestric
 import { CortexSessions } from '../src/services/backends/cortexSessions';
 import { CortexRuntime } from '../src/services/backends/cortexRuntime';
 import { cortexFixture, cortexWire } from './helpers/cortexFixtures';
-import { CortexRpcError } from '../src/services/backends/cortexProtocol';
+import { CortexAcpClient, CortexRpcError } from '../src/services/backends/cortexProtocol';
 import { cortexMissingSession } from '../src/services/backends/cortexErrors';
 
 describe('Cortex chat adapter ownership and recovery', () => {
@@ -55,7 +55,7 @@ describe('Cortex chat adapter ownership and recovery', () => {
     });
     adapter = new CortexCodeAdapter({ sessions, workingDir: dir });
   });
-  afterEach(async () => { adapter.shutdown(); await adapter.stopping; await fs.rm(dir, { recursive: true, force: true }); });
+  afterEach(async () => { await adapter.shutdown(); await fs.rm(dir, { recursive: true, force: true }); });
   const promptText = (fixture: ReturnType<typeof cortexFixture>) => fixture.writes.filter(message => message.method === 'session/prompt')
     .map(message => (message.params?.prompt as Array<{ text?: string }>).map(block => block.text || '').join('\n'));
 
@@ -120,7 +120,7 @@ describe('Cortex chat adapter ownership and recovery', () => {
     expect(fixtures[0].client.isClosed).toBe(true);
     expect(fixtures[1].writes.some(message => message.method === 'session/load')).toBe(true);
     expect(resumed.some(event => event.type === 'text' && event.content.includes('REPLAY'))).toBe(false);
-    adapter.shutdown(); await adapter.stopping;
+    await adapter.shutdown();
     await collect(adapter.sendMessage('after restart', { ...options, isNewSession: false, externalSessionId: 'native-1' }));
     expect(promptText(fixtures[2])).toHaveLength(1);
     expect(promptText(fixtures[2])[0]).toContain('after restart');
@@ -279,7 +279,7 @@ describe('Cortex chat adapter ownership and recovery', () => {
   test.each(['reset', 'shutdown'])('%s waits for a detached aborted-owner drain and cancels its waiting successor', async operation => {
     const { old, drained } = await suspendedAbortedOwner();
     const waiting = adapter.sendMessage('must never start', options);
-    if (operation === 'reset') adapter.onSessionReset('conversation'); else adapter.shutdown();
+    if (operation === 'reset') adapter.onSessionReset('conversation'); else void adapter.shutdown();
     let stopped = false; void adapter.stopping.then(() => { stopped = true; });
     try {
       await new Promise(resolve => setImmediate(resolve)); expect(stopped).toBe(false);
@@ -305,12 +305,60 @@ describe('Cortex chat adapter ownership and recovery', () => {
     expect(waiting.sendInput('stale', 'expired')).toBe(false);
   });
 
+  test('chat prompts have no fixed deadline but stop after an hour without native activity', async () => {
+    hold = true;
+    jest.useFakeTimers({ doNotFake: ['nextTick', 'setImmediate', 'queueMicrotask'] });
+    let consuming: Promise<StreamEvent[]>;
+    try {
+      consuming = collect(adapter.sendMessage('long work', options));
+      while (!fixtures[0]?.writes.some(message => message.method === 'session/prompt')) await new Promise(resolve => setImmediate(resolve));
+      jest.advanceTimersByTime(59 * 60_000);
+      fixtures[0].notification({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'still working' } }, 'native-1');
+      await new Promise(resolve => setImmediate(resolve));
+      jest.advanceTimersByTime(59 * 60_000);
+      expect(fixtures[0].client.isClosed).toBe(false);
+      jest.advanceTimersByTime(60_000);
+      expect(fixtures[0].client.isClosed).toBe(true);
+    } finally { jest.useRealTimers(); }
+    const events = await consuming;
+    expect(events.filter(event => event.type === 'error')).toEqual([
+      expect.objectContaining({ error: expect.stringContaining('no progress for 60 minutes'), source: 'transport' })]);
+    expect(events.filter(event => event.type === 'done')).toHaveLength(1);
+    hold = false;
+    const next = await collect(adapter.sendMessage('next', { ...options, isNewSession: false, externalSessionId: 'native-1' }));
+    expect(next.some(event => event.type === 'error')).toBe(false);
+    expect(fixtures).toHaveLength(2);
+  });
+
   test('failed configuration does not consume the runtime instruction prefix', async () => {
     const failed = await collect(adapter.sendMessage('bad selection', { ...options, model: 'unavailable' }));
     expect(failed.some(event => event.type === 'error')).toBe(true);
     expect(promptText(fixtures[0])).toEqual([]);
     await collect(adapter.sendMessage('corrected selection', options));
     expect(promptText(fixtures[0])[0]).toContain(options.systemPrompt);
+  });
+
+  test('a failed native configuration retires its runtime so the next turn reloads the saved session', async () => {
+    const original = CortexAcpClient.prototype.request;
+    let rejected = false;
+    const request = jest.spyOn(CortexAcpClient.prototype, 'request').mockImplementation(function (this: CortexAcpClient, method, params, timeoutMs) {
+      if (method === 'session/set_config_option' && !rejected) {
+        rejected = true;
+        return Promise.reject(new CortexRpcError('Model unavailable for this account', -32000));
+      }
+      return original.call(this, method, params, timeoutMs);
+    });
+    try {
+      const failed = await collect(adapter.sendMessage('first', options));
+      expect(failed.some(event => event.type === 'error')).toBe(true);
+      expect(fixtures[0].client.isClosed).toBe(true);
+      expect(promptText(fixtures[0])).toEqual([]);
+    } finally { request.mockRestore(); }
+    const next = await collect(adapter.sendMessage('retry', { ...options, isNewSession: false, externalSessionId: 'native-1' }));
+    expect(next.some(event => event.type === 'error')).toBe(false);
+    expect(fixtures).toHaveLength(2);
+    expect(fixtures[1].writes.some(message => message.method === 'session/load' && message.params?.sessionId === 'native-1')).toBe(true);
+    expect(promptText(fixtures[1])[0]).toContain('retry');
   });
 
   test('missing-session classification is bound to the observed native version, RPC shape and requested ID', () => {
@@ -324,7 +372,7 @@ describe('Cortex chat adapter ownership and recovery', () => {
   });
 
   test('idle cleanup continues after a pool failure and is supervised again after shutdown', async () => {
-    adapter.shutdown(); await adapter.stopping;
+    await adapter.shutdown();
     jest.useFakeTimers();
     try {
       const evict = jest.spyOn(sessions, 'evictIdle').mockRejectedValueOnce(new Error('PRIVATE cleanup diagnostic')).mockResolvedValue(undefined);
@@ -335,7 +383,7 @@ describe('Cortex chat adapter ownership and recovery', () => {
       expect(evict).toHaveBeenCalledTimes(2);
       expect(fixtures).toHaveLength(0);
     } finally {
-      adapter.shutdown(); await adapter.stopping;
+      await adapter.shutdown();
       jest.useRealTimers();
     }
   });

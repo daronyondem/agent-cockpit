@@ -1036,7 +1036,7 @@ describe('KbDreamService', () => {
 
   // ── Parse-failure retry + debug logging ───────────────────────────────
 
-  test.each(['CLI cancellation', 'empty output', 'parse warning', 'schema warning'])('a no-retry harness preserves pending entries after %s', async failure => {
+  test.each(['CLI cancellation', 'empty output', 'parse warning', 'schema warning', 'invalid items only'])('a no-retry harness preserves pending entries after %s', async failure => {
     Object.assign(mockAdapter, { allowAutomaticOneShotRetry: false });
     mockDb.listNeedsSynthesisEntryIds.mockReturnValue(['entry-1']); mockDb.listTopicSummaries.mockReturnValue([]);
     if (failure === 'CLI cancellation') mockAdapter.runOneShot.mockRejectedValueOnce(new Error('Cortex background work cancelled.'));
@@ -1044,7 +1044,8 @@ describe('KbDreamService', () => {
     else {
       mockAdapter.runOneShot.mockResolvedValueOnce('malformed response');
       (dreamOpsMod.parseDreamOutput as jest.Mock).mockReturnValueOnce({ operations: [], warnings: [
-        failure === 'parse warning' ? 'JSON parse error' : 'Missing or non-array "operations" field',
+        failure === 'parse warning' ? 'JSON parse error'
+          : failure === 'schema warning' ? 'Missing or non-array "operations" field' : 'Operation 0: unknown op "rename"',
       ] });
     }
     const mkdir = jest.spyOn(fs, 'mkdirSync').mockImplementation(() => undefined);
@@ -1054,8 +1055,22 @@ describe('KbDreamService', () => {
       expect(mockAdapter.runOneShot).toHaveBeenCalledTimes(1);
       expect(result.processedEntries).toBe(0); expect(result.skippedBatches).toBe(1);
       expect(result.errors).not.toEqual([]); expect(mockDb.clearNeedsSynthesis).not.toHaveBeenCalled();
-      if (failure.includes('warning')) expect(write.mock.calls.some(call => String(call[1]).includes('Attempts: 1'))).toBe(true);
+      if (failure.includes('warning') || failure.includes('invalid')) expect(write.mock.calls.some(call => String(call[1]).includes('Attempts: 1'))).toBe(true);
     } finally { mkdir.mockRestore(); write.mockRestore(); }
+  });
+
+  test('a no-retry harness applies partially valid output once and records its item warnings', async () => {
+    Object.assign(mockAdapter, { allowAutomaticOneShotRetry: false });
+    mockDb.listNeedsSynthesisEntryIds.mockReturnValue(['entry-1']); mockDb.listTopicSummaries.mockReturnValue([]);
+    mockAdapter.runOneShot.mockResolvedValueOnce('partially valid response');
+    const operation = { op: 'create_topic', topic_id: 'topic-1', title: 'Topic', summary: 'Summary', content: 'Content' };
+    (dreamOpsMod.parseDreamOutput as jest.Mock).mockReturnValueOnce({ operations: [operation], warnings: ['Operation 1: unknown op "rename"'] });
+    const result = await service.dream('ws-hash');
+    expect(mockAdapter.runOneShot).toHaveBeenCalledTimes(1);
+    expect(dreamOpsMod.applyOperations).toHaveBeenCalledWith(mockDb, [operation], expect.anything());
+    expect(result.errors).toContain('Operation 1: unknown op "rename"');
+    expect(result.processedEntries).toBe(1);
+    expect(mockDb.clearNeedsSynthesis).toHaveBeenCalledWith(['entry-1']);
   });
 
   test('retries CLI once when parser reports a JSON parse failure', async () => {

@@ -22,7 +22,7 @@ posix('Grok profiles, auth, and billing integration', () => {
     const settings = await env.chatService.getSettings();
     await env.chatService.saveSettings({ ...settings, cliProfiles: [...(settings.cliProfiles || []), profile] });
   });
-  afterEach(async () => { env.backendRegistry.shutdownAll(); await destroyChatRouterEnv(env); });
+  afterEach(async () => { await env.backendRegistry.shutdownAll(); await destroyChatRouterEnv(env); });
 
   test('profile selection exposes native models and checks account access without exposing identity', async () => {
     const metadata = await env.request('GET', '/api/chat/cli-profiles/grok-fixture/metadata');

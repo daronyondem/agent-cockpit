@@ -64,5 +64,8 @@ export interface CortexTurnOptions extends CortexSelection {
   /** Fail rather than wait for a human decision in background work. */
   headless?: boolean;
   allowTools: boolean;
+  /** Prompt deadline; 0 disables it for durable chat, where Stop owns cancellation. */
   timeoutMs?: number;
+  /** Stop the runtime after this long without native activity; pending decisions do not count. */
+  idleTimeoutMs?: number;
 }

@@ -2,6 +2,7 @@ import fsp from 'fs/promises';
 import path from 'path';
 import type { CliHarness, CliProfile, Settings } from '../types';
 import { atomicWriteFile } from '../utils/atomicWrite';
+import { logger } from '../utils/logger';
 import { parseCortexCodeProfileConfig } from '../contracts/cliProfiles';
 import {
   backendForCliProfile,
@@ -29,6 +30,8 @@ type PersistedCliProfile = Partial<Omit<CliProfile, 'harness'>> & {
   harness?: CliHarness;
   vendor?: CliHarness;
 };
+
+const log = logger.child({ module: 'settings' });
 
 export const DEFAULT_SETTINGS: Settings = {
   theme: 'system',
@@ -102,6 +105,7 @@ export class SettingsService {
     try {
       const data = await fsp.readFile(this._settingsFile, 'utf8');
       const settings = JSON.parse(data) as PersistedSettings;
+      repairPersistedCortexCodeConfigs(settings);
 
       if (settings.customInstructions && settings.systemPrompt === undefined) {
         const parts: string[] = [];
@@ -476,6 +480,22 @@ function isCliAuthHomeEnvKey(harness: CliProfile['harness'], key: string): boole
     || (harness === 'codex' && normalized === 'CODEX_HOME')
     || (harness === 'grok-build' && normalized === 'GROK_HOME')
     || (harness === 'cortex-code' && normalized === 'SNOWFLAKE_HOME');
+}
+
+/**
+ * Repairs stored CoCo configuration at the read boundary so one malformed
+ * profile cannot fail every settings read: a valid connection is kept and
+ * anything else leaves an unconfigured draft. Direct saves still reject.
+ */
+function repairPersistedCortexCodeConfigs(settings: PersistedSettings): void {
+  if (!Array.isArray(settings.cliProfiles)) return;
+  for (const profile of settings.cliProfiles as unknown as PersistedCliProfile[]) {
+    if (!profile || profile.cortexCode === undefined) continue;
+    try { parseCortexCodeProfileConfig(profile.cortexCode); continue; } catch { /* repaired below */ }
+    const { connection } = (profile.cortexCode || {}) as { connection?: unknown };
+    try { profile.cortexCode = parseCortexCodeProfileConfig({ connection }); } catch { delete profile.cortexCode; }
+    log.warn('Repaired invalid stored Cortex Code profile configuration', { cliProfileId: profile.id, connectionRetained: Boolean(profile.cortexCode) });
+  }
 }
 
 function normalizeClaudeCodeProfileConfig(value: unknown): NonNullable<CliProfile['claudeCode']> {

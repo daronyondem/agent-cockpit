@@ -1373,9 +1373,14 @@ export class KbDreamService {
     }
     if (!first) return null;
     const parsedFirst = parse(first);
-    if (adapter.allowAutomaticOneShotRetry === false && parsedFirst.warnings.length > 0) {
-      this._writeParseFailureLog(hash, phase, [first]);
-      throw new Error('Dreaming CLI output failed validation; automatic retry is disabled for this harness.');
+    if (adapter.allowAutomaticOneShotRetry === false) {
+      // Unusable output fails without a resend. Partially valid output is
+      // applied like other harnesses, with per-item warnings kept as run errors.
+      if (parsedFirst.warnings.length > 0 && !hasParsedItems(parsedFirst)) {
+        this._writeParseFailureLog(hash, phase, [first]);
+        throw new Error('Dreaming CLI output failed validation; automatic retry is disabled for this harness.');
+      }
+      return parsedFirst;
     }
     if (!hasParseFailure(parsedFirst.warnings)) return parsedFirst;
 
@@ -1721,6 +1726,11 @@ function scanBalancedObject(raw: string): string | null {
  */
 export function hasParseFailure(warnings: string[]): boolean {
   return warnings.some((w) => /json parse error|no json (object )?found/i.test(w));
+}
+
+/** True when a parse result holds at least one parsed item besides its warnings. */
+function hasParsedItems(parsed: { warnings: string[] }): boolean {
+  return Object.entries(parsed).some(([key, value]) => key !== 'warnings' && Array.isArray(value) && value.length > 0);
 }
 
 /** Extract topic IDs affected by a set of operations. */

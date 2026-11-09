@@ -92,6 +92,27 @@ describe('identity checks and enumeration failures', () => {
     expect(kill).toHaveBeenCalledTimes(1);
   });
 
+  posix('scans every 250 ms only while active and every 2 s while idle', async () => {
+    const exec = jest.fn(table('100 1 100 ROOT\n'));
+    const scope = new (load(exec))({ pid: 100, exitCode: null, signalCode: null } as unknown as ChildProcess);
+    scope.watch();
+    await flush();
+    scope.pace(false);
+    exec.mockClear();
+    await jest.advanceTimersByTimeAsync(1_999);
+    expect(exec).not.toHaveBeenCalled();
+    await jest.advanceTimersByTimeAsync(1);
+    expect(exec).toHaveBeenCalledTimes(1);
+    exec.mockClear();
+    scope.pace(true);
+    await flush();
+    expect(exec).toHaveBeenCalledTimes(1);
+    await jest.advanceTimersByTimeAsync(1_000);
+    expect(exec).toHaveBeenCalledTimes(5);
+    exec.mockImplementation(table(''));
+    await scope.stop();
+  });
+
   test('failed spawn without a PID is safe to stop', async () => {
     const scope = new CortexProcessScope({} as ChildProcess);
     await scope.stop();

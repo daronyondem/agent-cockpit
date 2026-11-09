@@ -21,13 +21,31 @@ export class CortexProcessScope {
   private scanning: Promise<CortexProcessIdentity[]> | null = null;
   private stopping: Promise<void> | null = null;
   private windows = process.platform === 'win32';
+  private interval = 0;
 
   constructor(private child: Pick<ChildProcess, 'pid' | 'exitCode' | 'signalCode' | 'kill'>) {}
 
   watch(): void {
     if (this.timer || this.stopping || !this.child.pid) return;
     void this.scan().catch(() => {});
-    this.timer = setInterval(() => { void this.scan().catch(() => {}); }, this.windows ? 1_000 : 250);
+    this.schedule(this.activeInterval);
+  }
+
+  /** Active work can spawn short-lived parents, so it scans fast; idle leases scan slowly. */
+  pace(active: boolean): void {
+    if (!this.timer || this.stopping) return;
+    const interval = active ? this.activeInterval : 2_000;
+    if (interval === this.interval) return;
+    if (active) void this.scan().catch(() => {});
+    this.schedule(interval);
+  }
+
+  private get activeInterval(): number { return this.windows ? 1_000 : 250; }
+
+  private schedule(interval: number): void {
+    clearInterval(this.timer);
+    this.interval = interval;
+    this.timer = setInterval(() => { void this.scan().catch(() => {}); }, interval);
     this.timer.unref();
   }
 

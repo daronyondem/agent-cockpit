@@ -1686,12 +1686,12 @@ describe('BackendRegistry with CodexAdapter', () => {
     expect(registry.getDefault()?.metadata.id).toBe('claude-code'); // First registered = default
   });
 
-  test('shutdownAll calls shutdown on all adapters', () => {
+  test('shutdownAll calls shutdown on all adapters', async () => {
     const registry = new BackendRegistry();
     const codex = new CodexAdapter({ workingDir: '/tmp' });
     const shutdownSpy = jest.spyOn(codex, 'shutdown');
     registry.register(codex);
-    registry.shutdownAll();
+    await registry.shutdownAll();
     expect(shutdownSpy).toHaveBeenCalled();
   });
 });

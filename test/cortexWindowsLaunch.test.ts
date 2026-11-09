@@ -16,7 +16,7 @@ describe('CoCo Windows ACP launch (simulated platform)', () => {
   beforeEach(() => {
     Object.defineProperty(process, 'platform', { value: 'win32' });
     jest.clearAllMocks(); stop = jest.fn().mockResolvedValue(undefined);
-    jest.mocked(CortexProcessScope).mockImplementation(() => ({ watch: jest.fn(), stop }) as unknown as CortexProcessScope);
+    jest.mocked(CortexProcessScope).mockImplementation(() => ({ watch: jest.fn(), pace: jest.fn(), stop }) as unknown as CortexProcessScope);
     jest.mocked(execFile).mockImplementation(((_cmd: string, _args: string[], _options: unknown, callback: Function) => {
       callback(null, { stdout: 'Cortex Code v1.2.35' });
     }) as any);

@@ -168,3 +168,29 @@ test('normal code changes remain tools; explicit delivery markers yield one scop
     }
   } finally { await fs.rm(dir, { recursive: true, force: true }); }
 });
+
+test('the inactivity watchdog waits through pending decisions and restarts after an answer', async () => {
+  jest.useFakeTimers({ doNotFake: ['nextTick', 'setImmediate', 'queueMicrotask'] });
+  try {
+    const f = fixture();
+    let prompted = false;
+    f.onRequest(request => { if (request.method === 'session/prompt') prompted = true; });
+    const turn = new CortexTurn(f.runtime, { text: 'question', allowTools: true, timeoutMs: 0, idleTimeoutMs: 60_000 });
+    const events = collect(turn);
+    while (!prompted) await new Promise(resolve => setImmediate(resolve));
+    const question = cortexWire('questions').find(frame => frame.method === 'session/request_permission')!;
+    f.send({ ...question, params: { ...question.params, sessionId: f.runtime.sessionId } });
+    while (!turn.pendingId) await new Promise(resolve => setImmediate(resolve));
+    jest.advanceTimersByTime(3 * 60 * 60_000);
+    expect(f.client.isClosed).toBe(false);
+    expect(turn.input('Blue', turn.pendingId)).toBe(true);
+    jest.advanceTimersByTime(59_000);
+    expect(f.client.isClosed).toBe(false);
+    jest.advanceTimersByTime(1_000);
+    expect(f.client.isClosed).toBe(true);
+    const result = await events;
+    expect(result.filter(event => event.type === 'error')).toEqual([
+      expect.objectContaining({ error: expect.stringContaining('no progress'), source: 'transport' })]);
+    expect(result.at(-1)).toEqual({ type: 'done' });
+  } finally { jest.useRealTimers(); }
+});

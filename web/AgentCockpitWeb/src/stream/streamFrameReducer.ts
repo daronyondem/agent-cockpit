@@ -14,8 +14,8 @@ export const AFTER_ASSISTANT_MESSAGE_RECONCILE_DELAY_MS = 5000;
 export type StreamUiState = 'streaming' | 'awaiting' | 'error' | null;
 
 export type PendingInteraction =
-  | { type: 'planApproval'; planContent: string; decisionId?: string }
-  | { type: 'userQuestion'; question: string; options: Array<{ label: string; description?: string }>; decisionId?: string };
+  | { type: 'planApproval'; planContent: string; decisionId?: string; decisionBound?: boolean }
+  | { type: 'userQuestion'; question: string; options: Array<{ label: string; description?: string }>; decisionId?: string; decisionBound?: boolean };
 
 export interface StreamMemoryUpdateMessage {
   id: string;
@@ -128,6 +128,7 @@ export function reduceStreamFrame(
             type: 'planApproval',
             planContent: stringOrEmpty(frame.planContent),
             ...(frame.id ? { decisionId: frame.id } : {}),
+            ...(frame.decisionBound ? { decisionBound: true } : {}),
           },
           planModeActive: false,
           uiState: 'awaiting',
@@ -144,6 +145,7 @@ export function reduceStreamFrame(
           question: question.question,
           options: question.options,
           ...(frame.id ? { decisionId: frame.id } : {}),
+          ...(frame.decisionBound ? { decisionBound: true } : {}),
         },
         uiState: 'awaiting',
       });
@@ -161,8 +163,8 @@ export function reduceStreamFrame(
   }
   if (frame.type === 'tool_outcomes') {
     const outcomes = Array.isArray(frame.outcomes) ? frame.outcomes : [];
-    const decisionId = next.pendingInteraction?.decisionId;
-    if (decisionId?.startsWith('cortex-decision:') && outcomes.some(outcome => outcome.toolUseId === decisionId)) {
+    const interaction = next.pendingInteraction;
+    if (interaction?.decisionBound && interaction.decisionId && outcomes.some(outcome => outcome.toolUseId === interaction.decisionId)) {
       next = { ...next, pendingInteraction: null, uiState: next.streamError ? 'error' : next.streaming ? 'streaming' : null };
     }
     return withEffects(patchToolOutcomes(next, outcomes, context.nowMs));

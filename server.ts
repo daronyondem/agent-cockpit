@@ -305,7 +305,8 @@ chatService.initialize().then(async () => {
     forceExitTimer.unref();
 
     await chatShutdown();
-    backendRegistry.shutdownAll();
+    // Await owned CLI process cleanup; the force-exit timer above still bounds it.
+    await backendRegistry.shutdownAll();
     wsFns.shutdown();
 
     server.close(() => {

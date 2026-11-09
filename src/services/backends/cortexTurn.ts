@@ -6,7 +6,7 @@ import { CortexInteractions } from './cortexInteractions';
 import { configureCortex } from './cortexModels';
 import { cortexPromptContent, cortexProcessorContent } from './cortexAttachments';
 import { CortexArtifacts } from './cortexArtifacts';
-import { cortexRuntimeError, cortexTerminalError } from './cortexErrors';
+import { CortexInactivityError, cortexRuntimeError, cortexTerminalError } from './cortexErrors';
 
 /** Native prompt mapping; cortex.ts owns durable chat leases. */
 export class CortexTurn {
@@ -17,6 +17,9 @@ export class CortexTurn {
   private started = false;
   private prompting = false;
   private interactionRequired = false;
+  private watching = false;
+  private idleStopped = false;
+  private watchdog?: NodeJS.Timeout;
   private interactions: CortexInteractions;
 
   constructor(private runtime: CortexRuntime, private options: CortexTurnOptions) {
@@ -30,7 +33,11 @@ export class CortexTurn {
 
   get pendingId(): string | null { return this.interactions.pendingId; }
   get didPrompt(): boolean { return this.prompting; }
-  input(text: string, decisionId: string): boolean { return !this.ended && this.interactions.input(text, decisionId); }
+  input(text: string, decisionId: string): boolean {
+    if (this.ended || !this.interactions.input(text, decisionId)) return false;
+    this.watch(); // Native work resumes after an answer.
+    return true;
+  }
   async abort(): Promise<void> {
     this.aborted = true;
     this.interactions.cancel();
@@ -55,6 +62,21 @@ export class CortexTurn {
 
   private emit(event: StreamEvent): void { this.events.push(event); this.wake?.(); }
 
+  /** Optional inactivity limit; waiting for a human decision is not native inactivity. */
+  private watch(): void {
+    const idleMs = this.options.idleTimeoutMs;
+    if (!idleMs || !this.watching) return;
+    clearTimeout(this.watchdog);
+    this.watchdog = setTimeout(() => {
+      if (this.interactions.pendingId) return this.watch();
+      this.idleStopped = true;
+      void this.runtime.client.close(new CortexInactivityError(
+        `Cortex made no progress for ${Math.round(idleMs / 60_000)} minutes; its runtime was stopped.`));
+    }, idleMs);
+  }
+
+  private stopWatching(): void { this.watching = false; clearTimeout(this.watchdog); }
+
   private async run(): Promise<void> {
     const decoder = new CortexEventDecoder(this.runtime.sessionId || '');
     const artifacts = new CortexArtifacts(this.runtime.sessionId || '', this.runtime.config.cwd);
@@ -69,13 +91,16 @@ export class CortexTurn {
         : await cortexPromptContent(this.options.text, this.options.attachments || [], this.options.attachmentRoot, model, this.runtime.version, image);
       if (this.aborted) { this.emit({ type: 'error', error: 'Cortex turn cancelled', source: 'abort' }); return; }
       unsubscribe = this.runtime.subscribe(message => {
+        this.watch();
         if (message.id !== undefined) return this.interactions.handle(message);
         this.interactions.observe(message);
         for (const event of decoder.decode(message)) this.emit(event);
         artifactWork = artifactWork.then(async () => { for (const event of await artifacts.collect(message)) this.emit(event); });
       });
       this.prompting = true;
-      const result = cortexRecord(await this.runtime.prompt(content, this.options.timeoutMs));
+      this.watching = true;
+      this.watch();
+      const result = cortexRecord(await this.runtime.prompt(content, this.options.timeoutMs).finally(() => this.stopWatching()));
       await artifactWork;
       const usage = decoder.usage.complete(result.usage, model);
       const error = this.interactionError() || cortexTerminalError(this.aborted ? { ...result, stopReason: 'cancelled' } : result, decoder.finalText, this.runtime.version);
@@ -95,7 +120,7 @@ export class CortexTurn {
       this.interactions.cancel();
       try {
         // Acknowledged native cancellation can leave background shells alive.
-        if (this.aborted) await this.runtime.close();
+        if (this.aborted || this.idleStopped) await this.runtime.close();
       } finally {
         this.emit({ type: 'done' });
         this.ended = true;

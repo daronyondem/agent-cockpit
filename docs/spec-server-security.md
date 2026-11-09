@@ -113,7 +113,7 @@ restart/import retry loop.
 
 Signal handlers for `SIGTERM`/`SIGINT`:
 1. Call and await `chatShutdown()` — marks pending/runtime-attached durable stream jobs `finalizing` with `Interrupted by server shutdown`, aborts runtime backend handles, and clears process-local stream maps without deleting those durable jobs
-2. Call `backendRegistry.shutdownAll()` — kills long-lived backend processes (e.g. Kiro ACP)
+2. Call and await `backendRegistry.shutdownAll()` — kills long-lived backend processes (e.g. Kiro ACP) and waits for adapters that return asynchronous cleanup (CoCo descendant draining), bounded by the forced-exit timeout
 3. Call `wsShutdown()` — closes all WebSocket connections and the WS server
 4. Call `server.close()` — stop accepting connections
 5. 10-second forced exit timeout (`.unref()` as safety net)

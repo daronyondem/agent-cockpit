@@ -67,7 +67,7 @@ posix('CoCo Routines through the real process adapter', () => {
     await env.chatService.saveSettings({ ...(await env.chatService.getSettings()), cliProfiles: [profile] });
   });
   afterEach(async () => {
-    adapter.shutdown(); await adapter.stopping; await Promise.allSettled(pending); await destroyChatRouterEnv(env);
+    await adapter.shutdown(); await Promise.allSettled(pending); await destroyChatRouterEnv(env);
   });
 
   test('disabled routes remove stale managed instructions without scaffolding or native work', async () => {
@@ -156,7 +156,7 @@ posix('CoCo Routines through the real process adapter', () => {
     await waitForPartialOutput(); expect(await prompts()).toHaveLength(1);
     await expect(service.runRoutine(workspaceId, 'fixture-radar', { source: 'manual' })).rejects.toThrow('already running');
     await expect(service.deleteRoutine(workspaceId, 'fixture-radar')).rejects.toThrow('running');
-    adapter.shutdown(); await expect(job).rejects.toThrow(/shutdown/); await adapter.stopping;
+    const stopped = adapter.shutdown(); await expect(job).rejects.toThrow(/shutdown/); await stopped;
     const failed = (await service.getRoutine(workspaceId, 'fixture-radar'))!.lastRun!;
     expect(failed.status).toBe('failed'); expect(failed.finalPath).toBeUndefined(); expect(notify).not.toHaveBeenCalled();
     expect(await fs.readFile(path.join(failed.outputDir, 'report.txt'), 'utf8')).toBe('ROUTINE_FIXTURE_OUTPUT'); expect(await prompts()).toHaveLength(1);

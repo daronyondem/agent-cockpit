@@ -246,6 +246,18 @@ describe('WebSocket streaming', () => {
     expect(res.body.mode).toBe('message');
   });
 
+  test('decision answers fall back to messages unless the backend binds them to its live turn', async () => {
+    const conv = await env.chatService.createConversation('HTTP Decision Fallback');
+    const answer = () => env.request('POST', `/api/chat/conversations/${conv.id}/input`, { text: 'yes', streamActive: false, decisionId: 'toolu_question' });
+    expect((await answer()).body.mode).toBe('message');
+    const bound = jest.spyOn(env.mockBackend, 'decisionsRequireActiveTurn', 'get').mockReturnValue(true);
+    try {
+      const res = await answer();
+      expect(res.status).toBe(409);
+      expect(res.body.error).toMatch(/no longer active/);
+    } finally { bound.mockRestore(); }
+  });
+
   test('interaction input endpoint prefers message fallback when client stream is inactive', async () => {
     const conv = await env.chatService.createConversation('HTTP Input Race');
 

@@ -51,7 +51,13 @@ export async function configureCortex(runtime: CortexRuntime, selection: CortexS
       runtime.configOptions = Array.isArray(response.configOptions) ? response.configOptions : [];
       const updated = cortexConfigOptions(runtime.configOptions).find(option => option.id === id);
       if (updated?.currentValue !== value) throw new CortexInputError('Cortex did not confirm the requested configuration.');
-    } catch (error) { runtime.configOptions = []; throw error; }
+    } catch (error) {
+      // Native selection is now unknown. Retire this runtime so the next lease
+      // reloads the saved session with a fresh catalog instead of reusing it.
+      runtime.configOptions = [];
+      await runtime.close();
+      throw error;
+    }
   };
   await set('model', selection.model || 'auto');
   await set('thought_level', selection.effort || 'auto');

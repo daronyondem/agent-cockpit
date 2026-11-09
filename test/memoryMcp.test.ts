@@ -466,7 +466,7 @@ describe('POST /mcp/memory/notes', () => {
       } })).rejects.toThrow('without tools');
       expect(oneShot).not.toHaveBeenCalled(); expect(start).not.toHaveBeenCalled();
       expect((await service.getWorkspaceMemory(conversation.workspaceId))?.files).toHaveLength(2);
-    } finally { unavailable.mockRestore(); adapter.shutdown(); await adapter.stopping; }
+    } finally { unavailable.mockRestore(); await adapter.shutdown(); }
   });
 
   afterEach(async () => {

@@ -85,6 +85,21 @@ test('RPC errors preserve code and data for later narrow recovery', async () => 
   await f.client.close();
 });
 
+test('a zero deadline leaves long native work open until its reply', async () => {
+  jest.useFakeTimers({ doNotFake: ['nextTick', 'setImmediate', 'queueMicrotask'] });
+  const f = fixture();
+  try {
+    const prompt = f.client.request('session/prompt', {}, 0);
+    jest.advanceTimersByTime(24 * 60 * 60_000);
+    expect(f.client.isClosed).toBe(false);
+    f.send({ id: 1, result: 'complete' });
+    await expect(prompt).resolves.toBe('complete');
+  } finally {
+    jest.useRealTimers();
+    await f.client.close();
+  }
+});
+
 test('timeout closes all pending work and ignores late replies; no operation is retried', async () => {
   const f = fixture();
   const slow = f.client.request('slow', {}, 5);

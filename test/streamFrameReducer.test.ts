@@ -81,6 +81,15 @@ describe('streamFrameReducer', () => {
       planAction: 'exit', id: 'cortex-decision:plan', planContent: '# Plan' }]);
     expect(plan.state.pendingInteraction).toMatchObject({ type: 'planApproval', decisionId: 'cortex-decision:plan' });
   });
+  test('only decision-bound cards resolve on a matching outcome', () => {
+    const outcome = (toolUseId: string) => ({ type: 'tool_outcomes' as const, outcomes: [{ toolUseId, isError: false, outcome: 'answered', status: 'success' }] });
+    const bound = replayFrames(baseState(), [{ type: 'tool_activity', tool: 'AskUserQuestion', isQuestion: true,
+      id: 'cortex-decision:question', decisionBound: true, questions: [{ question: 'Color?', options: [] }] }, outcome('cortex-decision:question')]);
+    expect(bound.state.pendingInteraction).toBeNull();
+    const unbound = replayFrames(baseState(), [{ type: 'tool_activity', tool: 'AskUserQuestion', isQuestion: true,
+      id: 'toolu_question', questions: [{ question: 'Color?', options: [] }] }, outcome('toolu_question')]);
+    expect(unbound.state.pendingInteraction).toMatchObject({ type: 'userQuestion', decisionId: 'toolu_question' });
+  });
   test('builds placeholder content blocks from streamed frames', () => {
     const initial = baseState({ conv: baseConversation(), streaming: true, uiState: 'streaming' });
 

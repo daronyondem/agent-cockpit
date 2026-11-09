@@ -43,7 +43,9 @@ export function createUploadRouter(opts: UploadRoutesOptions): express.Router {
           .catch((err: unknown) => cb(err as Error, dir));
       },
       filename: (_req, file, cb) => {
-        const safe = file.originalname.replace(/[\/\\]/g, '_');
+        // Match the send contract's attachment-name rule (contracts/streams.ts),
+        // so every stored upload can be referenced by a later message.
+        const safe = file.originalname.replace(/[\/\\\u0000-\u001f\u007f]/g, '_');
         cb(null, safe);
       },
     }),

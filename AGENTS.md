@@ -118,8 +118,9 @@ validation; it is opt-in and uses temporary fixture workspaces. Current native
 compatibility evidence is Grok Build 1.0.52 on macOS arm64. Windows resolver and
 wrapper tests do not replace native Windows/Linux runs.
 
-`BackendRegistry.shutdownAll()` also runs after CLI updates. Keep adapter
-shutdown reusable for later runtimes, and close startups that complete after
+`BackendRegistry.shutdownAll()` also runs after CLI updates and is awaited by
+both callers. Keep adapter shutdown reusable for later runtimes, return a
+Promise when cleanup is asynchronous, and close startups that complete after
 their conversation was reset. The native Grok suite verifies goal controls,
 full autonomous completion, and real Memory/KB/Workspace Context/Routine paths.
 Run `npm run e2e:grok-build-ui` for native desktop/mobile compatibility; its
@@ -204,7 +205,11 @@ Keep secrets in child env placeholders, use Cockpit's actual Node executable
 for the Memory/KB shims, dispose descendants before deleting plugin directories,
 and refresh changed tokens/endpoints/instructions/profile/cwd only at a safe
 turn boundary. Load failures recover only on the version-tested missing-session
-signature; auth/transport failures must never cause prompt resend. Preserve
+signature; auth/transport failures must never cause prompt resend. Chat prompts
+have no fixed deadline (Stop/reset own cancellation) but stop after an hour
+without native activity; pending decisions never count as inactivity. A failed
+native config change retires that runtime so the next turn reloads its saved
+session. Preserve
 opaque decision generations through REST/WS and both clients; native RPC/tool
 IDs are separate. Review `test/cortexBackend.test.ts`, `test/cortexPlugin.test.ts`
 and `test/cortexIntegration.test.ts`, and run opt-in
@@ -229,8 +234,9 @@ P6 C37/C38 certifies native KB workflows through `scripts/probe-cortex-kb.ts`
 (opt-in, isolated SQLite/PGLite/HTTP fixture, real Ollama/Pandoc/LibreOffice,
 shared terminal auth). `BaseBackendAdapter.allowAutomaticOneShotRetry` defaults
 to true; CoCo overrides false. KB conversion/dreaming wrappers must honor it for
-execution errors and malformed output; never mark invalid CoCo synthesis batches
-processed or automatically resend interrupted tool work. Processor image format
+execution errors and unusable output (empty, unparseable, wrong shape or no valid
+items); never mark such CoCo batches processed or automatically resend
+interrupted tool work. Partially valid output applies once like other adapters. Processor image format
 policy is `oneShotImageFormat` (CoCo: png); prepare `.ai.png` siblings in the KB
 image helper while preserving original bytes/media records and native image
 gates. Review `test/cortexKbIntegration.test.ts`, the page-conversion/handler/
@@ -308,7 +314,9 @@ available with drafts; mobile queue save/drain ownership belongs to
 `useSendPipeline.ts` with current options and per-conversation suspension.
 Preserve newer drafts/uploads and recheck pending/conversation/Stop state after
 queue persistence. Explicit Resume sends queued follow-ups without replaying
-interrupted work. Matching CoCo completion IDs resolve only their card; mobile
+interrupted work. Matching completion IDs resolve only `decisionBound` cards;
+clients key off that frame flag and the input route off the adapter's
+`decisionsRequireActiveTurn` policy, never the decision ID text; mobile
 socket callbacks must retain current socket/conversation ownership. Review
 `test/cortexQueueUi.test.ts`, `test/mobileStreamOwnership.test.ts`, the desktop
 store/reducer and CoCo integration suites. Run opt-in

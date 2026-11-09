@@ -14,6 +14,7 @@ import { cortexRestrictedPlatform } from './cortexRestrictedPolicy';
 
 interface ActiveTurn { aborted: boolean; turn?: CortexTurn; draining?: Promise<void> }
 const log = logger.child({ module: 'cortex-code' });
+const CHAT_IDLE_TIMEOUT_MS = 60 * 60_000;
 
 /** Chat and processor facade; native goals and steering stay gated. */
 export class CortexCodeAdapter extends BaseBackendAdapter {
@@ -35,6 +36,7 @@ export class CortexCodeAdapter extends BaseBackendAdapter {
 
   get allowAutomaticOneShotRetry(): boolean { return false; }
   get oneShotImageFormat(): 'png' { return 'png'; }
+  get decisionsRequireActiveTurn(): boolean { return true; }
 
   private ensureIdleTimer(): void {
     if (this.idleTimer) return;
@@ -128,8 +130,11 @@ export class CortexCodeAdapter extends BaseBackendAdapter {
       if (!this.instructed.has(runtime) && options.systemPrompt) {
         text = `[Current Agent Cockpit instructions]\n${options.systemPrompt}\n[/Current Agent Cockpit instructions]\n\n${text}`;
       }
+      // No fixed deadline: Stop/reset/shutdown own chat cancellation. An hour
+      // without native activity stops a hung runtime; pending decisions do not count.
       owner.turn = new CortexTurn(runtime, { text, model: options.model, effort: options.effort,
-        attachments: options.attachments, attachmentRoot: options.attachmentRoot, allowTools: true });
+        attachments: options.attachments, attachmentRoot: options.attachmentRoot, allowTools: true,
+        timeoutMs: 0, idleTimeoutMs: CHAT_IDLE_TIMEOUT_MS });
       delegated = true;
       yield* owner.turn.stream();
     } catch (error) {
@@ -162,7 +167,7 @@ export class CortexCodeAdapter extends BaseBackendAdapter {
       .then(() => {}).catch(() => log.warn('Cortex reset cleanup failed'));
   }
 
-  shutdown(): void {
+  shutdown(): Promise<void> {
     clearInterval(this.idleTimer);
     this.idleTimer = undefined;
     for (const owner of this.active.values()) { owner.aborted = true; void owner.turn?.abort(); }
@@ -171,5 +176,6 @@ export class CortexCodeAdapter extends BaseBackendAdapter {
     this.stopping = Promise.allSettled([this.stopping, this.shots.shutdown(), this.restricted.shutdown(), this.sessions.shutdown(), ...this.drains]).then(results => {
       if (results.some(result => result.status === 'rejected')) log.warn('Cortex shutdown cleanup failed');
     });
+    return this.stopping;
   }
 }

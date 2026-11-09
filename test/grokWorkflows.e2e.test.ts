@@ -34,7 +34,7 @@ native('Grok Build application workflow compatibility', () => {
     workspaceId = (await env.chatService.createConversation('Fixture seed', workspace, 'grok-build', 'grok-4.7', 'low', profileId)).workspaceId;
   });
   afterEach(async () => {
-    env.backendRegistry.shutdownAll();
+    await env.backendRegistry.shutdownAll();
     await destroyChatRouterEnv(env);
     if (previousPort === undefined) delete process.env.PORT;
     else process.env.PORT = previousPort;

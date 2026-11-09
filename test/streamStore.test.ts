@@ -2312,7 +2312,7 @@ test.each(['failed', 'message'])('a late %s input response cannot replace a newe
 
 test('completed CoCo decisions clear on replay/outcome without clearing a newer question or the draft', async () => {
   const ws = await openWs('c1'), Store = (window as any).StreamStore;
-  const question = (id: string) => ws.dispatch({ type: 'tool_activity', id, isQuestion: true, questions: [{ question: 'Color?', options: [] }] });
+  const question = (id: string) => ws.dispatch({ type: 'tool_activity', id, isQuestion: true, decisionBound: true, questions: [{ question: 'Color?', options: [] }] });
   Store.setInput('c1', 'unsent draft'); question('cortex-decision:first');
   ws.dispatch({ type: 'tool_outcomes', outcomes: [{ toolUseId: 'cortex-decision:first' }] });
   expect(Store.getState('c1').pendingInteraction).toBeNull();
@@ -2320,6 +2320,14 @@ test('completed CoCo decisions clear on replay/outcome without clearing a newer 
   expect(Store.getState('c1').pendingInteraction.decisionId).toBe('cortex-decision:next');
   expect(Store.getState('c1').input).toBe('unsent draft');
   await Store.send('c1', 'unsent draft'); expect((global as any).AgentApi.fetch).not.toHaveBeenCalled();
+});
+
+test('an outcome never clears an unbound question that shares its tool ID', async () => {
+  const ws = await openWs('c1'), Store = (window as any).StreamStore;
+  ws.dispatch({ type: 'tool_activity', id: 'toolu_question', isQuestion: true, questions: [{ question: 'Color?', options: [] }] });
+  ws.dispatch({ type: 'tool_outcomes', outcomes: [{ toolUseId: 'toolu_question' }] });
+  expect(Store.getState('c1').pendingInteraction).toMatchObject({ decisionId: 'toolu_question' });
+  expect(Store.getState('c1').pendingInteraction.decisionBound).toBeUndefined();
 });
 
 test('desktop abort with queued work retains both queue and unsent draft without draining', async () => {
