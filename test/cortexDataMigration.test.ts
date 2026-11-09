@@ -57,7 +57,7 @@ test('CoCo profiles, durable chat/media/usage and processor choices survive full
   for (const [relative, content] of Object.entries(files)) {
     const file = path.join(sourceRoot, relative); await fs.mkdir(path.dirname(file), { recursive: true }); await fs.writeFile(file, content);
   }
-  const runtimeDirs = ['agent-cockpit-cortex-plugin-Ab123z', 'nested/cockpit-cortex-auth-Aa123z', 'nested/cockpit-cortex-login-Zz123a'];
+  const runtimeDirs = ['agent-cockpit-cortex-plugin-Ab123z', 'nested/cockpit-cortex-auth-Aa123z', 'nested/cockpit-cortex-login-Zz123a', 'nested/cockpit-cortex-restricted-Ab123z'];
   for (const dir of runtimeDirs) {
     await fs.mkdir(path.join(sourceRoot, dir), { recursive: true });
     await fs.writeFile(path.join(sourceRoot, dir, 'owner.json'), 'transient fixture ownership');
@@ -94,12 +94,12 @@ test('CoCo profiles, durable chat/media/usage and processor choices survive full
   expect(checks.tools.cliProfiles[3]).toMatchObject({ status: 'warning', message: expect.stringContaining('connection is unavailable') });
 });
 
-test.each(['plugin', 'auth', 'login', 'empty-directory', 'manifest-only'])('rejects imported %s runtime ownership even with valid manifest checksums', async kind => {
-  const folder = kind === 'plugin' ? 'agent-cockpit-cortex-plugin-Ab123z' : `cockpit-cortex-${kind === 'empty-directory' ? 'login' : kind === 'manifest-only' ? 'auth' : kind}-Ab123z`;
+test.each(['plugin', 'auth', 'login', 'restricted', 'empty-directory', 'restricted-empty-directory', 'manifest-only'])('rejects imported %s runtime ownership even with valid manifest checksums', async kind => {
+  const folder = kind === 'plugin' ? 'agent-cockpit-cortex-plugin-Ab123z' : `cockpit-cortex-${kind === 'empty-directory' ? 'login' : kind === 'restricted-empty-directory' ? 'restricted' : kind === 'manifest-only' ? 'auth' : kind}-Ab123z`;
   const relative = `nested/${folder}/owner.json`; const content = 'transient';
   const service = new DataMigrationService({ dataRoot: path.join(root, 'data'), appVersion: 'test' });
   const bundle = await service.createExportBundle(); const zip = new AdmZip(bundle.filePath);
-  if (kind === 'empty-directory') zip.addFile(`data/nested/${folder}/`, Buffer.alloc(0));
+  if (kind.endsWith('empty-directory')) zip.addFile(`data/nested/${folder}/`, Buffer.alloc(0));
   else {
     bundle.manifest.files.push({ path: relative, bytes: content.length, sha256: crypto.createHash('sha256').update(content).digest('hex') });
     bundle.manifest.counts.files++; bundle.manifest.counts.bytes += content.length;

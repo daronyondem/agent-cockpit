@@ -43,7 +43,7 @@ describe('CoCo consolidated compatibility reports', () => {
   });
 
   test('workflow and expected-auth-failure catalogs are separate; every workflow requires its own evidence', async () => {
-    expect(selectCortexProbes('workflows', []).map(item => item.id)).toEqual(['chat', 'kb', 'context', 'routines', 'mobile']);
+    expect(selectCortexProbes('workflows', []).map(item => item.id)).toEqual(['chat', 'restricted', 'kb', 'context', 'routines', 'mobile']);
     expect(selectCortexProbes('auth-control', []).map(item => item.id)).toEqual(['missing-auth']);
     expect(() => selectCortexProbes('workflows', ['--probe', 'missing-auth'])).toThrow();
     for (const probe of [...CORTEX_PROBES.workflows, ...CORTEX_PROBES['auth-control']]) {

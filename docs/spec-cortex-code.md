@@ -2,8 +2,8 @@
 
 [← Back to index](SPEC.md)
 
-**Implemented scope (2026-11-08):** P1–P5 profiles/runtime/chat/setup,
-P6 C33/C34/C36–C41 tool-enabled workflows and processor selection, P7 C42–C47
+**Implemented scope (2026-11-09):** P1–P5 profiles/runtime/chat/setup,
+P6 C33–C41 tool-enabled/restricted workflows and processor selection, P7 C42–C47
 desktop/mobile decisions/queues/usage/media/auth controls, P8 C48–C51 optional
 installation/update/migration/macOS acceptance, and C54/C55 native compatibility
 and complete workflow catalogs. C56 records explicit capability deferrals.
@@ -11,7 +11,8 @@ Native acceptance baseline is CoCo 1.2.35, macOS arm64.
 **Runtime status:** `CortexCodeAdapter` is registered in `server.ts` for chat.
 Fresh saved-auth inference, durable chat/MCP, sequential tool-enabled processors,
 PNG OCR, KB, Workspace Context, Routines and production desktop/mobile browser
-workflows have native acceptance. Strict Memory, native goals/subagents/steering,
+workflows have native acceptance. Strict Memory now has separate native headless
+acceptance on the exact retained build; native goals/subagents/steering,
 additional media, billing and account isolation remain gated/deferred. Native
 Ubuntu/Windows and physical-device acceptance are separate.
 Windows x64 runtime implementation and simulated-platform tests are now present;
@@ -22,16 +23,73 @@ See [the implementation tracker](design/cortex-code-implementation-plan.md),
 [native evaluation](research/cortex-code-acp-evaluation.md), and
 [Proposed ADR-0093](adr/0093-integrate-cortex-code-through-its-native-acp-interface.md).
 
+## Restricted text processors (P6 C35)
+
+The current zero-tool path is native root headless JSONL, independently of ACP.
+`CortexRestrictedShots` in `cortexRestricted.ts` owns ephemeral jobs and the
+single startup/sequence deadline, external AbortSignal and reusable shutdown.
+`cortexRestrictedPolicy.ts` owns exact tool names, configuration, prompt wrapping
+and compatibility checks. `cortexRestrictedStream.ts` owns input/output framing.
+These modules do not import other harness adapters or create native MCP plugins.
+
+Eligibility is `restrictedText:true` only on macOS arm64. Before each nonempty
+call, resolve/pin the selected CLI realpath, check passive native version 1.2.35
+and sibling distribution metadata exactly `1.2.35+191333.f82de3d91715`. Fail
+closed for another build, missing metadata or platform. Require an explicit
+profile and reject MCP/media, unsupported effort, invalid deadlines and pre-abort.
+An empty sequence returns `[]` after input validation without native startup.
+
+Create a private realpath temporary 0700 `cockpit-cortex-restricted-XXXXXX`
+directory as both cwd and `CORTEX_HOME`; never execute in the requested workspace.
+Write 0600 `settings.json` with `autoUpdate:false,agentMode:'standard'` and
+`hooks.json` with `disableAllHooks:true`. Preserve normal HOME/SNOWFLAKE_HOME
+authentication and selected connection. Managed child env overrides profile env
+for standard mode, no auto-applied profiles, bundled skills `__all__`, and no
+managed Snowflake MCP. The native flags and complete 48-name deny list are
+specified in [the C35 evidence](research/cortex-code-restricted-processors.md).
+Do not enable tools through approval policy or reuse ACP for this boundary.
+
+Require one system/init frame with a nonempty session_id and empty array
+catalogs `tools`, `skills`, `plugins`, `mcp_servers`, `slash_commands` before
+submitting text. Each user frame is `{type:'user',session_id,message:{role:'user',
+content:[{type:'text',text:<wrapped>} ]}}`; wrapped text is a fixed instruction
+followed by JSON.stringify(prompt), protecting native slash/shell dispatch.
+Only one prompt is pending; sequential prompts share this one process/session.
+
+Accept same-session assistant text/thinking content and system/context_usage
+frames while pending. A result must have `type:'result',subtype:'success',
+is_error:false,num_turns:1`, a distinct nonempty uuid, string result, empty
+permission_denials and finite nonnegative input/output/cache-creation/cache-read
+token buckets. Return trimmed result. Unexpected tool/control/session/content
+frames, malformed JSON, frames over 32 MiB, native failure/exit or incomplete
+results terminate the entire sequence with no resend or later prompt. Diagnostic
+bytes are drained without exposing native account/error text. Native usage is
+validated without inventing Snowflake cost or adding an independent usage ledger.
+
+Success, failure, timeout, abort and shutdown await identity-checked process
+cleanup before deleting the private home and releasing the job. Cleanup errors
+reject; never report successful output while a known root remains active.
+Version probes are abortable. No native sessions/private history are retained.
+Export excludes and import rejects reserved restricted directories, including
+empty ones. Existing Memory governance/extraction/proposal/draft calls require
+this role and can select CoCo explicitly; no saved/default choice is rewritten.
+Titles/summaries keep deterministic fallbacks. Tool-enabled ACP, chat, OCR,
+queues, mobile streams, pricing and deferred optional capabilities are unchanged.
+
+Native C35 evidence is nine actual zero-tool/resource requests across eight jobs,
+positive hook/MCP controls, hostile input and real Memory workflows, active abort
+drain and fresh inference. Tests and the opt-in native probe are in
+[the testing specification](spec-testing.md#coco-restricted-memory-c35).
+Earlier sections' strict-Memory deferrals describe their original checkpoint;
+this C35 section supersedes those gates only for the exact scope above.
+
 ## Background execution and OCR (P6 C33/C34/C36)
 
-The public adapter delegates `runOneShot(prompt, options)` and
-`runSessionShot(prompts, options)` to `cortexShots.ts`. The former returns the
-first string from a one-prompt sequence; the latter returns one trimmed final
-answer per prompt. `allowTools` must be exactly `true`. Omitted/false values
-reject before session acquisition, plugin generation, version detection or
-native startup, including empty sequences and calls supplying MCP. G1 remains
-open: permission denial and native allowlists do not remove tool declarations.
-Memory governance/extraction/consolidation therefore cannot use CoCo. Existing
+The public adapter routes explicit `allowTools:true` one-shot/sequential calls
+to `cortexShots.ts` (native ACP). Omitted/false calls use the dedicated
+[restricted headless path](#restricted-text-processors-p6-c35). `runOneShot`
+returns the first string of a one-prompt sequence; `runSessionShot` returns one
+trimmed final answer per prompt. Neither path retries interrupted work. Existing
 deterministic title/summary fallbacks do not start inference.
 
 Each call requires an explicit profile and gets an unguessable processor lease
@@ -77,7 +135,7 @@ The verified model/version remains exactly `claude-sonnet-4-6` on 1.2.35 (includ
 build suffixes); Auto and unsupported models fail before submitting a prompt.
 No PDF/audio/video attachment transport or JPEG support is claimed.
 
-Metadata now advertises `oneShot:{restrictedText:false,toolEnabled:true,sequential:true}`
+Metadata advertises `oneShot:{restrictedText:<macOS arm64>,toolEnabled:true,sequential:true}`
 and `oneShotMediaInput.image:['explicit-attachment']`. Profile-local model metadata
 retains its independent verified image gate. The existing authenticated
 `POST /conversations/:id/attachments/ocr` path sends the trusted image through
@@ -314,9 +372,11 @@ Browser-safe `src/contracts/backendCapabilities.ts` owns the shared policy:
   backends without explicit `oneShot` flags keep existing role behavior;
   explicit denials and CoCo's independently gated roles are enforced.
 - Memory note governance, extraction, consolidation proposals and rewrite drafts
-  require `restrictedText`. CoCo is rejected before `runOneShot` or native
-  startup; no tool flag is relaxed. Notes report that the note was not saved;
-  best-effort extraction returns zero; consolidation errors remain visible.
+  require `restrictedText`. CoCo uses the separately verified C35 path on
+  macOS arm64, with the exact native distribution checked at invocation. Other
+  platforms fail static preflight. Failures never select another profile: notes
+  report that the note was not saved, best-effort extraction returns zero, and
+  consolidation errors remain visible.
 - KB conversion/OCR, digestion, dreaming, Context and Routines require
   `toolEnabled`; gleaning additionally requires `sequential`. Ingestion rejects
   unsupported roles before discovery and keeps image-only recovery without
@@ -365,7 +425,8 @@ box is hidden for CoCo so it cannot start a job without presenting the native
 generation-owned redirect UI. Explicit isolated homes and custom commands use
 terminal authentication and are not verified by a successful shared setup check.
 The setup panel explains manual installation when the CLI is unavailable and
-names unavailable goals/agents/steering/restricted Memory. Optional installation/doctor actions are specified in P8 C48 below; CLI Update
+names unavailable goals/agents/steering. Restricted Memory has its separate C35
+version/platform guard. Optional installation/doctor actions are specified in P8 C48 below; CLI Update
 management is specified in P8 C49 below.
 Metadata supplies an inline blue snowflake-shaped icon to both clients.
 
@@ -1076,9 +1137,9 @@ ingestion callers keep their current media checks through that path. A missing
 explicit model must not silently select a different media model.
 
 The shared policy drives the processor selectors and service preflights under
-C41; full client acceptance remains P7. CoCo's adapter independently rejects
-restricted calls before startup. The strict native zero-tool boundary is
-unverified, so CoCo metadata explicitly denies `restrictedText` until certified.
+C41; full client acceptance remains P7. CoCo's restricted-text metadata is
+platform-scoped by C35; each native invocation independently verifies the full
+distribution and empty startup catalogs before submitting any processor prompt.
 Unknown Snowflake pricing and unsupported native goals/subagents remain outside
 this foundation; token/media/goal capabilities are not inferred from model names.
 
@@ -1911,8 +1972,9 @@ for prerequisites, exact coverage/deadlines, mandatory report checks and limits.
 The [capability decision record](research/cortex-code-capability-decisions.md)
 defers goals, subagent cards, unsolicited steering, additional native media,
 Snowflake billing and account isolation for the 1.2.35/macOS baseline. Existing
-metadata/role/media/usage guards remain unchanged. C35 remains conditional on a
-complete native zero-tool boundary; upstream code mode still permits tools and
+media/usage guards remain unchanged. C35 subsequently certified a separate
+headless zero-tool boundary on the exact macOS arm64 distribution (see below);
+upstream code mode still permits tools and
 is not that proof. Current upstream documentation does not certify a new native
 contract or CLI version for Cockpit.
 

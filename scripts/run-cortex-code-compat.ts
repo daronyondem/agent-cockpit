@@ -32,13 +32,14 @@ export async function runCortexCompatibility(suite: CortexCompatSuite, args = pr
   const controller = new AbortController();
   const abort = () => controller.abort();
   process.once('SIGINT', abort); process.once('SIGTERM', abort);
-  const deadline = setTimeout(abort, ({ backend: 40, ui: 70, workflows: 70, 'auth-control': 5 }[suite]) * 60_000);
+  const deadline = setTimeout(abort, ({ backend: 40, ui: 70, workflows: 85, 'auth-control': 5 }[suite]) * 60_000);
   const results: Array<Record<string, unknown>> = [];
   const report: Record<string, unknown> = { startedAt, suite, platform: process.platform, osRelease: os.release(), arch: process.arch, node: process.version,
     selected: selected.map(probe => probe.id), omitted: CORTEX_PROBES[suite].filter(probe => !selected.some(item => item.id === probe.id)).map(probe => probe.id),
     scope: selected.length === CORTEX_PROBES[suite].length ? 'all catalog probes' : 'selected catalog probes',
     authScope: suite === 'auth-control' ? 'empty native configuration; expected failure only' : 'shared terminal credentials; real account inference required',
-    pending: ['C26 human remote OAuth', 'C35 strict Memory', 'C52 Ubuntu', 'C53 Windows', 'physical mobile devices',
+    pending: ['C26 human remote OAuth', 'C52 Ubuntu', 'C53 Windows', 'physical mobile devices',
+      ...(selected.some(probe => probe.id === 'restricted') ? [] : ['C35 restricted Memory outside this run']),
       ...(suite === 'workflows' && selected.length === CORTEX_PROBES.workflows.length ? [] : ['complete workflow catalog outside this run'])],
     historicalObservations: [
       'C49 saved-auth verification failure and cached-job timeout; later passes do not establish their cause.',

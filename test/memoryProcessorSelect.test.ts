@@ -55,3 +55,16 @@ test('no eligible profiles renders an explicit empty choice', async () => {
   expect(container.textContent).toBe('No eligible CLI profiles available');
   expect(container.querySelector('select')!.value).toBe('');
 });
+
+test('a verified restricted CoCo capability makes the Memory profile selectable without changing saved choices', async () => {
+  const onChange = jest.fn();
+  const verifiedMetadata = (profile: { id: string }) => ({ ...metadataForProfile(profile),
+    capabilities: { oneShot: { restrictedText: true, toolEnabled: true, sequential: true } } });
+  await act(async () => { root.render(createElement(MemoryProcessorSelect, { profiles, selectedId: 'claude', metadataForProfile: verifiedMetadata, onChange })); });
+  const select = container.querySelector('select')!;
+  expect(select.value).toBe('claude');
+  expect(select.querySelector<HTMLOptionElement>('option[value="cortex"]')!.disabled).toBe(false);
+  expect(onChange).not.toHaveBeenCalled();
+  await act(async () => { select.value = 'cortex'; select.dispatchEvent(new Event('change', { bubbles: true })); });
+  expect(onChange).toHaveBeenCalledWith('cortex');
+});

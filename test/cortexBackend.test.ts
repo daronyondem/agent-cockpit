@@ -3,6 +3,7 @@ import os from 'os';
 import path from 'path';
 import type { CliProfile, CortexRuntimeConfig, SendMessageOptions, SendMessageResult, StreamEvent } from '../src/types';
 import { CortexCodeAdapter } from '../src/services/backends/cortex';
+import { cortexRestrictedPlatform } from '../src/services/backends/cortexRestrictedPolicy';
 import { CortexSessions } from '../src/services/backends/cortexSessions';
 import { CortexRuntime } from '../src/services/backends/cortexRuntime';
 import { cortexFixture, cortexWire } from './helpers/cortexFixtures';
@@ -62,7 +63,7 @@ describe('Cortex chat adapter ownership and recovery', () => {
     expect(adapter.allowAutomaticOneShotRetry).toBe(false);
     expect(adapter.oneShotImageFormat).toBe('png');
     expect(adapter.metadata.capabilities).toMatchObject({ stdinInput: false, agents: false, goals: false,
-      oneShot: { restrictedText: false, toolEnabled: true, sequential: true } });
+      oneShot: { restrictedText: cortexRestrictedPlatform(), toolEnabled: true, sequential: true } });
     expect(adapter.metadata.resumeCapabilities).toMatchObject({ activeTurnResume: 'unsupported', sessionResume: 'supported' });
     expect((await adapter.getMetadata()).models).toEqual([]);
     expect((await adapter.getMetadata({ cliProfile: options.cliProfile })).models?.some(model => model.id === options.model)).toBe(true);
@@ -70,7 +71,7 @@ describe('Cortex chat adapter ownership and recovery', () => {
     expect(adapter.metadata.icon).toMatch(/^<svg /);
     expect(await adapter.generateSummary([], 'Saved summary')).toBe('Saved summary');
     expect(await adapter.generateTitle('a title', 'Fallback')).toBe('Fallback');
-    await expect(adapter.runOneShot('do work')).rejects.toThrow('zero-tool');
+    await expect(adapter.runOneShot('do work')).rejects.toThrow('explicit CLI profile');
     expect(() => adapter.sendMessage('missing options')).toThrow('workspace identity');
   });
 

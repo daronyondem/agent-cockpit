@@ -75,7 +75,7 @@ test('custom env and shared setup resolve the same native homes as runtime execu
 });
 
 test('recognizes only reserved native temporary folder segments', () => {
-  for (const prefix of ['agent-cockpit-cortex-plugin-', 'cockpit-cortex-auth-', 'cockpit-cortex-login-']) {
+  for (const prefix of ['agent-cockpit-cortex-plugin-', 'cockpit-cortex-auth-', 'cockpit-cortex-login-', 'cockpit-cortex-restricted-']) {
     expect(isCortexMigrationRuntimePath(`nested/${prefix}Ab123z/owner.json`)).toBe(true);
   }
   for (const file of ['chat/cortex-auth.json', 'notes/cockpit-cortex-auth-guide.md', 'cortex/profile.json', 'agent-cockpit-cortex-plugin-Ab123z.md']) {

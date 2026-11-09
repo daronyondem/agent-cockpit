@@ -486,7 +486,8 @@ weaken production guards to reach a missing-auth prompt. Validate each fixed
 workflow outcome in `cortexCompatReports.ts`, not just a top-level pass.
 The browser fixture is isolated and PM2-managed; real-adapter service fixtures
 remain in-process. Chat's governed Memory uses a separate authenticated Claude
-processor; strict CoCo Memory remains disabled. KB needs real Ollama/Pandoc/
+processor; C35 separately certifies CoCo strict Memory through its native
+headless path below. KB needs real Ollama/Pandoc/
 LibreOffice; Routine outreach stays a stub. Missing dependencies must fail,
 never silently skip, mock or retry. Preserve short temporary roots, shared auth,
 private report material and full-Jest-before-browser ordering. See the C55
@@ -501,6 +502,27 @@ strict Memory from a documentation claim alone. Public setup is documented in
 `docs/user/cortex-code.md`; C59 ADR/mobile/PR preparation and final evidence live
 in `docs/design/cortex-code-review.md`. ADR-0093 remains Proposed until merge
 under ADR-0001. Review preparation does not publish a PR or release.
+
+C35 restricted text ownership lives in `cortexRestricted.ts`,
+`cortexRestrictedPolicy.ts` and `cortexRestrictedStream.ts`, separate from ACP.
+Default/false allowTools must use the native headless zero-tool path; never
+upgrade it to ACP/tool-enabled execution. Admit only macOS arm64 and standalone
+1.2.35+191333.f82de3d91715 after passive pinned version/distribution checks.
+Keep the private CORTEX_HOME **and cwd**, disable hooks via private hooks.json,
+MCP/skills/auto-profiles, force standard mode, retain all 48 exact deny names,
+and require empty tool/skill/plugin/MCP/slash startup catalogs before prompts.
+Wrap arbitrary input as literal JSON text so native slash/shell dispatch cannot
+run it. Preserve terminal HOME/SNOWFLAKE_HOME auth; this is not account isolation.
+Unexpected tool/control/session/result frames fail closed. One deadline covers
+startup/sequences; never replay, and await owned cleanup before temp deletion.
+Review the focused restricted process/stream, Memory/selector and migration tests;
+run `CORTEX_RESTRICTED_PROBE=1 npx tsx scripts/probe-cortex-restricted.ts` or the
+workflow catalog's `--probe restricted` for native drift. Preserve actual outgoing
+zero-schema/resource capture, working hook/MCP positive controls, real governance/
+extraction/consolidation and active abort/fresh inference evidence. Other builds
+and platforms stay gated. Titles/summaries retain fallback. This C35 proof
+supersedes earlier strict-Memory deferrals only in the exact scope documented in
+[the C35 report](docs/research/cortex-code-restricted-processors.md).
 
 # Server Management
 

@@ -1,6 +1,6 @@
 # Cortex Code (CoCo) harness implementation plan
 
-**Status:** Implemented macOS arm64/CoCo 1.2.35 core and tool-enabled background scope, P7/P8 C48–C51 and C54–C59 autonomous review/verification complete. Windows x64 runtime preparation is implemented with simulated tests. Four acceptance items remain: C26 human OAuth, conditional C35 zero-tool Memory, C52 native Ubuntu and C53 native Windows. No PR or release has been published.
+**Status:** Implemented macOS arm64/CoCo 1.2.35 core and tool-enabled background scope, P7/P8 C48–C51 and C54–C59 autonomous review/verification complete. Windows x64 runtime preparation is implemented with simulated tests. C35 strict Memory is implemented/certified on the exact macOS arm64 distribution. Three acceptance items remain: C26 human OAuth, C52 native Ubuntu and C53 native Windows. No PR or release has been published.
 **Created:** 2026-11-05.
 **Planning baseline:** Agent Cockpit `0.4.166`, revision `11d14825e955f6c83364c3917558b4d3068a4bac`, plus the uncommitted CoCo research/guidance documents.
 **Native compatibility baseline:** Cortex Code `1.2.35`, distribution `1.2.35+191333.f82de3d91715`, macOS arm64.
@@ -34,8 +34,9 @@ Planning assumptions:
 - Deliver core chat before optional parity work. Unverified features remain
   explicitly unavailable; do not emulate native goals or silently reroute work
   to a different profile to make a selector appear functional.
-- Implemented slices and native acceptance are recorded below. C26, conditional
-  C35 and native C52/C53 remain open. C56 defers optional parity without claiming
+- Implemented slices and native acceptance are recorded below. C26 and native
+  C52/C53 remain open. C35 uses a separately verified native headless path on
+  the exact macOS arm64 distribution. C56 defers optional parity without claiming
   it is implemented; final review does not authorize a PR or release.
 
 Track work as follows:
@@ -172,7 +173,7 @@ means that feature is already integrated into Cockpit. Phase IDs refer to §9.
 |---|---|---|---|
 | Workspace instructions/status/repair | Add CoCo to `AGENTS.md` instruction mapping and compatibility status; preserve user-authored files and managed blocks | V native pointer read; C repair/store | P1, P5 |
 | Cockpit Memory note/search in chat | Native plugin runs existing `memoryMcp/stub.cjs`; preserve workspace/conversation token scope and server-side governance | V shim + HTTP fixture, not production governance | P5 |
-| Memory extraction/write governance/consolidation | Existing Memory service selects a strict tool-free processor; CoCo unavailable for this role until G1 passes | U strict processor; Memory tools can still work through another configured processor | P6 |
+| Memory extraction/write governance/consolidation | Native headless zero-tool path on macOS arm64 / 1.2.35+191333.f82de3d91715; exact build and startup catalogs checked per job | V C35; actual service workflows and zero-schema/resource requests verified | P6 |
 | Memory search/browser/edit/notifications | Existing server stores and UI; test actual accepted/rejected/redacted outcomes and exact-file notifications | C; never bypass governance with direct writes | P5, P7 |
 | Native CLI memory import/watch | Disable native CoCo memory in managed runtimes with verified `CORTEX_ENABLE_MEMORY=0`; keep `extractMemory/getMemoryDir` null | P disabled in probes; verify suppression, no native import claim | P2, P5 |
 | KB chat search | Native plugin runs `kbSearchMcp/stub.cjs` with its separate token; normalize prefixed/deferred/wrapped tool activity | V fixture search result reached assistant | P5 |
@@ -506,7 +507,7 @@ them; cleanup must also cover abrupt server restart.
 | Interactive tool-enabled chat | Normal conversations, Memory/KB tools | Native persistent session; user-facing questions/plans; managed MCP |
 | Tool-enabled ephemeral work | KB conversion/digestion/dreaming, Workspace Context, Routines, attachment OCR where requested | Implement `runOneShot` with `allowTools:true`, owned temporary session/plugin, caller timeout/abort, tested headless permission policy |
 | Sequential ephemeral work | KB gleaning via `runSessionShot` | Preserve one native session across prompts with per-prompt output, common overall deadline, same tools/model/effort and complete cleanup |
-| Strict tool-free text | Memory write governance/extraction/consolidation and any title/summary or other caller using default `allowTools:false` | Reject before native prompt while G1 is open; title/summary return deterministic fallback; Memory selection unavailable |
+| Strict tool-free text | Memory write governance/extraction/consolidation and default/false `allowTools` callers | Dedicated native headless path on the exact macOS arm64 distribution, isolated config/cwd, zero-catalog preflight, no MCP/media; title/summary keep deterministic fallback |
 
 Keep default `allowTools:false`. Never upgrade a restricted caller to unrestricted
 execution or claim that rejecting reverse permission requests removes tool
@@ -813,10 +814,20 @@ Desktop/mobile changes retain decision generations; PWA metadata is unchanged.
 - [x] C34 — Enforce restricted-path rejection before spawn/prompt while G1 is
   open, deterministic title/summary fallback and Memory selector exclusion.
   Verify programmatic callers cannot bypass the UI gate.
-- [ ] C35 — If G1 passes, implement restricted execution and enable only the
+- [x] C35 — If G1 passes, implement restricted execution and enable only the
   verified roles. Verify zero definitions/operations across native/deferred MCP,
   hooks/skills/commands/slashes and sequential prompts; run actual governance,
   extraction and consolidation before selecting CoCo for Memory.
+  **Complete 2026-11-09:** dedicated native headless JSONL path with exact 48-name
+  denial, private CORTEX_HOME/cwd, disabled hooks/MCP/skills/profiles and wrapped
+  command-like text. macOS arm64/full-distribution guard and empty native startup
+  catalogs fail closed before prompting. Nine actual captured requests in eight
+  jobs had zero tool schemas/resources; working hook/MCP positive controls stayed
+  inactive during restricted work. Native sequential continuity, actual governance,
+  extraction, proposal and rewrite/apply, active cancellation/drain and fresh
+  inference passed. See [C35 evidence](../research/cortex-code-restricted-processors.md)
+  for the sanitized report and separately retained initial harness failure.
+  Titles/summaries retain fallback; no broader build/platform/account claims.
 - [x] C36 — Certify image one-shot transport/model gates and attachment OCR.
   Verify a real image answer/OCR, cancellation and unsupported-model rejection.
 - [x] C37 — Certify KB image/PDF/DOCX/PPTX conversion via existing pipelines.
@@ -1585,7 +1596,7 @@ or release is required to validate this planning document.
 
 | Gate | Current status | Required experiment / resolution | Release effect |
 |---|---|---|---|
-| G1 — Strict tool-free execution | Gated; C35 remains conditional. Phase 0 still emitted native calls with an unmatched allowlist; C56 code-mode review does not establish zero tools | Prove zero definitions/operations across native/deferred/MCP/tools/hooks/skills/slashes/sequences, then run strict Memory workflows | CoCo Memory unavailable; deterministic title/summary fallbacks; separate eligible Memory processor |
+| G1 — Strict tool-free execution | Passed for native headless JSONL on macOS arm64 / 1.2.35+191333.f82de3d91715; C35 complete. Earlier ACP allowlist/code-mode failures remain historical | New builds/platforms require renewed zero-schema/resource and real Memory workflow evidence | Strict Memory selectable within that scope; unknown build/platform rejected; deterministic title/summary fallbacks retained |
 | G2 — Root-exit/descendant cleanup | Verified in scoped macOS runtime/chat/processor/PM2 fixtures through C51/C54/C55 | Retain userspace sampling limits; validate every added OS and native semantic delegation separately | macOS scoped ownership supported; not OS containment or subagent certification |
 | G3 — Recovery and terminal errors | Implemented P3/P5; native saved-session/restart/relocation/Stop/recovery and durable HTTP/WS/browser evidence in C54/C55 | Retain missing-session-only recovery and error-as-text classification; no prompt resend for auth/transport failures | Enabled scoped core chat/restart; arbitrary error/version behavior is not certified |
 | G4 — Media and artifacts | Verified PNG/claude-sonnet-4-6/1.2.35, real KB rasterization/OCR and delivered files; C56 broader media deferred | Per-model/transport/format native evidence before direct PDF/audio/video/additional images or generation | Only existing verified subset enabled; KB conversions do not prove native PDF input |
@@ -1651,6 +1662,8 @@ At implementation time update only the relevant current specifications:
 | 2026-11-07 | P8 C48 complete; 13 tasks remain unchecked | Optional standalone installation/doctor/Welcome support following `20620d8` | CoCo 1.2.35 / macOS arm64 / Node 26.0.0 | Real disposable official installation, immediate discovery without PATH changes, spaced home/app/command override and auth-home separation passed (`cockpit cortex install V2PgNg`). Native saved-auth/Welcome detection/fresh desktop inference and six responsive synthetic handoff cases passed (`cockpit-cortex-auth-ui-9RMnWK`). Full V8 173 suites / 2,941 tests; 88.62% lines, 76.69% branches, 93.82% functions. Floors raised to 88.62/76.65/93.8. macOS installer/release/update regressions, types/lint/architecture/spec/ADR, rebuilt assets and unchanged bundle limits pass; Memory saved. C26, conditional C35 and C49–C59 remain open; C49 is next. |
 
 | 2026-11-08 | P8 C49 complete; 12 tasks remain unchecked | Version-gated native updates following `327de77` | CoCo 1.2.35 / macOS arm64 / Node 26.0.0 | Full V8 175 suites / 2,956 tests; 88.66% lines, 76.83% branches, 93.86% functions; floors raised to 88.65/76.8/93.85. Disposable native download/checksum/activation/draining/reuse/failure/explicit retry passed (`cockpit cortex updates x0xwAe`), with synthetic build/target controls disclosed. Independent PM2 update-row acceptance passed at 1280/390/320 px (`cockpit-cortex-auth-ui-M6gFEs`), without mutation/auth. Required types/lint/architecture/spec/ADR/build/budget and macOS regressions pass; Memory saved. Full auth repeats failed generic verification (`zVw71N`) and cached-login waiting after successful fresh inference (`mdl3Fa`); standalone fresh verification passed. Failed evidence is retained, not counted as full auth recertification. C26/C54 retain that observation. C26, conditional C35 and C50–C59 remain open; C50 is next. |
+
+| 2026-11-09 | P6 C35/G1 complete; three tracker tasks remain | Restricted Memory implementation following `68ecb4e` | CoCo 1.2.35+191333.f82de3d91715 / macOS arm64 / Node 26.0.0 | Final 185 suites / 3,061 tests passed at raised floors 88.78/77.30/93.95; measured 88.79/77.31/93.98. Native selected restricted catalog 1/1 (1/6 selected), 14 required checks, nine zero-schema/resource requests across eight inference jobs plus an empty-connection negative control. Actual governance/extraction/proposal/draft/apply, positive hook/MCP handshake and schema controls, hostile input, sequence and active cancel/drain/fresh inference passed; activation unchanged. Required types/lint/architecture/spec/ADR/build/budget gates pass; Memory saved. C26, native C52/C53 remain pending. No PR/release/normal-server restart. |
 
 ## 13. References
 

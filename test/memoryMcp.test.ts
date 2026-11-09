@@ -431,9 +431,13 @@ function makeRequest(
 // ── POST /memory/notes handler tests ──────────────────────────────────────
 
 describe('POST /mcp/memory/notes', () => {
-  test('a restored CoCo Memory selection fails before startup, keeps its profile and never saves a fallback note', async () => {
+  test('an unavailable CoCo Memory selection fails before startup, keeps its profile and never saves a fallback note', async () => {
     const start = jest.fn();
     const adapter = new CortexCodeAdapter({ sessions: new CortexSessions(start) });
+    const metadata = adapter.metadata;
+    const unavailable = jest.spyOn(adapter, 'metadata', 'get').mockReturnValue({ ...metadata, capabilities: {
+      ...metadata.capabilities, oneShot: { restrictedText: false, toolEnabled: true, sequential: true },
+    } });
     registry.register(adapter);
     try {
       const settings = await service.getSettings();
@@ -462,7 +466,7 @@ describe('POST /mcp/memory/notes', () => {
       } })).rejects.toThrow('without tools');
       expect(oneShot).not.toHaveBeenCalled(); expect(start).not.toHaveBeenCalled();
       expect((await service.getWorkspaceMemory(conversation.workspaceId))?.files).toHaveLength(2);
-    } finally { adapter.shutdown(); await adapter.stopping; }
+    } finally { unavailable.mockRestore(); adapter.shutdown(); await adapter.stopping; }
   });
 
   afterEach(async () => {

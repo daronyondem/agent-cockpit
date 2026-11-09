@@ -1721,8 +1721,9 @@ strip `configDir`/`SNOWFLAKE_HOME`, while explicit profile home metadata remains
 unverified for runtime isolation. See [the complete CoCo contract](spec-cortex-code.md)
 for validation, defaults, migration, capability fields and current availability.
 CoCo is registered for durable chat and tool-enabled one-shot/sequential work,
-with shared authentication setup; installation/update integration remains pending.
-Its one-shot capabilities are restrictedText:false, toolEnabled:true and
+with shared authentication and scoped installation/update integration.
+Its one-shot capabilities are restrictedText:true on macOS arm64 (with an exact
+distribution guard at execution; false elsewhere), toolEnabled:true and
 sequential:true, with explicit image transport and independently gated models.
 The internal `RunOneShotAttachment` declaration lives in `src/types/backends.ts`
 and is re-exported by the base adapter: `{path:string, kind:ModelInputModality,

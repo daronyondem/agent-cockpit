@@ -65,9 +65,12 @@ ingestion/digestion/gleaning/dreaming, Workspace Context and Routines. Queues,
 Stop, reconnect, history and mobile OCR have native browser coverage. Routine
 outreach acceptance uses a stub, not a real delivered message.
 
-Keep an eligible separate Memory processor selected: strict CoCo Memory
-governance/extraction/consolidation is disabled. Tool-enabled KB, Context and
-Routine processors can select CoCo independently. Missing/disabled saved choices
+In **Settings → Memory**, CoCo can now be selected for governance, extraction
+and consolidation on macOS arm64 with the exact standalone build
+`1.2.35+191333.f82de3d91715`. Restricted jobs run with zero tool definitions in
+a private native configuration; another build/platform is rejected. Model and
+effort use the saved Memory choices. Titles/summaries retain their existing
+fallbacks. Tool-enabled KB, Context and Routine processors select CoCo independently. Missing/disabled saved choices
 remain visible and require an explicit change; Cockpit does not silently switch
 the account or harness. KB embeddings need configured Ollama; Office conversion
 needs Pandoc/LibreOffice as described in the KB setup docs.

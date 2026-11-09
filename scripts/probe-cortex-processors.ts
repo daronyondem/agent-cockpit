@@ -51,9 +51,8 @@ async function main() {
     assert.ok(metadata.models?.some(model => model.id === options.model));
     results.catalog = true;
     results.stage = 'restricted';
-    await assert.rejects(adapter.runOneShot('/command', { cliProfile: profile }), /zero-tool/);
-    await assert.rejects(adapter.runSessionShot(['one', 'two'], { cliProfile: profile, allowTools: false }), /zero-tool/);
-    results.restrictedRejected = true;
+    assert.equal(await adapter.runOneShot('Return exactly RESTRICTED_OK.', { ...options, allowTools: false }), 'RESTRICTED_OK');
+    results.restrictedText = true; // Full zero-schema/Memory evidence is the separate C35 probe.
     results.stage = 'sequential';
     const nonce = `NATIVE_${crypto.randomBytes(6).toString('hex')}`;
     const outputs = await adapter.runSessionShot([

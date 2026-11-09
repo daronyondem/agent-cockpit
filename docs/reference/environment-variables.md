@@ -42,7 +42,8 @@ is separate from account configuration.
 | --- | --- |
 | `SNOWFLAKE_HOME` | Native connection/config home; normally `~/.snowflake`. Explicit non-setup profile `configDir` maps here. Separate-home/two-account isolation is not certified. Setup profiles retain shared terminal auth instead of creating isolated homes. |
 | `CORTEX_OAUTH_MANUAL` | Managed native runtime/login sets `1` for the manual URL/loopback redirect handoff. OAuth URLs/state/codes belong only to the active job. |
-| `CORTEX_ENABLE_MEMORY` | Managed runtime forces `0`; use Cockpit Memory MCP with an eligible separate processor. |
+| `CORTEX_ENABLE_MEMORY` | Managed runtime forces `0`; use Cockpit Memory MCP with an eligible processor. |
+| `CORTEX_HOME` | Restricted processors force an ephemeral private config/history home and cwd; normal HOME/SNOWFLAKE_HOME auth is retained. This is not account isolation. |
 | `CORTEX_ACP_TEST_MODE` | Managed runtime forces `0`. Fake native mode is never authentication/compatibility evidence. |
 
 Developer-only `CORTEX_CODE_E2E=1` authorizes real compatibility runs;

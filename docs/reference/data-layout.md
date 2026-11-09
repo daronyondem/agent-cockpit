@@ -131,7 +131,7 @@ bundle. Explicit native homes inside the data root follow the existing
 full-root durable-file contract and may include credential-bearing data.
 Export/import does not rewrite these homes or absolute profile/processor
 choices. Reserved `agent-cockpit-cortex-plugin-*` and
-`cockpit-cortex-auth-*`/`cockpit-cortex-login-*` native temporary directories
+`cockpit-cortex-auth-*`/`cockpit-cortex-login-*`/`cockpit-cortex-restricted-*` native temporary directories
 with native six-character generated suffixes are excluded and rejected on
 import, including empty directories. OAuth jobs,
 URLs, state and redirects remain memory-only.

@@ -14,7 +14,7 @@ section.
 | Runtime and protocol | Dedicated cortex modules, captured realpath/version, per-conversation leases, replay suppression, reusable shutdown, descendant identity cleanup and safe-boundary MCP/token refresh. No production Grok/Kiro imports or generic ACP refactor. |
 | Authentication | Create-only native TOML, shared terminal credentials, native manual OAuth/PTY, exact callback generation/state/issuer/owner and fresh inference. Human remote handoff C26 and account isolation remain unclaimed. |
 | Chat and clients | Existing REST/WS/storage/artifact facades; opaque decision ownership, queues/Stop/reconnect, context vs token usage, unavailable cost, scoped attachments and invocation-only OCR overrides. |
-| Processors | Explicit tool-enabled selection and one deadline, no retry/replay, headless human gates fail, missing saved choices retained. Strict Memory stays unavailable; governed chat Memory uses another eligible processor. |
+| Processors | Explicit tool-enabled selection and one deadline, no retry/replay, headless human gates fail, missing saved choices retained. C35 adds a separate verified headless strict Memory path on the exact macOS arm64 build; chat can still use another eligible processor. |
 | Platform lifecycle | Optional official standalone install, narrow proven macOS update layout, passive full-bundle import checks and reserved runtime exclusions. Ubuntu preparation is not a native pass. Windows x64 runtime is implemented with simulated tests; native acceptance remains pending and install/update remain manual. |
 | Compatibility and reporting | Isolated synthetic data, PM2 browser fixtures, fixed native checks, bounded deadlines/cleanup and private raw evidence. A subset pass or expected-auth failure is never full capability/auth certification. |
 
@@ -38,7 +38,6 @@ outside acceptance. Full Jest must finish before rebuilding/browser probes.
 ## Residual gates
 
 - C26: a human completes the real remote-browser OAuth handoff through Cockpit.
-- C35/G1: a complete native zero-tool boundary, then real strict Memory workflows.
 - C52: actual Ubuntu 24.04 x64 install/auth/user-service/cache/update/cleanup.
 - C53: native Windows executable/auth/PowerShell/ConPTY/process/update acceptance.
   Runtime implementation and simulated tests are complete; other harness wrappers
@@ -63,14 +62,14 @@ The dedicated ACP adapter supports durable chat, thinking/tools, questions and
 revised plans, resume, delivered files and managed Memory/KB MCP. Tool-enabled
 sequential processors power KB, Workspace Context, Routines and verified PNG OCR.
 Desktop/mobile preserve decision, queue, Stop, reconnect, usage and attachment
-ownership. CoCo cost remains unavailable; strict Memory and unverified native
-features stay gated. Optional installation, version-limited macOS updates and
+ownership. CoCo cost remains unavailable. Strict Memory uses the verified
+headless path on the exact macOS arm64 build; other unverified features stay gated. Optional installation, version-limited macOS updates and
 full-data migration checks preserve shared auth and existing release behavior.
 
 Validation: see the final C58 evidence below and the
 compatibility specification (`docs/spec-testing.md`). Native acceptance is pinned
 CoCo 1.2.35/macOS arm64, with synthetic isolated data and PM2 browser fixtures.
-Routine outreach is a stub. Human OAuth, strict Memory and native other-platform
+Routine outreach is a stub. Human OAuth and native other-platform
 acceptance remain separate as listed above. No release/version bump is included.
 
 ## Final C58 validation
@@ -153,3 +152,37 @@ passes do not close C26/C35/C52/C53 or certify every workflow/platform.
 Durable Memory note saved before updating the project mirror:
 `notes/note_2026-11-09T11-23-24-140Z_cortex-code-c53-windows.md`.
 Working changes are local; no PR, release, production restart or version bump.
+
+
+## C35 follow-up — 2026-11-09
+
+The earlier review's strict-Memory deferral is superseded for macOS arm64 and
+standalone 1.2.35+191333.f82de3d91715. Dedicated restricted controller/policy/JSONL
+modules keep ACP chat and tool-enabled work intact. Exact native tool denial,
+private configuration/cwd, no hooks/MCP/skills/profiles, empty startup catalogs,
+literal prompt wrapping and full-distribution validation form the boundary.
+Actual captured zero-schema/resource requests and real Memory governance,
+extraction, consolidation proposal/draft/apply, sequential continuity and active
+cancel/drain/fresh inference passed. See [C35 evidence](../research/cortex-code-restricted-processors.md).
+ADR-0093 remains Proposed; the proven native headless protocol is recorded there
+as the reason for this separate restricted boundary.
+
+Mobile impact: processor execution stays server-side; no mobile REST/WS, stream,
+attachment, PWA manifest or stored selection schema changes. Existing browser-safe
+role metadata drives the desktop Memory selector, whose rendered test verifies
+CoCo selection without rewriting saved choices. Both clients retain existing
+chat/media gates. Native service evidence is not a new mobile/browser acceptance
+claim. C26 human OAuth, C52 Ubuntu and C53 Windows remain the three tracker gates.
+
+
+C35 final verification: 185 suites / 3,061 tests passed, 20 opt-in tests skipped;
+V8 88.79 statements/lines, 77.31 branches, 93.98 functions at raised floors
+88.78/77.30/93.95. Native selected restricted catalog passed 14 required checks
+at `/tmp/cockpit-cortex-workflows-compat-wCFaWK/compatibility-report.json`, with
+nine zero-tool/resource requests, eight inference jobs plus one negative-control
+job, working MCP initialize/discovery, shared auth and unchanged activation.
+Earlier intermediate probe reports lacked the explicit MCP handshake assertion;
+only this final catalog certifies that assertion. Types/lint/maintainability/spec/
+ADR and both rebuilt production clients/budget pass. The other five native
+workflow probes were outside this run. No release/PR/version bump or normal
+server restart was performed. Memory architecture note saved through the tool.

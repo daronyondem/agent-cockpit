@@ -13,7 +13,7 @@ export class CortexShots {
 
   run(prompts: string[], options: RunOneShotOptions): Promise<string[]> {
     // This check precedes session creation, plugin generation and native startup.
-    if (options.allowTools !== true) return Promise.reject(new CortexInputError('Cortex restricted processors are unavailable until zero-tool execution is verified. Select another Memory processor.'));
+    if (options.allowTools !== true) return Promise.reject(new CortexInputError('Cortex ACP processors require allowTools:true; restricted text uses its dedicated native headless runtime.'));
     if (!options.cliProfile) return Promise.reject(new CortexInputError('Cortex processors require an explicit CLI profile.'));
     const timeoutMs = options.timeoutMs ?? 60_000;
     if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) return Promise.reject(new CortexInputError('Cortex processor timeout must be positive.'));

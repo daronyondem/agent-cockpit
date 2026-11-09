@@ -27,7 +27,8 @@ Design and planning documents that preserve product intent, implementation plans
 
 | Document | Status | Description |
 |----------|--------|-------------|
-| [design/cortex-code-implementation-plan.md](design/cortex-code-implementation-plan.md) | Implemented macOS 1.2.35 core/background scope; C54–C59 workflows/deferrals/docs/regression/review preparation complete. C26, conditional C35 and C52/C53 remain pending | CoCo implementation, evidence and residual gates |
+| [design/cortex-code-implementation-plan.md](design/cortex-code-implementation-plan.md) | Implemented macOS 1.2.35 core/background scope; C54–C59 workflows/deferrals/docs/regression/review preparation complete. C35 strict Memory certified on the exact macOS arm64 build; C26 and native C52/C53 remain pending | CoCo implementation, evidence and residual gates |
+| [research/cortex-code-restricted-processors.md](research/cortex-code-restricted-processors.md) | Native zero-tool headless boundary, strict Memory workflows and exact build/platform gates | CoCo G1/C35 evidence |
 | [design/cortex-code-review.md](design/cortex-code-review.md) | Local review/PR preparation | ADR/mobile review, full implemented scope, validation and residual gates; no external PR/release action |
 | [design/claude-code-interactive/implementation-plan.md](design/claude-code-interactive/implementation-plan.md) | Implemented | End-to-end implementation plan for a separate Claude Code Interactive backend using hidden PTY control, transcript-derived events, shared Claude profiles, and provider-specific CLI compatibility warnings |
 | [design/claude-code-interactive/hardening-plan.md](design/claude-code-interactive/hardening-plan.md) | Implemented | Follow-up hardening plan for Claude Code Interactive terminal query responses, hook-driven lifecycle signals, transcript finalization, and real-CLI drift coverage |

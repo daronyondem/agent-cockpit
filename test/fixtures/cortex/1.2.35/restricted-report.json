@@ -1,0 +1,75 @@
+{
+  "startedAt": "2026-11-09T18:37:29.490Z",
+  "platform": "darwin",
+  "arch": "arm64",
+  "node": "v26.0.0",
+  "cliVersion": "1.2.35",
+  "revision": "68ecb4ea31f44085efe9b763cdbca3f745118ad3",
+  "dirty": true,
+  "jobs": [
+    {
+      "requests": 2,
+      "zeroTools": true,
+      "zeroResources": true
+    },
+    {
+      "requests": 1,
+      "zeroTools": true,
+      "zeroResources": true
+    },
+    {
+      "requests": 1,
+      "zeroTools": true,
+      "zeroResources": true
+    },
+    {
+      "requests": 1,
+      "zeroTools": true,
+      "zeroResources": true
+    },
+    {
+      "requests": 1,
+      "zeroTools": true,
+      "zeroResources": true
+    },
+    {
+      "requests": 1,
+      "zeroTools": true,
+      "zeroResources": true
+    },
+    {
+      "requests": 1,
+      "zeroTools": true,
+      "zeroResources": true
+    },
+    {
+      "requests": 1,
+      "zeroTools": true,
+      "zeroResources": true
+    },
+    {
+      "requests": 0,
+      "zeroTools": true,
+      "zeroResources": true
+    }
+  ],
+  "results": {
+    "stage": "complete",
+    "positiveToolSchemas": true,
+    "positiveMcpHandshake": true,
+    "positiveControls": true,
+    "sequential": true,
+    "ambientAndHostileInput": true,
+    "governance": true,
+    "extraction": true,
+    "consolidationProposal": true,
+    "consolidationDraftAndApply": true,
+    "cancelActiveRequestAndDrain": true,
+    "freshAfterCancel": true,
+    "missingConnectionRejected": true,
+    "zeroToolRequests": 9,
+    "zeroDefinitionsAndResources": true,
+    "activationUnchanged": true,
+    "passed": true
+  }
+}

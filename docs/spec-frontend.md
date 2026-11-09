@@ -505,7 +505,10 @@ unavailable-model guidance without exposing native errors. It preserves saved
 model/effort during pending/empty/failed discovery and retains an unknown saved
 model as a disabled row alongside available replacements. It never infers login
 success from a model list. Claude mode and Codex speed remain harness-specific;
-CoCo goals, agents, steering and restricted Memory remain unavailable. Native
+CoCo goals, agents and steering remain unavailable. The shared Memory selector
+accepts its restrictedText capability on macOS arm64; execution verifies the
+exact C35 build. Saved unavailable choices remain visible and are never changed
+automatically. Native
 browser acceptance for interactions, queues, usage and the mobile PWA is tracked
 separately under the remaining P7 tasks.
 

@@ -384,3 +384,24 @@ processor/usage/client suites retain the other gates. Public setup is in
 [user/cortex-code.md](user/cortex-code.md), explicit deferrals in
 [research/cortex-code-capability-decisions.md](research/cortex-code-capability-decisions.md),
 and review/evidence in [design/cortex-code-review.md](design/cortex-code-review.md).
+
+
+### CoCo C35 restricted processor ownership
+
+`cortexRestricted.ts`, `cortexRestrictedPolicy.ts` and `cortexRestrictedStream.ts`
+own the native headless zero-tool path, separately from ACP chat/tool-enabled
+processors. The corresponding process/stream suites, Memory role/selector and
+migration tests cover the boundary. Native `probe-cortex-restricted.ts` and its
+workflow-catalog evidence validation cover actual zero-schema/resource requests,
+positive hook/MCP controls, hostile input, sequential and real Memory workflows,
+active cancellation/drain and fresh inference. See [C35 evidence](research/cortex-code-restricted-processors.md)
+and [the canonical spec](spec-cortex-code.md#restricted-text-processors-p6-c35).
+Historical C33–C59 rows' strict-Memory deferrals are superseded only for macOS
+arm64 / 1.2.35+191333.f82de3d91715. No mobile API/assets/manifest contract changes
+are needed: selection consumes existing server capabilities and processors remain
+server-side. Other platforms/builds retain the strict role gate.
+
+C35 final frozen baseline: 185 suites / 3,061 tests, 20 existing opt-in skips;
+88.79% statements/lines, 77.31% branches and 93.98% functions. Floors raised to
+88.78/77.30/93.95. Native selected restricted catalog passes 14 required outcomes
+(1/1 selected, 1/6 catalog), with nine actual zero-schema/resource requests.

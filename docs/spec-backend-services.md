@@ -2241,7 +2241,10 @@ conversation-owned path checks and processor retry/deadline policies stay intact
 ## CoCo capability deferrals and final review (C56–C59)
 
 The dedicated adapter retains goals:false, agents:false, stdinInput:false and
-oneShot.restrictedText:false. Direct native PDF/audio/video transports and
+platform-scoped oneShot.restrictedText with exact C35 distribution checks at
+execution. Strict Memory uses the dedicated native headless JSONL modules in
+[the CoCo contract](spec-cortex-code.md#restricted-text-processors-p6-c35).
+Direct native PDF/audio/video transports and
 Snowflake pricing/account panels are not enabled. The complete rationale,
 required evidence and enabled PNG/tool-enabled workflow boundaries are in
 [the CoCo capability decisions](research/cortex-code-capability-decisions.md).

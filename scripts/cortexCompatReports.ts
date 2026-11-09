@@ -16,6 +16,7 @@ export const CORTEX_PROBES = {
   ],
   workflows: [
     { id: 'chat', flag: 'CORTEX_CHAT_PROBE', prefix: 'cockpit-cortex-chat-', minutes: 12 },
+    { id: 'restricted', flag: 'CORTEX_RESTRICTED_PROBE', prefix: 'cockpit-cortex-c35-', minutes: 12 },
     { id: 'kb', flag: 'CORTEX_KB_PROBE', prefix: 'cockpit-cortex-kb-', minutes: 12 },
     { id: 'context', flag: 'CORTEX_CONTEXT_PROBE', prefix: 'cockpit-cortex-context-', minutes: 12 },
     { id: 'routines', flag: 'CORTEX_ROUTINES_PROBE', prefix: 'cockpit-cortex-routines-', minutes: 12 },
@@ -29,6 +30,9 @@ export type CortexCompatSuite = keyof typeof CORTEX_PROBES;
 
 /** Required real workflow outcomes, not just successful process startup. */
 export const CORTEX_WORKFLOW_CHECKS: Record<string, readonly (readonly string[])[]> = {
+  restricted: [...['positiveControls', 'positiveToolSchemas', 'positiveMcpHandshake', 'sequential', 'ambientAndHostileInput', 'governance', 'extraction',
+    'consolidationProposal', 'consolidationDraftAndApply', 'cancelActiveRequestAndDrain', 'freshAfterCancel',
+    'missingConnectionRejected', 'zeroDefinitionsAndResources', 'activationUnchanged'].map(check => [check])],
   chat: [
     ['mcp', 'nativePluginDiscovery'], ['mcp', 'realStdioShims'], ['mcp', 'separateMemoryProcessor'], ['mcp', 'governedNotePersisted'],
     ['mcp', 'memorySearch'], ['mcp', 'pgliteKeywordSearch'], ['mcp', 'sqliteTopicRead'],

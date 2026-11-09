@@ -7,7 +7,7 @@ export const CORTEX_MIGRATION_WARNING = 'Cortex Code executables and Snowflake h
 
 /** Reserved native mkdtemp folders, including when TMPDIR is inside the data root. */
 export function isCortexMigrationRuntimePath(relativePath: string): boolean {
-  return relativePath.split('/').some(part => /^(?:agent-cockpit-cortex-plugin-|cockpit-cortex-(?:auth|login)-)[a-zA-Z0-9]{6}$/.test(part));
+  return relativePath.split('/').some(part => /^(?:agent-cockpit-cortex-plugin-|cockpit-cortex-(?:auth|login|restricted)-)[a-zA-Z0-9]{6}$/.test(part));
 }
 
 /** Passive destination checks: never execute an imported command or start login/inference. */

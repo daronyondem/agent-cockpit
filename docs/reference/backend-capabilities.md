@@ -93,7 +93,9 @@ Native compatibility is verified on Grok Build 1.0.52, macOS arm64. See the
   Context, Routines and PNG OCR;
 - PNG image input only on the tested claude-sonnet-4-6 / CoCo 1.2.35 combination;
 - input/output/cache tokens and separate context snapshots; USD cost unavailable;
-- strict Memory processors, native goals, subagent cards, unsolicited steering,
+- strict Memory through zero-tool native headless JSONL on macOS arm64 and
+  distribution 1.2.35+191333.f82de3d91715 only;
+- native goals, subagent cards, unsolicited steering,
   additional native media, billing and account isolation remain gated/deferred.
 
 Compatibility evidence is macOS arm64/1.2.35; native Ubuntu/Windows and physical

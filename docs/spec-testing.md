@@ -1381,8 +1381,9 @@ authenticated `claude` (or CORTEX_TEST_MEMORY_COMMAND) for chat's separate Memor
 governance; real Pandoc, LibreOffice and a running local Ollama containing
 nomic-embed-text for KB. No fallback installs, mocked AI, skipped prerequisite
 or automatic native retry can turn a missing dependency into a pass. Native
-Routine timeout takes at least a minute. Strict Memory consolidation/dreaming
-requires restrictedText and remains unavailable to CoCo; titles/summaries retain
+Routine timeout takes at least a minute. Strict Memory consolidation requires
+restrictedText and now has its separate C35 catalog fixture on the exact retained
+macOS arm64 build; KB dreaming remains tool-enabled. Titles/summaries retain
 their existing fallback behavior. Unsupported native goals/agents/steering/media
 and unknown Snowflake pricing retain their independent gates.
 
@@ -1393,7 +1394,8 @@ outcomes and truthy strings fail; the shareable report includes only the fixed
 check labels and `evidenceComplete`, never raw native values. A full workflow
 catalog pass removes the outside-workflow scope marker only for that catalog;
 backend/UI/auth-control and selected workflow runs retain it. Other platform,
-human OAuth, strict Memory and physical-device gates always remain independent.
+human OAuth and physical-device gates remain independent. A selected run without
+restricted retains an explicit C35-outside-this-run marker.
 
 The separate auth-control command does not select/read a saved connection or
 pass CORTEX_TEST_CONNECTION into its probe. It still validates the real retained
@@ -1500,3 +1502,43 @@ skipped): 88.75% statements/lines, 77.21% branches, 93.94% functions. Floors are
 the final three Windows-specific suites pass 21 cases. The follow-up in
 [the implementation review](design/cortex-code-review.md#c53-autonomous-follow-up-2026-11-09)
 records exact native subset scope and remaining gates.
+
+
+## CoCo restricted Memory (C35)
+
+`test/cortexRestricted.test.ts` runs an actual JSONL process fixture through the
+adapter. It covers private home/cwd and forced env, exact deny argv, wrapped
+slash input, sequential continuity, build/platform guards, zero-catalog startup,
+timeout/abort/shutdown/reuse and fail-closed native output with no retry.
+`test/cortexRestrictedStream.test.ts` covers catalog/session/result ownership,
+UTF-8 fragmentation, tool/control frames, incomplete usage, oversized/malformed
+output, exit and cleanup errors. Existing processor, Memory and rendered selector
+suites verify role eligibility and retained unavailable choices. Migration suites
+exclude/reject transient restricted homes, including empty directories.
+
+Run native proof only with authenticated shared terminal credentials and the
+exact macOS arm64 distribution:
+
+```sh
+CORTEX_RESTRICTED_PROBE=1 npx tsx scripts/probe-cortex-restricted.ts
+CORTEX_CODE_E2E=1 npm run e2e:cortex-code-workflows -- --probe restricted
+```
+
+The workflow catalog now includes six probes: chat, restricted, kb, context,
+routines and mobile; its outer deadline is 85 minutes. The restricted probe is
+an isolated HTTP/service fixture, with working hook/MCP positive controls,
+private-config hostile-input/sequential checks and real Memory governance,
+extraction, proposal, rewrite/apply. Native debug capture projects actual request
+schema/resource counts before production temp cleanup; it never publishes raw
+prompts/account fields. Abort waits for an observed active request, then verifies
+cleanup and fresh inference. Runner validation requires every outcome, not just
+exit success. Full Jest must finish before catalog builds/browser checks.
+
+The retained report and failed first harness attempt are documented in
+[the C35 evidence](research/cortex-code-restricted-processors.md). Nine actual
+requests in eight inference jobs passed with zero tools/resources; a ninth job
+rejected empty connection configuration before inference. The final selected
+catalog validates 14 outcomes, including actual MCP initialize/tools-list. This certifies strict
+Memory only on that distribution/platform; prior strict-Memory deferrals in
+historical checkpoint sections are superseded for this scope. C26, C52/C53,
+physical devices, new releases and account isolation remain independent.

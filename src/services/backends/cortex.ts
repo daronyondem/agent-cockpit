@@ -9,16 +9,19 @@ import { CortexInputError, CortexMissingSessionError, cortexRuntimeError } from 
 import { buildNativeSessionRecovery, buildSessionRecoveryEvent, createRecoverySnapshot } from './sessionRecovery';
 import { logger } from '../../utils/logger';
 import { CortexShots } from './cortexShots';
+import { CortexRestrictedShots } from './cortexRestricted';
+import { cortexRestrictedPlatform } from './cortexRestrictedPolicy';
 
 interface ActiveTurn { aborted: boolean; turn?: CortexTurn; draining?: Promise<void> }
 const log = logger.child({ module: 'cortex-code' });
 
-/** Chat and processor facade; native goals, steering and restricted work stay gated. */
+/** Chat and processor facade; native goals and steering stay gated. */
 export class CortexCodeAdapter extends BaseBackendAdapter {
   private active = new Map<string, ActiveTurn>();
   private drains = new Set<Promise<void>>();
   private instructed = new WeakSet<CortexRuntime>();
   private idleTimer?: NodeJS.Timeout;
+  private restricted = new CortexRestrictedShots();
   stopping: Promise<void> = Promise.resolve();
 
   constructor(options: { workingDir?: string; sessions?: CortexSessions } = {}) {
@@ -46,7 +49,7 @@ export class CortexCodeAdapter extends BaseBackendAdapter {
       icon: '<svg xmlns="http://www.w3.org/2000/svg" width="28" height="28" viewBox="0 0 28 28"><rect width="28" height="28" rx="7" fill="#1679a7"/><path d="M14 5v18M6.2 9.5l15.6 9M6.2 18.5l15.6-9M11 7l3 3 3-3M11 21l3-3 3 3" stroke="white" stroke-width="2" fill="none"/></svg>', models: [],
       capabilities: { thinking: true, planMode: true, planRevision: true, agents: false,
         toolActivity: true, userQuestions: true, stdinInput: false, goals: false,
-        oneShot: { restrictedText: false, toolEnabled: true, sequential: true },
+        oneShot: { restrictedText: cortexRestrictedPlatform(), toolEnabled: true, sequential: true },
         oneShotMediaInput: { image: ['explicit-attachment'] } },
       resumeCapabilities: { activeTurnResume: 'unsupported',
         activeTurnResumeReason: 'Interrupted Cortex work is never resent automatically.',
@@ -148,7 +151,7 @@ export class CortexCodeAdapter extends BaseBackendAdapter {
   }
 
   runSessionShot(prompts: string[], options: RunOneShotOptions = {}): Promise<string[]> {
-    return this.shots.run(prompts, options);
+    return options.allowTools === true ? this.shots.run(prompts, options) : this.restricted.run(prompts, options);
   }
 
   onSessionReset(conversationId: string): void {
@@ -165,7 +168,7 @@ export class CortexCodeAdapter extends BaseBackendAdapter {
     for (const owner of this.active.values()) { owner.aborted = true; void owner.turn?.abort(); }
     this.active.clear();
     // A later send recreates idle supervision after a CLI update.
-    this.stopping = Promise.allSettled([this.stopping, this.shots.shutdown(), this.sessions.shutdown(), ...this.drains]).then(results => {
+    this.stopping = Promise.allSettled([this.stopping, this.shots.shutdown(), this.restricted.shutdown(), this.sessions.shutdown(), ...this.drains]).then(results => {
       if (results.some(result => result.status === 'rejected')) log.warn('Cortex shutdown cleanup failed');
     });
   }

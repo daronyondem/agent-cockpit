@@ -449,3 +449,15 @@ saved-credential completion. The saved-auth Cockpit browser probe also passed
 again after the abortable-startup/awaited-shutdown changes. Retain production's
 90-second startup bound and the open C26 acceptance gate; do not treat the
 standalone timeout as successful authentication evidence.
+
+
+## C35 follow-up — 2026-11-09
+
+The initial ACP allowlist experiment above did not remove tool declarations.
+A separate native headless JSONL path now proves zero outgoing tool schemas and
+resources on the exact macOS arm64 / 1.2.35+191333.f82de3d91715 distribution.
+Exact tool-name denial plus private config/cwd, disabled hooks/MCP/skills/profiles,
+standard mode, wrapped input and empty startup catalog checks passed real strict
+Memory workflows and active cancel/fresh inference. This supersedes only the
+strict-Memory gate in earlier checkpoints; it does not change their observations.
+See [the C35 report](cortex-code-restricted-processors.md).

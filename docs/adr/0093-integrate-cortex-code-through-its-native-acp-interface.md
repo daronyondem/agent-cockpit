@@ -7,6 +7,11 @@ supersedes: []
 superseded-by: null
 tags: [backends, profiles, protocol, authentication]
 affects:
+  - src/services/backends/cortexRestricted.ts
+  - src/services/backends/cortexRestrictedPolicy.ts
+  - src/services/backends/cortexRestrictedStream.ts
+  - scripts/probe-cortex-restricted.ts
+  - docs/research/cortex-code-restricted-processors.md
   - src/services/backends/cortexWindowsProcess.ts
   - test/cortexWindows.test.ts
   - test/cortexWindowsLaunch.test.ts
@@ -176,6 +181,20 @@ CoCo's explicit eligibility at client and service boundaries. Default one-shot
 path is proven. Titles/summaries use deterministic fallback meanwhile. Chat
 Memory tools can still use a separately configured supported governance processor.
 Tool-enabled processors and media are independently certified before selection.
+
+C35 subsequently proves a separate native headless JSONL restricted path for
+macOS arm64 / 1.2.35+191333.f82de3d91715. Keep ACP for chat/tool-enabled work;
+use focused restricted controller/policy/framing modules for default/false
+allowTools calls. Exact deny names alone are insufficient: isolate CORTEX_HOME
+and cwd, disable hooks/MCP/skills/profiles, force standard mode, wrap command-like
+input, validate the exact build and empty startup catalogs. Real outgoing
+requests and Memory workflows establish zero tools/resources. Preserve shared
+terminal authentication, sequential session ownership, one deadline and awaited
+cleanup without retries. New builds/platforms need independent proof. This is
+native CLI execution, not a separate model API under the CoCo name. The extra
+protocol boundary is justified because ACP has no proven zero-tools mechanism;
+titles/summaries keep their deterministic fallbacks. See the
+[C35 evidence](../research/cortex-code-restricted-processors.md).
 
 P6 places ephemeral one-shot/sequential ownership in `cortexShots.ts`, sharing
 the native session/runtime and turn modules without durable chat state. One

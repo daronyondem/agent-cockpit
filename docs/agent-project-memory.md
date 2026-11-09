@@ -153,6 +153,27 @@ tool is unavailable.
 
 ## Optional CLI Installations
 
+- CoCo C35/G1 is now certified only on macOS arm64 and standalone distribution
+  1.2.35+191333.f82de3d91715. The dedicated `cortexRestricted.ts`,
+  `cortexRestrictedPolicy.ts` and `cortexRestrictedStream.ts` own native headless
+  JSONL for default/false allowTools calls, independently of ACP chat/tool-enabled
+  processors. Keep private CORTEX_HOME **and cwd**, normal HOME/SNOWFLAKE_HOME
+  terminal auth, exact build checks, standard mode, hooks disabled through
+  hooks.json, no MCP/skills/auto-profiles, all 48 exact deny names, literal JSON
+  prompt wrapping and empty startup catalogs. Validate native result/session
+  ownership and fail on tool/control frames. One deadline covers the sequence;
+  never replay and await cleanup before deleting private state. Reserved
+  restricted temp folders are excluded/rejected by migration. Nine captured
+  requests in eight jobs had zero tool schemas/resources; actual governance,
+  extraction, proposal/draft/apply, hostile/ambient input, sequential continuity
+  and active cancel/drain/fresh inference passed. Other builds/platforms remain
+  gated; titles/summaries keep fallback and Snowflake prices remain unknown.
+  This supersedes earlier strict-Memory deferrals only for the verified scope.
+  C26 human Cockpit OAuth, native C52 Ubuntu and C53 Windows remain pending.
+  See `docs/research/cortex-code-restricted-processors.md` and run its native
+  probe/workflow catalog when changing this boundary. Durable note:
+  `notes/note_2026-11-09T18-23-05-865Z_cortex-code-c35-restricted.md`.
+
 - CoCo C53 Windows x64 runtime preparation is implemented: standalone
   `%LOCALAPPDATA%\cortex\cortex.exe`/PATH/explicit discovery, hidden direct ACP,
   case-insensitive env/auth ownership and focused `cortexWindowsProcess.ts`

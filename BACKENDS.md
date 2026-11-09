@@ -34,8 +34,9 @@ Grok implementation, native extensions, cost completeness, background work, and
 platform verification are detailed in [spec-grok-build.md](docs/spec-grok-build.md).
 
 CoCo compatibility is verified on 1.2.35/macOS arm64. Tool-enabled KB, Context,
-Routine and OCR workflows are supported; strict CoCo Memory processors remain
-disabled. ACP session MCP fields are not used: Cockpit supplies a private native
+Routine and OCR workflows are supported. Strict Memory processors use native
+headless JSONL on the exact retained macOS arm64 distribution; other builds and
+platforms fail closed. ACP session MCP fields are not used: Cockpit supplies a private native
 plugin. Saved sessions can load on an explicit next turn; interrupted work is
 never automatically resent. Native Windows/Linux, human remote-browser Cockpit
 acceptance and account isolation remain independent gates. See

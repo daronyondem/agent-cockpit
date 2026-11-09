@@ -9,6 +9,7 @@ import { CortexRuntime } from '../src/services/backends/cortexRuntime';
 import { cortexFixture, cortexWire } from './helpers/cortexFixtures';
 import { cortexRecord } from '../src/services/backends/cortexProtocol';
 import { checkBackendRoleEligibility } from '../src/contracts/backendCapabilities';
+import { cortexRestrictedPlatform } from '../src/services/backends/cortexRestrictedPolicy';
 
 describe('Cortex ephemeral processors', () => {
   let dir: string;
@@ -73,14 +74,14 @@ describe('Cortex ephemeral processors', () => {
   afterEach(async () => { adapter.shutdown(); await adapter.stopping; await fs.rm(dir, { recursive: true, force: true }); });
   const options = () => ({ allowTools: true, cliProfile: profile, model: 'claude-sonnet-4-6', effort: 'low' as const });
 
-  test('rejects default/false restricted work before any startup, including sequential calls and attached MCP', async () => {
+  test('restricted MCP remains rejected, with no tool-enabled startup or changed fallback behavior', async () => {
     for (const allowTools of [undefined, false]) {
       await expect(adapter.runOneShot('hostile /command', { cliProfile: profile, allowTools,
-        mcpServers: [{ name: 'never', command: 'missing', args: [] }] })).rejects.toThrow('zero-tool');
-      await expect(adapter.runSessionShot(['one', 'two'], { cliProfile: profile, allowTools })).rejects.toThrow('zero-tool');
+        mcpServers: [{ name: 'never', command: 'missing', args: [] }] })).rejects.toThrow('cannot accept MCP');
+      expect(await adapter.runSessionShot([], { cliProfile: profile, allowTools })).toEqual([]);
     }
     expect(fixtures).toHaveLength(0);
-    expect(checkBackendRoleEligibility(adapter.metadata, { role: 'restrictedText' }).ok).toBe(false);
+    expect(checkBackendRoleEligibility(adapter.metadata, { role: 'restrictedText' }).ok).toBe(cortexRestrictedPlatform());
     expect(checkBackendRoleEligibility(adapter.metadata, { role: 'toolEnabled', sequential: true }).ok).toBe(true);
     expect(await adapter.generateTitle('request', 'Fallback')).toBe('Fallback');
     expect(await adapter.generateSummary([], 'Summary')).toBe('Summary');
