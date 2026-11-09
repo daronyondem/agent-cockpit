@@ -1,6 +1,6 @@
 # Cortex Code (CoCo) harness implementation plan
 
-**Status:** Implemented macOS arm64/CoCo 1.2.35 core and tool-enabled background scope, P7/P8 C48–C51 and C54–C59 autonomous review/verification complete. Windows x64 runtime preparation is implemented with simulated tests. C35 strict Memory is implemented/certified on the exact macOS arm64 distribution. Three acceptance items remain: C26 human OAuth, C52 native Ubuntu and C53 native Windows. No PR or release has been published.
+**Status:** Implemented macOS arm64/CoCo 1.2.35 core and tool-enabled background scope, P7/P8 C48–C51 and C54–C59 autonomous review/verification complete. Windows x64 runtime preparation is implemented with simulated tests. C35 strict Memory is implemented/certified on the exact macOS arm64 distribution. Three acceptance items remain: C26 human OAuth, C52 native Ubuntu and C53 native Windows. No release has been published.
 **Created:** 2026-11-05.
 **Planning baseline:** Agent Cockpit `0.4.166`, revision `11d14825e955f6c83364c3917558b4d3068a4bac`, plus the uncommitted CoCo research/guidance documents.
 **Native compatibility baseline:** Cortex Code `1.2.35`, distribution `1.2.35+191333.f82de3d91715`, macOS arm64.

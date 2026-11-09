@@ -64,4 +64,3 @@ test('mobile keeps unbound cards through matching outcomes and stream end', asyn
     expect(view.interaction.decisionId).toBe('toolu_question');
   } finally { await act(async () => root.unmount()); jest.useRealTimers(); }
 });
-
