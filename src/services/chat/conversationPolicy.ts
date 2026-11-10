@@ -1,5 +1,5 @@
 import type { ClaudeCodeMode, EffortLevel, ServiceTier } from '../../types';
-import { cliHarnessForBackend } from '../cliProfiles';
+import { cliHarnessForBackend, cliProfileIdForBackend } from '../cliProfiles';
 import { CONTRACT_EFFORT_LEVELS } from '../../contracts/conversations';
 
 export interface ConversationPolicyModelMetadata {
@@ -37,6 +37,21 @@ export function effectiveClaudeCodeMode(
   if (requested !== 'ultracode' || !model) return undefined;
   if (cliHarnessForBackend(backend) !== 'claude-code') return undefined;
   return modelOption?.supportedEffortLevels?.includes('xhigh') ? 'ultracode' : undefined;
+}
+
+/**
+ * Model IDs belong to the catalog of the CLI profile and harness that offered
+ * them. A selection survives only when both stay the same; the Claude Code
+ * standard/interactive protocols share one harness catalog, and a missing
+ * profile ID means the backend's server-configured profile.
+ */
+export function modelSelectionCarriesOver(
+  previous: { backend?: string; cliProfileId?: string },
+  next: { backend: string; cliProfileId?: string },
+): boolean {
+  const profile = (side: { backend?: string; cliProfileId?: string }) => side.cliProfileId || cliProfileIdForBackend(side.backend);
+  const catalog = (backend: string | undefined) => cliHarnessForBackend(backend) || backend;
+  return profile(previous) === profile(next) && catalog(previous.backend) === catalog(next.backend);
 }
 
 export function titleFallbackFromMessage(userMessage: string): string {

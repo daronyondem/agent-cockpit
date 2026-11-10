@@ -231,9 +231,12 @@ export function createStreamRouter(opts: StreamRoutesOptions): express.Router {
               return res.status(409).json({ error: 'Cannot switch CLI profile after the active session has messages' });
             }
             await chatService.updateConversationCliProfile(convId, cliProfileId, backend || conv.backend);
+            // The switch drops a model/effort chosen from the previous profile's catalog.
+            conv = (await chatService.getConversation(convId))!;
           }
         } else if (backend && backend !== conv.backend) {
           await chatService.updateConversationBackend(convId, backend);
+          conv = (await chatService.getConversation(convId))!;
         }
       } catch (err: unknown) {
         if (isCliProfileResolutionError(err)) {

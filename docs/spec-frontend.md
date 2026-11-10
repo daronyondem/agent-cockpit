@@ -571,7 +571,8 @@ unchanged. CSS retains its existing 230 KiB aggregate limit.
 
 CoCo appears in the standard Harness selector and profile cards, including
 profiles created by shared setup. Its executable default is `cortex`; its icon
-is supplied by backend metadata. The editor supports name, enable/delete,
+is the supplied Snowflake logo (`#29b5e8`, transparent background), shared through
+backend metadata with composer icons, assistant avatars and mobile. The editor supports name, enable/delete,
 command override, named `cortexCode.connection`, and explicit account home/env
 overrides. Switching from another harness into CoCo selects account mode and
 clears that harness's auth-home/env; switching away removes `cortexCode`.

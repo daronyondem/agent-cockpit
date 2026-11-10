@@ -2096,6 +2096,47 @@ describe('CLI profile runtime selection', () => {
     expect(blocked.body.error).toBe('Cannot switch CLI profile after the active session has messages');
   });
 
+  test.each([
+    ['without a model drops the previous profile model', undefined, undefined],
+    ['keeps an explicit model equal to the previous selection', 'opus', 'opus'],
+  ])('a first-message profile switch %s', async (_label, sentModel, expectedModel) => {
+    const kiroBackend = new KiroMockBackend();
+    env.backendRegistry.register(kiroBackend);
+    const settings = await env.chatService.getSettings();
+    await env.chatService.saveSettings({
+      ...settings,
+      cliProfiles: [
+        ...(settings.cliProfiles || []),
+        {
+          id: 'profile-kiro-model-switch',
+          name: 'Kiro Model Switch',
+          harness: 'kiro',
+          authMode: 'server-configured',
+          createdAt: '2026-04-29T00:00:00.000Z',
+          updatedAt: '2026-04-29T00:00:00.000Z',
+        },
+      ],
+    });
+    const conv = await env.chatService.createConversation('Model Switch Test', undefined, undefined, 'opus');
+    kiroBackend.setMockEvents([
+      { type: 'text', content: 'Hi', streaming: true },
+      { type: 'done' },
+    ] as StreamEvent[]);
+
+    const ws = await env.connectWs(conv.id);
+    const eventsPromise = env.readWsEvents(ws);
+    const res = await env.request('POST', `/api/chat/conversations/${conv.id}/message`, {
+      content: 'Switch profiles',
+      cliProfileId: 'profile-kiro-model-switch',
+      ...(sentModel ? { model: sentModel } : {}),
+    });
+    await eventsPromise;
+
+    expect(res.status).toBe(200);
+    expect(kiroBackend._lastOptions!.model).toBe(expectedModel);
+    expect((await env.chatService.getConversation(conv.id))!.model).toBe(expectedModel);
+  });
+
   test('allows repairing a missing conversation CLI profile after messages exist', async () => {
     const conv = await env.chatService.createConversation('Missing Profile Repair');
 
