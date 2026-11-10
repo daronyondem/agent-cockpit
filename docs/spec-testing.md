@@ -1960,6 +1960,11 @@ not a change to production's 15-second phase deadlines or an automatic retry.
 `startup-timings.jsonl` records the synthetic case name, elapsed startup/status
 time and phase limit; it contains no credentials or environment snapshots.
 Startup failure still fails every dependent case and requires owned cleanup.
+The native Windows Job Object fixtures similarly allow 60 seconds for the
+first worker to start, within a 75-second case deadline covering cleanup. The
+argv/UTF-8 and missing-executable cases use the same case bound. Their orphan
+termination/unrelated-process assertions and production cleanup deadlines stay
+unchanged; these cases test containment, not cold-start performance.
 
 [Run 41954476405](https://github.com/daronyondem/agent-cockpit/actions/runs/41954476405)
 builds PR head `9fb54f7` using clean GitHub PR merge revision
