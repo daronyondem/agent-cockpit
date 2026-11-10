@@ -1,10 +1,11 @@
 /** @jest-environment jsdom */
-import { act, createElement } from 'react';
+import { act, createElement, useState } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { loadFrontendModule } from './mobileModuleLoader';
 
 const api = {
   cortexConnections: jest.fn(), createCortexConnection: jest.fn(), startSetupCliAuth: jest.fn(), testSetupCliAuth: jest.fn(),
+  startCliProfileAuth: jest.fn(), testCliProfile: jest.fn(),
   getCliProfileAuthJob: jest.fn(), cancelCliProfileAuth: jest.fn(), submitCortexRedirect: jest.fn(),
 };
 const { CortexSetup } = loadFrontendModule('web/AgentCockpitWeb/src/cortexSetup.jsx', {
@@ -103,5 +104,55 @@ describe('Cortex shared setup controls', () => {
     api.startSetupCliAuth.mockResolvedValue({ profile, job: { ...running, id: 'new-job', cortex: { ...running.cortex, generation: 'new-generation' } } });
     await click('Authenticate Cortex'); expect(input('Complete redirect URL').value).toBe('');
     for (const storage of [window.localStorage, window.sessionStorage]) expect(JSON.stringify(storage)).not.toMatch(/PRIVATE_STATE|PRIVATE_CODE/);
+  });
+
+  test.each([true, false])('a card recovers only its own active login (matching profile=%s)', async matching => {
+    const cardProfile = { id: 'card', authMode: 'account', cortexCode: { connection: 'saved' } };
+    api.cortexConnections.mockResolvedValue({ connections: [{ name: 'fixture' }], job: { ...running, profileId: matching ? 'card' : 'another' } });
+    await act(async () => root.render(createElement(CortexSetup, { key: 'card', profile: cardProfile, onConnectionChange: jest.fn(), onSave: jest.fn() })));
+    expect(container.querySelector('select')!.value).toBe('saved');
+    if (!matching) {
+      expect(container.querySelector('textarea')).toBeNull();
+      expect(button('Cancel Cortex login')).toBeUndefined();
+      expect(api.getCliProfileAuthJob).not.toHaveBeenCalled();
+      return;
+    }
+    expect(container.querySelector('textarea')!.value).toContain('PRIVATE_STATE');
+    await type('Complete redirect URL', 'http://127.0.0.1:54321/?code=PRIVATE_CODE');
+    api.submitCortexRedirect.mockResolvedValue({ job: { ...running, profileId: 'card', status: 'succeeded', cortex: undefined } });
+    await act(async () => container.querySelector('form')!.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true })));
+    expect(api.submitCortexRedirect).toHaveBeenCalledWith('job', 'generation', 'http://127.0.0.1:54321/?code=PRIVATE_CODE');
+    expect(container.innerHTML).not.toMatch(/PRIVATE_STATE|PRIVATE_CODE/);
+  });
+
+  test('creating a connection updates only the card selection; checking saves before using its profile route', async () => {
+    const save = jest.fn().mockResolvedValue(true);
+    function Card(){
+      const [connection, select] = useState('');
+      return createElement(CortexSetup, { profile: { id: 'card', authMode: 'account', cortexCode: { connection } }, onConnectionChange: select, onSave: save });
+    }
+    await act(async () => root.render(createElement(Card)));
+    expect(button('Check Cortex login').disabled).toBe(true);
+    await click('Create OAuth connection'); await type('New connection name', 'new'); await type('Snowflake account', 'EXAMPLE'); await type('Snowflake user', 'USER');
+    api.createCortexConnection.mockResolvedValue({ connections: [{ name: 'new' }] });
+    await act(async () => container.querySelector('form')!.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true })));
+    expect(container.querySelector('select')!.value).toBe('new');
+    api.testCliProfile.mockResolvedValue({ result: { output: 'Card login verified' } });
+    await click('Check Cortex login');
+    expect(save).toHaveBeenCalledTimes(1); expect(api.testCliProfile).toHaveBeenCalledWith('card');
+    expect(api.testSetupCliAuth).not.toHaveBeenCalled();
+    expect(container.textContent).toContain('Card login verified');
+    expect(container.textContent).not.toContain('Snowflake user');
+  });
+
+  test('an isolated card checks its own home and offers terminal login without shared connection creation', async () => {
+    const save = jest.fn().mockResolvedValue(true);
+    await act(async () => root.render(createElement(CortexSetup, { key: 'isolated', profile: { id: 'isolated', authMode: 'account',
+      configDir: '/private/home', cortexCode: { connection: 'private' } }, onConnectionChange: jest.fn(), onSave: save })));
+    expect(container.querySelector('input')!.value).toBe('private');
+    expect(button('Create OAuth connection')).toBeUndefined(); expect(button('Authenticate Cortex')).toBeUndefined();
+    expect(container.textContent).toContain('Authenticate in its terminal');
+    api.testCliProfile.mockResolvedValue({ result: { output: 'Isolated login verified' } });
+    await click('Check Cortex login'); expect(api.testCliProfile).toHaveBeenCalledWith('isolated');
   });
 });

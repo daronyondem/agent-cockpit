@@ -6,9 +6,14 @@ import { hasRequiredCliProfileConfig } from '../src/contracts/cliProfiles';
 const catalog = require('../web/AgentCockpitWeb/src/profileCatalog.js');
 const projection = require('../web/AgentCockpitWeb/src/screens/processorProfiles');
 const configField = require('../web/AgentCockpitWeb/src/screens/cliProfileConfigDir.js');
-const api = { settings: { get: jest.fn(), backends: jest.fn(), save: jest.fn(), usageStats: jest.fn(), usagePricing: jest.fn() } };
+const api = { settings: { get: jest.fn(), backends: jest.fn(), save: jest.fn(), usageStats: jest.fn(), usagePricing: jest.fn(),
+  cortexConnections: jest.fn(), testCliProfile: jest.fn(), startCliProfileAuth: jest.fn(),
+} };
+const { CortexSetup } = loadFrontendModule('web/AgentCockpitWeb/src/cortexSetup.jsx', {
+  react: require('react'), 'react/jsx-runtime': require('react/jsx-runtime'), './api.js': { AgentApi: api }, './cortexSetup.css': {},
+}, { window });
 const { SettingsScreen } = loadFrontendModule('web/AgentCockpitWeb/src/screens/settingsScreen.jsx', {
-  react: { ...require('react'), lazy: () => () => null }, 'react/jsx-runtime': require('react/jsx-runtime'),
+  react: { ...require('react'), lazy: (load: () => unknown) => String(load).includes('cortexSetup') ? CortexSetup : () => null }, 'react/jsx-runtime': require('react/jsx-runtime'),
   '../profileCatalog.js': catalog, './processorProfiles': projection, './cliProfileConfigDir.js': configField,
   './cliProfileAuthState.js': require('../web/AgentCockpitWeb/src/screens/cliProfileAuthState.js'),
   './usageStats.js': require('../web/AgentCockpitWeb/src/screens/usageStats.js'),
@@ -26,10 +31,14 @@ beforeEach(() => {
   (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true; jest.clearAllMocks();
   api.settings.get.mockResolvedValue({ cliProfiles: [profile], theme: 'system' }); api.settings.backends.mockResolvedValue({ backends: [{ id: 'cortex-code', icon: '<svg></svg>' }] });
   api.settings.save.mockImplementation(settings => Promise.resolve(settings));
+  api.settings.cortexConnections.mockResolvedValue({ connections: [{ name: 'fixture' }, { name: 'other-connection' }], job: null });
+  api.settings.testCliProfile.mockImplementation(id => Promise.resolve({ profile, result: { profileId: id, output: 'Login verified' } }));
+  api.settings.startCliProfileAuth.mockImplementation(id => Promise.resolve({ profile, job: { id: 'job', profileId: id, status: 'succeeded', events: [{ text: 'Authenticated' }] } }));
   container = document.createElement('div'); document.body.append(container); root = createRoot(container);
 });
 afterEach(async () => { await act(async () => root.unmount()); container.remove(); });
 const field = (label: string) => Array.from(container.querySelectorAll('label')).find(node => node.querySelector('.settings-field-label')?.textContent === label)!;
+const connectionSelect = () => container.querySelector<HTMLSelectElement>('.cortex-setup select')!;
 const button = (label: string) => Array.from(container.querySelectorAll('button')).find(node => node.textContent?.trim() === label)!;
 async function change(input: HTMLInputElement | HTMLSelectElement, value: string){ await act(async () => {
   Object.getOwnPropertyDescriptor(input.tagName === 'SELECT' ? HTMLSelectElement.prototype : HTMLInputElement.prototype, 'value')!.set!.call(input, value);
@@ -41,9 +50,12 @@ test('saved CoCo profiles expose Harness, native connection, command, shared-aut
   expect(field('Harness').querySelector('select')!.value).toBe('cortex-code');
   expect(field('Command').querySelector('input')!.placeholder).toBe('cortex');
   expect(field('Config directory').textContent).toContain('SNOWFLAKE_HOME');
-  expect(container.textContent).toContain('shared terminal login'); expect(button('Authenticate')).toBeUndefined();
+  expect(container.textContent).toContain('terminal credentials'); expect(button('Authenticate')).toBeUndefined();
+  expect(container.querySelector('.cli-card .cortex-setup')).not.toBeNull();
+  expect(container.querySelectorAll('.cortex-setup')).toHaveLength(1);
+  expect(button('Cortex Code (CoCo) setup')).toBeUndefined();
   await change(field('Name').querySelector('input')!, 'Renamed CoCo');
-  await change(field('Snowflake connection').querySelector('input')!, 'other-connection');
+  await change(connectionSelect(), 'other-connection');
   await act(async () => button('Save').click());
   expect(api.settings.save.mock.calls[0][0].cliProfiles[0]).toMatchObject({ name: 'Renamed CoCo', cortexCode: { connection: 'other-connection' } });
   await act(async () => container.querySelector<HTMLInputElement>('.cli-card-head-side input[type="checkbox"]')!.click());
@@ -57,13 +69,58 @@ test('switching a profile to CoCo clears another harness auth home and leaving C
   await act(async () => root.render(createElement(SettingsScreen, { initialTab: 'cli' })));
   await change(field('Harness').querySelector('select')!, 'cortex-code');
   expect(field('Config directory').querySelector('input')!.value).toBe('');
-  await change(field('Snowflake connection').querySelector('input')!, 'fixture');
+  await change(connectionSelect(), 'fixture');
   await act(async () => button('Save').click());
   const changed = api.settings.save.mock.calls[0][0].cliProfiles[0];
   expect(changed).toMatchObject({ harness: 'cortex-code', authMode: 'account' }); expect(changed.configDir).toBeUndefined(); expect(changed.env).toBeUndefined();
   await change(field('Harness').querySelector('select')!, 'codex');
   await act(async () => button('Save').click());
   expect(api.settings.save.mock.calls[1][0].cliProfiles[0].cortexCode).toBeUndefined();
+});
+
+test('each CoCo card saves its connection and authenticates that exact profile without adding a setup profile', async () => {
+  const other = { ...profile, id: 'other', name: 'Other CoCo', cortexCode: { connection: 'other-connection' } };
+  api.settings.get.mockResolvedValue({ cliProfiles: [profile, other], defaultCliProfileId: 'cortex' });
+  await act(async () => root.render(createElement(SettingsScreen, { initialTab: 'cli' })));
+  await change(connectionSelect(), 'other-connection');
+  await act(async () => button('Check Cortex login').click());
+  expect(api.settings.save.mock.calls[0][0].cliProfiles).toEqual([
+    expect.objectContaining({ id: 'cortex', cortexCode: { connection: 'other-connection' } }), other,
+  ]);
+  expect(api.settings.testCliProfile).toHaveBeenCalledWith('cortex');
+  expect(api.settings.save.mock.invocationCallOrder[0]).toBeLessThan(api.settings.testCliProfile.mock.invocationCallOrder[0]);
+  const cards = container.querySelectorAll<HTMLElement>('.cli-card');
+  await act(async () => cards[1].querySelector<HTMLButtonElement>('.cli-card-head')!.click());
+  expect(cards[0].querySelector('.cortex-setup')).toBeNull();
+  expect(cards[1].querySelector('.cortex-setup')).not.toBeNull();
+  expect(container.textContent).not.toContain('Login verified');
+  await act(async () => button('Authenticate Cortex').click());
+  expect(api.settings.startCliProfileAuth).toHaveBeenCalledWith('other');
+  const saved = api.settings.save.mock.calls.at(-1)![0];
+  expect(saved.cliProfiles).toHaveLength(2); expect(saved.defaultCliProfileId).toBe('cortex');
+});
+
+test('a newly added CoCo profile can choose its connection and check login from its card', async () => {
+  api.settings.get.mockResolvedValue({ cliProfiles: [] });
+  await act(async () => root.render(createElement(SettingsScreen, { initialTab: 'cli' })));
+  expect(container.querySelector('.cortex-setup')).toBeNull();
+  await act(async () => button('Add CLI profilename · harness · protocol · setup mode').click());
+  await change(field('Harness').querySelector('select')!, 'cortex-code');
+  expect(container.querySelector('.cli-card .cortex-setup')).not.toBeNull();
+  expect(button('Check Cortex login').disabled).toBe(true);
+  await change(connectionSelect(), 'fixture');
+  await act(async () => button('Check Cortex login').click());
+  const saved = api.settings.save.mock.calls[0][0].cliProfiles;
+  expect(saved).toHaveLength(1); expect(saved[0]).toMatchObject({ harness: 'cortex-code', cortexCode: { connection: 'fixture' } });
+  expect(api.settings.testCliProfile).toHaveBeenCalledWith(saved[0].id);
+});
+
+test('login actions stop when saving the profile fails', async () => {
+  api.settings.save.mockRejectedValue(new Error('Disk full'));
+  await act(async () => root.render(createElement(SettingsScreen, { initialTab: 'cli' })));
+  await act(async () => button('Authenticate Cortex').click());
+  expect(api.settings.startCliProfileAuth).not.toHaveBeenCalled();
+  expect(container.querySelector('[role="alert"]')!.textContent).toContain('Save this CLI profile successfully');
 });
 
 test('General cannot promote an incomplete CoCo draft and leaves a saved unknown model visible', async () => {

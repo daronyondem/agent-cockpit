@@ -130,9 +130,15 @@ async function main(): Promise<void> {
     assert.equal(await card.getByLabel(/^Snowflake connection/).inputValue(), connection);
     assert.equal(await card.getByLabel(/^Command/).getAttribute('placeholder'), 'cortex');
     assert.equal(await card.getByRole('button', { name: 'Authenticate', exact: true }).count(), 0, 'CoCo must use its owned shared-auth handoff');
+    assert.equal(await card.getByRole('region', { name: 'Cortex Code setup' }).count(), 1, 'Setup belongs inside the selected profile card');
     await card.getByLabel('Name', { exact: true }).fill('CoCo desktop fixture');
-    await Promise.all([page.waitForResponse(response => response.url().endsWith('/chat/settings') && response.request().method() === 'PUT'),
-      page.getByRole('button', { name: 'Save', exact: true }).click()]);
+    const [cardCheck] = await Promise.all([
+      page.waitForResponse(response => response.url().endsWith(`/cli-profiles/${profile.id}/test`), { timeout: 120_000 }),
+      card.getByRole('button', { name: 'Check Cortex login', exact: true }).click(),
+    ]);
+    const cardChecked = await cardCheck.json();
+    assert.equal(cardChecked.profile?.id, profile.id, 'Card setup must use the exact profile');
+    assert.equal(cardChecked.result?.authenticated, true, 'Card login check did not verify');
     results.profileEditor = true;
     await page.setViewportSize({ width: 390, height: 844 });
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth), false, 'Profile fields must fit a narrow browser viewport');
@@ -218,7 +224,7 @@ async function verifyResponsiveHandoff(browser: Browser, baseUrl: string, root: 
       if (url.pathname.endsWith('/cortex-code/connections') && request.method() === 'GET') {
         return respond({ connections: [{ name: 'c47-fixture', manualOAuth: true, browserTimeoutMs: 600000 }], job: active?.status === 'running' ? active : null });
       }
-      if (url.pathname.endsWith('/setup-auth/cortex-code/start')) {
+      if (url.pathname.endsWith('/setup-auth/cortex-code/start') || url.pathname.endsWith('/setup-cortex-code-account/auth/start')) {
         const now = nextTime(), secret = `C47_SYNTHETIC_${crypto.randomBytes(16).toString('hex')}`;
         const login = new URL('https://fixture.snowflakecomputing.com/oauth/authorize');
         login.search = new URLSearchParams({ response_type: 'code', client_id: 'fixture-' + 'x'.repeat(128), scope: 'refresh_token session:role-any',
@@ -248,8 +254,12 @@ async function verifyResponsiveHandoff(browser: Browser, baseUrl: string, root: 
     });
     const panel = page.getByRole('region', { name: 'Cortex Code setup' });
     const open = async () => { await page.goto(`${baseUrl}/v2/?welcome=1`);
-      if (surface === 'settings') await page.getByRole('button', { name: 'CLI Profiles', exact: true }).click();
-      await panel.getByRole('button', { name: 'Cortex Code (CoCo) setup', exact: true }).click(); };
+      if (surface === 'settings') {
+        await page.getByRole('button', { name: 'CLI Profiles', exact: true }).click();
+        await page.locator('.cli-card .cortex-setup').waitFor();
+        const connectionPicker = panel.getByRole('combobox');
+        if (await connectionPicker.inputValue() !== 'c47-fixture') await connectionPicker.selectOption('c47-fixture');
+      } else await panel.getByRole('button', { name: 'Cortex Code (CoCo) setup', exact: true }).click(); };
     const cleanStorage = async () => {
       const snapshot = await page.evaluate(async () => ({ local: Object.entries(localStorage), session: Object.entries(sessionStorage),
         history: history.state, url: location.href, databases: await indexedDB.databases(), caches: await caches.keys() }));
@@ -259,8 +269,9 @@ async function verifyResponsiveHandoff(browser: Browser, baseUrl: string, root: 
       assert.equal(snapshot.caches.length, 0, 'Unexpected Cache Storage in the isolated desktop setup context');
     };
     const pasteRedirect = async () => {
-      assert.ok(active?.cortex?.authorizationUrl);
       const url = panel.getByRole('textbox', { name: 'Native login URL', exact: true });
+      await url.waitFor(); // Profile cards save settings before starting the login job.
+      assert.ok(active?.cortex?.authorizationUrl);
       await url.focus(); await page.keyboard.press('ControlOrMeta+C');
       assert.equal(await page.evaluate(() => navigator.clipboard.readText()), active.cortex.authorizationUrl, 'Native URL copy was truncated');
       const login = new URL(active.cortex.authorizationUrl), redirect = new URL('http://127.0.0.1:54321/');

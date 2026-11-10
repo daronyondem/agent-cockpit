@@ -538,8 +538,10 @@ override activation preserves unresolved global identity. Full native browser
 acceptance remains P7. See [the C41 contract](spec-cortex-code.md#processor-selection-boundaries-p6-c41).
 
 Welcome's CLI panel and Settings → CLI Profiles lazy-load the shared focused
-`cortexSetup.jsx`/CSS component. Its explicit expansion loads native connection
-summaries and any live job. It supports create-only OAuth connections, named
+`cortexSetup.jsx`/CSS component. Welcome keeps its explicit expansion. Settings
+renders setup directly inside each expanded CoCo profile card, with no setup
+panel above the cards. Opening a card loads native connection summaries and
+recovers only a live job whose profile ID matches that card. It supports create-only OAuth connections, named
 selection, paid minimal Check login, Authenticate, Cancel, a selectable native
 URL/deadline and complete remote redirect submission. The panel polls once per
 second, recovers active jobs after reload, ignores older update timestamps,
@@ -548,8 +550,13 @@ is stored in local/session storage, cookies, browser history or settings. The
 C47 browser matrix verifies complete clipboard transfer, live form fit and
 terminal/reload clearing on Welcome and Settings at 1280/390/320 px; active
 component memory and clipboard are transient transfer state. Synthetic callback
-checks are separate from native inference and C26 human OAuth. Settings merges only the returned setup
-profile into its current draft. Setup leaves defaults unchanged. See
+checks are separate from native inference and C26 human OAuth. Card connection
+selection changes that profile only, with no automatic first-connection fallback.
+Check/authenticate saves settings first and then uses that exact profile's
+test/auth route; saving failure stops the action. No extra setup profile is
+created. Isolated homes expose a connection-name input, terminal-login guidance
+and profile-specific checks. Disabled profiles/invalid settings disable controls.
+Welcome retains the setup-auth routes. Card setup leaves defaults unchanged. See
 [CoCo P4](spec-cortex-code.md#shared-connection-and-authentication-setup-p4) for
 all transport/state rules. The mobile PWA gains no administrative setup flow;
 the desktop browser panel wraps at narrow viewports.

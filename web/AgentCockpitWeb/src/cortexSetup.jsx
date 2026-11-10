@@ -2,10 +2,14 @@ import React from 'react';
 import { AgentApi } from './api.js';
 import './cortexSetup.css';
 
-export function CortexSetup({ onProfileSaved }){
+export function CortexSetup({ profile, onConnectionChange, onSave, disabled = false }){
   const [open, setOpen] = React.useState(false);
   const [connections, setConnections] = React.useState([]);
-  const [connection, setConnection] = React.useState('');
+  const [setupConnection, setSetupConnection] = React.useState('');
+  const connection = profile ? profile.cortexCode?.connection || '' : setupConnection;
+  const setConnection = profile ? onConnectionChange : setSetupConnection;
+  const isolated = !!(profile?.configDir || Object.keys(profile?.env || {}).some(key => key.toUpperCase() === 'SNOWFLAKE_HOME'));
+  const remoteLogin = !profile || (profile.authMode === 'account' && !isolated);
   const [create, setCreate] = React.useState(false);
   const [draft, setDraft] = React.useState({ name: '', account: '', user: '' });
   const [job, setJob] = React.useState(null);
@@ -48,35 +52,49 @@ export function CortexSetup({ onProfileSaved }){
     const response = await AgentApi.settings.cortexConnections();
     if (!mounted.current) return;
     setConnections(response.connections);
-    setConnection(current => response.connections.some(item => item.name === current) ? current : response.connections[0]?.name || '');
-    if (response.job) { acceptJob(response.job); setConnection(response.job.cortex?.connection || ''); }
+    if (!profile) setSetupConnection(current => response.connections.some(item => item.name === current) ? current : response.connections[0]?.name || '');
+    if (response.job && (!profile || response.job.profileId === profile.id)) {
+      acceptJob(response.job);
+      if (!profile) setSetupConnection(response.job.cortex?.connection || '');
+    }
   }
 
+  React.useEffect(() => {
+    if (profile) void act(refresh);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- Load when the card opens or switches between shared and isolated homes; connection edits must not overwrite selection.
+  }, [profile?.id, isolated]);
+
   async function setup(start){
-    const response = await (start ? AgentApi.settings.startSetupCliAuth : AgentApi.settings.testSetupCliAuth)('cortex-code', { connection });
+    if (profile && !await onSave()) throw new Error('Save this CLI profile successfully before checking login or authenticating.');
     if (!mounted.current) return;
-    onProfileSaved?.(response.profile);
+    const response = profile
+      ? await (start ? AgentApi.settings.startCliProfileAuth : AgentApi.settings.testCliProfile)(profile.id)
+      : await (start ? AgentApi.settings.startSetupCliAuth : AgentApi.settings.testSetupCliAuth)('cortex-code', { connection });
+    if (!mounted.current) return;
     if (response.job) acceptJob(response.job);
     else { setJob(null); setResult(response.result.output || response.result.error || 'Check finished.'); }
     setRedirect('');
   }
 
   return <section className="cortex-setup" aria-label="Cortex Code setup">
-    <button className="btn" type="button" aria-expanded={open} onClick={() => {
+    {profile ? <b>Cortex Code setup</b> : <button className="btn" type="button" aria-expanded={open} onClick={() => {
       setOpen(!open); if (!open) void act(refresh);
-    }}>Cortex Code (CoCo) setup</button>
-    {open ? <div className="cortex-setup-body">
-      <p>Use the Cortex Code CLI installed on this server and share its terminal login. Each login check makes a small inference request.</p>
-      <p className="u-dim">Save a named connection to use CoCo in chat. If the CLI is missing, install Cortex Code on this server, then check login here. Setup does not change your default Profile. Goals, agents, steering and tool-free Memory are unavailable.</p>
+    }}>Cortex Code (CoCo) setup</button>}
+    {profile || open ? <fieldset className="cortex-setup-body" disabled={disabled || profile?.disabled}>
+      <p>{profile ? 'Choose the Snowflake account connection for this profile. Login actions save this profile first.' : 'Use the Cortex Code CLI installed on this server and share its terminal login.'} Each login check makes a small inference request.</p>
+      <p className="u-dim">{isolated ? 'This profile uses a custom Snowflake home. Authenticate in its terminal, then check login here.' : 'Login shares the server’s terminal credentials. Save a named connection to use CoCo in chat. If the CLI is missing, install Cortex Code on this server first.'}</p>
       <div className="cortex-setup-row">
-        <label>Snowflake connection<select value={connection} disabled={busy || running} onChange={event => setConnection(event.target.value)}>
+        <label>Snowflake connection{isolated ? <input value={connection} disabled={busy || running} onChange={event => setConnection(event.target.value)}/> : <select value={connection} disabled={busy || running} onChange={event => setConnection(event.target.value)}>
           <option value="">Select a connection</option>
+          {connection && !connections.some(item => item.name === connection) ? <option value={connection}>{connection}</option> : null}
           {connections.map(item => <option key={item.name} value={item.name}>{item.name}</option>)}
-        </select></label>
-        <button className="btn" type="button" disabled={busy || running} onClick={() => void act(refresh)}>Refresh connections</button>
-        <button className="btn" type="button" disabled={busy || running} onClick={() => setCreate(!create)}>Create OAuth connection</button>
+        </select>}</label>
+        {!isolated ? <>
+          <button className="btn" type="button" disabled={busy || running} onClick={() => void act(refresh)}>Refresh connections</button>
+          <button className="btn" type="button" disabled={busy || running} onClick={() => setCreate(!create)}>Create OAuth connection</button>
+        </> : null}
       </div>
-      {create ? <form className="cortex-setup-create" autoComplete="off" onSubmit={event => {
+      {create && !isolated ? <form className="cortex-setup-create" autoComplete="off" onSubmit={event => {
         event.preventDefault(); void act(async () => {
           const response = await AgentApi.settings.createCortexConnection(draft);
           if (!mounted.current) return;
@@ -92,7 +110,7 @@ export function CortexSetup({ onProfileSaved }){
       </form> : null}
       <div className="cortex-setup-row">
         <button className="btn" type="button" disabled={busy || running || !connection} onClick={() => void act(() => setup(false))}>Check Cortex login</button>
-        <button className="btn primary" type="button" disabled={busy || running || !connection} onClick={() => void act(() => setup(true))}>Authenticate Cortex</button>
+        {remoteLogin ? <button className="btn primary" type="button" disabled={busy || running || !connection} onClick={() => void act(() => setup(true))}>Authenticate Cortex</button> : !isolated ? <p className="u-dim">Switch Setup mode to Account profile to authenticate here, or use terminal login.</p> : null}
         {running ? <button className="btn" type="button" disabled={busy} onClick={() => {
           setRedirect(''); void act(async () => { const response = await AgentApi.settings.cancelCliProfileAuth(job.id); if (mounted.current) acceptJob(response.job); });
         }}>Cancel Cortex login</button> : null}
@@ -116,6 +134,6 @@ export function CortexSetup({ onProfileSaved }){
         : handoff?.phase === 'verifying' ? 'Verifying Cortex Code access…' : 'Starting native login…'
         : job ? job.events?.at(-1)?.text || job.error || job.status : result}</div>
       {error ? <p role="alert">{error}</p> : null}
-    </div> : null}
+    </fieldset> : null}
   </section>;
 }

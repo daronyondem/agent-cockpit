@@ -434,8 +434,10 @@ tool is unavailable.
   saves invalidate API/view caches; retain pending promise identity, same-ID
   connection keys and late/unmounted completion checks. Keep saved model/effort
   through unavailable discovery; catalogs do not establish auth. Remote OAuth
-  stays in the dedicated shared setup panel, with isolated/custom terminal auth
-  explicit. The expanded native auth/UI probe passed responsive editing/save,
+  now lives inside each expanded CoCo CLI Profile card and uses that exact saved
+  profile's test/auth routes; only Welcome keeps the standalone setup shortcut.
+  Preserve job recovery by profile ID and isolated-home terminal auth guidance.
+  The expanded native auth/UI probe passed responsive editing/save,
   native model/effort/icon/unsupported-control gates and fresh browser inference
   on CoCo 1.2.35/macOS arm64. Its PM2 fixture allows 20 seconds for shutdown
   draining. C43 now uses shared plan-revision role eligibility in both clients,

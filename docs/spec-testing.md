@@ -965,7 +965,10 @@ Focused suites:
   transient redirect submission, polling/completion/cancel and reload recovery
   without persisting secrets, full native-URL focus selection, exact untruncated
   redirect submission, immediate input clearing while a request is pending, and
-  removal on failed/cancelled polls. The test module loader accepts optional globals
+  removal on failed/cancelled polls, exact-profile card recovery, card connection
+  creation/selection and isolated-home check guidance. `test/cortexProfileEditor.test.ts`
+  also exercises newly added profiles, card placement, independent profile IDs,
+  save-before-check/auth ordering and failed-save suppression. The test module loader accepts optional globals
   to exercise browser timers directly.
 
 Existing CLI auth/service/profile suites remain regression gates. POSIX
