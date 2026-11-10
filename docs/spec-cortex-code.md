@@ -1640,6 +1640,9 @@ Welcome executable status separately from its fresh inference evidence.
 
 ## Native CLI updates (P8 C49)
 
+[ADR-0100](adr/0100-keep-coco-updates-independent-of-runtime-certification.md)
+records version-independent eligibility, replacing the initial C49 allowlist.
+
 `src/services/cortexUpdates.ts` owns CoCo update runtime discovery, official
 installation recognition, stable distribution checks and status projection.
 `CliUpdateService` includes enabled CoCo profiles and the legacy default target.
@@ -1653,18 +1656,20 @@ profile environments or establish account isolation.
 An actionable installation currently requires macOS arm64/x64, the normal
 `~/.local/bin/cortex` symlink, an executable whose realpath is exactly
 `~/.local/share/cortex/<distribution>/cortex`, matching `cortex-version.txt`, and
-a fresh native version response matching the distribution's patch version,
-currently 1.2.35 or 1.2.37. Updater eligibility is independent of chat, login,
-media and strict-processor certification. Full distribution versions
+a fresh native version response matching the distribution's patch version.
+There is no CLI-version allowlist: new patch, minor and major versions remain
+actionable while that installation contract holds. Updater eligibility is
+independent of chat, login, media and strict-processor certification, matching
+Codex/Claude's separation of installation checks and compatibility warnings.
+Full distribution versions
 use `major.minor.patch+HHMMSS.githash`. Wrappers, copied/version-pinned binaries,
-custom aliases, foreign symlinks, mismatched metadata, other platforms and
-unverified updater versions remain visible but manual. Missing executables
+custom aliases, foreign symlinks, mismatched metadata and other platforms
+remain visible but manual. Missing executables
 remain non-actionable. Discovery does not invoke ACP or authenticate.
-Recognized standalone layouts retain `installMethod:'self-update'` even when
-their updater version is unverified. Unsupported status explains whether the
-platform, installation layout/metadata/version match, or updater version is
-unverified; it never tells users with a valid newer installation to install
-1.2.35. Those statuses remain non-actionable through the existing `lastError`.
+Recognized standalone layouts use `installMethod:'self-update'` regardless of
+whether the CLI release has runtime compatibility evidence. Unsupported status
+explains platform or installation layout/metadata/version mismatches through
+the existing `lastError`; a newer CLI release alone is never an update error.
 
 Passive checks read the reviewed native distribution source
 `https://sfc-repo.snowflakecomputing.com/cortex-code-cli/a4643c4278/stable_version.txt`
@@ -1677,8 +1682,9 @@ Network/metadata failures retain the known local version and disable execution.
 A differing stable release outside 1.2.35 carries `updateCaution` about
 chat/login/media certification before installation, explicitly separate from
 managed updater eligibility. Already-current installations carry no update
-caution. Installing a target does not itself certify its updater or other native
-features; verified 1.2.37 retains its managed updater after installation.
+caution. Installing a target does not itself certify native runtime features.
+The target remains eligible for the next managed update based on its verified
+installation, without a Cockpit release or version-allowlist change.
 
 An explicit update reserves the item before asynchronous preflight, refreshes
 path/version/stable-target evidence and rechecks active/pending chat immediately
@@ -1694,8 +1700,9 @@ ephemeral processors drain before the response.
 Later calls can recreate runtimes/idle supervision. Failed attempts also refresh
 cached status because native work may have partially changed files. Exit zero
 is insufficient: a new process and activation metadata must match the selected
-full distribution. An installed newer target can pass that check while remaining
-ineligible to run its own unverified updater. HTTP methods/bodies and status
+full distribution. Future invocations use the same native `update <target>`
+interface; an interface failure follows the existing error/drain/refresh path,
+never an automatic retry or a version-certification block. HTTP methods/bodies and status
 shapes remain unchanged; update execution failures return the existing 400 path,
 active chat the existing 409 path. No CLI authentication is inferred.
 
@@ -1707,9 +1714,10 @@ change. Existing Claude compatibility warnings and other harness update methods
 remain unchanged.
 
 `test/cortexUpdates.test.ts` covers shared executable/env isolation, strict
-layout/version gates, stable metadata, pinned invocation, duplicate/preflight
+layout/native-version agreement, stable metadata, pinned invocation, duplicate/preflight
 ownership, newly active chat, awaited cleanup, failed attempts/no retry/explicit
-recovery, changed activation, exit-zero postcheck failure and unverified targets.
+recovery, changed activation, exit-zero postcheck failure, future patch/minor/major
+eligibility and successive future-version updates with nonblocking cautions.
 `test/cortexUpdateRoutes.test.ts` checks real route response ownership while
 CoCo cleanup is held. Existing CLI/runtime/backend/macOS installer/release/update
 suites remain regression gates.
@@ -1728,6 +1736,9 @@ Set `CORTEX_UPDATE_TEST_COMMAND` to a retained versioned distribution executable
 to copy that distribution into the disposable home instead of installing the
 current stable first. Both HOME and SNOWFLAKE_HOME are isolated. The probe
 asserts managed updates remain enabled and update cautions clear after success.
+The update and update-row probes have no release allowlist; they record the
+actual native version tested. This policy does not claim native certification
+of future binaries or widen independent chat/auth/media/processor gates.
 
 
 C49 update-status browser acceptance has an explicit independent mode:

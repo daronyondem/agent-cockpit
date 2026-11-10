@@ -50,7 +50,6 @@ async function main(): Promise<void> {
     }
     const distribution = path.dirname(fs.realpathSync(command)), version = path.basename(distribution);
     const nativeVersion = version.split('+')[0];
-    assert.ok(['1.2.35', '1.2.37'].includes(nativeVersion), 'Review new updater versions before extending this probe');
     assert.equal(cortexInstalledUpdateVersion(command), version);
     results.cliVersion = nativeVersion; results.nativeDistribution = version;
     // Keep the genuine binary, but label this disposable copy with an

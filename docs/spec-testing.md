@@ -1050,11 +1050,13 @@ regressions pass; rebuilt desktop/mobile assets retain the 914 KiB JS budget.
 ### CoCo native CLI updates (P8 C49)
 
 `test/cortexUpdates.test.ts` covers shared executable grouping and profile env
-exclusion, canonical native layout/metadata/version gating, full build lookup,
+exclusion, canonical native layout/metadata/native-version agreement, full build lookup,
 pinned updater invocation, reserved preflight/duplicate and newly active chat,
 network/metadata failure recovery, awaited invalidation, one failed native
 attempt with explicit retry, changed activation, exit-zero postcheck failure and
-unverified versions/platforms. `test/cortexUpdateRoutes.test.ts` holds real HTTP
+future patch/minor/major eligibility, successive new-version updates despite
+runtime cautions, and unsupported platforms. Future-version fixtures prove
+policy, not native compatibility. `test/cortexUpdateRoutes.test.ts` holds real HTTP
 responses until CoCo draining finishes on success/failure. The existing CLI update
 foundation case now expects a visible non-actionable CoCo target rather than
 excluding the harness. Existing runtime/backend and macOS installer/release/
@@ -1081,9 +1083,10 @@ for retained `1.2.35+191333.f82de3d91715` and `1.2.37+221950.87518d294789`, each
 targeting stable `1.2.37+221950.87518d294789`: download/activation, passive-query
 preservation, runtime draining/reuse, missing-target failure and explicit retry.
 Managed updates stay enabled after upgrade; already-current installs have no
-update caution. Focused regressions cover later 1.2.37 builds, unknown versions,
+update caution. Focused regressions cover later builds and future versions,
 distinct platform/layout errors and the separate chat/login/media caution.
-The update-row-only browser mode accepts 1.2.35/1.2.37; the full auth probe still
+The update and update-row-only probes have no CLI-version allowlist and record
+the actual release used. The full auth probe still
 requires 1.2.35, so updater evidence does not broaden authentication claims.
 The 1.2.37 update-row-only run passed at 1280/390/320 px with an enabled Run
 updater button and no error/caution text, without updating or authenticating.
