@@ -8,6 +8,8 @@ import { createMemoryMcpServer, MEMORY_MCP_STUB_PATH } from '../src/services/mem
 import { ChatService } from '../src/services/chatService';
 import { BackendRegistry } from '../src/services/backends/registry';
 import { BaseBackendAdapter, type RunOneShotOptions } from '../src/services/backends/base';
+import { CortexCodeAdapter } from '../src/services/backends/cortex';
+import { CortexSessions } from '../src/services/backends/cortexSessions';
 import type {
   BackendMetadata,
   SendMessageOptions,
@@ -429,6 +431,44 @@ function makeRequest(
 // ── POST /memory/notes handler tests ──────────────────────────────────────
 
 describe('POST /mcp/memory/notes', () => {
+  test('an unavailable CoCo Memory selection fails before startup, keeps its profile and never saves a fallback note', async () => {
+    const start = jest.fn();
+    const adapter = new CortexCodeAdapter({ sessions: new CortexSessions(start) });
+    const metadata = adapter.metadata;
+    const unavailable = jest.spyOn(adapter, 'metadata', 'get').mockReturnValue({ ...metadata, capabilities: {
+      ...metadata.capabilities, oneShot: { restrictedText: false, toolEnabled: true, sequential: true },
+    } });
+    registry.register(adapter);
+    try {
+      const settings = await service.getSettings();
+      await service.saveSettings({ ...settings, cliProfiles: [{ id: 'cortex-memory', name: 'CoCo Memory', harness: 'cortex-code', authMode: 'account',
+        cortexCode: { connection: 'fixture' }, createdAt: '', updatedAt: '' }], memory: { cliProfileId: 'cortex-memory', cliBackend: 'cortex-code' } });
+      const conversation = await service.createConversation('Restored Memory selection', tmpDir);
+      await service.setWorkspaceMemoryEnabled(conversation.workspaceId, true);
+      const session = memoryMcp.issueMemoryMcpSession(conversation.id, conversation.workspaceId);
+      await startHttpServer(memoryMcp.router);
+      const response = await makeRequest('POST', '/mcp/memory/notes', { content: 'Remember this fixture rule' }, { 'x-memory-token': session.token });
+      expect(response.status).toBe(502);
+      expect(response.body.message).toContain('Memory note was not saved');
+      expect(response.body.message).toContain('without tools');
+      expect(start).not.toHaveBeenCalled();
+      expect(stubCli._oneShotCalls).toHaveLength(0);
+      expect((await service.getWorkspaceMemory(conversation.workspaceId))?.files || []).toEqual([]);
+      expect((await service.getSettings()).memory?.cliProfileId).toBe('cortex-memory');
+      const first = await service.addMemoryNoteEntry(conversation.workspaceId, { content: '# First fixture rule', source: 'memory-note', filenameHint: 'first' });
+      const second = await service.addMemoryNoteEntry(conversation.workspaceId, { content: '# Second fixture rule', source: 'memory-note', filenameHint: 'second' });
+      const oneShot = jest.spyOn(adapter, 'runOneShot');
+      expect(await memoryMcp.extractMemoryFromSession({ workspaceHash: conversation.workspaceId, conversationId: conversation.id,
+        messages: [{ role: 'user', content: 'A new durable fixture rule.' }] })).toBe(0);
+      await expect(memoryMcp.proposeMemoryConsolidation(conversation.workspaceId)).rejects.toThrow('without tools');
+      await expect(memoryMcp.draftMemoryConsolidation(conversation.workspaceId, { action: {
+        action: 'merge_candidates', filenames: [first, second], reason: 'Fixture duplicates',
+      } })).rejects.toThrow('without tools');
+      expect(oneShot).not.toHaveBeenCalled(); expect(start).not.toHaveBeenCalled();
+      expect((await service.getWorkspaceMemory(conversation.workspaceId))?.files).toHaveLength(2);
+    } finally { unavailable.mockRestore(); await adapter.shutdown(); }
+  });
+
   afterEach(async () => {
     await stopHttpServer();
   });

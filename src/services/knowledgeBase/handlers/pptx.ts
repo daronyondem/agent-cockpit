@@ -35,6 +35,7 @@
 import path from 'path';
 import { promises as fsp } from 'fs';
 import AdmZip from 'adm-zip';
+import { logger } from '../../../utils/logger';
 import { XMLParser } from 'fast-xml-parser';
 import type { Handler, HandlerResult } from './types';
 import * as pptxSignalsModule from '../ingestion/pptxSignals';
@@ -59,13 +60,13 @@ interface DownscaledImage {
   absLinkPath: string;
 }
 
-async function downscaleAll(rels: string[], outDir: string): Promise<DownscaledImage[]> {
+async function downscaleAll(rels: string[], outDir: string, format?: 'png'): Promise<DownscaledImage[]> {
   return Promise.all(
     rels.map(async (rel) => {
       const abs = path.join(outDir, rel);
       const sidecarAbs = abs + '.ai.png';
       const sidecarRel = rel + '.ai.png';
-      const resolved = await ensureAiReadyImage(abs, sidecarAbs);
+      const resolved = await ensureAiReadyImage(abs, sidecarAbs, format);
       return resolved === abs
         ? { storeRel: rel, linkRel: rel, absLinkPath: abs }
         : { storeRel: rel, linkRel: sidecarRel, absLinkPath: sidecarAbs };
@@ -334,8 +335,8 @@ export const pptxHandler: Handler = async ({
   // digestion-time CLI read stay under the vision-token cap. The
   // originals on disk are preserved; only the markdown link target
   // changes when a `.ai.png` sibling is written.
-  const embeddedItems = await downscaleAll(embeddedMediaRels, outDir);
-  const slideItems = await downscaleAll(slideImageRels, outDir);
+  const embeddedItems = await downscaleAll(embeddedMediaRels, outDir, ingestionAdapter?.oneShotImageFormat);
+  const slideItems = await downscaleAll(slideImageRels, outDir, ingestionAdapter?.oneShotImageFormat);
 
   const mediaFiles: string[] = [];
   for (const item of [...embeddedItems, ...slideItems]) {
@@ -442,7 +443,8 @@ export const pptxHandler: Handler = async ({
       slideRecords.push(record);
       slideBlocks.push(buildSlideSection(record, aiMarkdown, slide.notes, imageRel));
     } else {
-      console.warn(`[kb/pptx] AI conversion failed for slide ${slide.slideNumber} of "${filename}": ${aiError}`);
+      logger.warn('KB PPTX image conversion failed', { filename, slideNumber: slide.slideNumber, error: aiError });
+      const retries = ingestionAdapter.allowAutomaticOneShotRetry === false ? 0 : 1;
       const record: SlideRecord = {
         slideNumber: slide.slideNumber,
         source: 'image-only',
@@ -451,8 +453,8 @@ export const pptxHandler: Handler = async ({
         extractedChars: slide.body.length,
         hasImage: true,
         aiCallDurationMs,
-        aiRetries: 1,
-        note: 'AI conversion failed after retry',
+        aiRetries: retries,
+        note: `AI conversion failed ${retries ? 'after' : 'without'} retry`,
       };
       slideRecords.push(record);
       slideBlocks.push(buildSlideSection(record, '', slide.notes, imageRel));

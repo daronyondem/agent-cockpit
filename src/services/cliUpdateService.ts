@@ -14,6 +14,7 @@ import { resolveGrokCliRuntime } from './backends/grok';
 import { resolveCopilotCliRuntime } from './backends/copilot';
 import { buildCliCommandInvocation, windowsCmdCommandLine, type CliCommandResolution } from './cliCommandResolver';
 import { serverConfiguredCliProfileId } from './cliProfiles';
+import { cortexInstalledUpdateVersion, probeCortexUpdateInstallation, resolveCortexUpdateRuntime } from './cortexUpdates';
 import { ensureWindowsCliToolWrappers } from './windowsCliToolWrappers';
 import type {
   CliInstallMethod,
@@ -37,6 +38,7 @@ const HARNESS_LABELS: Record<CliHarness, string> = {
   kiro: 'Kiro',
   opencode: 'OpenCode',
   'grok-build': 'Grok Build',
+  'cortex-code': 'Cortex Code (CoCo)',
   copilot: 'GitHub Copilot',
 };
 
@@ -46,6 +48,7 @@ const HARNESS_DEFAULT_COMMANDS: Record<CliHarness, string> = {
   kiro: 'kiro-cli',
   opencode: 'opencode',
   'grok-build': 'grok',
+  'cortex-code': 'cortex',
   copilot: 'copilot',
 };
 
@@ -162,25 +165,38 @@ export class CliUpdateService {
       };
     }
 
-    const current = this._items.get(itemId) || await this._probeTarget(target);
-    if (!current.updateSupported || !current.updateCommand || current.updateCommand.length === 0) {
-      return {
-        success: false,
-        steps: [],
-        error: current.lastError || 'This CLI installation cannot be updated safely from Agent Cockpit.',
-        item: current,
-      };
-    }
-
+    // CoCo revalidates its activation path and stable target before mutation.
     this._updateInProgress.add(itemId);
-    const steps: UpdateStep[] = [];
     try {
+      const current = target.harness === 'cortex-code' ? await this._probeTarget(target)
+        : this._items.get(itemId) || await this._probeTarget(target);
+      if (target.harness === 'cortex-code') this._items.set(itemId, current);
+      if (!current.updateSupported || !current.updateCommand || current.updateCommand.length === 0) {
+        return {
+          success: false,
+          steps: [],
+          error: current.lastError || 'This CLI installation cannot be updated safely from Agent Cockpit.',
+          item: current,
+        };
+      }
+
+      if (target.harness === 'cortex-code' && opts.hasActiveStreams?.()) {
+        return { success: false, steps: [], item: current, error: 'Cannot update a CLI while conversations are actively running.' };
+      }
+      const steps: UpdateStep[] = [];
       const [cmd, ...args] = current.updateCommand;
       try {
         const out = await this._exec(cmd, args, target.env, UPDATE_TIMEOUT_MS);
         steps.push({ name: current.updateCommand.join(' '), success: true, output: out.trim() });
       } catch (err: unknown) {
         steps.push({ name: current.updateCommand.join(' '), success: false, output: (err as Error).message });
+        if (target.harness === 'cortex-code') {
+          await opts.onUpdated?.();
+          const refreshed = await this._probeTarget(target);
+          this._items.set(itemId, refreshed);
+          this._lastCheckAt = new Date().toISOString();
+          return { success: false, steps, error: (err as Error).message, item: refreshed };
+        }
         return { success: false, steps, error: (err as Error).message, item: current };
       }
 
@@ -190,6 +206,9 @@ export class CliUpdateService {
       const refreshed = await this._probeTarget(target);
       this._items.set(itemId, refreshed);
       this._lastCheckAt = new Date().toISOString();
+      if (target.harness === 'cortex-code' && (refreshed.currentVersion !== current.latestVersion || cortexInstalledUpdateVersion(refreshed.resolvedPath) !== current.latestVersion)) {
+        return { success: false, steps, item: refreshed, error: 'Cortex updater finished, but fresh version detection did not verify the selected distribution. Refresh checks before retrying.' };
+      }
       return { success: true, steps, item: refreshed };
     } finally {
       this._updateInProgress.delete(itemId);
@@ -251,6 +270,7 @@ export class CliUpdateService {
   }
 
   private _runtimeForProfile(profile: CliProfile): CliCommandResolution & { command: string; env: NodeJS.ProcessEnv } {
+    if (profile.harness === 'cortex-code') return resolveCortexUpdateRuntime(profile, this._appRoot);
     if (profile.harness === 'codex') return resolveCodexCliRuntime(profile);
     if (profile.harness === 'claude-code') return resolveClaudeCliRuntime(profile);
     if (profile.harness === 'opencode') return resolveOpenCodeCliRuntime(profile);
@@ -275,7 +295,7 @@ export class CliUpdateService {
       command: runtime.command,
       argsPrefix: runtime.argsPrefix || [],
       windowsCmdShim: !!runtime.windowsCmdShim,
-      PATH: runtime.env.PATH || '',
+      PATH: harness === 'cortex-code' ? '' : runtime.env.PATH || '',
     })).digest('hex').slice(0, 12);
     return `${harness}:${hash}`;
   }
@@ -283,9 +303,14 @@ export class CliUpdateService {
   private async _probeTarget(target: CliRuntimeTarget): Promise<CliUpdateStatus> {
     const base = this._emptyStatus(target);
     try {
+      if (target.harness === 'cortex-code' && process.platform === 'win32' && !/\.exe$/i.test(target.command)) {
+        throw new Error('Cortex Code on Windows requires a standalone .exe command');
+      }
       const versionOut = await this._execTarget(target, this._versionArgs(target.harness), EXEC_TIMEOUT_MS);
       const currentVersion = parseVersion(versionOut);
       const resolvedPath = await this._resolveCommand(target);
+      if (target.harness === 'cortex-code') return { ...base,
+        ...await probeCortexUpdateInstallation(versionOut, resolvedPath, target.command) };
       const probe = await this._detectInstallMethod(target, resolvedPath);
       const updateCommand = this._updateCommand(target, probe);
       const latestVersion = await this._latestVersion(target, probe.installMethod);
@@ -350,6 +375,7 @@ export class CliUpdateService {
   }
 
   private _versionArgs(harness: CliHarness): string[] {
+    if (harness === 'cortex-code') return ['--no-auto-update', '--version'];
     return harness === 'kiro' ? ['version'] : ['--version'];
   }
 
@@ -497,7 +523,7 @@ export class CliUpdateService {
 }
 
 function isCliHarnessValue(value: unknown): value is CliHarness {
-  return value === 'codex' || value === 'claude-code' || value === 'kiro' || value === 'opencode' || value === 'grok-build' || value === 'copilot';
+  return value === 'codex' || value === 'claude-code' || value === 'kiro' || value === 'opencode' || value === 'grok-build' || value === 'cortex-code' || value === 'copilot';
 }
 
 function inferNpmPrefixFromPackagePath(resolvedPath: string, npmPackage: string): string | null {

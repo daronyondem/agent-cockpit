@@ -77,6 +77,10 @@ describe('extracted chat modules', () => {
   });
 
   test('conversationPolicy keeps effort, service tier, and title rules pure', () => {
+    expect(effectiveEffort('profile-discovered', 'medium', undefined, 'cortex-code')).toBe('medium');
+    expect(effectiveEffort('profile-discovered', 'invalid' as any, undefined, 'cortex-code')).toBeUndefined();
+    expect(effectiveEffort('profile-discovered', 'medium', undefined, 'claude-code')).toBeUndefined();
+    expect(effectiveEffort(undefined, 'medium', undefined, 'cortex-code')).toBeUndefined();
     expect(effectiveEffort('sonnet', 'max', {
       id: 'sonnet',
       supportedEffortLevels: ['low', 'medium', 'high'],

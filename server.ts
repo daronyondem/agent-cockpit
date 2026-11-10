@@ -17,6 +17,7 @@ import { KiroAdapter } from './src/services/backends/kiro';
 import { GrokBuildAdapter } from './src/services/backends/grok';
 import { CodexAdapter } from './src/services/backends/codex';
 import { OpenCodeAdapter } from './src/services/backends/opencode';
+import { CortexCodeAdapter } from './src/services/backends/cortex';
 import { CopilotAdapter } from './src/services/backends/copilot';
 import { UpdateService } from './src/services/updateService';
 import { CliUpdateService } from './src/services/cliUpdateService';
@@ -122,6 +123,7 @@ backendRegistry.register(new CodexAdapter({
   sandbox: config.CODEX_SANDBOX_MODE,
 }));
 backendRegistry.register(new OpenCodeAdapter({ workingDir: config.DEFAULT_WORKSPACE }));
+backendRegistry.register(new CortexCodeAdapter({ workingDir: config.DEFAULT_WORKSPACE }));
 backendRegistry.register(new CopilotAdapter({ workingDir: config.DEFAULT_WORKSPACE }));
 
 const chatService = new ChatService(__dirname, {

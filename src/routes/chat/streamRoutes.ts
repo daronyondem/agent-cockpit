@@ -12,6 +12,7 @@ import { StreamJobSupervisor, type PendingMessageSend } from '../../services/str
 import type { MemoryMcpServer } from '../../services/memoryMcp';
 import type { KbSearchMcpServer } from '../../services/kbSearchMcp';
 import { validateConversationInputRequest, validateSendMessageRequest } from '../../contracts/streams';
+import { resolveConversationAttachments } from '../../services/chat/attachments';
 import { isContractValidationError } from '../../contracts/validation';
 import type {
   ActiveStreamEntry,
@@ -194,6 +195,8 @@ export function createStreamRouter(opts: StreamRoutesOptions): express.Router {
       return res.status(409).json({ error: 'Conversation is already streaming' });
     }
 
+    const attachmentRoot = path.join(chatService.artifactsDir, convId);
+    let attachments: Awaited<ReturnType<typeof resolveConversationAttachments>>;
     let jobHandedOff = false;
     let pendingMessageSend: PendingMessageSend | null = null;
     try {
@@ -209,6 +212,13 @@ export function createStreamRouter(opts: StreamRoutesOptions): express.Router {
         workingDir: executionDir,
       });
       const jobId = pendingMessageSend.jobId;
+      // Resolve uploads only after the pending send is registered, so the
+      // in-flight check and registration above stay one synchronous step.
+      try {
+        attachments = await resolveConversationAttachments(attachmentRoot, body.attachments || []);
+      } catch (err) {
+        return res.status(400).json({ error: (err as Error).message });
+      }
 
       try {
         if (cliProfileId) {
@@ -325,7 +335,7 @@ export function createStreamRouter(opts: StreamRoutesOptions): express.Router {
     }
 
     let systemPrompt = '';
-    if (isNewSession) {
+    if (isNewSession || backendId === 'cortex-code') {
       const settings = await chatService.getSettings();
       const globalPrompt = settings.systemPrompt || '';
       const wsInstructions = workspaceIdForSend ? (await chatService.getWorkspaceInstructions(workspaceIdForSend)) || '' : '';
@@ -421,8 +431,10 @@ export function createStreamRouter(opts: StreamRoutesOptions): express.Router {
       ? (refreshedConv?.serviceTier || undefined)
       : (conv.serviceTier || undefined);
     const sendResult = adapter.sendMessage(cliMessage, {
+      ...(attachments.length ? { attachments, attachmentRoot } : {}),
       sessionId: conv.currentSessionId,
       conversationId: convId,
+      workspaceId: workspaceIdForSend || undefined,
       cliProfileId: runtime.cliProfileId || refreshedConv?.cliProfileId || conv.cliProfileId || undefined,
       cliProfile: runtime.profile,
       isNewSession,
@@ -491,7 +503,7 @@ export function createStreamRouter(opts: StreamRoutesOptions): express.Router {
       }
       throw err;
     }
-    const { text, streamActive } = body;
+    const { text, streamActive, decisionId } = body;
 
     const conv = await chatService.getConversation(convId);
     if (!conv) return res.status(404).json({ error: 'Conversation not found' });
@@ -524,8 +536,14 @@ export function createStreamRouter(opts: StreamRoutesOptions): express.Router {
         }
         return res.json({ mode: 'stdin' });
       }
-      entry.sendInput(text.trim());
+      if (entry.sendInput(text.trim(), decisionId) === false) {
+        return res.status(409).json({ error: 'This interaction is no longer active or its answer is invalid.' });
+      }
       return res.json({ mode: 'stdin' });
+    }
+
+    if (decisionId && backendRegistry.get(conv.backend)?.decisionsRequireActiveTurn) {
+      return res.status(409).json({ error: 'This interaction is no longer active.' });
     }
 
     return res.json({ mode: 'message' });

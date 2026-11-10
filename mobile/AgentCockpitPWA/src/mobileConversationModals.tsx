@@ -306,7 +306,7 @@ export function ActionsModal(props: {
           <span>Share Markdown</span>
           <ChevronRightIcon />
         </button>
-        <button className="action" type="button" onClick={props.onSessions}>
+        <button className="action" type="button" onClick={() => { props.onClose(); props.onSessions(); }}>
           <span className="ic"><SessionsIcon /></span>
           <span>Sessions</span>
           <ChevronRightIcon />

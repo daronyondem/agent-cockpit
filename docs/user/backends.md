@@ -7,6 +7,7 @@ authenticated on the same machine that runs the Agent Cockpit server.
 | --- | --- | --- | --- |
 | Claude Code | `claude` | Planning, tool-heavy coding, plan mode | Supports token and cost reporting, plan mode, subagents, and mid-turn input. |
 | OpenAI Codex | `codex` | Fast coding iteration and goal-mode workflows | Uses Codex App Server, supports subagents, goal controls, token usage, and full local execution defaults. |
+| Cortex Code (CoCo) | `cortex` | Snowflake-backed coding, chat and tool-enabled processors | Native ACP; verified on 1.2.35/macOS arm64. Shared terminal auth, questions/plans, PNG OCR; strict Memory on the exact retained macOS arm64 build; goals/subagents/steering and pricing remain gated. |
 | Grok Build | `grok` | Coding, native goals, plan approval and subagents | Uses ACP plus native extensions; reuses terminal login, reports model usage/cost and optional account billing. |
 | Kiro | `kiro-cli` | ACP-based workflows and Kiro-specific projects | Uses ACP over stdin/stdout and reports credits/context percentage rather than token cost. |
 | OpenCode | `opencode` | Multi-provider coding through DeepSeek, Groq, Gemini, OpenRouter, and similar providers | Self-configured provider credentials and model routing. Supports thinking, tool activity, and session resume. |
@@ -247,3 +248,18 @@ processes share that workspace folder by default. To give each conversation an
 isolated checkout and session branch, enable
 [Worktree Isolation](worktree-isolation.md) on the workspace. This works the
 same way for every supported backend.
+
+## Cortex Code (CoCo)
+
+Install the official standalone CLI on the server and select a named Snowflake
+connection in Settings → CLI Profiles. Normal setup shares terminal credentials;
+the dedicated panel can check saved access or transfer a native OAuth URL and
+complete loopback redirect from a browser on another machine. Successful fresh
+inference is required; model discovery is not login proof. The actual human
+remote-browser run through Cockpit remains an acceptance gate.
+
+See [Cortex Code setup and limits](cortex-code.md) for installation, the exact
+authentication steps, supported workflows, image/model requirements, updates and
+migration. Native Windows/Linux acceptance is pending. Strict Memory can select
+CoCo on the exact verified macOS arm64 build; tool-enabled workflows retain
+their independent capability checks.

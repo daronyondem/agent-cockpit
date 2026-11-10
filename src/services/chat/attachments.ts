@@ -1,4 +1,6 @@
 import path from 'path';
+import fs from 'fs/promises';
+import type { ChatAttachmentReference } from '../../contracts/streams';
 import type { AttachmentKind, AttachmentMeta } from '../../types';
 
 const IMAGE_EXTS = new Set(['.png', '.jpg', '.jpeg', '.gif', '.webp', '.svg', '.bmp', '.avif']);
@@ -108,4 +110,21 @@ export function attachmentFromPath(abs: string, size?: number): AttachmentMeta {
     kind,
     meta: formatAttachmentSize(size),
   };
+}
+
+/** Resolve explicit upload references; prose paths never become native media. */
+export async function resolveConversationAttachments(root: string, references: ChatAttachmentReference[]): Promise<AttachmentMeta[]> {
+  if (!references.length) return [];
+  try {
+    const base = await fs.realpath(root);
+    if (!(await fs.lstat(root)).isDirectory()) throw new Error('Invalid upload directory');
+    return await Promise.all(references.map(async ({ name }) => {
+      const file = path.resolve(root, name);
+      const [resolved, stat] = await Promise.all([fs.realpath(file), fs.lstat(file)]);
+      if (path.dirname(resolved) !== base || !stat.isFile()) throw new Error('Invalid upload');
+      return attachmentFromPath(resolved, stat.size);
+    }));
+  } catch {
+    throw new Error('Attachment is outside this conversation or unavailable.');
+  }
 }

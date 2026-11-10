@@ -1,4 +1,5 @@
 import React from 'react';
+import { checkBackendRoleEligibility } from '../../../../src/contracts/backendCapabilities';
 
 import { Ico } from '../icons.jsx';
 import { StreamStore } from '../streamStore.js';
@@ -136,13 +137,14 @@ function formatMemoryOutcomeAction(action){
   }
 }
 
-export function InteractionCard({ convId, interaction, respondPending, allowPlanFeedback = false }){
+export function InteractionCard({ convId, interaction, respondPending, backend }){
   if (!interaction) return null;
+  const allowPlanFeedback = checkBackendRoleEligibility(backend, { role: 'planRevision' }).ok;
   if (interaction.type === 'planApproval') {
-    return <PlanApprovalCard convId={convId} planContent={interaction.planContent} respondPending={respondPending} allowFeedback={allowPlanFeedback}/>;
+    return <PlanApprovalCard key={(interaction.decisionId || '') + ':' + interaction.planContent} convId={convId} decisionId={interaction.decisionId} planContent={interaction.planContent} respondPending={respondPending} allowFeedback={allowPlanFeedback}/>;
   }
   if (interaction.type === 'userQuestion') {
-    return <QuestionCard key={interaction.requestId || interaction.question} convId={convId} question={interaction.question} options={interaction.options} allowFreeform={interaction.allowFreeform} respondPending={respondPending}/>;
+    return <QuestionCard key={(interaction.requestId || interaction.decisionId || '') + ':' + interaction.question} convId={convId} decisionId={interaction.decisionId} question={interaction.question} options={interaction.options} allowFreeform={interaction.allowFreeform} respondPending={respondPending}/>;
   }
   return null;
 }
@@ -160,7 +162,7 @@ const AWAITING_DOT_STYLE = {
   boxShadow: "0 0 0 3px color-mix(in oklch, var(--status-awaiting), transparent 80%)",
 };
 
-function PlanApprovalCard({ convId, planContent, respondPending, allowFeedback }){
+function PlanApprovalCard({ convId, decisionId, planContent, respondPending, allowFeedback }){
   const [feedback, setFeedback] = React.useState('');
   const html = planContent ? renderMarkdown(planContent) : '';
   return (
@@ -182,31 +184,31 @@ function PlanApprovalCard({ convId, planContent, respondPending, allowFeedback }
       <div className="plan-actions">
         <span className="spacer" style={{flex:1}}/>
         {allowFeedback ? (
-          <button className="btn" disabled={respondPending || !feedback.trim()} onClick={() => StreamStore.respond(convId, feedback.trim())}>Request changes</button>
+          <button className="btn" disabled={respondPending || !feedback.trim()} onClick={() => StreamStore.respond(convId, feedback.trim(), decisionId)}>Request changes</button>
         ) : null}
         <button
           className="btn danger"
           disabled={respondPending}
-          onClick={() => StreamStore.respond(convId, 'no')}
+          onClick={() => StreamStore.respond(convId, 'no', decisionId)}
         >Reject</button>
         <button
           className="btn primary"
           disabled={respondPending}
-          onClick={() => StreamStore.respond(convId, 'yes')}
+          onClick={() => StreamStore.respond(convId, 'yes', decisionId)}
         >{respondPending ? 'Sending…' : 'Approve & run'}</button>
       </div>
     </div>
   );
 }
 
-function QuestionCard({ convId, question, options, allowFreeform, respondPending }){
+function QuestionCard({ convId, decisionId, question, options, allowFreeform, respondPending }){
   const [text, setText] = React.useState('');
   const inputRef = React.useRef(null);
   React.useEffect(() => { if (inputRef.current) inputRef.current.focus(); }, []);
   const canSubmit = !!text.trim() && !respondPending;
   function submit(){
     if (!canSubmit) return;
-    StreamStore.respond(convId, text.trim());
+    StreamStore.respond(convId, text.trim(), decisionId);
   }
   function pick(label){
     if (allowFreeform === false) { StreamStore.respond(convId, label); return; }

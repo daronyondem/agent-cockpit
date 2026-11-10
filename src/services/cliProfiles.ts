@@ -1,6 +1,8 @@
 import type { CliCommunicationProtocol, CliHarness, CliProfile, Settings } from '../types';
+import { hasRequiredCliProfileConfig } from '../contracts/cliProfiles';
+export { hasRequiredCliProfileConfig } from '../contracts/cliProfiles';
 
-export const SUPPORTED_CLI_HARNESSES: CliHarness[] = ['claude-code', 'kiro', 'codex', 'opencode', 'grok-build', 'copilot'];
+export const SUPPORTED_CLI_HARNESSES: CliHarness[] = ['claude-code', 'kiro', 'codex', 'opencode', 'grok-build', 'cortex-code', 'copilot'];
 export const CLAUDE_CODE_INTERACTIVE_BACKEND_ID = 'claude-code-interactive';
 export const CLAUDE_CODE_STANDARD_PROTOCOL: CliCommunicationProtocol = 'standard';
 export const CLAUDE_CODE_INTERACTIVE_PROTOCOL: CliCommunicationProtocol = 'interactive';
@@ -13,6 +15,7 @@ const HARNESS_LABELS: Record<CliHarness, string> = {
   codex: 'Codex',
   opencode: 'OpenCode',
   'grok-build': 'Grok Build',
+  'cortex-code': 'Cortex Code (CoCo)',
   copilot: 'GitHub Copilot',
 };
 
@@ -56,7 +59,7 @@ export function serverConfiguredCliProfileId(harness: CliHarness): string {
 
 export function isSetupAccountCliProfile(profile: Pick<CliProfile, 'id' | 'harness' | 'authMode'>): boolean {
   if (profile.authMode !== 'account') return false;
-  if (profile.harness !== 'claude-code' && profile.harness !== 'codex' && profile.harness !== 'grok-build') return false;
+  if (profile.harness !== 'claude-code' && profile.harness !== 'codex' && profile.harness !== 'grok-build' && profile.harness !== 'cortex-code') return false;
   return profile.id === `setup-${profile.harness}-account`
     || profile.id.startsWith(`setup-${profile.harness}-account-`);
 }
@@ -103,6 +106,9 @@ export function resolveCliProfileRuntime(
     if (profile.disabled) {
       return { error: `CLI profile is disabled: ${profile.name}` };
     }
+    if (!hasRequiredCliProfileConfig(profile)) {
+      return { error: 'Cortex Code requires a CLI Profile with a valid named Snowflake connection.' };
+    }
     const legacyDefaultBackend = !fallbackBackend
       && requestedProfileId === settings.defaultCliProfileId
       && backendUsesCliHarness(settings.defaultBackend, profile.harness)
@@ -126,6 +132,9 @@ export function resolveCliProfileRuntime(
     return {
       error: 'CLI profile is required. Configure a Default CLI profile in Global Settings before starting CLI-powered work.',
     };
+  }
+  if (backendId === 'cortex-code' && (!fallbackProfile || !hasRequiredCliProfileConfig(fallbackProfile))) {
+    return { error: 'Cortex Code requires a CLI Profile with a valid named Snowflake connection.' };
   }
   return {
     runtime: {
@@ -159,7 +168,7 @@ export function ensureServerConfiguredCliProfiles(
   if (!defaultCliProfileId && defaultHarness) {
     const candidateId = serverConfiguredCliProfileId(defaultHarness);
     const candidate = profiles.find((profile) => profile.id === candidateId && !profile.disabled);
-    if (candidate) {
+    if (candidate && hasRequiredCliProfileConfig(candidate)) {
       defaultCliProfileId = candidateId;
       changed = true;
     }

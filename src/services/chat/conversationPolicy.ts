@@ -1,5 +1,6 @@
 import type { ClaudeCodeMode, EffortLevel, ServiceTier } from '../../types';
 import { cliHarnessForBackend } from '../cliProfiles';
+import { CONTRACT_EFFORT_LEVELS } from '../../contracts/conversations';
 
 export interface ConversationPolicyModelMetadata {
   id: string;
@@ -10,8 +11,11 @@ export function effectiveEffort(
   model: string | undefined,
   requested: EffortLevel | undefined,
   modelOption: ConversationPolicyModelMetadata | undefined,
+  backend?: string,
 ): EffortLevel | undefined {
   if (!requested || !model) return undefined;
+  // CoCo's catalog is profile-local; its native configuration validates effort.
+  if (backend === 'cortex-code') return CONTRACT_EFFORT_LEVELS.includes(requested) ? requested : undefined;
   const supported = modelOption?.supportedEffortLevels;
   if (!supported || supported.length === 0) return undefined;
   if (supported.includes(requested)) return requested;

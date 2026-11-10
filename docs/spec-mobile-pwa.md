@@ -1,5 +1,66 @@
 # Mobile PWA Client
 
+CoCo P1 extends shared profile/capability types and pure eligibility contracts
+without adding a mobile runtime choice or UI flow. No PWA metadata, assets or
+administration behavior changes. See [CoCo foundations](spec-cortex-code.md);
+native mobile chat acceptance remains a later phase.
+
+P7 C42 updates the desktop/shared responsive setup and Settings profile editor,
+desktop catalog ownership and the backend-supplied CoCo icon. Mobile receives
+the icon through existing metadata. No PWA administration screen, endpoint,
+manifest, service worker, asset source or protocol change is introduced. The
+desktop's profile-catalog hook is not imported by mobile; broader native mobile
+model/usage/media acceptance is recorded under C45/C46 below; C47 keeps
+consolidated responsive-client checks separate.
+
+P7 C43 applies shared revision capability policy to mobile/desktop plan cards.
+The mobile send pipeline synchronously prevents duplicate/stale submissions,
+exposes reply-busy state and preserves newer interactions/drafts on late input
+responses. CoCo rejection selects keep_planning and may end with explanatory
+text or return to another native gate; approval permits execution.
+Question drafts reset on decision/prompt changes. Wire contracts and PWA metadata,
+manifest, service worker and asset sources stay unchanged. Native interaction
+acceptance is scoped separately from the remaining C45–C47 mobile feature matrix.
+
+P7 C44 adds explicit queue-only guidance for unsupported live steering, serialized
+queue saves/drains and an idle Resume queue control. Stop pauses queue ownership
+before cancellation; late callbacks and failed/aborted runs retain queued work.
+Queue persistence clears only unchanged draft/upload snapshots. Newer drafts,
+questions and conversations survive delayed replies. Matching outcomes resolve
+decision-bound (`decisionBound:true`) cards during socket replay, and stream end
+clears only those cards; superseded socket frames are ignored.
+The native queue probe checks current chat flows and persisted queue reload,
+while mobile drafts retain their existing in-memory scope. No PWA metadata,
+manifest, service-worker, administrative or persistence-format changes are added.
+
+P6 C33/C34/C36 adds server-side tool-enabled sequential execution and verified
+PNG OCR through the existing endpoint. No new PWA settings, assets, metadata or
+administrative screen is added. Mobile consumers retain the shared profile-local
+model/media checks; full native mobile acceptance and remaining selection parity
+are P7. Memory processor selection is a desktop administrative control;
+the backend rejects unsupported CoCo restricted calls regardless of client.
+
+P6 C37/C38 adds server-side KB conversion/digestion/dreaming certification.
+Prepared CoCo PNG siblings use the existing KB media/Markdown routes; originals
+remain available. No PWA UI, metadata, asset source or administration changes
+are required. Native mobile/browser compatibility remains a separate gate.
+
+P6 C39 certifies the existing server-side Workspace Context service/scheduler
+with CoCo. Existing context/state/update routes and frames remain unchanged;
+no mobile source, built asset, manifest or settings changes are required.
+Full native mobile/browser acceptance remains pending.
+
+P6 C40 certifies the existing Routine backend paths with CoCo, including
+proposals, manual/scheduled runs, files/history and timeout. It adds no mobile
+UI, routes, frames, assets or manifest changes. Full mobile Routine/proposal
+interaction acceptance remains part of the later client gates.
+
+C41 processor preflights and preserved global/workspace settings also apply to
+mobile/programmatic callers. Unsupported profiles fail before execution without
+relaxing tool restrictions or falling back to another harness. No mobile
+settings screen, wire shape, PWA asset source or manifest change is required;
+full native mobile acceptance remains separate.
+
 [← Back to index](SPEC.md)
 
 Grok Build uses the shared mobile profile/model/effort, interaction, tool/Agent,
@@ -58,7 +119,7 @@ See [ADR-0025](adr/0025-use-mobile-pwa-as-sole-mobile-client.md).
 - `src/mobileComponents.tsx` — stable re-export boundary for the mobile screens and modals consumed by `App.tsx`.
 - `src/mobileConversationListScreen.tsx` — conversation-list rendering, workspace filtering controls, live/goal row state, and conversation-card presentation.
 - `src/mobileChatScreen.tsx` — chat transcript rendering, composer shell, backend-neutral goal strip/event cards, assistant identity projection, message Markdown/file-card rendering, wrapped Markdown code-block copy controls, queue stack, usage meter, and attachment tray. It passes the conversation backend's plan-feedback support to the interaction card.
-- `src/interactionCard.tsx` — pending plan-approval and clarifying-question card. Plan cards send explicit `Approve & run` (`yes`) and `Reject` (`no`) decisions, matching desktop; only Grok plan cards add the `Plan revision feedback` textarea and `Request changes` button. Question cards keep option chips, free-text answers, and `Answer`.
+- `src/interactionCard.tsx` — pending plan-approval and clarifying-question card. Plan cards send explicit `Approve & run` (`yes`) and `Reject` (`no`) decisions, matching desktop; shared `planRevision` capability eligibility controls the `Plan revision feedback` textarea and `Request changes` button (CoCo explicit support, Grok legacy default, explicit denial honored). Question cards keep option chips, free-text answers, and `Answer`. The card receives conversation backend metadata and reply-busy state; all actions/inputs disable during delivery.
 - `src/mobileModals.tsx` — stable re-export boundary for modal and secondary-screen modules.
 - `src/mobileConversationModals.tsx` — New Conversation/folder picker, conversation actions, Markdown sharing, and run settings sheets.
 - `src/mobileSessionScreens.tsx` — session list and read-only session viewer surfaces.
@@ -203,9 +264,9 @@ The PWA currently covers:
 - Stop stream via `POST /api/chat/conversations/:id/abort`. Close the local stream socket immediately, but retain streaming state until the abort request and conversation/goal/list refreshes complete. Send must remain unavailable while the server is still finalizing the aborted turn, including a delayed abort response, so immediate replacement does not collide with the old stream.
 - WebSocket replay and live streaming for text, assistant messages, title updates, usage, errors, done, and replay start, with automatic active-stream polling/reconnect on mobile browser resume, network return, and transient socket errors.
 - Assistant message text, assistant content-block text, thinking blocks, and live streaming text render through `marked` with GitHub Flavored Markdown and hard line breaks enabled, then pass through DOMPurify before insertion. Assistant markdown prose uses the same General Sans body typography as the desktop web UI `.prose` treatment, while markdown headings keep the serif prose font. Fenced and indented Markdown code blocks render as bounded monospace panels with a language label, per-block **Copy** button, preserved line breaks, and long-line wrapping (`white-space: pre-wrap` plus break-word/anywhere wrapping) so CLI-supplied text does not create horizontal overflow on narrow screens. Thinking blocks render as full-width dashed Markdown panels rather than inline flex chips so multi-paragraph Claude Code reasoning keeps normal line flow on narrow mobile screens. Assistant/live CLI message headings use the message backend's metadata label and inline SVG icon from `GET /api/chat/backends`, falling back to the Agent Cockpit logo when no backend icon is available. System messages without `goalEvent`, including native-session recovery notices, use the Agent Cockpit logo and **Agent Cockpit** heading instead of the selected harness identity. User-authored message text remains plain text after uploaded-file marker stripping, preserving line breaks and avoiding accidental interpretation of user text as HTML/Markdown.
-- Plan approval and clarifying-question cards from `tool_activity` meta-events, answered through `POST /api/chat/conversations/:id/input`. Plan decisions come only from the explicit approve/reject buttons, so free text is never interpreted as approval; `useSendPipeline.submitInteraction(answer?)` sends a button's decision instead of the typed draft. It captures the submitted interaction object before awaiting the input response and uses a functional state update to clear only that same object after acknowledgement. A subsequent question or replacement plan received while the HTTP request is pending stays visible and answerable, even when questions reuse one native tool ID.
+- Plan approval and clarifying-question cards from `tool_activity` meta-events, answered through `POST /api/chat/conversations/:id/input`. Plan decisions come only from the explicit approve/reject buttons, so free text is never interpreted as approval; `useSendPipeline.submitInteraction(answer?)` sends a button's decision instead of the typed draft. It captures the submitted interaction object before awaiting the input response and uses a functional state update to clear only that same object after acknowledgement. On `{ mode: 'message' }` it sends the answer as a normal message with `clearComposer:false` and `restoreDraftOnFailure:false`, preserving the separate composer draft/uploads on success and failure, including edits made while the answer is sending; those uploads are not included in the answer request; `sendMessageNow` lets only that same interaction object past its pending-card guard, because the cleared state has not re-rendered yet, while a newer card still blocks the send. A subsequent question or replacement plan received while the HTTP request is pending stays visible and answerable, even when questions reuse one native tool ID.
 - Correlated questions retain `inputRequestId` as `PendingInteraction.requestId` and submit it through the optional fourth identity argument of `api.sendInput`. Duplicate submissions are locked while pending; an old acknowledgement never clears a newer question's typed answer. A new request resets the answer, including repeated identical prompts. `allowFreeform:false` hides the textarea/Answer button and submits choices directly; otherwise choices prefill an editable answer. Stale correlated inputs never fall back to a normal message. Active replay reconstructs unanswered questions; matching tool outcomes resolve only their exact ID. Done/terminal errors clear correlated questions while legacy post-stream interactions keep their fallback behavior.
-- `useChatStreamConnection` owns `inputTurnId`, accepts only the current socket/conversation's frames, and clears readiness on reconnect, socket closure and terminal state. `chatStreamEvents.ts` projects input readiness and exact request outcomes. A current Copilot token exposes **Steer** in the composer metadata row; the ordinary Send action remains Queue during streaming. `useSendPipeline.steerDraft` posts the normal text/file wire content with current turn ID and a unique input ID, holds the draft/files until confirmed consumption, and blocks duplicate send/queue/steer operations. Stop stays available in the top bar. On success it removes only submitted unchanged text/files; on refusal/network error it preserves them and shows the existing error banner, without automatic resend or queue append. A conversation switch prevents a late acknowledgement from clearing another conversation's draft.
+- `useChatStreamConnection` owns `inputTurnId`, accepts only the current socket/conversation's frames, and clears readiness on reconnect, socket closure and terminal state. `chatStreamEvents.ts` projects input readiness and exact request outcomes. A current Copilot token exposes **Steer** in the composer metadata row and selects the streaming composer hint even when static Copilot metadata leaves steering disabled; the ordinary Send action remains Queue during streaming. `useSendPipeline.steerDraft` posts the normal text/file wire content with current turn ID and a unique input ID, holds the draft/files until confirmed consumption, and blocks duplicate send/queue/steer operations. Stop stays available in the top bar. On success it removes only submitted unchanged text/files; on refusal/network error it preserves them and shows the existing error banner, without automatic resend or queue append. A conversation switch prevents a late acknowledgement from clearing another conversation's draft.
 - Hosted qualification is scoped to the [owner's clean `9cb25d6` report](https://github.com/daronyondem/agent-cockpit/pull/571#issuecomment-6658673116): a narrow Chrome client on macOS, not a physical phone. Chat/questions, Stop followed by a new send, reload/recall, model/effort, files and retained delegated cards passed. Steering during a running command in an existing hosted conversation failed with `No response was returned`; its input HTTP/native trace was not captured, so this remains an open, unclassified finding. New fixed-model browser coverage exercises that running-tool/resumed-session sequence and cold-resume without replay, but does not establish a hosted fix. Physical-device behavior, live PWA delegation and hosted goal pause/reload/fresh-limit resume remain unconfirmed. No PWA implementation, metadata, manifest or service-worker change accompanies this qualification update.
 - Browser Notification API prompts and hidden-tab notifications for stream done/error and interaction-needed events when permission is granted. This is not remote push.
 - Queue read/write/clear via `GET`, `PUT`, and `DELETE /api/chat/conversations/:id/queue`.
@@ -213,7 +274,8 @@ The PWA currently covers:
 - Queue reorder and edit modal, including removal of uploaded attachment references.
 - Attachment upload from browser file picker with progress and cancel. DNG uploads are normalized by the server into a generated `<original>.dng.preview.jpg` JPEG sidecar capped to a 2576 px long edge; the returned attachment chip/path is the JPEG preview (`kind: image`), while the original RAW file stays in the conversation artifacts directory and is not shown as a separate attachment. HEIC/HEIF has no special server conversion here; if Safari supplies JPEG bytes they use the normal JPEG path, otherwise unsupported uploads fail through the normal upload-error chip state.
 - Delete completed pending uploads via `DELETE /api/chat/conversations/:id/upload/:filename`. Deleting a generated DNG preview attachment also removes the paired original DNG on the server.
-- Image OCR insertion through `POST /api/chat/conversations/:id/attachments/ocr` with the selected `cliProfileId` and `backend`; the server rejects OCR when the selected profile/backend cannot transport one-shot image input or the selected/default model does not report `model.capabilities.input.image`. When OCR repairs a missing stored conversation profile to the selected profile, the response includes a persisted Agent Cockpit system `recoveryMessage`; the PWA applies it through the same server-message upsert path used by stream events before inserting the returned Markdown into the draft.
+- Pending plan/question cards retain optional `decisionId` from `tool_activity.id`. `ApiClient.sendInput(conversationID,text,streamActive,decisionId?)` echoes it in the shared request contract. CoCo requires the exact current decision generation; a 409 keeps the interaction/error visible and does not create a new user message. Newer interactions received while the response is pending remain intact. No PWA manifest or service-worker policy changes accompany this field.
+- Image OCR insertion through `POST /api/chat/conversations/:id/attachments/ocr` with the selected `cliProfileId`, `backend`, `model` and `effort`; the server rejects OCR when the selected profile/backend cannot transport one-shot image input or the selected/default model does not report `model.capabilities.input.image`. When OCR repairs a missing stored conversation profile to the selected profile, the response includes a persisted Agent Cockpit system `recoveryMessage`; the PWA applies it through the same server-message upsert path used by stream events before inserting the returned Markdown into the draft.
 - Send/queue wire-content composition by appending `[Uploaded files: <paths>]`.
 - User-message uploaded-file marker stripping and file card rendering.
 - Assistant `<!-- FILE_DELIVERY:/absolute/path -->` marker stripping and file card rendering. Only assistant markers create delivered-file references; a marker quoted in a user prompt does not advertise a file before the harness creates it. Delivered files use `GET /api/chat/conversations/:id/workspace-file` for previews/downloads so worktree-isolated conversations read from their execution checkout instead of the canonical base checkout.
@@ -271,6 +333,103 @@ The generated app is served from:
 ```
 
 When `WEB_BUILD_MODE=auto`, `MobileBuildService` verifies `public/mobile-built/.agent-cockpit-build.json` at server startup and rebuilds from `mobile/AgentCockpitPWA/` when the source or lockfiles are stale. The service uses `npm.cmd` through the shared `.cmd` wrapper on Windows and `npm` elsewhere. Dev self-update installs mobile dependencies and forces this build before restarting PM2; production self-update installs mobile dependencies in the staged release and runs the same build preflight only when the packaged mobile marker/assets are missing or stale.
+
+### CoCo usage display (P7 C45)
+
+`mobileChatScreen.tsx` composes `usageBar.tsx`, preserving session usage priority
+and existing harness price/context formatting. CoCo has separate Cost and
+Estimated Cost n/a cells for unknown Snowflake prices and a collapsible Token
+breakdown with Fresh input, Output, Cache read and Cache write (including zero).
+The total includes all four buckets via browser-safe
+`src/contracts/usagePresentation.ts`. Missing context stays n/a; zero/missing
+CoCo context has no fabricated minimum progress fill. The expanded details
+explain that costs exclude unpriced CoCo usage. Existing positive reported costs
+and rounded-up estimates stay intact for other harnesses. Build mobile assets;
+no PWA manifest, identity, auth, service worker or offline policy changes.
+Rendered tests live in `test/cortexUsageUi.test.ts`; the isolated native
+`scripts/probe-cortex-usage.ts` verifies display, reload and PM2 restart counters.
+
+### CoCo mobile acceptance and OCR ownership (P7 C46)
+
+Native CoCo 1.2.35/macOS Chromium acceptance passed; see the tracker and testing
+specification for exact reports, failures and physical/platform limits.
+
+The send pipeline carries explicit `{name}` upload references from each message's
+attachment snapshot, including persisted queue entries, alongside the existing
+uploaded-file wire text. The server resolves filenames within the conversation's
+uploads; paths/kinds supplied by clients or pasted into prose cannot create native
+media. Native CoCo still validates PNG bytes, model, version and limits.
+
+`usePendingAttachments.ts` sends the current Run Settings model/effort as well
+as profile/backend to OCR. This matters before the first chat message, when the
+saved conversation can still use Auto while the composer has selected a verified
+image model. The route validates those optional invocation overrides and keeps
+the stored chat model/effort unchanged. Existing clients omitting them retain
+saved-selection fallback. Profile repair/locking and image byte/model gates stay
+unchanged; CoCo PNG support is still limited to Sonnet 4.6/CLI 1.2.35.
+
+The hook reserves a per-attachment OCR job synchronously, suppressing duplicate
+requests before React renders. It tracks current options/attachments and binds
+results to conversation, currentSessionId, attachment and job identity. Removal,
+clear/send, reset, navigation and unmount cannot insert late text or recovery
+messages into another draft/session. A model/effort/profile change may cache a
+still-owned successful result, but does not insert it automatically or overwrite
+the newer runtime selection. Explicit Insert OCR uses the cached Markdown;
+failures retain the image/draft and allow an explicit retry. Completing OCR uses
+the latest draft appender, preserving edits made during the request. Suppressing
+a stale response does not claim cancellation of the server's bounded OCR job.
+
+`test/cortexMobileAttachments.test.ts` covers deferred completion, duplicate
+calls, cached insertion, navigation/reset/removal/clear/model/unmount ownership,
+failure and explicit retry. Route/contract and desktop store tests cover selected
+model/effort, legacy omission, invalid/unverified selection and unchanged stored
+chat values. The opt-in `scripts/probe-cortex-mobile.ts` uses real CoCo through
+production Chromium assets at 390×844 in an isolated PM2/data/workspace fixture:
+profile/model/effort selection and locking, unsupported Goal/Speed/Mode controls,
+PNG/text upload, native OCR/cache, image and text chat, thinking/tools, socket
+replay, explicit durable artifacts, actual download bytes after original-file
+mutation, reset/read-only history, descendant Stop cleanup and fresh inference
+without retrying interrupted work. Python fixtures are syntax-checked before
+native execution. Native C43/C44/C45 probes provide the separate decision,
+queue and usage portions of the acceptance matrix. This is browser acceptance
+with a native macOS CLI, not physical iOS/Android/Safari/share-sheet certification.
+
+Rebuild ignored mobile output after source changes. No PWA manifest, identity,
+service-worker/offline cache policy, administration screen or public asset source
+change accompanies C46. C26, strict Memory, C47 and platform gates stay separate.
+
+The read-only session screen stays above chat and below modal backdrops (z-index
+10 and 20 respectively). Artifact preview dialogs opened from history remain
+visible and their Close controls receive pointer input; the native probe clicks
+them without forcing or bypassing hit testing. The read-only viewer itself has
+no composer, while the underlying current-chat screen can remain mounted.
+Selecting Sessions first dismisses the Conversation actions sheet, so it cannot
+remain mounted and intercept input after the session list closes. The rendered
+selection/history test verifies that transition before native pointer checks.
+
+### Consolidated client and responsive setup verification (P7 C47)
+
+The full desktop/mobile behavior suite, types and production builds pass. The
+standard desktop Welcome/Settings setup remains the narrow-browser setup path;
+no PWA administration, source asset, manifest, identity or offline/service-worker
+change is introduced. The auth probe checks 1280/390/320 px clipboard transfer,
+transient clearing/reload recovery and no persistent browser handoff material
+with synthetic browser-local callbacks, separately from native saved-auth/fresh
+inference. C43–C46 retain the native mobile chat matrix for unchanged production
+source. This does not certify physical iOS/Android/Safari clipboard behavior,
+C26's human remote-browser OAuth, or another native platform.
+
+
+P8 C48 adds optional CoCo detection/installation to desktop Welcome, including
+narrow desktop viewports. The mobile PWA has no installation/admin screen;
+its source, manifest, service-worker and metadata remain unchanged. Existing
+mobile chat/attachment/auth ownership contracts are unaffected.
+
+
+P8 C49 CLI Update remains desktop server administration. CoCo update/runtime
+cleanup is shared backend behavior; the PWA adds no update control, route/body,
+manifest, service-worker or source asset change. Mobile chat uses fresh runtimes
+after the existing reusable backend shutdown; interrupted tool work is not replayed.
 
 Current Copilot browser qualification passes 40 combined desktop/PWA and narrow
 Settings Chromium cases on macOS and Ubuntu with the real SDK runtime, fixed

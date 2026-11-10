@@ -179,6 +179,22 @@ Memory, KB processors, summaries, titles, and OCR. The processor must be a CLI
 profile that resolves through `ChatService.resolveCliProfileRuntime()`, and the
 adapter must implement `runOneShot()`.
 
+CoCo uses its tool-enabled ephemeral processor path with the selected global or
+workspace override profile/model/effort, the workspace cwd, the ten-minute run
+timeout and the run's AbortSignal. The service does not retry failed or stopped
+processor work. Direct markdown edits made before a failure remain on disk;
+there is no filesystem transaction or rollback. Memory deletion is a separate
+server-owned step after successful completion and action-block validation.
+This does not enable CoCo for the restricted Memory governance/extraction roles.
+
+Global and workspace override settings preserve explicit unavailable profile
+IDs through normalization/import. Runtime resolution fails on that exact ID;
+it does not substitute the legacy backend mirror or default profile. Resolution
+errors now record a failed run and release ownership. Registered adapters pass
+the shared `toolEnabled` role preflight before execution. Both Context selectors
+retain unavailable saved choices visibly; activating an override preserves an
+unresolved global selection. See [CoCo C41](spec-cortex-code.md#processor-selection-boundaries-p6-c41).
+
 If source planning finds no source files for a scan or no markdown files for a
 maintenance pass, the service records a completed zero-file run with a concise
 summary and does not invoke the processor. Zero-file scan completions still
@@ -520,6 +536,7 @@ Focused coverage lives in:
 | File | Coverage |
 |------|----------|
 | `test/workspaceContext.service.test.ts` | Folder creation, generated instructions, `AGENTS.md` managed block, autonomous scan prompt execution, uploaded-file source expansion, maintenance prompt execution over existing context markdown, markdown writes, state, and run reports. |
+| `test/cortexContextIntegration.test.ts` | Actual CoCo process adapter with deterministic ACP executable: global and workspace override configuration, uploaded-source planning, direct markdown writes, eligible active Memory deletion and silent updates, disabled Memory exclusion, missing/duplicate/unknown actions retaining inbox entries without retry, headless question failure, stop/overlap/drain/fresh execution, zero-source/disabled passivity, scheduler cadence and seven-day run retention. |
 | `test/copilotMemoryContext.test.ts` | Normal-CI application integration using the real Copilot adapter and an executable JSONL fixture. A note saved through the production Memory MCP shim/HTTP/governance path is offered to Context alongside a reference file; the processor writes real markdown, consumes only accepted entries, preserves unaccepted entries, and persists run state/reports across service reload. Missing/unknown Memory actions, process failure, and cancellation preserve the inbox and permit retry. Also verifies processor profile/model, workspace cwd, managed instructions, and tool-enabled Context versus restricted Memory arguments. |
 | `test/copilotContextTriggers.test.ts` | Production scheduler/HTTP/finalizer/Copilot fixture coverage for enable-triggered scans, due maintenance, overlapping ticks, failure and scheduled retry, disable/cancellation preserving inbox data, reset source isolation, and finalizer retry after maintenance releases the workspace. |
 | `test/copilotWorkflows.e2e.test.ts` | Opt-in `npm run e2e:copilot-workflows` runs real Copilot against fixed local model responses with an isolated temporary auth home. Native tools read the managed `AGENTS.md` pointer/instructions plus actual reference/Memory files, write Context markdown, and a new chat retrieves the result after the accepted note is deleted. Invalid native output leaves the note pending; retry succeeds. Two additional native cases exercise scheduler-triggered maintenance over the actual inbox and automatic reset finalization scoped to the ended session. Copilot 1.0.105/macOS arm64 evidence does not certify hosted-model judgment or other native platforms; browser UX has a separate suite. |
@@ -529,6 +546,11 @@ Focused coverage lives in:
 | `test/sessionFinalizerQueue.test.ts` | Persisted `workspace_context_conversation_final_pass` finalizer job handling. |
 | `test/streamStore.test.ts` | `workspace_context_update` frame handling and browser event dispatch. |
 | `test/frontendRoutes.test.ts` | Static frontend route/API guards for Workspace Context settings, markdown preview, run controls, and absence of old review/graph endpoints. |
+
+Native CoCo service/scheduler certification is opt-in through
+`scripts/probe-cortex-context.ts`; see the command and exact acceptance limits
+in [the testing spec](spec-testing.md#cortex-native-workspace-context-p6-c39).
+The deterministic fixture is transport/service coverage, not native CLI evidence.
 
 ## Implementation Files
 

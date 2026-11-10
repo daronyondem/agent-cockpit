@@ -37,6 +37,8 @@ export interface ToolActivityEvent {
   planAction?: 'enter' | 'exit';
   isQuestion?: boolean;
   questions?: ToolQuestion[];
+  /** Answerable only through the live turn; a matching outcome resolves it. */
+  decisionBound?: boolean;
   inputRequestId?: string;
 }
 
@@ -216,7 +218,7 @@ export type BackendInputResult = { accepted: true }
 export interface ActiveStreamEntry {
   stream: AsyncGenerator<StreamEvent>;
   abort: () => void;
-  sendInput: (text: string) => void;
+  sendInput: (text: string, decisionId?: string) => void | boolean;
   deliverInput?: (input: BackendInputRequest) => Promise<BackendInputResult>;
   backend: string;
   needsTitleUpdate: boolean;

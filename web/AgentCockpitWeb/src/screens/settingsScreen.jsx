@@ -1,3 +1,7 @@
+import { totalsFor, aggregatePerModel } from './usageStats.js';
+import { isUsageCostUnavailable, usageTokenTotal } from '../../../../src/contracts/usagePresentation';
+import { backendIdForProfile, backendForProfile, modelsForProfile, modelDisplayLabel, defaultModelId, effortLevelsForProfile, defaultEffortFor } from '../profileCatalog.js';
+import { processorProfileForSetting as profileForSetting } from './processorProfiles';
 import React from 'react';
 import { AgentApi } from '../api.js';
 import { Ico } from '../icons.jsx';
@@ -6,6 +10,15 @@ import { useDialog } from '../dialog.jsx';
 import { useToasts } from '../toast.jsx';
 import { CliUpdateStore } from '../cliUpdateStore.js';
 import { cliConfigDirField } from './cliProfileConfigDir.js';
+import { useProfileBackends } from '../useProfileBackends.js';
+import { hasRequiredCliProfileConfig } from '../../../../src/contracts/cliProfiles';
+const CortexSetup = React.lazy(() => import('../cortexSetup.jsx').then(mod => ({ default: mod.CortexSetup })));
+const LazyProcessorProfileSelect = React.lazy(() => import('./memoryProcessorSelect.jsx').then(mod => ({ default: mod.ProcessorProfileSelect })));
+function ProcessorProfileSelect(props){
+  return <React.Suspense fallback={<select disabled><option>Loading profiles…</option></select>}>
+    <LazyProcessorProfileSelect {...props}/>
+  </React.Suspense>;
+}
 import { cliProfileAuthStateLabel as authStateLabel } from './cliProfileAuthState.js';
 
 const MigrationTab = React.lazy(() => import('./settingsMigrationTab.jsx').then(mod => ({ default: mod.MigrationTab })));
@@ -39,18 +52,9 @@ const CLI_HARNESS_OPTIONS = [
   { id: 'kiro', label: 'Kiro' },
   { id: 'opencode', label: 'OpenCode' },
   { id: 'grok-build', label: 'Grok Build' },
+  { id: 'cortex-code', label: 'Cortex Code (CoCo)' },
   { id: 'copilot', label: 'GitHub Copilot' },
 ];
-
-function cliHarnessForBackend(backendId){
-  return backendId === 'claude-code-interactive' ? 'claude-code' : backendId;
-}
-
-function backendIdForProfile(profile){
-  if (!profile) return null;
-  if (profile.harness === 'claude-code' && profile.protocol === 'interactive') return 'claude-code-interactive';
-  return profile.harness;
-}
 
 function protocolLabel(profile){
   if (!profile || profile.harness !== 'claude-code') return null;
@@ -95,6 +99,7 @@ function normalizeUiProfile(profile){
   } else {
     delete next.opencode;
   }
+  if (next.harness !== 'cortex-code') delete next.cortexCode;
   if (next.harness === 'copilot') {
     next.authMode = 'server-configured';
     delete next.configDir;
@@ -185,7 +190,7 @@ function bedrockEnvWarning(profile){
 }
 
 function cliDefaultCommand(harness){
-  return harness === 'codex' ? 'codex' : harness === 'kiro' ? 'kiro-cli' : harness === 'opencode' ? 'opencode' : harness === 'grok-build' ? 'grok' : harness === 'copilot' ? 'copilot' : 'claude';
+  return harness === 'codex' ? 'codex' : harness === 'kiro' ? 'kiro-cli' : harness === 'opencode' ? 'opencode' : harness === 'grok-build' ? 'grok' : harness === 'cortex-code' ? 'cortex' : harness === 'copilot' ? 'copilot' : 'claude';
 }
 
 function defaultCliProfileName(harness){
@@ -202,6 +207,7 @@ function cliSelfConfiguredHome(harness){
   if (harness === 'claude-code') return '~/.claude';
   if (harness === 'opencode') return '~/.local/share/opencode and ~/.config/opencode';
   if (harness === 'grok-build') return '~/.grok';
+  if (harness === 'cortex-code') return '~/.snowflake';
   if (harness === 'copilot') return '~/.copilot';
   return 'the server Kiro CLI account';
 }
@@ -263,17 +269,7 @@ function modelsForBackend(backends, backendId){
   const b = (backends || []).find(b => b.id === backendId);
   return (b && Array.isArray(b.models)) ? b.models : [];
 }
-function modelDisplayLabel(modelOrId){
-  const raw = typeof modelOrId === 'string'
-    ? modelOrId
-    : String((modelOrId && (modelOrId.label || modelOrId.id)) || '');
-  return raw.startsWith('openrouter/') ? raw.slice('openrouter/'.length) : raw;
-}
-function defaultModelId(models){
-  if (!models || !models.length) return undefined;
-  const def = models.find(m => m.default);
-  return def ? def.id : models[0].id;
-}
+
 function effortLevelsForModel(backends, backendId, modelId){
   const models = modelsForBackend(backends, backendId);
   const m = models.find(x => x.id === modelId);
@@ -284,16 +280,7 @@ function backendIconFor(backends, backendId){
   const b = (backends || []).find(x => x.id === backendId);
   return (b && b.icon) || null;
 }
-function backendForProfile(backends, profileBackends, profile){
-  if (!profile) return null;
-  return (profileBackends && profileBackends[profile.id])
-    || (backends || []).find(b => b.id === backendIdForProfile(profile))
-    || null;
-}
-function modelsForProfile(backends, profileBackends, profile){
-  const b = backendForProfile(backends, profileBackends, profile);
-  return (b && Array.isArray(b.models)) ? b.models : [];
-}
+
 function backendSupportsOneShotInput(backend, modality){
   const transports = backend && backend.capabilities && backend.capabilities.oneShotMediaInput
     ? backend.capabilities.oneShotMediaInput[modality]
@@ -317,34 +304,11 @@ function providerOptionsFromModels(models){
   }
   return Array.from(seen.values());
 }
-function effortLevelsForProfile(backends, profileBackends, profile, modelId){
-  const models = modelsForProfile(backends, profileBackends, profile);
-  const m = models.find(x => x.id === modelId);
-  if (!m || !Array.isArray(m.supportedEffortLevels)) return [];
-  return m.supportedEffortLevels;
-}
+
 function activeCliProfiles(settings){
   return Array.isArray(settings && settings.cliProfiles)
     ? settings.cliProfiles.filter(p => p && !p.disabled)
     : [];
-}
-function profileForBackend(profiles, backendId){
-  if (!backendId) return null;
-  const harness = cliHarnessForBackend(backendId);
-  return profiles.find(p => backendIdForProfile(p) === backendId)
-    || profiles.find(p => p.id === 'server-configured-' + harness)
-    || profiles.find(p => p.harness === harness)
-    || null;
-}
-function profileForSetting(profiles, profileId, backendId, fallbackBackend){
-  return (profileId ? profiles.find(p => p.id === profileId) : null)
-    || profileForBackend(profiles, backendId)
-    || profileForBackend(profiles, fallbackBackend)
-    || null;
-}
-function defaultEffortFor(levels){
-  if (!levels || !levels.length) return undefined;
-  return levels.includes('high') ? 'high' : levels[0];
 }
 
 function memoryProcessorStatusLabel(status){
@@ -439,7 +403,7 @@ export function SettingsScreen({ onClose, initialTab, onOpenWorkspaceSettings })
   const [tab, setTab] = React.useState(() => SETTINGS_TABS.some(t => t.id === initialTab) ? initialTab : 'general');
   const [settings, setSettings] = React.useState(null);
   const [backends, setBackends] = React.useState([]);
-  const [profileBackends, setProfileBackends] = React.useState({});
+  const [profileBackends, loadProfileBackend] = useProfileBackends();
   const [loading, setLoading] = React.useState(true);
   const [loadError, setLoadError] = React.useState(null);
   const [saving, setSaving] = React.useState(false);
@@ -471,16 +435,6 @@ export function SettingsScreen({ onClose, initialTab, onOpenWorkspaceSettings })
       return { ...prev, ...u };
     });
   }
-
-  const loadProfileBackend = React.useCallback((profileId) => {
-    if (!profileId || profileBackends[profileId]) return;
-    AgentApi.getCliProfileMetadata(profileId)
-      .then((backend) => {
-        if (!backend) return;
-        setProfileBackends(prev => ({ ...prev, [profileId]: backend }));
-      })
-      .catch(() => {});
-  }, [profileBackends]);
 
   const canSave = !!settings && !loading && !saving && !cliValidationError;
 
@@ -592,7 +546,7 @@ function GeneralTab({ settings, backends, profileBackends, loadProfileBackend, o
      so we never carry a model id into a backend that doesn't support it. */
   function onProfileChange(v){
     const profile = profiles.find(p => p.id === v);
-    if (!profile) return;
+    if (!profile || !hasRequiredCliProfileConfig(profile)) return;
     const nextBackend = backendIdForProfile(profile);
     const m = modelsForProfile(backends, profileBackends, profile);
     const newModel = defaultModelId(m);
@@ -639,7 +593,7 @@ function GeneralTab({ settings, backends, profileBackends, loadProfileBackend, o
         <Field label="Default CLI profile">
           <select value={selectedProfile ? selectedProfile.id : ''} onChange={(e) => onProfileChange(e.target.value)}>
             {!selectedProfile ? <option value="">Select a profile</option> : null}
-            {profiles.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+            {profiles.map(p => <option key={p.id} value={p.id} disabled={!hasRequiredCliProfileConfig(p)}>{p.name}</option>)}
           </select>
         </Field>
       ) : (
@@ -652,6 +606,7 @@ function GeneralTab({ settings, backends, profileBackends, loadProfileBackend, o
       {models.length ? (
         <Field label="Default model">
           <select value={modelId} onChange={(e) => onModelChange(e.target.value)}>
+            {modelId && !models.some(m => m.id === modelId) ? <option value={modelId} disabled>{modelId} (unavailable)</option> : null}
             {models.map(m => <option key={m.id} value={m.id}>{modelDisplayLabel(m)}</option>)}
           </select>
         </Field>
@@ -967,7 +922,7 @@ function CliProfilesTab({ settings, backends, onPatch, onSave, saving, onValidat
         harness,
         name: usesGeneratedCliProfileName(current) ? defaultCliProfileName(harness) : current.name,
         protocol: harness === 'claude-code' ? (current.protocol || 'standard') : undefined,
-        authMode: (harness === 'kiro' || harness === 'opencode' || harness === 'copilot') ? 'server-configured' : current.authMode,
+        authMode: harness === 'cortex-code' ? 'account' : (harness === 'kiro' || harness === 'opencode' || harness === 'copilot') ? 'server-configured' : current.authMode,
         opencode: harness === 'opencode' ? (current.opencode || {}) : undefined,
       };
       if (harness === 'kiro' || harness === 'opencode' || harness === 'copilot') {
@@ -975,6 +930,7 @@ function CliProfilesTab({ settings, backends, onPatch, onSave, saving, onValidat
         next.configDir = undefined;
         next.env = undefined;
       }
+      if (harness === 'cortex-code') { next.configDir = undefined; next.env = undefined; }
       return next;
     });
   }
@@ -1211,6 +1167,10 @@ function CliProfilesTab({ settings, backends, onPatch, onSave, saving, onValidat
 
       <CliUpdatesPanel/>
 
+      <React.Suspense fallback={null}><CortexSetup onProfileSaved={profile => onPatch(prev => ({ ...prev,
+        cliProfiles: [...(prev.cliProfiles || []).filter(item => item.id !== profile.id), profile],
+      }))}/></React.Suspense>
+
       <div className="cli-list">
         {profiles.length === 0 ? (
           <div className="settings-empty u-dim">No CLI profiles are configured yet.</div>
@@ -1384,6 +1344,9 @@ function CliProfilesTab({ settings, backends, onPatch, onSave, saving, onValidat
                       </Field>
                     ) : null}
                   </div>
+                  {profile.harness === 'cortex-code' ? <Field label="Snowflake connection" hint="Save before loading models; check shared login in Cortex setup above.">
+                    <input className="inp" value={profile.cortexCode?.connection || ''} onChange={event => patchProfile(profile.id, { cortexCode: event.target.value ? { connection: event.target.value } : undefined })}/>
+                  </Field> : null}
                   <div className="cli-profile-grid">
                     <Field label="Setup mode" hint={isKiro ? 'Kiro is self-configured only for now.' : isOpenCode ? 'OpenCode provider credentials are managed by OpenCode for now.' : isCopilot ? 'GitHub Copilot reuses the copilot CLI login already on this server.' : undefined}>
                       <div className="settings-select-wrap">
@@ -1501,7 +1464,7 @@ function CliProfilesTab({ settings, backends, onPatch, onSave, saving, onValidat
                         />
                         {envError ? <span className="settings-field-hint u-err">{envError}</span> : null}
                       </Field>
-                      <div className="cli-auth-box">
+                      {profile.harness !== 'cortex-code' ? <div className="cli-auth-box">
                         <div className="cli-auth-head">
                           <div>
                             <b>Account authentication</b>
@@ -1532,7 +1495,7 @@ function CliProfilesTab({ settings, backends, onPatch, onSave, saving, onValidat
                           ) : null}
                         </div>
                         {authText ? <pre className="cli-auth-log">{authText}</pre> : null}
-                      </div>
+                      </div> : <p className="settings-field-hint">Cortex setup uses shared terminal login. For an isolated Snowflake home or custom executable, authenticate in its terminal.</p>}
                     </>
                   ) : (
                     <>
@@ -1615,13 +1578,9 @@ function CliProfilesTab({ settings, backends, onPatch, onSave, saving, onValidat
 
 function SettingsMemoryTab({ settings, backends, profileBackends, loadProfileBackend, onPatch }){
   const mem = settings.memory || {};
-  const profiles = activeCliProfiles(settings);
+  const profiles = (settings.cliProfiles || []).filter(Boolean);
   const fallbackBackend = settings.defaultBackend || '';
-  const selectedProfile = profiles.find(p => p.id === mem.cliProfileId)
-    || profileForBackend(profiles, mem.cliBackend)
-    || profiles.find(p => p.id === settings.defaultCliProfileId)
-    || profileForBackend(profiles, fallbackBackend)
-    || null;
+  const selectedProfile = profileForSetting(profiles, mem.cliProfileId, mem.cliBackend, fallbackBackend, settings.defaultCliProfileId);
   const selectedProfileId = selectedProfile ? selectedProfile.id : null;
   React.useEffect(() => {
     if (selectedProfileId && loadProfileBackend) loadProfileBackend(selectedProfileId);
@@ -1693,14 +1652,13 @@ function SettingsMemoryTab({ settings, backends, profileBackends, loadProfileBac
         </div>
       </div>
       <Field label="Memory CLI profile">
-        <select value={selectedProfile ? selectedProfile.id : ''} onChange={(e) => onProfileChange(e.target.value)}>
-          {profiles.length === 0 ? <option value="">No CLI profiles available</option> : null}
-          {profiles.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
-        </select>
+        <ProcessorProfileSelect role="restrictedText" label="Memory" profiles={profiles} selectedId={mem.cliProfileId || selectedProfileId}
+          metadataForProfile={profile => backendForProfile(backends, profileBackends, profile)} onChange={onProfileChange}/>
       </Field>
       {models.length ? (
         <Field label="Memory model">
           <select value={modelId} onChange={(e) => onModelChange(e.target.value)}>
+            {modelId && !models.some(m => m.id === modelId) ? <option value={modelId} disabled>{modelId} (unavailable)</option> : null}
             {models.map(m => <option key={m.id} value={m.id}>{modelDisplayLabel(m)}</option>)}
           </select>
         </Field>
@@ -1722,7 +1680,7 @@ function SettingsMemoryTab({ settings, backends, profileBackends, loadProfileBac
 
 function SettingsKbTab({ settings, backends, profileBackends, loadProfileBackend, onPatch }){
   const kb = settings.knowledgeBase || {};
-  const profiles = activeCliProfiles(settings);
+  const profiles = (settings.cliProfiles || []).filter(Boolean);
   const fallbackBackend = settings.defaultBackend || '';
 
   // Ingestion picks (vision-capable CLI for AI-assisted page/slide/image conversion)
@@ -1749,7 +1707,7 @@ function SettingsKbTab({ settings, backends, profileBackends, loadProfileBackend
   const igEffort = kb.ingestionCliEffort || defaultEffortFor(igEfforts) || '';
 
   // Digestion picks
-  const dgProfile = profileForSetting(profiles, kb.digestionCliProfileId, kb.digestionCliBackend, fallbackBackend);
+  const dgProfile = profileForSetting(profiles, kb.digestionCliProfileId, kb.digestionCliBackend, fallbackBackend, settings.defaultCliProfileId);
   const dgModels = dgProfile
     ? modelsForProfile(backends, profileBackends, dgProfile)
     : modelsForBackend(backends, fallbackBackend);
@@ -1760,7 +1718,7 @@ function SettingsKbTab({ settings, backends, profileBackends, loadProfileBackend
   const dgEffort = kb.digestionCliEffort || defaultEffortFor(dgEfforts) || '';
 
   // Dreaming picks
-  const drProfile = profileForSetting(profiles, kb.dreamingCliProfileId, kb.dreamingCliBackend, fallbackBackend);
+  const drProfile = profileForSetting(profiles, kb.dreamingCliProfileId, kb.dreamingCliBackend, fallbackBackend, settings.defaultCliProfileId);
   const drModels = drProfile
     ? modelsForProfile(backends, profileBackends, drProfile)
     : modelsForBackend(backends, fallbackBackend);
@@ -1886,14 +1844,8 @@ function SettingsKbTab({ settings, backends, profileBackends, loadProfileBackend
         flagged content falls back to image-only references.
       </p>
       <Field label="Ingestion CLI profile">
-        <select value={igProfile ? igProfile.id : ''} onChange={(e) => onIgProfile(e.target.value)}>
-          <option value="">— None (skip AI conversion) —</option>
-          {igProfileOptions.map(p => (
-            <option key={p.id} value={p.id} disabled={igProfileUnsupported && igProfile && p.id === igProfile.id}>
-              {p.name}{igProfileUnsupported && igProfile && p.id === igProfile.id ? ' (not image-capable)' : ''}
-            </option>
-          ))}
-        </select>
+        <ProcessorProfileSelect profiles={igProfileOptions} selectedId={kb.ingestionCliProfileId || (igProfile && igProfile.id)} label="KB image conversion" emptyLabel="— None (skip AI conversion) —"
+          metadataForProfile={profile => backendForProfile(backends, profileBackends, profile)} onChange={onIgProfile}/>
       </Field>
       {igProfileUnsupported ? (
         <div className="settings-warning u-err">
@@ -1928,14 +1880,13 @@ function SettingsKbTab({ settings, backends, profileBackends, loadProfileBackend
 
       <div className="settings-section-title">Digestion</div>
       <Field label="Digestion CLI profile">
-        <select value={dgProfile ? dgProfile.id : ''} onChange={(e) => onDgProfile(e.target.value)}>
-          {profiles.length === 0 ? <option value="">No CLI profiles available</option> : null}
-          {profiles.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
-        </select>
+        <ProcessorProfileSelect profiles={profiles} selectedId={kb.digestionCliProfileId || (dgProfile && dgProfile.id)} label="KB digestion" sequential={gleaningEnabled}
+          metadataForProfile={profile => backendForProfile(backends, profileBackends, profile)} onChange={onDgProfile}/>
       </Field>
       {dgModels.length ? (
         <Field label="Digestion model">
           <select value={dgModel} onChange={(e) => onDgModel(e.target.value)}>
+            {dgModel && !dgModels.some(m => m.id === dgModel) ? <option value={dgModel} disabled>{dgModel} (unavailable)</option> : null}
             {dgModels.map(m => <option key={m.id} value={m.id}>{modelDisplayLabel(m)}</option>)}
           </select>
         </Field>
@@ -1952,14 +1903,13 @@ function SettingsKbTab({ settings, backends, profileBackends, loadProfileBackend
 
       <div className="settings-section-title">Dreaming</div>
       <Field label="Dreaming CLI profile">
-        <select value={drProfile ? drProfile.id : ''} onChange={(e) => onDrProfile(e.target.value)}>
-          {profiles.length === 0 ? <option value="">No CLI profiles available</option> : null}
-          {profiles.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
-        </select>
+        <ProcessorProfileSelect profiles={profiles} selectedId={kb.dreamingCliProfileId || (drProfile && drProfile.id)} label="KB dreaming"
+          metadataForProfile={profile => backendForProfile(backends, profileBackends, profile)} onChange={onDrProfile}/>
       </Field>
       {drModels.length ? (
         <Field label="Dreaming model">
           <select value={drModel} onChange={(e) => onDrModel(e.target.value)}>
+            {drModel && !drModels.some(m => m.id === drModel) ? <option value={drModel} disabled>{drModel} (unavailable)</option> : null}
             {drModels.map(m => <option key={m.id} value={m.id}>{modelDisplayLabel(m)}</option>)}
           </select>
         </Field>
@@ -2009,9 +1959,9 @@ function SettingsKbTab({ settings, backends, profileBackends, loadProfileBackend
 
 function SettingsWorkspaceContextTab({ settings, backends, profileBackends, loadProfileBackend, onPatch }){
   const workspaceContext = settings.workspaceContext || {};
-  const profiles = activeCliProfiles(settings);
+  const profiles = (settings.cliProfiles || []).filter(Boolean);
   const fallbackBackend = settings.defaultBackend || '';
-  const selectedProfile = profileForSetting(profiles, workspaceContext.cliProfileId, workspaceContext.cliBackend, fallbackBackend);
+  const selectedProfile = profileForSetting(profiles, workspaceContext.cliProfileId, workspaceContext.cliBackend, fallbackBackend, settings.defaultCliProfileId);
   const selectedProfileId = selectedProfile ? selectedProfile.id : null;
   React.useEffect(() => {
     if (selectedProfileId && loadProfileBackend) loadProfileBackend(selectedProfileId);
@@ -2079,14 +2029,13 @@ function SettingsWorkspaceContextTab({ settings, backends, profileBackends, load
 
       <div className="settings-section-title">Processor</div>
       <Field label="Workspace Context CLI profile">
-        <select value={selectedProfile ? selectedProfile.id : ''} onChange={(e) => onProfileChange(e.target.value)}>
-          {profiles.length === 0 ? <option value="">No CLI profiles available</option> : null}
-          {profiles.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
-        </select>
+        <ProcessorProfileSelect profiles={profiles} selectedId={workspaceContext.cliProfileId || selectedProfileId} label="Workspace Context"
+          metadataForProfile={profile => backendForProfile(backends, profileBackends, profile)} onChange={onProfileChange}/>
       </Field>
       {models.length ? (
         <Field label="Workspace Context model">
           <select value={modelId} onChange={(e) => onModelChange(e.target.value)}>
+            {modelId && !models.some(m => m.id === modelId) ? <option value={modelId} disabled>{modelId} (unavailable)</option> : null}
             {models.map(m => <option key={m.id} value={m.id}>{modelDisplayLabel(m)}</option>)}
           </select>
         </Field>
@@ -2668,24 +2617,18 @@ function usageRoundedEstimatedCost(usage){ const v = usageEstimatedCost(usage); 
 function fmtUsageDisplayCost(usage){
   const estimated = usageRoundedEstimatedCost(usage);
   const reported = usageReportedCost(usage);
-  return estimated > 0 ? `$${Math.ceil(reported + estimated)}` : fmtCostShort(reported);
+  if (usage.hasUnpricedUsage && reported === 0 && estimated === 0) return 'n/a';
+  const label = estimated > 0 ? `$${Math.ceil(reported + estimated)}` : fmtCostShort(reported);
+  return usage.hasUnpricedUsage ? `${label} + unpriced usage` : label;
 }
 
-/* Sum every record across the given days into a single usage total. */
-function totalsFor(days){
-  const t = { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, costUsd: 0, estimatedCostUsd: 0 };
-  for (const d of days || []) {
-    for (const r of (d.records || [])) {
-      const u = r.usage || {};
-      t.inputTokens      += u.inputTokens      || 0;
-      t.outputTokens     += u.outputTokens     || 0;
-      t.cacheReadTokens  += u.cacheReadTokens  || 0;
-      t.cacheWriteTokens += u.cacheWriteTokens || 0;
-      t.costUsd          += usageReportedCost(u);
-      t.estimatedCostUsd += usageEstimatedCost(u);
-    }
-  }
-  return t;
+function UsageSummaryStat({ label, usage, tokens }){
+  return <div className="stat">
+    <div className="lbl">{label}</div>
+    <div className="num">{fmtUsageDisplayCost(usage)}</div>
+    <div className="sub u-dim">Cost {usage.hasUnpricedUsage && usage.costUsd === 0 ? 'n/a' : fmtCostShort(usage.costUsd)} · Estimated Cost {usage.hasUnpricedUsage && usage.estimatedCostUsd === 0 ? 'n/a' : fmtEstimatedCost(usage.estimatedCostUsd)}</div>
+    <div className="sub u-dim">{tokens}</div>
+  </div>;
 }
 
 /* Filter the raw `days` list to the selected range. Empty range returns an
@@ -2722,29 +2665,6 @@ function buildDailyRows(days){
   return rows;
 }
 
-function aggregatePerModel(days){
-  const map = new Map();
-  for (const d of days || []) {
-    for (const r of (d.records || [])) {
-      const pricingTier = r.pricingTier || '';
-      const key = `${r.backend}\u0001${r.model}\u0001${pricingTier}`;
-      const slot = map.get(key) || {
-        backend: r.backend, model: r.model, pricingTier,
-        inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, costUsd: 0, estimatedCostUsd: 0,
-      };
-      const u = r.usage || {};
-      slot.inputTokens      += u.inputTokens      || 0;
-      slot.outputTokens     += u.outputTokens     || 0;
-      slot.cacheReadTokens  += u.cacheReadTokens  || 0;
-      slot.cacheWriteTokens += u.cacheWriteTokens || 0;
-      slot.costUsd          += usageReportedCost(u);
-      slot.estimatedCostUsd += usageEstimatedCost(u);
-      map.set(key, slot);
-    }
-  }
-  return Array.from(map.values()).sort((a, b) => (b.costUsd + b.estimatedCostUsd) - (a.costUsd + a.estimatedCostUsd));
-}
-
 /* Build the bar series for the "last 14 days" chart. Returns ascending
    (oldest → newest left → right) bars whose value is either total cost or
    total tokens for that day, depending on the selected metric. */
@@ -2756,7 +2676,7 @@ function buildBars(days, metric){
       const u = r.usage || {};
       if (metric === 'cost')       value += usageReportedCost(u);
       else if (metric === 'estimated') value += usageEstimatedCost(u);
-      else                         value += (u.inputTokens || 0) + (u.outputTokens || 0);
+      else                         value += usageTokenTotal(u);
     }
     return { date: d.date, value };
   });
@@ -2957,32 +2877,13 @@ function UsageTab(){
   return (
     <div className="settings-usage">
       <div className="stat-grid">
-        <div className="stat">
-          <div className="lbl">Today</div>
-          <div className="num">{fmtUsageDisplayCost(today)}</div>
-          <div className="sub u-dim">Cost {fmtCostShort(today.costUsd)} · Estimated Cost {fmtEstimatedCost(today.estimatedCostUsd)}</div>
-          <div className="sub u-dim">{fmtTokensShort(today.inputTokens)} in · {fmtTokensShort(today.outputTokens)} out</div>
-        </div>
-        <div className="stat">
-          <div className="lbl">Last 7 days</div>
-          <div className="num">{fmtUsageDisplayCost(week)}</div>
-          <div className="sub u-dim">Cost {fmtCostShort(week.costUsd)} · Estimated Cost {fmtEstimatedCost(week.estimatedCostUsd)}</div>
-          <div className="sub u-dim">{fmtTokensShort(week.inputTokens + week.outputTokens)} tokens</div>
-        </div>
-        <div className="stat">
-          <div className="lbl">Last 30 days</div>
-          <div className="num">{fmtUsageDisplayCost(month)}</div>
-          <div className="sub u-dim">Cost {fmtCostShort(month.costUsd)} · Estimated Cost {fmtEstimatedCost(month.estimatedCostUsd)}</div>
-          <div className="sub u-dim">{fmtTokensShort(month.inputTokens + month.outputTokens)} tokens</div>
-        </div>
-        <div className="stat">
-          <div className="lbl">All time</div>
-          <div className="num">{fmtUsageDisplayCost(all)}</div>
-          <div className="sub u-dim">Cost {fmtCostShort(all.costUsd)} · Estimated Cost {fmtEstimatedCost(all.estimatedCostUsd)}</div>
-          <div className="sub u-dim">{fmtTokensShort(all.inputTokens + all.outputTokens)} tokens</div>
-        </div>
+        <UsageSummaryStat label="Today" usage={today} tokens={`${fmtTokensShort(today.inputTokens)} in · ${fmtTokensShort(today.outputTokens)} out`}/>
+        <UsageSummaryStat label="Last 7 days" usage={week} tokens={`${fmtTokensShort(usageTokenTotal(week))} tokens`}/>
+        <UsageSummaryStat label="Last 30 days" usage={month} tokens={`${fmtTokensShort(usageTokenTotal(month))} tokens`}/>
+        <UsageSummaryStat label="All time" usage={all} tokens={`${fmtTokensShort(usageTokenTotal(all))} tokens`}/>
       </div>
 
+      {all.hasUnpricedUsage ? <p className="u-dim">Costs exclude usage with unavailable pricing. Token counts remain included.</p> : null}
       <div className="pane-block">
         <div className="pane-block-head">
           <span>Last 14 days</span>
@@ -2994,7 +2895,7 @@ function UsageTab(){
           />
         </div>
         {bars.length === 0 || maxBar === 0 ? (
-          <div className="u-dim" style={{padding:'24px',fontSize:12}}>No usage recorded yet.</div>
+          <div className="u-dim" style={{padding:'24px',fontSize:12}}>{all.hasUnpricedUsage && metric !== 'tokens' ? 'No priced usage for this metric.' : 'No usage recorded yet.'}</div>
         ) : (
           <div className="bars">
             {bars.map((b, i) => (
@@ -3047,8 +2948,8 @@ function UsageTab(){
                     <td className="r">{fmtNum(r.outputTokens)}</td>
                     <td className="r">{fmtNum(r.cacheReadTokens)}</td>
                     <td className="r">{fmtNum(r.cacheWriteTokens)}</td>
-                    <td className="r">{r.costUsd > 0 ? fmtCost(r.costUsd) : '—'}</td>
-                    <td className="r">{fmtEstimatedCostCell(r.estimatedCostUsd)}</td>
+                    <td className="r">{r.hasUnpricedUsage && r.costUsd === 0 ? 'n/a' : r.costUsd > 0 ? fmtCost(r.costUsd) : '—'}</td>
+                    <td className="r">{r.hasUnpricedUsage && r.estimatedCostUsd === 0 ? 'n/a' : fmtEstimatedCostCell(r.estimatedCostUsd)}</td>
                   </tr>
                 ))}
               </tbody>
@@ -3075,7 +2976,7 @@ function UsageTab(){
               <tbody>
                 {dailyRows.map((r, i) => {
                   const u = r.usage;
-                  const tokens = (u.inputTokens || 0) + (u.outputTokens || 0);
+                  const tokens = usageTokenTotal(u);
                   return (
                     <tr key={`${r.date}/${r.backend}/${r.model}/${r.pricingTier || ''}/${i}`}>
                       <td className="u-mono">{r.date}</td>
@@ -3083,8 +2984,8 @@ function UsageTab(){
                       <td className="u-mono">{r.model}</td>
                       <td className="u-mono">{r.pricingTier || '—'}</td>
                       <td className="r">{fmtNum(tokens)}</td>
-                      <td className="r">{usageReportedCost(u) > 0 ? fmtCost(usageReportedCost(u)) : '—'}</td>
-                      <td className="r">{fmtEstimatedCostCell(usageEstimatedCost(u))}</td>
+                      <td className="r">{isUsageCostUnavailable(u, r.backend) ? 'n/a' : usageReportedCost(u) > 0 ? fmtCost(usageReportedCost(u)) : '—'}</td>
+                      <td className="r">{isUsageCostUnavailable(u, r.backend) ? 'n/a' : fmtEstimatedCostCell(usageEstimatedCost(u))}</td>
                     </tr>
                   );
                 })}

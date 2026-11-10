@@ -9,6 +9,7 @@ import { MockBackendAdapter } from './helpers/mockBackendAdapter';
 import { makeDngWithJpegPreview, makeJpeg } from './helpers/dngFixture';
 import { CONVERSATION_UPLOAD_LIMIT_BYTES } from '../src/routes/chat/uploadRoutes';
 import { MISSING_CLI_PROFILE_RECOVERY_MESSAGE } from '../src/routes/chat/routeUtils';
+import * as chatAttachments from '../src/services/chat/attachments';
 import type { StreamEvent, ActiveStreamEntry, BackendMetadata, CodexThreadGoal, SendMessageOptions, SendMessageResult, CliProfile } from '../src/types';
 
 let env: ChatRouterEnv;
@@ -1190,6 +1191,38 @@ describe('pending message send lifecycle guards', () => {
     expect(pending.sendCalls()).toBe(1);
   });
 
+  test('a concurrent send is rejected while an earlier send resolves its uploads', async () => {
+    const conv = await env.chatService.createConversation('Attachment race');
+    const uploads = path.join(env.chatService.artifactsDir, conv.id);
+    fs.mkdirSync(uploads, { recursive: true });
+    fs.writeFileSync(path.join(uploads, 'notes.txt'), 'notes');
+    let sendCalls = 0;
+    env.mockBackend.sendMessage = function() {
+      sendCalls += 1;
+      return { stream: (async function*() { yield { type: 'done' }; })(), abort: () => {}, sendInput: () => {} };
+    };
+    const original = chatAttachments.resolveConversationAttachments;
+    let entered!: () => void;
+    let release!: () => void;
+    const firstEntered = new Promise<void>(resolve => { entered = resolve; });
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    const resolve = jest.spyOn(chatAttachments, 'resolveConversationAttachments').mockImplementationOnce(async (...args) => {
+      entered();
+      await gate;
+      return original(...args);
+    });
+    try {
+      const body = { content: 'with notes', backend: 'claude-code', attachments: [{ name: 'notes.txt' }] };
+      const first = env.request('POST', `/api/chat/conversations/${conv.id}/message`, body);
+      await firstEntered;
+      const second = await env.request('POST', `/api/chat/conversations/${conv.id}/message`, body);
+      release();
+      expect(second.status).toBe(409);
+      expect((await first).status).toBe(200);
+      expect(sendCalls).toBe(1);
+    } finally { release(); resolve.mockRestore(); }
+  });
+
   test('update and restart guards include pending sends', async () => {
     await destroyChatRouterEnv(env);
     const fakeUpdateService = {
@@ -1562,6 +1595,20 @@ describe('POST /conversations/:id/upload', () => {
     expect(fs.statSync(path.join(env.chatService.artifactsDir, conv.id, 'large.bin')).size).toBe(fileSize);
   }, 20000);
 
+  test('stores control-character names so a later message can reference the upload', async () => {
+    const conv = await env.chatService.createConversation('Control-character upload');
+    const upload = await uploadSizedConversationFile(conv.id, 'tab\tname.txt', 5);
+    expect(upload.status).toBe(200);
+    expect(upload.body.files[0].name).toBe('tab_name.txt');
+    env.mockBackend.sendMessage = function() {
+      return { stream: (async function*() { yield { type: 'done' }; })(), abort: () => {}, sendInput: () => {} };
+    };
+    const send = await env.request('POST', `/api/chat/conversations/${conv.id}/message`, {
+      content: 'see file', backend: 'claude-code', attachments: [{ name: upload.body.files[0].name }],
+    });
+    expect(send.status).toBe(200);
+  });
+
   test('returns a capped JPEG preview attachment for DNG uploads', async () => {
     const conv = await env.chatService.createConversation('DNG upload');
     const jpeg = makeJpeg(2600, 1300);
@@ -1664,6 +1711,22 @@ describe('DELETE /conversations/:id/upload/:filename', () => {
 // ── POST /conversations/:id/attachments/ocr ─────────────────────────────────
 
 describe('POST /conversations/:id/attachments/ocr', () => {
+  test('uses selected OCR model/effort without changing the stored chat selection', async () => {
+    const conv = await env.chatService.createConversation('OCR selection', undefined, 'claude-code', 'stale-model', 'high');
+    const artifactDir = path.join(env.chatService.artifactsDir, conv.id); fs.mkdirSync(artifactDir, { recursive: true });
+    const imagePath = path.join(artifactDir, 'selection.png'); fs.writeFileSync(imagePath, 'fixture');
+    const before = await env.chatService.getConversation(conv.id);
+    env.mockBackend.setOneShotImpl(async () => 'SELECTED OCR');
+    const endpoint = `/api/chat/conversations/${conv.id}/attachments/ocr`;
+    const result = await env.request('POST', endpoint, { path: imagePath, model: 'sonnet', effort: 'low' });
+    expect(result.status).toBe(200);
+    expect(env.mockBackend._oneShotCalls[0].options).toMatchObject({ model: 'sonnet', effort: 'low' });
+    expect(await env.chatService.getConversation(conv.id)).toMatchObject({ model: before!.model, effort: before!.effort });
+    expect((await env.request('POST', endpoint, { path: imagePath, model: 'unverified' })).status).toBe(400);
+    expect((await env.request('POST', endpoint, { path: imagePath, effort: 'invalid' })).status).toBe(400);
+    expect(env.mockBackend._oneShotCalls).toHaveLength(1);
+  });
+
   test('returns markdown from the backend runOneShot', async () => {
     const conv = await env.chatService.createConversation('Test');
     const artifactDir = path.join(env.chatService.artifactsDir, conv.id);

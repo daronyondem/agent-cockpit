@@ -6,6 +6,7 @@ import path from 'path';
 import { CliProfileAuthService, redactCliAuthText, type CliAuthJobSnapshot } from '../src/services/cliProfileAuthService';
 import { probeCopilotProfile } from '../src/services/backends/copilotProfileStatus';
 import type { CliProfile, Settings } from '../src/types';
+import type { CortexAuth } from '../src/services/cortexAuth';
 
 jest.mock('../src/services/backends/copilotProfileStatus', () => ({
   ...jest.requireActual('../src/services/backends/copilotProfileStatus'), probeCopilotProfile: jest.fn(),
@@ -233,22 +234,27 @@ describe('CliProfileAuthService', () => {
       await service.shutdown();
     });
 
-    test('shutdown aborts native Copilot checks, waits for cleanup, and blocks later work', async () => {
+    test('shutdown aborts Copilot checks and drains both harnesses before blocking later work', async () => {
       let started!: () => void;
       const checking = new Promise<void>(resolve => { started = resolve; });
       jest.mocked(probeCopilotProfile).mockImplementation((_profile, signal) => new Promise((_resolve, reject) => {
         signal.addEventListener('abort', () => { setTimeout(() => reject(new Error('Probe cancelled after cleanup')), 20); }, { once: true });
         started();
       }));
-      const service = makeService(createSpawn(call => closeSoon(call, { stdout: 'Copilot installed' })));
+      let releaseCortex!: () => void;
+      const cortexDrain = new Promise<void>(resolve => { releaseCortex = resolve; });
+      const cortexAuth = { shutdown: jest.fn(), drain: jest.fn(() => cortexDrain) };
+      const service = makeService(createSpawn(call => closeSoon(call, { stdout: 'Copilot installed' })), { cortexAuth: cortexAuth as unknown as CortexAuth });
       const pending = service.checkProfile(makeProfile({ harness: 'copilot' }));
       await checking;
       let stopped = false;
       const ending = service.shutdown().then(() => { stopped = true; });
       await Promise.resolve();
       expect(stopped).toBe(false);
-      await ending;
       expect(await pending).toMatchObject({ available: true, status: 'error', error: 'Probe cancelled after cleanup' });
+      expect(stopped).toBe(false); expect(cortexAuth.shutdown).toHaveBeenCalledTimes(1);
+      expect(cortexAuth.drain).toHaveBeenCalledTimes(1);
+      releaseCortex(); await ending;
       expect(await service.checkProfile(makeProfile({ harness: 'copilot' }))).toMatchObject({ status: 'error', error: expect.stringContaining('shutting down') });
       await expect(service.startAuth(makeProfile())).rejects.toThrow('shutting down');
     });

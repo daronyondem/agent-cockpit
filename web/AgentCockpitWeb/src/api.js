@@ -442,14 +442,13 @@
       .then(r => r.json())
       .then(data => {
         const backend = data && data.backend ? data.backend : null;
-        if (revision === state._metadataRevision) {
-          state._profileMetadataCache.set(profileId, { backend, expires: Date.now() + 60_000 });
-          state._profileMetadataPromise.delete(profileId);
-        }
+        if (revision !== state._metadataRevision || state._profileMetadataPromise.get(profileId) !== promise) return null;
+        state._profileMetadataCache.set(profileId, { backend, expires: Date.now() + 60_000 });
+        state._profileMetadataPromise.delete(profileId);
         return backend;
       })
       .catch(err => {
-        if (revision === state._metadataRevision) state._profileMetadataPromise.delete(profileId);
+        if (revision === state._metadataRevision && state._profileMetadataPromise.get(profileId) === promise) state._profileMetadataPromise.delete(profileId);
         throw err;
       });
     state._profileMetadataPromise.set(profileId, promise);
@@ -1103,9 +1102,9 @@
       }
       return data;
     }),
-    testSetupCliAuth: (harness) => chatFetch(
+    testSetupCliAuth: (harness, options = {}) => chatFetch(
       'cli-profiles/setup-auth/' + encodeURIComponent(harness) + '/test',
-      { method: 'POST', body: {} },
+      { method: 'POST', body: options },
     ).then(r => r.json()).then(data => {
       if (data && data.settings) {
         state._settingsCache = data.settings;
@@ -1114,9 +1113,9 @@
       }
       return data;
     }),
-    startSetupCliAuth: (harness) => chatFetch(
+    startSetupCliAuth: (harness, options = {}) => chatFetch(
       'cli-profiles/setup-auth/' + encodeURIComponent(harness) + '/start',
-      { method: 'POST', body: {} },
+      { method: 'POST', body: options },
     ).then(r => r.json()).then(data => {
       if (data && data.settings) {
         state._settingsCache = data.settings;
@@ -1132,6 +1131,15 @@
       'cli-profiles/auth-jobs/' + encodeURIComponent(jobId) + '/cancel',
       { method: 'POST', body: {} },
     ).then(r => r.json()).then(invalidateCompletedCopilotAuth),
+    cortexConnections: () => chatFetch('cli-profiles/cortex-code/connections').then(r => r.json()),
+    createCortexConnection: (connection) => chatFetch('cli-profiles/cortex-code/connections', {
+      method: 'POST', body: connection,
+    }).then(r => r.json()),
+    submitCortexRedirect: (jobId, generation, redirectUrl) => chatFetch(
+      'cli-profiles/auth-jobs/' + encodeURIComponent(jobId) + '/redirect', {
+        method: 'POST', body: { generation, redirectUrl },
+      },
+    ).then(r => r.json()),
   };
 
   const AuthApi = {

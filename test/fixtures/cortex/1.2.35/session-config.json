@@ -1,0 +1,457 @@
+{
+  "source": {
+    "cliVersion": "1.2.35",
+    "distribution": "1.2.35+191333.f82de3d91715",
+    "platform": "darwin-arm64",
+    "capturedAt": "2026-11-02",
+    "probe": "core",
+    "selection": "ordered excerpt; identities, paths, endpoints sanitized; model catalog sampled"
+  },
+  "frames": [
+    {
+      "direction": "out",
+      "frame": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "initialize",
+        "params": {
+          "protocolVersion": 1,
+          "clientInfo": {
+            "name": "agent-cockpit-evaluation",
+            "version": "1"
+          },
+          "clientCapabilities": {
+            "fs": {
+              "readTextFile": false,
+              "writeTextFile": false
+            },
+            "terminal": false
+          }
+        }
+      }
+    },
+    {
+      "direction": "in",
+      "frame": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "result": {
+          "protocolVersion": 1,
+          "agentInfo": {
+            "name": "Cortex Code",
+            "version": "1.0.0"
+          },
+          "agentCapabilities": {
+            "loadSession": true,
+            "sessionCapabilities": {
+              "list": {},
+              "close": {},
+              "fork": {}
+            },
+            "promptCapabilities": {
+              "image": true
+            }
+          }
+        }
+      }
+    },
+    {
+      "direction": "out",
+      "frame": {
+        "jsonrpc": "2.0",
+        "id": 2,
+        "method": "session/new",
+        "params": {
+          "cwd": "/fixture/workspace/core",
+          "mcpServers": []
+        }
+      }
+    },
+    {
+      "direction": "in",
+      "frame": {
+        "jsonrpc": "2.0",
+        "id": 2,
+        "result": {
+          "sessionId": "fixture-id-1",
+          "configOptions": [
+            {
+              "id": "model",
+              "name": "Model",
+              "category": "model",
+              "type": "select",
+              "currentValue": "auto",
+              "options": [
+                {
+                  "value": "auto",
+                  "name": "Auto (Balanced)"
+                },
+                {
+                  "value": "claude-sonnet-4-6",
+                  "name": "Claude Sonnet 4.6"
+                }
+              ]
+            },
+            {
+              "id": "mode",
+              "name": "Mode",
+              "description": "Controls the agent's operating mode",
+              "category": "mode",
+              "type": "select",
+              "currentValue": "standard",
+              "options": [
+                {
+                  "value": "standard",
+                  "name": "Standard",
+                  "description": "Normal coding mode"
+                },
+                {
+                  "value": "plan",
+                  "name": "Plan",
+                  "description": "Plan before making changes"
+                },
+                {
+                  "value": "bypass",
+                  "name": "Bypass",
+                  "description": "Auto-approve all tool calls"
+                }
+              ]
+            },
+            {
+              "id": "thought_level",
+              "name": "Effort",
+              "description": "How much the agent thinks before responding",
+              "category": "thought_level",
+              "type": "select",
+              "currentValue": "auto",
+              "options": [
+                {
+                  "value": "auto",
+                  "name": "Auto"
+                },
+                {
+                  "value": "minimal",
+                  "name": "Minimal"
+                },
+                {
+                  "value": "low",
+                  "name": "Low"
+                },
+                {
+                  "value": "medium",
+                  "name": "Medium"
+                },
+                {
+                  "value": "high",
+                  "name": "High"
+                },
+                {
+                  "value": "xhigh",
+                  "name": "Xhigh"
+                },
+                {
+                  "value": "max",
+                  "name": "Max"
+                }
+              ]
+            },
+            {
+              "id": "_restricted_session_scope",
+              "name": "Restricted scope",
+              "description": "Restrict the roles and privileges the agent's SQL can use. Applies to the SQL session shared across sessions on this connection.",
+              "category": "_restricted_session_scope",
+              "type": "select",
+              "currentValue": "none",
+              "options": [
+                {
+                  "value": "none",
+                  "name": "None (unrestricted)",
+                  "description": "Agent SQL runs with your full privileges"
+                },
+                {
+                  "value": "SNOWFLAKE$DATA_READ_WITH_AI",
+                  "name": "Read-only",
+                  "description": "Agent SQL is limited to reading data"
+                }
+              ]
+            }
+          ]
+        }
+      }
+    },
+    {
+      "direction": "out",
+      "frame": {
+        "jsonrpc": "2.0",
+        "id": 3,
+        "method": "session/set_model",
+        "params": {
+          "sessionId": "fixture-id-1",
+          "modelId": "claude-sonnet-4-6"
+        }
+      }
+    },
+    {
+      "direction": "in",
+      "frame": {
+        "jsonrpc": "2.0",
+        "id": 3,
+        "error": {
+          "code": -32601,
+          "message": "\"Method not found\": session/set_model",
+          "data": {
+            "method": "session/set_model"
+          }
+        }
+      }
+    },
+    {
+      "direction": "out",
+      "frame": {
+        "jsonrpc": "2.0",
+        "id": 4,
+        "method": "session/set_config_option",
+        "params": {
+          "sessionId": "fixture-id-1",
+          "configId": "model",
+          "value": "claude-sonnet-4-6"
+        }
+      }
+    },
+    {
+      "direction": "in",
+      "frame": {
+        "jsonrpc": "2.0",
+        "id": 4,
+        "result": {
+          "configOptions": [
+            {
+              "id": "model",
+              "name": "Model",
+              "category": "model",
+              "type": "select",
+              "currentValue": "claude-sonnet-4-6",
+              "options": [
+                {
+                  "value": "auto",
+                  "name": "Auto (Balanced)"
+                },
+                {
+                  "value": "claude-sonnet-4-6",
+                  "name": "Claude Sonnet 4.6"
+                }
+              ]
+            },
+            {
+              "id": "mode",
+              "name": "Mode",
+              "description": "Controls the agent's operating mode",
+              "category": "mode",
+              "type": "select",
+              "currentValue": "standard",
+              "options": [
+                {
+                  "value": "standard",
+                  "name": "Standard",
+                  "description": "Normal coding mode"
+                },
+                {
+                  "value": "plan",
+                  "name": "Plan",
+                  "description": "Plan before making changes"
+                },
+                {
+                  "value": "bypass",
+                  "name": "Bypass",
+                  "description": "Auto-approve all tool calls"
+                }
+              ]
+            },
+            {
+              "id": "thought_level",
+              "name": "Effort",
+              "description": "How much the agent thinks before responding",
+              "category": "thought_level",
+              "type": "select",
+              "currentValue": "auto",
+              "options": [
+                {
+                  "value": "auto",
+                  "name": "Auto"
+                },
+                {
+                  "value": "minimal",
+                  "name": "Minimal"
+                },
+                {
+                  "value": "low",
+                  "name": "Low"
+                },
+                {
+                  "value": "medium",
+                  "name": "Medium"
+                },
+                {
+                  "value": "high",
+                  "name": "High"
+                },
+                {
+                  "value": "xhigh",
+                  "name": "Xhigh"
+                },
+                {
+                  "value": "max",
+                  "name": "Max"
+                }
+              ]
+            },
+            {
+              "id": "_restricted_session_scope",
+              "name": "Restricted scope",
+              "description": "Restrict the roles and privileges the agent's SQL can use. Applies to the SQL session shared across sessions on this connection.",
+              "category": "_restricted_session_scope",
+              "type": "select",
+              "currentValue": "none",
+              "options": [
+                {
+                  "value": "none",
+                  "name": "None (unrestricted)",
+                  "description": "Agent SQL runs with your full privileges"
+                },
+                {
+                  "value": "SNOWFLAKE$DATA_READ_WITH_AI",
+                  "name": "Read-only",
+                  "description": "Agent SQL is limited to reading data"
+                }
+              ]
+            }
+          ]
+        }
+      }
+    },
+    {
+      "direction": "out",
+      "frame": {
+        "jsonrpc": "2.0",
+        "id": 5,
+        "method": "session/set_config_option",
+        "params": {
+          "sessionId": "fixture-id-1",
+          "configId": "thought_level",
+          "value": "low"
+        }
+      }
+    },
+    {
+      "direction": "in",
+      "frame": {
+        "jsonrpc": "2.0",
+        "id": 5,
+        "result": {
+          "configOptions": [
+            {
+              "id": "model",
+              "name": "Model",
+              "category": "model",
+              "type": "select",
+              "currentValue": "claude-sonnet-4-6",
+              "options": [
+                {
+                  "value": "auto",
+                  "name": "Auto (Balanced)"
+                },
+                {
+                  "value": "claude-sonnet-4-6",
+                  "name": "Claude Sonnet 4.6"
+                }
+              ]
+            },
+            {
+              "id": "mode",
+              "name": "Mode",
+              "description": "Controls the agent's operating mode",
+              "category": "mode",
+              "type": "select",
+              "currentValue": "standard",
+              "options": [
+                {
+                  "value": "standard",
+                  "name": "Standard",
+                  "description": "Normal coding mode"
+                },
+                {
+                  "value": "plan",
+                  "name": "Plan",
+                  "description": "Plan before making changes"
+                },
+                {
+                  "value": "bypass",
+                  "name": "Bypass",
+                  "description": "Auto-approve all tool calls"
+                }
+              ]
+            },
+            {
+              "id": "thought_level",
+              "name": "Effort",
+              "description": "How much the agent thinks before responding",
+              "category": "thought_level",
+              "type": "select",
+              "currentValue": "low",
+              "options": [
+                {
+                  "value": "auto",
+                  "name": "Auto"
+                },
+                {
+                  "value": "minimal",
+                  "name": "Minimal"
+                },
+                {
+                  "value": "low",
+                  "name": "Low"
+                },
+                {
+                  "value": "medium",
+                  "name": "Medium"
+                },
+                {
+                  "value": "high",
+                  "name": "High"
+                },
+                {
+                  "value": "xhigh",
+                  "name": "Xhigh"
+                },
+                {
+                  "value": "max",
+                  "name": "Max"
+                }
+              ]
+            },
+            {
+              "id": "_restricted_session_scope",
+              "name": "Restricted scope",
+              "description": "Restrict the roles and privileges the agent's SQL can use. Applies to the SQL session shared across sessions on this connection.",
+              "category": "_restricted_session_scope",
+              "type": "select",
+              "currentValue": "none",
+              "options": [
+                {
+                  "value": "none",
+                  "name": "None (unrestricted)",
+                  "description": "Agent SQL runs with your full privileges"
+                },
+                {
+                  "value": "SNOWFLAKE$DATA_READ_WITH_AI",
+                  "name": "Read-only",
+                  "description": "Agent SQL is limited to reading data"
+                }
+              ]
+            }
+          ]
+        }
+      }
+    }
+  ]
+}

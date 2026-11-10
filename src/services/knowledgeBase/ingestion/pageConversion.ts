@@ -5,11 +5,11 @@
 //      call that converts one image (PDF page render, slide render, embedded
 //      DOCX figure, or standalone uploaded image) into clean Markdown. The
 //      caller supplies the absolute image path; this function builds the
-//      unified prompt, runs the CLI, and retries once if the call throws or
-//      returns empty/whitespace output.
+//      unified prompt, runs the CLI, and retries once on failed/empty output
+//      only when the adapter permits automatic retries.
 //
 //   2. `ensureAiReadyImage` — write a downscaled PNG sibling next to an
-//      oversized image and return the path the caller should use for both
+//      oversized or format-normalized image and return the path used for both
 //      the AI call AND the link in `text.md`. Handlers run this BEFORE
 //      `convertImageToMarkdown` so the same downscaled file serves both
 //      ingestion-time AI and digestion-time CLI reads. Decode failures fall
@@ -53,8 +53,8 @@ const DEFAULT_TIMEOUT_MS = 10 * 60_000;
 export const MAX_LONG_EDGE_PX = 2576;
 
 /**
- * If the source image's long edge exceeds `MAX_LONG_EDGE_PX`, write a
- * proportionally-scaled PNG to `destPath` and return `destPath`. Otherwise,
+ * If the long edge exceeds `MAX_LONG_EDGE_PX` or PNG is explicitly required
+ * for a non-PNG source, write a PNG sibling (without upscaling). Otherwise,
  * or if the source can't be decoded by `@napi-rs/canvas` (SVG, video,
  * unsupported codec), return `srcPath` unchanged with no write.
  *
@@ -67,6 +67,7 @@ export const MAX_LONG_EDGE_PX = 2576;
 export async function ensureAiReadyImage(
   srcPath: string,
   destPath: string,
+  format?: 'png',
 ): Promise<string> {
   let img: Awaited<ReturnType<typeof napiCanvas.loadImage>>;
   try {
@@ -76,11 +77,11 @@ export async function ensureAiReadyImage(
   }
 
   const longEdge = Math.max(img.width, img.height);
-  if (longEdge <= MAX_LONG_EDGE_PX) {
+  if (longEdge <= MAX_LONG_EDGE_PX && !(format === 'png' && path.extname(srcPath).toLowerCase() !== '.png')) {
     return srcPath;
   }
 
-  const scale = MAX_LONG_EDGE_PX / longEdge;
+  const scale = Math.min(1, MAX_LONG_EDGE_PX / longEdge);
   const newWidth = Math.max(1, Math.round(img.width * scale));
   const newHeight = Math.max(1, Math.round(img.height * scale));
   const canvas = napiCanvas.createCanvas(newWidth, newHeight);
@@ -101,7 +102,7 @@ export interface ConvertImageOptions {
   effort?: EffortLevel;
   /** Resolved CLI profile for account-isolated ingestion calls. */
   cliProfile?: CliProfile;
-  /** Per-image hard timeout. Defaults to 3 min. */
+  /** Per-image hard timeout. Defaults to 10 min. */
   timeoutMs?: number;
 }
 
@@ -119,8 +120,8 @@ export interface ConvertImageResult {
  * to the image's parent directory and `allowTools: true`). The prompt
  * references the image by basename so it works regardless of absolute path.
  *
- * Retries once if the adapter throws OR returns empty/whitespace output.
- * After two failed attempts, throws the last error (handlers decide whether
+ * Retries once on failed/empty output only when the adapter permits it.
+ * After the permitted attempts, throws the last error (handlers decide whether
  * to fall back to `source: image-only`).
  */
 export async function convertImageToMarkdown(
@@ -141,7 +142,8 @@ export async function convertImageToMarkdown(
   };
 
   let lastError: unknown = null;
-  for (let attempt = 0; attempt < 2; attempt++) {
+  const attempts = opts.adapter.allowAutomaticOneShotRetry === false ? 1 : 2;
+  for (let attempt = 0; attempt < attempts; attempt++) {
     try {
       const output = await opts.adapter.runOneShot(prompt, runOptions);
       if (output && output.trim().length > 0) {

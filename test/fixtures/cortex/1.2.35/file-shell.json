@@ -1,0 +1,684 @@
+{
+  "source": {
+    "cliVersion": "1.2.35",
+    "distribution": "1.2.35+191333.f82de3d91715",
+    "platform": "darwin-arm64",
+    "capturedAt": "2026-11-02",
+    "probe": "core",
+    "selection": "ordered excerpt; identities, paths, endpoints sanitized; model catalog sampled"
+  },
+  "frames": [
+    {
+      "direction": "out",
+      "frame": {
+        "jsonrpc": "2.0",
+        "id": 6,
+        "method": "session/prompt",
+        "params": {
+          "sessionId": "fixture-id-1",
+          "prompt": [
+            {
+              "type": "text",
+              "text": "Use native file tools to read fixture.txt in your working directory and create result.txt containing ONLY the value after FIXTURE_VALUE= with no newline. Then run a shell command to verify the result matches fixture.txt. Do not read or modify any files outside this temporary directory. Return the fixture value."
+            }
+          ]
+        }
+      }
+    },
+    {
+      "direction": "in",
+      "frame": {
+        "jsonrpc": "2.0",
+        "method": "session/update",
+        "params": {
+          "sessionId": "fixture-id-1",
+          "update": {
+            "sessionUpdate": "agent_thought_chunk",
+            "content": {
+              "type": "text",
+              "text": "Let"
+            }
+          }
+        }
+      }
+    },
+    {
+      "direction": "in",
+      "frame": {
+        "jsonrpc": "2.0",
+        "method": "session/update",
+        "params": {
+          "sessionId": "fixture-id-1",
+          "update": {
+            "sessionUpdate": "agent_thought_chunk",
+            "content": {
+              "type": "text",
+              "text": " me read"
+            }
+          }
+        }
+      }
+    },
+    {
+      "direction": "in",
+      "frame": {
+        "jsonrpc": "2.0",
+        "method": "session/update",
+        "params": {
+          "sessionId": "fixture-id-1",
+          "update": {
+            "sessionUpdate": "agent_thought_chunk",
+            "content": {
+              "type": "text",
+              "text": " the fixture.txt file first"
+            }
+          }
+        }
+      }
+    },
+    {
+      "direction": "in",
+      "frame": {
+        "jsonrpc": "2.0",
+        "method": "session/update",
+        "params": {
+          "sessionId": "fixture-id-1",
+          "update": {
+            "sessionUpdate": "agent_thought_chunk",
+            "content": {
+              "type": "text",
+              "text": "."
+            }
+          }
+        }
+      }
+    },
+    {
+      "direction": "in",
+      "frame": {
+        "jsonrpc": "2.0",
+        "method": "session/update",
+        "params": {
+          "sessionId": "fixture-id-1",
+          "update": {
+            "sessionUpdate": "usage_update",
+            "size": 1050000,
+            "used": 49810
+          }
+        }
+      }
+    },
+    {
+      "direction": "in",
+      "frame": {
+        "jsonrpc": "2.0",
+        "method": "session/update",
+        "params": {
+          "sessionId": "fixture-id-1",
+          "update": {
+            "sessionUpdate": "tool_call",
+            "toolCallId": "fixture-tool-1",
+            "title": "read",
+            "kind": "read",
+            "status": "pending",
+            "rawInput": {
+              "file_path": "/fixture/workspace/core/fixture.txt"
+            }
+          }
+        }
+      }
+    },
+    {
+      "direction": "in",
+      "frame": {
+        "jsonrpc": "2.0",
+        "method": "session/update",
+        "params": {
+          "sessionId": "fixture-id-1",
+          "update": {
+            "sessionUpdate": "tool_call_update",
+            "toolCallId": "fixture-tool-1",
+            "status": "completed",
+            "content": [
+              {
+                "type": "content",
+                "content": {
+                  "type": "text",
+                  "text": "1... FIXTURE_VALUE=COCO-b1bfeae504ef4582\n2... "
+                }
+              }
+            ],
+            "rawOutput": "1... FIXTURE_VALUE=COCO-b1bfeae504ef4582\n2... "
+          }
+        }
+      }
+    },
+    {
+      "direction": "in",
+      "frame": {
+        "jsonrpc": "2.0",
+        "method": "session/update",
+        "params": {
+          "sessionId": "fixture-id-1",
+          "update": {
+            "sessionUpdate": "usage_update",
+            "size": 1000000,
+            "used": 32136
+          }
+        }
+      }
+    },
+    {
+      "direction": "in",
+      "frame": {
+        "jsonrpc": "2.0",
+        "method": "session/update",
+        "params": {
+          "sessionId": "fixture-id-1",
+          "update": {
+            "sessionUpdate": "tool_call",
+            "toolCallId": "fixture-tool-2",
+            "title": "write",
+            "kind": "edit",
+            "status": "pending",
+            "rawInput": {
+              "content": "COCO-b1bfeae504ef4582",
+              "file_path": "/fixture/workspace/core/result.txt"
+            }
+          }
+        }
+      }
+    },
+    {
+      "direction": "in",
+      "frame": {
+        "jsonrpc": "2.0",
+        "id": 0,
+        "method": "session/request_permission",
+        "params": {
+          "sessionId": "fixture-id-1",
+          "toolCall": {
+            "toolCallId": "fixture-tool-17",
+            "title": "write: /fixture/workspace/core/result.txt",
+            "status": "pending",
+            "kind": "other"
+          },
+          "options": [
+            {
+              "kind": "allow_once",
+              "name": "Allow",
+              "optionId": "allow"
+            },
+            {
+              "kind": "allow_always",
+              "name": "Always allow writing files in /fixture/workspace/core",
+              "optionId": "always_0"
+            },
+            {
+              "kind": "allow_always",
+              "name": "Allow writing files in /fixture/workspace/core for this session",
+              "optionId": "always_1"
+            },
+            {
+              "kind": "reject_once",
+              "name": "Deny",
+              "optionId": "deny"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "direction": "out",
+      "frame": {
+        "jsonrpc": "2.0",
+        "id": 0,
+        "result": {
+          "outcome": {
+            "outcome": "selected",
+            "optionId": "allow"
+          }
+        }
+      }
+    },
+    {
+      "direction": "in",
+      "frame": {
+        "jsonrpc": "2.0",
+        "method": "session/update",
+        "params": {
+          "sessionId": "fixture-id-1",
+          "update": {
+            "sessionUpdate": "tool_call_update",
+            "toolCallId": "fixture-tool-2",
+            "status": "completed",
+            "content": [
+              {
+                "type": "diff",
+                "path": "/fixture/workspace/core/result.txt",
+                "newText": "COCO-b1bfeae504ef4582"
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "direction": "in",
+      "frame": {
+        "jsonrpc": "2.0",
+        "method": "session/update",
+        "params": {
+          "sessionId": "fixture-id-1",
+          "update": {
+            "sessionUpdate": "usage_update",
+            "size": 1000000,
+            "used": 31914
+          }
+        }
+      }
+    },
+    {
+      "direction": "in",
+      "frame": {
+        "jsonrpc": "2.0",
+        "method": "session/update",
+        "params": {
+          "sessionId": "fixture-id-1",
+          "update": {
+            "sessionUpdate": "tool_call",
+            "toolCallId": "fixture-tool-3",
+            "title": "bash: grep -o 'FIXTURE_VALUE=.*' /fixture/workspace/core/fixture.txt | cut -d= -f2 | tr -d '\\n' > /t\u2026",
+            "kind": "execute",
+            "status": "pending",
+            "rawInput": {
+              "command": "grep -o 'FIXTURE_VALUE=.*' /fixture/workspace/core/fixture.txt | cut -d= -f2 | tr -d '\\n' > /tmp/expected.txt && diff /tmp/expected.txt /fixture/workspace/core/result.txt && echo \"MATCH\"",
+              "description": "Verify result matches fixture value"
+            }
+          }
+        }
+      }
+    },
+    {
+      "direction": "in",
+      "frame": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "session/request_permission",
+        "params": {
+          "sessionId": "fixture-id-1",
+          "toolCall": {
+            "toolCallId": "fixture-tool-18",
+            "title": "bash: grep -o 'FIXTURE_VALUE=.*' /fixture/workspace/core/fixture.txt | cut -d= -f2 | tr -d '\\n' > /tmp/expected.txt && diff /tmp/expected.txt /fixture/workspace/core/result.txt && echo \"MATCH\"",
+            "status": "pending",
+            "kind": "other"
+          },
+          "options": [
+            {
+              "kind": "allow_once",
+              "name": "Allow",
+              "optionId": "allow"
+            },
+            {
+              "kind": "allow_always",
+              "name": "Allow this specific command in the future",
+              "optionId": "always_0"
+            },
+            {
+              "kind": "allow_always",
+              "name": "Allow this specific command for this session",
+              "optionId": "always_1"
+            },
+            {
+              "kind": "allow_always",
+              "name": "Always allow using 'diff'",
+              "optionId": "always_2"
+            },
+            {
+              "kind": "allow_always",
+              "name": "Allow using 'diff' for this session",
+              "optionId": "always_3"
+            },
+            {
+              "kind": "reject_once",
+              "name": "Deny",
+              "optionId": "deny"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "direction": "out",
+      "frame": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "result": {
+          "outcome": {
+            "outcome": "selected",
+            "optionId": "allow"
+          }
+        }
+      }
+    },
+    {
+      "direction": "in",
+      "frame": {
+        "jsonrpc": "2.0",
+        "method": "session/update",
+        "params": {
+          "sessionId": "fixture-id-1",
+          "update": {
+            "sessionUpdate": "tool_call_update",
+            "toolCallId": "fixture-tool-3",
+            "status": "in_progress",
+            "content": [
+              {
+                "type": "content",
+                "content": {
+                  "type": "text",
+                  "text": "MATCH"
+                }
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "direction": "in",
+      "frame": {
+        "jsonrpc": "2.0",
+        "method": "session/update",
+        "params": {
+          "sessionId": "fixture-id-1",
+          "update": {
+            "sessionUpdate": "tool_call_update",
+            "toolCallId": "fixture-tool-3",
+            "status": "completed",
+            "content": [
+              {
+                "type": "content",
+                "content": {
+                  "type": "text",
+                  "text": "Bash command `grep -o 'FIXTURE_VALUE=.*' /fixture/workspace/core/fixture.txt | cut -d= -f2 | tr -d '\\n' > /tmp/expected.txt && diff /tmp/expected.txt /fixture/workspace/core/result.txt && echo \"MATCH\"` with description `Verify result matches fixture value` returned output: MATCH"
+                }
+              }
+            ],
+            "rawOutput": "Bash command `grep -o 'FIXTURE_VALUE=.*' /fixture/workspace/core/fixture.txt | cut -d= -f2 | tr -d '\\n' > /tmp/expected.txt && diff /tmp/expected.txt /fixture/workspace/core/result.txt && echo \"MATCH\"` with description `Verify result matches fixture value` returned output: MATCH"
+          }
+        }
+      }
+    },
+    {
+      "direction": "in",
+      "frame": {
+        "jsonrpc": "2.0",
+        "method": "session/update",
+        "params": {
+          "sessionId": "fixture-id-1",
+          "update": {
+            "sessionUpdate": "agent_message_chunk",
+            "content": {
+              "type": "text",
+              "text": "The fixture"
+            }
+          }
+        }
+      }
+    },
+    {
+      "direction": "in",
+      "frame": {
+        "jsonrpc": "2.0",
+        "method": "session/update",
+        "params": {
+          "sessionId": "fixture-id-1",
+          "update": {
+            "sessionUpdate": "agent_message_chunk",
+            "content": {
+              "type": "text",
+              "text": " value"
+            }
+          }
+        }
+      }
+    },
+    {
+      "direction": "in",
+      "frame": {
+        "jsonrpc": "2.0",
+        "method": "session/update",
+        "params": {
+          "sessionId": "fixture-id-1",
+          "update": {
+            "sessionUpdate": "agent_message_chunk",
+            "content": {
+              "type": "text",
+              "text": " is"
+            }
+          }
+        }
+      }
+    },
+    {
+      "direction": "in",
+      "frame": {
+        "jsonrpc": "2.0",
+        "method": "session/update",
+        "params": {
+          "sessionId": "fixture-id-1",
+          "update": {
+            "sessionUpdate": "agent_message_chunk",
+            "content": {
+              "type": "text",
+              "text": " **"
+            }
+          }
+        }
+      }
+    },
+    {
+      "direction": "in",
+      "frame": {
+        "jsonrpc": "2.0",
+        "method": "session/update",
+        "params": {
+          "sessionId": "fixture-id-1",
+          "update": {
+            "sessionUpdate": "agent_message_chunk",
+            "content": {
+              "type": "text",
+              "text": "COCO-b1bfe"
+            }
+          }
+        }
+      }
+    },
+    {
+      "direction": "in",
+      "frame": {
+        "jsonrpc": "2.0",
+        "method": "session/update",
+        "params": {
+          "sessionId": "fixture-id-1",
+          "update": {
+            "sessionUpdate": "agent_message_chunk",
+            "content": {
+              "type": "text",
+              "text": "ae504ef4582**"
+            }
+          }
+        }
+      }
+    },
+    {
+      "direction": "in",
+      "frame": {
+        "jsonrpc": "2.0",
+        "method": "session/update",
+        "params": {
+          "sessionId": "fixture-id-1",
+          "update": {
+            "sessionUpdate": "agent_message_chunk",
+            "content": {
+              "type": "text",
+              "text": ". The result."
+            }
+          }
+        }
+      }
+    },
+    {
+      "direction": "in",
+      "frame": {
+        "jsonrpc": "2.0",
+        "method": "session/update",
+        "params": {
+          "sessionId": "fixture-id-1",
+          "update": {
+            "sessionUpdate": "agent_message_chunk",
+            "content": {
+              "type": "text",
+              "text": "txt was"
+            }
+          }
+        }
+      }
+    },
+    {
+      "direction": "in",
+      "frame": {
+        "jsonrpc": "2.0",
+        "method": "session/update",
+        "params": {
+          "sessionId": "fixture-id-1",
+          "update": {
+            "sessionUpdate": "agent_message_chunk",
+            "content": {
+              "type": "text",
+              "text": " written"
+            }
+          }
+        }
+      }
+    },
+    {
+      "direction": "in",
+      "frame": {
+        "jsonrpc": "2.0",
+        "method": "session/update",
+        "params": {
+          "sessionId": "fixture-id-1",
+          "update": {
+            "sessionUpdate": "agent_message_chunk",
+            "content": {
+              "type": "text",
+              "text": " with just"
+            }
+          }
+        }
+      }
+    },
+    {
+      "direction": "in",
+      "frame": {
+        "jsonrpc": "2.0",
+        "method": "session/update",
+        "params": {
+          "sessionId": "fixture-id-1",
+          "update": {
+            "sessionUpdate": "agent_message_chunk",
+            "content": {
+              "type": "text",
+              "text": " that"
+            }
+          }
+        }
+      }
+    },
+    {
+      "direction": "in",
+      "frame": {
+        "jsonrpc": "2.0",
+        "method": "session/update",
+        "params": {
+          "sessionId": "fixture-id-1",
+          "update": {
+            "sessionUpdate": "agent_message_chunk",
+            "content": {
+              "type": "text",
+              "text": " value and"
+            }
+          }
+        }
+      }
+    },
+    {
+      "direction": "in",
+      "frame": {
+        "jsonrpc": "2.0",
+        "method": "session/update",
+        "params": {
+          "sessionId": "fixture-id-1",
+          "update": {
+            "sessionUpdate": "agent_message_chunk",
+            "content": {
+              "type": "text",
+              "text": " verified"
+            }
+          }
+        }
+      }
+    },
+    {
+      "direction": "in",
+      "frame": {
+        "jsonrpc": "2.0",
+        "method": "session/update",
+        "params": {
+          "sessionId": "fixture-id-1",
+          "update": {
+            "sessionUpdate": "agent_message_chunk",
+            "content": {
+              "type": "text",
+              "text": " to match."
+            }
+          }
+        }
+      }
+    },
+    {
+      "direction": "in",
+      "frame": {
+        "jsonrpc": "2.0",
+        "method": "session/update",
+        "params": {
+          "sessionId": "fixture-id-1",
+          "update": {
+            "sessionUpdate": "usage_update",
+            "size": 1000000,
+            "used": 32737
+          }
+        }
+      }
+    },
+    {
+      "direction": "in",
+      "frame": {
+        "jsonrpc": "2.0",
+        "id": 6,
+        "result": {
+          "stopReason": "end_turn",
+          "usage": {
+            "inputTokens": 902,
+            "outputTokens": 519,
+            "cachedReadTokens": 95298,
+            "cachedWriteTokens": 50397,
+            "totalTokens": 147116
+          }
+        }
+      }
+    }
+  ]
+}

@@ -1,3 +1,4 @@
+import { checkBackendRoleEligibility } from '../../contracts/backendCapabilities';
 import express from 'express';
 import fs from 'fs';
 import path from 'path';
@@ -6,7 +7,7 @@ import { csrfGuard } from '../../middleware/csrf';
 import { attachmentFromPath, type ChatService } from '../../services/chatService';
 import type { BackendRegistry } from '../../services/backends/registry';
 import { checkOneShotMediaInput } from '../../services/backends/mediaCapabilities';
-import { validateAttachmentOcrRequest, type AttachmentOcrResponse } from '../../contracts/uploads';
+import { validateAttachmentOcrRequest, type AttachmentOcrRequest, type AttachmentOcrResponse } from '../../contracts/uploads';
 import { isContractValidationError } from '../../contracts/validation';
 import type { Request, Response, NextFunction } from '../../types';
 import { logger } from '../../utils/logger';
@@ -42,7 +43,9 @@ export function createUploadRouter(opts: UploadRoutesOptions): express.Router {
           .catch((err: unknown) => cb(err as Error, dir));
       },
       filename: (_req, file, cb) => {
-        const safe = file.originalname.replace(/[\/\\]/g, '_');
+        // Match the send contract's attachment-name rule (contracts/streams.ts),
+        // so every stored upload can be referenced by a later message.
+        const safe = file.originalname.replace(/[\/\\\u0000-\u001f\u007f]/g, '_');
         cb(null, safe);
       },
     }),
@@ -152,11 +155,15 @@ export function createUploadRouter(opts: UploadRoutesOptions): express.Router {
     let attachmentPath: string;
     let requestedCliProfileId: string | undefined;
     let requestedBackend: string | undefined;
+    let requestedModel: string | undefined;
+    let requestedEffort: AttachmentOcrRequest['effort'];
     try {
       ({
         path: attachmentPath,
         cliProfileId: requestedCliProfileId,
         backend: requestedBackend,
+        model: requestedModel,
+        effort: requestedEffort,
       } = validateAttachmentOcrRequest(req.body));
     } catch (err: unknown) {
       if (isContractValidationError(err)) {
@@ -231,8 +238,12 @@ export function createUploadRouter(opts: UploadRoutesOptions): express.Router {
     if (!adapter) {
       return res.status(500).json({ error: `Backend not registered: ${backendId}` });
     }
+    const eligibility = checkBackendRoleEligibility(adapter.metadata, { role: 'toolEnabled' });
+    if (!eligibility.ok) return res.status(400).json({ error: eligibility.message });
     const metadata = await adapter.getMetadata({ cliProfile: runtime.profile });
-    const mediaCheck = checkOneShotMediaInput(metadata, conv.model || undefined, 'image');
+    const model = requestedModel || conv.model || undefined;
+    const effort = requestedEffort || conv.effort || undefined;
+    const mediaCheck = checkOneShotMediaInput(metadata, model, 'image');
     if (!mediaCheck.ok) {
       return res.status(400).json({ error: mediaCheck.message });
     }
@@ -246,8 +257,8 @@ export function createUploadRouter(opts: UploadRoutesOptions): express.Router {
 
     try {
       const markdown = await adapter.runOneShot(prompt, {
-        model: conv.model || undefined,
-        effort: conv.effort || undefined,
+        model,
+        effort,
         timeoutMs: 90_000,
         allowTools: true,
         workingDir: conv.executionDir || conv.workingDir || undefined,

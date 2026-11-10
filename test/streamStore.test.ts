@@ -147,6 +147,7 @@ test('plan-exit frame sets pendingInteraction and uiState=awaiting', async () =>
   expect(state.pendingInteraction).toEqual({
     type: 'planApproval',
     planContent: '# Plan\n\n- step 1\n- step 2',
+    decisionId: 't-plan',
   });
   expect(state.uiState).toBe('awaiting');
   expect(Store.convStates()).toEqual({ c1: 'awaiting' });
@@ -469,7 +470,7 @@ test('respond() with mode:stdin clears pendingInteraction without a fresh send',
   const [callPath, callOpts] = api.fetch.mock.calls[0];
   expect(callPath).toBe('conversations/c1/input');
   expect(callOpts.method).toBe('POST');
-  expect(callOpts.body).toEqual({ text: 'yes', streamActive: false });
+  expect(callOpts.body).toEqual({ text: 'yes', streamActive: false, decisionId: 't' });
 
   const state = Store.getState('c1');
   expect(state.pendingInteraction).toBeNull();
@@ -535,13 +536,13 @@ test.each([
     label: 'next question with the same tool ID',
     first: { isQuestion: true, questions: [{ question: 'Color?', options: [] }] },
     next: { isQuestion: true, questions: [{ question: 'Size?', options: [] }] },
-    expected: { type: 'userQuestion', question: 'Size?', options: [] },
+    expected: { type: 'userQuestion', question: 'Size?', options: [], decisionId: 'same-tool' },
   },
   {
     label: 'revised plan',
     first: { isPlanMode: true, planAction: 'exit', planContent: '# Original plan' },
     next: { isPlanMode: true, planAction: 'exit', planContent: '# Revised plan' },
-    expected: { type: 'planApproval', planContent: '# Revised plan' },
+    expected: { type: 'planApproval', planContent: '# Revised plan', decisionId: 'same-tool' },
   },
 ])('respond() preserves a $label received before the input response', async ({ first, next, expected }) => {
   const ws = await openWs('c1');
@@ -616,6 +617,16 @@ test('send() posts selected CLI profile with its harness backend', async () => {
     cliProfileId: 'profile-codex-main',
     backend: 'codex',
   });
+});
+
+test('send() forwards uploaded filename references alongside the existing wire text', async () => {
+  localStorage.setItem('ac:v2:draft:c1', JSON.stringify({ text: 'image', attachments: [{ name: 'safe.png', path: '/uploads/c1/safe.png', kind: 'image' }] }));
+  const Store = (window as any).StreamStore, api = (global as any).AgentApi;
+  api.fetch.mockResolvedValueOnce(makeResponse({ id: 'c1', backend: 'cortex-code', messages: [], messageQueue: [] }));
+  await Store.load('c1'); api.fetch.mockReset();
+  api.fetch.mockResolvedValueOnce(makeResponse({ userMessage: null }));
+  await Store.send('c1', 'image');
+  expect(api.fetch.mock.calls[0][1].body).toMatchObject({ content: 'image\n\n[Uploaded files: /uploads/c1/safe.png]', attachments: [{ name: 'safe.png' }] });
 });
 
 test('Copilot sends an explicit effort clear when the selected model has no effort control', async () => {
@@ -751,6 +762,8 @@ test('ocrAttachment() posts the selected replacement profile and updates convers
   await Store.load('c1');
   Store.setComposerCliProfile('c1', 'profile-claude-replacement', 'claude-code');
   const attachmentId = Store.getState('c1').pendingAttachments[0].id;
+  Store.setComposerModel('c1', 'sonnet');
+  Store.setComposerEffort('c1', 'low');
 
   const markdown = await Store.ocrAttachment('c1', attachmentId);
 
@@ -761,6 +774,8 @@ test('ocrAttachment() posts the selected replacement profile and updates convers
     {
       cliProfileId: 'profile-claude-replacement',
       backend: 'claude-code',
+      model: 'sonnet',
+      effort: 'low',
     },
   );
   expect(Store.getState('c1').conv).toMatchObject({
@@ -1341,6 +1356,7 @@ describe('queue', () => {
 
     const state = Store.getState('c1');
     expect(state.queue).toEqual([{ content: 'queued text', attachments: [attachment] }]);
+    expect(api.fetch.mock.calls.find((call: any[]) => call[0] === 'conversations/c1/message' && call[1]?.body?.content?.includes('queued text'))[1].body.attachments).toEqual([{ name: 'x.png' }]);
     expect(state.streaming).toBe(status === 409);
     expect(state.uiState).toBe(status === 409 ? 'streaming' : 'error');
     expect(state.streamError).toBe(status === 409 ? null : err.message);
@@ -2370,4 +2386,86 @@ describe('WebSocket revalidation', () => {
 
     dateSpy.mockRestore();
   });
+});
+
+test('rendered decision identity rejects stale callbacks and duplicate input before a pending request resolves', async () => {
+  const ws = await openWs('c1'); const Store = (window as any).StreamStore; const api = (global as any).AgentApi;
+  ws.dispatch({ type: 'tool_activity', id: 'cortex-decision:current', isQuestion: true, questions: [{ question: 'Color?', options: [] }] });
+  await Store.respond('c1', 'Blue', 'cortex-decision:old'); expect(api.fetch).not.toHaveBeenCalled();
+  let acknowledge!: (response: ReturnType<typeof makeResponse>) => void;
+  api.fetch.mockReturnValueOnce(new Promise(resolve => { acknowledge = resolve; }));
+  const sending = Store.respond('c1', 'Blue', 'cortex-decision:current');
+  await Store.respond('c1', 'Blue', 'cortex-decision:current'); expect(api.fetch).toHaveBeenCalledTimes(1);
+  ws.dispatch({ type: 'tool_activity', id: 'cortex-decision:next', isQuestion: true, questions: [{ question: 'Color?', options: [] }] });
+  acknowledge(makeResponse({ mode: 'stdin' })); await sending;
+  expect(Store.getState('c1').pendingInteraction.decisionId).toBe('cortex-decision:next');
+  await Store.respond('c1', 'Blue', 'cortex-decision:current'); expect(api.fetch).toHaveBeenCalledTimes(1);
+});
+
+test.each(['failed', 'message'])('a late %s input response cannot replace a newer interaction or resend its old answer', async mode => {
+  const ws = await openWs('c1'); const Store = (window as any).StreamStore; const api = (global as any).AgentApi;
+  const question = (id: string) => ws.dispatch({ type: 'tool_activity', id, isQuestion: true, questions: [{ question: 'Color?', options: [] }] });
+  question('cortex-decision:first');
+  let resolve!: (response: ReturnType<typeof makeResponse>) => void, reject!: (error: Error) => void;
+  api.fetch.mockReturnValueOnce(new Promise((yes, no) => { resolve = yes; reject = no; }));
+  const answering = Store.respond('c1', 'Blue', 'cortex-decision:first'); question('cortex-decision:next');
+  if (mode === 'failed') reject(new Error('old reply failed')); else resolve(makeResponse({ mode: 'message' }));
+  await answering;
+  expect(Store.getState('c1').pendingInteraction.decisionId).toBe('cortex-decision:next');
+  expect(Store.getState('c1').streamError).toBeFalsy(); expect(Store.getState('c1').respondPending).toBe(false);
+  expect(api.fetch).toHaveBeenCalledTimes(1);
+});
+
+test('completed CoCo decisions clear on replay/outcome without clearing a newer question or the draft', async () => {
+  const ws = await openWs('c1'), Store = (window as any).StreamStore;
+  const question = (id: string) => ws.dispatch({ type: 'tool_activity', id, isQuestion: true, decisionBound: true, questions: [{ question: 'Color?', options: [] }] });
+  Store.setInput('c1', 'unsent draft'); question('cortex-decision:first');
+  ws.dispatch({ type: 'tool_outcomes', outcomes: [{ toolUseId: 'cortex-decision:first' }] });
+  expect(Store.getState('c1').pendingInteraction).toBeNull();
+  question('cortex-decision:next'); ws.dispatch({ type: 'tool_outcomes', outcomes: [{ toolUseId: 'cortex-decision:first' }] });
+  expect(Store.getState('c1').pendingInteraction.decisionId).toBe('cortex-decision:next');
+  expect(Store.getState('c1').input).toBe('unsent draft');
+  await Store.send('c1', 'unsent draft'); expect((global as any).AgentApi.fetch).not.toHaveBeenCalled();
+});
+
+test('an outcome never clears an unbound question that shares its tool ID', async () => {
+  const ws = await openWs('c1'), Store = (window as any).StreamStore;
+  ws.dispatch({ type: 'tool_activity', id: 'toolu_question', isQuestion: true, questions: [{ question: 'Color?', options: [] }] });
+  ws.dispatch({ type: 'tool_outcomes', outcomes: [{ toolUseId: 'toolu_question' }] });
+  expect(Store.getState('c1').pendingInteraction).toMatchObject({ decisionId: 'toolu_question' });
+  expect(Store.getState('c1').pendingInteraction.decisionBound).toBeUndefined();
+});
+
+test('desktop abort with queued work retains both queue and unsent draft without draining', async () => {
+  const ws = await openWs('c1'), Store = (window as any).StreamStore, api = (global as any).AgentApi;
+  ws.dispatch({ type: 'text', content: 'running' }); Store.setInput('c1', 'unsent draft');
+  await Store.enqueue('c1', 'queued'); api.fetch.mockClear();
+  ws.dispatch({ type: 'error', error: 'Aborted by user', terminal: true, source: 'abort' }); ws.dispatch({ type: 'done' });
+  await new Promise(resolve => setTimeout(resolve, 5));
+  expect(Store.getState('c1').queue.map((item: any) => item.content)).toEqual(['queued']);
+  expect(Store.getState('c1').input).toBe('unsent draft');
+  expect(api.fetch.mock.calls.filter((call: any[]) => call[0].endsWith('/message'))).toEqual([]);
+});
+
+test('a question arriving before a scheduled queue send keeps its text queued and editable', async () => {
+  const ws = await openWs('c1'), Store = (window as any).StreamStore, api = (global as any).AgentApi;
+  await Store.enqueue('c1', 'queued'); api.fetch.mockClear(); Store.resumeSuspendedQueue('c1');
+  ws.dispatch({ type: 'tool_activity', id: 'cortex-decision:now', isQuestion: true, questions: [{ question: 'Color?', options: [] }] });
+  await new Promise(resolve => setTimeout(resolve, 5));
+  expect(Store.getState('c1').queue).toEqual([expect.objectContaining({ content: 'queued', inFlight: false })]);
+  expect(Store.getState('c1').pendingInteraction.decisionId).toBe('cortex-decision:now');
+  expect(api.fetch.mock.calls.filter((call: any[]) => call[0].endsWith('/message'))).toEqual([]);
+});
+
+test('desktop Stop suspends the queue before cancellation finishes or a stale done can drain it', async () => {
+  const ws = await openWs('c1'), Store = (window as any).StreamStore, api = (global as any).AgentApi;
+  await startAcceptedStream('c1', ws); Store.setInput('c1', 'unsent'); await Store.enqueue('c1', 'queued');
+  let abort!: (value: unknown) => void;
+  api.abortConversation.mockReturnValueOnce(new Promise(resolve => { abort = resolve; }));
+  api.fetch.mockClear(); api.fetch.mockResolvedValue(makeResponse({ id: 'c1', messages: [], messageQueue: [{ content: 'queued' }] }));
+  const stopping = Store.stopStream('c1'); expect(Store.getState('c1').queueSuspended).toBe(true);
+  ws.dispatch({ type: 'done' }); await new Promise(resolve => setTimeout(resolve, 5));
+  expect(api.fetch.mock.calls.filter((call: any[]) => call[0].endsWith('/message'))).toEqual([]);
+  abort({ aborted: true }); await stopping;
+  expect(Store.getState('c1').queueSuspended).toBe(true); expect(Store.getState('c1').input).toBe('unsent');
 });

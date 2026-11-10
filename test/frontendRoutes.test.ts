@@ -433,7 +433,6 @@ describe('frontend routes', () => {
   });
 
   test('composer profile picker recovers reset sessions with stale profile ids', () => {
-    const composerSrc = fs.readFileSync(path.join(ROOT, 'web/AgentCockpitWeb/src/chat/composer.jsx'), 'utf8');
     const storeSrc = fs.readFileSync(path.join(ROOT, 'web/AgentCockpitWeb/src/streamStore.js'), 'utf8');
     const chatLiveSrc = fs.readFileSync(path.join(ROOT, 'web/AgentCockpitWeb/src/chat/chatLive.jsx'), 'utf8');
     const mobileAppSrc = fs.readFileSync(path.join(ROOT, 'mobile/AgentCockpitPWA/src/App.tsx'), 'utf8');
@@ -443,14 +442,6 @@ describe('frontend routes', () => {
     expect(storeSrc).toContain('composerCliProfileId: freshSession ? (data.cliProfileId || null) : next.composerCliProfileId');
     expect(storeSrc).toContain('composerBackend: freshSession ? (data.backend || null) : next.composerBackend');
     expect(storeSrc).toContain('if (opts && opts.cliProfileId) body.cliProfileId = opts.cliProfileId;');
-    expect(composerSrc).toContain('const canRepairMissingProfile = profileLocked && !!composerCliProfileId && !exactProfile;');
-    expect(composerSrc).toContain('const canChangeProfile = !profileLocked || canRepairMissingProfile;');
-    expect(composerSrc).toContain('canChangeProfile && activeProfiles.length === 1 ? activeProfiles[0] : null');
-    expect(composerSrc).toContain("value={selectedProfile ? selectedProfile.name : 'Select profile'}");
-    expect(composerSrc).toContain('disabled={disabled || !canChangeProfile}');
-    expect(composerSrc).toContain("title={canRepairMissingProfile ? 'Select replacement CLI profile'");
-    expect(composerSrc).toContain("...(!selectedProfile ? [{ value: '', label: 'Select profile', disabled: true }] : [])");
-    expect(composerSrc).toContain('disabled={!!o.disabled}');
     expect(chatLiveSrc).toContain('const storedProfileMissing = profileLocked');
     expect(chatLiveSrc).toContain('const success = await StreamStore.reset(convId, resetProfile ? {');
     expect(mobileApiSrc).toContain('async resetConversation(conversationID: string, input: ResetConversationRequest = {})');
@@ -458,20 +449,6 @@ describe('frontend routes', () => {
     expect(mobileAppSrc).toContain('const storedProfileMissing = !!conversation.cliProfileId');
     expect(mobileAppSrc).toContain('chooseResetProfileRepair(availableProfiles, conversation, selectedCliProfileId)');
     expect(mobileAppSrc).toContain('const response = await clientRef.current.resetConversation(conversation.id, resetProfile ? {');
-  });
-
-  test('composer profile metadata loading does not overwrite the selected model', () => {
-    const composerSrc = fs.readFileSync(path.join(ROOT, 'web/AgentCockpitWeb/src/chat/composer.jsx'), 'utf8');
-
-    expect(composerSrc).toContain('const [profileBackendLoadedFor, setProfileBackendLoadedFor] = React.useState(null);');
-    expect(composerSrc).toContain('const profileMetadataPending = !!selectedProfileId && profileBackendLoadedFor !== selectedProfileId;');
-    expect(composerSrc).toContain('const fallbackModel = profileMetadataPending');
-    expect(composerSrc).toContain('const pendingModel = (profileMetadataPending || unavailableModel) && composerModel');
-    expect(composerSrc).toContain('const modelOptions = profileMetadataPending && !modelFromCatalog');
-    expect(composerSrc).toContain("disabled={disabled || (profileMetadataPending && !modelFromCatalog)}");
-    expect(composerSrc).toMatch(/React\.useEffect\(\(\) => \{\s+if \(profileMetadataPending\) return;\s+if \(backendId && modelId && composerModel !== modelId\)/);
-    expect(composerSrc).toMatch(/React\.useEffect\(\(\) => \{\s+if \(profileMetadataPending\) return;\s+if \(effort !== composerEffort\)/);
-    expect(composerSrc).toMatch(/React\.useEffect\(\(\) => \{\s+if \(profileMetadataPending\) return;\s+if \(!claudeCodeModeSupported && composerClaudeCodeMode\)/);
   });
 
   test('Bedrock Claude Code profiles do not show Claude subscription plan usage', () => {
@@ -513,16 +490,6 @@ describe('frontend routes', () => {
     expect(cssSrc).toContain('.usage-pricing-actions');
   });
 
-  test('mobile Usage bar separates reported and estimated cost', () => {
-    const componentsSrc = readMobileChatScreen();
-    const cssSrc = readMobileCss();
-
-    expect(componentsSrc).toContain('const estimatedCost = Number(usage.estimatedCostUsd) || 0;');
-    expect(componentsSrc).toContain('Math.ceil(estimatedCost).toLocaleString()');
-    expect(componentsSrc).toContain('<span className="usage-label">Estimated Cost</span>');
-    expect(componentsSrc).toContain('{estimatedCostLabel}');
-    expect(cssSrc).toContain('grid-template-columns: repeat(4, minmax(0, 1fr));');
-  });
 
   test('mobile PWA renders thinking Markdown blocks without flex-column squeeze', () => {
     const componentsSrc = readMobileChatScreen();

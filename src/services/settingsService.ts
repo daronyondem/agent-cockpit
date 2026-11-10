@@ -2,6 +2,8 @@ import fsp from 'fs/promises';
 import path from 'path';
 import type { CliHarness, CliProfile, Settings } from '../types';
 import { atomicWriteFile } from '../utils/atomicWrite';
+import { logger } from '../utils/logger';
+import { parseCortexCodeProfileConfig } from '../contracts/cliProfiles';
 import {
   backendForCliProfile,
   cliProtocolForBackend,
@@ -9,6 +11,7 @@ import {
   ensureServerConfiguredCliProfiles,
   isSetupAccountCliProfile,
   isCliHarness,
+  hasRequiredCliProfileConfig,
   serverConfiguredCliProfileId,
 } from './cliProfiles';
 import {
@@ -27,6 +30,8 @@ type PersistedCliProfile = Partial<Omit<CliProfile, 'harness'>> & {
   harness?: CliHarness;
   vendor?: CliHarness;
 };
+
+const log = logger.child({ module: 'settings' });
 
 export const DEFAULT_SETTINGS: Settings = {
   theme: 'system',
@@ -100,6 +105,7 @@ export class SettingsService {
     try {
       const data = await fsp.readFile(this._settingsFile, 'utf8');
       const settings = JSON.parse(data) as PersistedSettings;
+      repairPersistedCortexCodeConfigs(settings);
 
       if (settings.customInstructions && settings.systemPrompt === undefined) {
         const parts: string[] = [];
@@ -175,7 +181,7 @@ export class SettingsService {
   }
 
   private _withFirstAvailableCliProfileDefault(settings: Settings): Settings {
-    const profiles = Array.isArray(settings.cliProfiles) ? settings.cliProfiles.filter((profile) => !profile.disabled) : [];
+    const profiles = Array.isArray(settings.cliProfiles) ? settings.cliProfiles.filter((profile) => !profile.disabled && hasRequiredCliProfileConfig(profile)) : [];
     if (profiles.length === 0) return settings;
 
     const current = settings.defaultCliProfileId
@@ -252,7 +258,7 @@ export class SettingsService {
       : [];
 
     const defaultProfile = settings.defaultCliProfileId
-      ? profiles.find((profile) => profile.id === settings.defaultCliProfileId && !profile.disabled)
+      ? profiles.find((profile) => profile.id === settings.defaultCliProfileId && !profile.disabled && hasRequiredCliProfileConfig(profile))
       : undefined;
 
     const next: Settings = {
@@ -385,7 +391,7 @@ export class SettingsService {
     backend: string | undefined,
   ): { profileId?: string; backend?: string } {
     const selected = profileId
-      ? profiles.find((profile) => profile.id === profileId && !profile.disabled)
+      ? profiles.find((profile) => profile.id === profileId)
       : undefined;
     if (selected) {
       return {
@@ -395,7 +401,7 @@ export class SettingsService {
     }
 
     if (profileId && !selected) {
-      return { backend };
+      return { profileId, backend };
     }
 
     const harness = cliHarnessForBackend(backend);
@@ -445,6 +451,10 @@ export class SettingsService {
       }
     }
 
+    if (harness === 'cortex-code' && profile.cortexCode !== undefined) {
+      normalized.cortexCode = parseCortexCodeProfileConfig(profile.cortexCode);
+    }
+
     const isSetupAccount = isSetupAccountCliProfile(normalized);
     const configDir = profile.configDir?.trim();
     if (configDir && harness !== 'kiro' && harness !== 'opencode' && harness !== 'copilot' && !isSetupAccount) normalized.configDir = configDir;
@@ -468,7 +478,24 @@ function isCliAuthHomeEnvKey(harness: CliProfile['harness'], key: string): boole
   const normalized = key.toUpperCase();
   return (harness === 'claude-code' && normalized === 'CLAUDE_CONFIG_DIR')
     || (harness === 'codex' && normalized === 'CODEX_HOME')
-    || (harness === 'grok-build' && normalized === 'GROK_HOME');
+    || (harness === 'grok-build' && normalized === 'GROK_HOME')
+    || (harness === 'cortex-code' && normalized === 'SNOWFLAKE_HOME');
+}
+
+/**
+ * Repairs stored CoCo configuration at the read boundary so one malformed
+ * profile cannot fail every settings read: a valid connection is kept and
+ * anything else leaves an unconfigured draft. Direct saves still reject.
+ */
+function repairPersistedCortexCodeConfigs(settings: PersistedSettings): void {
+  if (!Array.isArray(settings.cliProfiles)) return;
+  for (const profile of settings.cliProfiles as unknown as PersistedCliProfile[]) {
+    if (!profile || profile.cortexCode === undefined) continue;
+    try { parseCortexCodeProfileConfig(profile.cortexCode); continue; } catch { /* repaired below */ }
+    const { connection } = (profile.cortexCode || {}) as { connection?: unknown };
+    try { profile.cortexCode = parseCortexCodeProfileConfig({ connection }); } catch { delete profile.cortexCode; }
+    log.warn('Repaired invalid stored Cortex Code profile configuration', { cliProfileId: profile.id, connectionRetained: Boolean(profile.cortexCode) });
+  }
 }
 
 function normalizeClaudeCodeProfileConfig(value: unknown): NonNullable<CliProfile['claudeCode']> {

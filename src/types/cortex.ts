@@ -1,0 +1,71 @@
+import type { CliProfile } from './cliProfiles';
+import type { EffortLevel } from './cliProfiles';
+import type { AttachmentMeta } from './attachments';
+import type { McpServerConfig, RunOneShotAttachment } from './backends';
+
+export type CortexRecord = Record<string, unknown>;
+export type CortexRpcId = string | number;
+export interface CortexRpcMessage {
+  jsonrpc: '2.0';
+  id?: CortexRpcId;
+  method?: string;
+  params?: CortexRecord;
+  result?: unknown;
+  error?: { code: number; message: string; data?: unknown };
+}
+
+export interface CortexProcessIdentity { pid: number; parent: number; group: number; started: string }
+
+export interface CortexProcessorJob {
+  cancel: (message: string) => void;
+  done: Promise<string[]>;
+}
+
+export interface CortexRuntimeConfig {
+  command: string;
+  args: string[];
+  env: Record<string, string | undefined>;
+  cwd: string;
+  fingerprint: string;
+}
+
+export interface CortexSessionOptions {
+  profile: CliProfile;
+  workspaceId: string;
+  cwd: string;
+  /** Instruction/plugin generation; changing it requires a new native runtime. */
+  contextKey?: string;
+  pluginDir?: string;
+  /** Cockpit-owned child environment; never persisted into the CLI profile. */
+  managedEnv?: Record<string, string>;
+  mcpServers?: McpServerConfig[];
+  sessionId?: string;
+}
+
+export interface CortexConfigOption {
+  id: string;
+  currentValue: string;
+  options: Array<{ value: string; name: string }>;
+}
+
+export interface CortexSelection {
+  model?: string;
+  effort?: EffortLevel;
+  mode?: 'standard' | 'plan';
+}
+
+export interface CortexTurnOptions extends CortexSelection {
+  text: string;
+  attachments?: AttachmentMeta[];
+  /** Trusted conversation-specific upload directory, supplied by the server. */
+  attachmentRoot?: string;
+  /** Explicit trusted processor files; never derived from prompt text. */
+  processorAttachments?: RunOneShotAttachment[];
+  /** Fail rather than wait for a human decision in background work. */
+  headless?: boolean;
+  allowTools: boolean;
+  /** Prompt deadline; 0 disables it for durable chat, where Stop owns cancellation. */
+  timeoutMs?: number;
+  /** Stop the runtime after this long without native activity; pending decisions do not count. */
+  idleTimeoutMs?: number;
+}

@@ -1,11 +1,17 @@
 import { parseServiceTierInput, type ContractServiceTier, type ServiceTierInput } from './serviceTier';
 import { parseClaudeCodeModeInput, type ClaudeCodeModeInput, type ContractClaudeCodeMode } from './claudeCodeMode';
-import { asRecord, contractError, optionalBoolean, optionalString, optionalStringEnum, requiredNonEmptyString } from './validation';
+import { asRecord, contractError, optionalArray, optionalBoolean, optionalString, optionalStringEnum, requiredNonEmptyString } from './validation';
 import type { Message, StreamJobRuntimeInfo } from './responses';
 import { CONTRACT_EFFORT_LEVELS, type ContractEffortLevel } from './conversations';
 
+export interface ChatAttachmentReference {
+  /** Server-assigned filename from this conversation's upload response. */
+  name: string;
+}
+
 export interface SendMessageRequest {
   content: string;
+  attachments?: ChatAttachmentReference[];
   backend?: string;
   model?: string;
   effort?: ContractEffortLevel | null;
@@ -22,6 +28,8 @@ export interface ValidatedSendMessageRequest extends Omit<SendMessageRequest, 'c
 export interface ConversationInputRequest {
   text: string;
   streamActive?: boolean;
+  /** Opaque interaction generation, required by Cortex question/plan replies. */
+  decisionId?: string;
   requestId?: string;
   turnId?: string;
   inputId?: string;
@@ -58,6 +66,11 @@ export function validateSendMessageRequest(body: unknown): ValidatedSendMessageR
   const record = asRecord(body);
   return {
     content: requiredNonEmptyString(record, 'content', 'Message content required'),
+    attachments: optionalArray(record, 'attachments', item => {
+      const name = requiredNonEmptyString(asRecord(item), 'name', 'Attachment filename required');
+      if (name === '.' || name === '..' || /[\\/\u0000-\u001f\u007f]/.test(name)) contractError('Invalid attachment filename');
+      return { name };
+    }),
     backend: optionalString(record, 'backend'),
     model: optionalString(record, 'model'),
     effort: record.effort === null ? null : optionalStringEnum(record, 'effort', CONTRACT_EFFORT_LEVELS),
@@ -78,6 +91,7 @@ export function validateConversationInputRequest(body: unknown): ConversationInp
   return {
     text: requiredNonEmptyString(record, 'text', 'Input text required'),
     streamActive: optionalBoolean(record, 'streamActive'),
+    decisionId: optionalString(record, 'decisionId'),
     ...(requestId !== undefined ? { requestId } : {}),
     ...(turnId !== undefined ? { turnId, inputId } : {}),
   };

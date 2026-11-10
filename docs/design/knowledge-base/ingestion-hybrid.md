@@ -11,6 +11,13 @@
 
 ---
 
+Current execution-policy extension (November 2026): all retry arrows below are
+conditional on the adapter's `allowAutomaticOneShotRetry` policy. CoCo disables
+retries, preserving originals/image-only output and recording zero retries on
+failure. Its `oneShotImageFormat:'png'` also requests a PNG sibling for eligible
+non-PNG images below the downscale cap. See the canonical
+[CoCo KB workflow contract](../../spec-cortex-code.md#knowledge-base-workflows-p6-c37c38).
+
 ## 1. Background & Motivation
 
 The Knowledge Base pipeline today has two failure modes the user has hit in practice:

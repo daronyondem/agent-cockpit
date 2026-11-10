@@ -286,8 +286,9 @@ validation; it is opt-in and uses temporary fixture workspaces. Current native
 compatibility evidence is Grok Build 1.0.52 on macOS arm64. Windows resolver and
 wrapper tests do not replace native Windows/Linux runs.
 
-`BackendRegistry.shutdownAll()` also runs after CLI updates. Keep adapter
-shutdown reusable for later runtimes, and close startups that complete after
+`BackendRegistry.shutdownAll()` also runs after CLI updates and is awaited by
+both callers. Keep adapter shutdown reusable for later runtimes, return a
+Promise when cleanup is asynchronous, and close startups that complete after
 their conversation was reset. The native Grok suite verifies goal controls,
 full autonomous completion, and real Memory/KB/Workspace Context/Routine paths.
 Run `npm run e2e:grok-build-ui` for native desktop/mobile compatibility; its
@@ -306,6 +307,401 @@ identity tracking and background-child/parent completion draining, and never
 automatically retry interrupted tool work. Keep auth isolation separate from
 the shared CLI executable/update location. See `docs/spec-grok-build.md` and
 ADR-0092.
+
+# Cortex Code (CoCo) Compatibility
+
+CoCo is registered for durable chat. Setup work must preserve the
+verified `CORTEX_OAUTH_MANUAL=1` flow: show the native login URL, accept the full
+loopback redirect from another machine, retain shared terminal auth, and verify
+the result from a fresh process. ACP initialization/session creation alone is
+not authentication evidence. Handle native login timeouts and retain the active
+job's callback ownership. See `docs/research/cortex-code-acp-evaluation.md` for
+the 1.2.35 protocol findings and implementation gates.
+
+Phase 0 evidence is retained under `test/fixtures/cortex/1.2.35`. Run the
+opt-in `scripts/probe-cortex-phase0.ts` as documented in the research report
+for native startup/cancel/root-exit/restriction checks. This is research
+scaffolding, not a registered adapter or full compatibility suite. Keep strict
+tool-free processors gated until zero-tool execution is demonstrated; an
+allowlist or denied approval alone does not establish that boundary. See
+Proposed ADR-0099 and `docs/design/cortex-code-implementation-plan.md`.
+
+P1 profile/capability, P2 transport/runtime and P3 internal turn mapping are specified in
+`docs/spec-cortex-code.md`; P5 now registers the chat adapter. CoCo owns its
+dedicated `cortexProtocol.ts`, `cortexRuntime.ts`, `cortexSessions.ts` and
+`cortexProcess.ts` modules; production code must not import Grok/Kiro adapters.
+Review the focused `test/cortexProtocol.test.ts`, `test/cortexRuntime.test.ts`
+and `test/cortexProcess.test.ts` when changing those boundaries. Run the opt-in
+`scripts/probe-cortex-runtime.ts` for native runtime drift, as documented in
+`docs/spec-testing.md`; it is not yet a full Cockpit adapter/UI suite. Retain
+generation-safe reusable shutdown and identity-checked descendant cleanup.
+Keep descendant scans at the normal 250 ms POSIX / 1 s Windows cadence until
+runtime close, including cached idle sessions. Prompt completion does not prove
+background tools finished; slowing scans can lose a detached child's ancestry.
+CoCo event, interaction, model, error, usage, attachment and artifact ownership
+lives in the focused `cortex*.ts` modules. Review the corresponding focused
+tests and run opt-in `scripts/probe-cortex-events.ts` for native mapping drift.
+Keep decision generation separate from native RPC/tool IDs, use native auto for
+override reset, hold terminal error text until classified, and retain unknown
+Snowflake pricing. Artifacts require explicit delivery markers/resource links;
+ordinary code diffs remain tool outcomes. Model catalog discovery is not auth
+evidence; an empty auth home can omit the model option before inference.
+Shared role/media selection policy belongs
+in browser-safe `src/contracts/backendCapabilities.ts`, with the backend media
+module kept as a compatibility facade. Configuration completeness is distinct
+from registered runtime availability and successful authentication.
+
+P4 setup/auth is implemented behind `CliProfileAuthService` through dedicated
+`cortexConnections.ts`, `cortexOAuth.ts`, `cortexLogin.ts`, `cortexAuth.ts` and
+`cortexAuthVerification.ts` modules, with browser-safe contracts in
+`src/contracts/cortexAuth.ts`. Keep native connections create-only and preserve
+existing TOML bytes/comments. Keep login URLs/state/codes in the active job
+only, bind redirect submissions to its generation/callback/state/issuer, and
+retain the shared-home reservation until native descendants drain. Server
+shutdown must await auth/check draining, including abortable version
+detection and late startups. Native
+first-run login needs a PTY; its parser is version-gated to 1.2.35. Saved login
+must pass one exact-response fresh inference check, never model discovery alone.
+Review the focused connection/OAuth/PTY/auth/verification/route/React suites and
+run opt-in `scripts/probe-cortex-auth.ts` for native saved-auth/UI drift. It uses
+an isolated PM2 fixture and normal terminal credentials, without forcing logout.
+The actual human remote-browser handoff through Cockpit remains C26 pending;
+fixture ownership checks and the earlier research handoff do not close that gate.
+Unconfigured profiles must not become defaults. Processor execution, native
+goals, agents and steering remain gated independently of chat registration.
+
+P5 chat orchestration belongs to `cortex.ts`; private native MCP manifest/env
+generation and conservative abandoned-owner cleanup belong to `cortexPlugin.ts`.
+Keep secrets in child env placeholders, use Cockpit's actual Node executable
+for the Memory/KB shims, dispose descendants before deleting plugin directories,
+and refresh changed tokens/endpoints/instructions/profile/cwd only at a safe
+turn boundary. Load failures recover only on the version-tested missing-session
+signature; auth/transport failures must never cause prompt resend. Chat prompts
+have no fixed deadline (Stop/reset own cancellation) but stop after an hour
+without native activity; pending decisions never count as inactivity. A failed
+native config change retires that runtime so the next turn reloads its saved
+session. Preserve
+opaque decision generations through REST/WS and both clients; native RPC/tool
+IDs are separate. Review `test/cortexBackend.test.ts`, `test/cortexPlugin.test.ts`
+and `test/cortexIntegration.test.ts`, and run opt-in
+`scripts/probe-cortex-chat.ts` for native app/MCP/resume/artifact compatibility.
+This isolated HTTP/WS fixture is not full native browser/process-manager or
+Windows/Linux acceptance. See `docs/spec-testing.md` for exact limits.
+
+P6 ephemeral processor ownership belongs to `cortexShots.ts`. Require explicit
+`allowTools:true`, preserve a single deadline across startup and sequential
+prompts, never replay/retry interrupted work, and await cancellation/shutdown
+cleanup before releasing the job. Headless questions/plans must fail rather
+than invent a human response. Processor image paths are server-owned and reuse
+the version/model/PNG byte gates in `cortexAttachments.ts`; chat keeps its upload
+root boundary. Review `test/cortexShots.test.ts`, `test/processorProfiles.test.ts`,
+`test/memoryProcessorSelect.test.ts` and the restored CoCo Memory case in
+`test/memoryMcp.test.ts`. Run opt-in
+`scripts/probe-cortex-processors.ts` for native sequential/headless/OCR/cancel
+drift. Full client/platform acceptance remains separate; a successful primitive
+or OCR run does not close that gate.
+
+P6 C37/C38 certifies native KB workflows through `scripts/probe-cortex-kb.ts`
+(opt-in, isolated SQLite/PGLite/HTTP fixture, real Ollama/Pandoc/LibreOffice,
+shared terminal auth). `BaseBackendAdapter.allowAutomaticOneShotRetry` defaults
+to true; CoCo overrides false. KB conversion/dreaming wrappers must honor it for
+execution errors and unusable output (empty, unparseable, wrong shape or no valid
+items); never mark such CoCo batches processed or automatically resend
+interrupted tool work. Partially valid output applies once like other adapters. Processor image format
+policy is `oneShotImageFormat` (CoCo: png); prepare `.ai.png` siblings in the KB
+image helper while preserving original bytes/media records and native image
+gates. Review `test/cortexKbIntegration.test.ts`, the page-conversion/handler/
+dreaming suites and CoCo backend tests. Native workflow success does not certify
+Windows/Linux, full browser/PM2 acceptance, C26, or strict Memory execution.
+
+P6 C39 certifies Workspace Context through the actual service/scheduler and
+`scripts/probe-cortex-context.ts` (opt-in, isolated HTTP/data/workspace fixture,
+shared terminal auth). Review `test/cortexContextIntegration.test.ts` and the
+Workspace Context service/route suites when changing profile/model/effort
+resolution, direct markdown updates, eligible Memory action validation/deletion,
+cancellation, scheduler cadence, zero-source runs, disabled passivity or run
+retention. Stopped/invalid runs must retain unaccepted Memory and must not resend
+tool work. Direct context edits before failure are not rolled back. This
+tool-enabled workflow does not enable strict CoCo Memory processors or close
+the full client/PM2/platform gates.
+
+P6 C40 certifies Routine proposal/chat/install and manual/scheduled execution
+through `scripts/probe-cortex-routines.ts` (opt-in, isolated HTTP/data/workspace,
+shared terminal auth, injected outreach stub). Review
+`test/cortexRoutinesIntegration.test.ts` and the Routine service/route suites
+when changing authoring, opt-in instructions, manifest configuration, runtime
+folders/history/persistent state, schedules, timeout or notifications. Preserve
+one native attempt on failure, drain timeout/shutdown before releasing ownership,
+retain partial files without delivering failed-run notify.md, and keep actual
+outreach disabled in compatibility probes. The native probe exercises the real
+one-minute manifest deadline; deterministic tests fire the registered timer.
+This does not certify a new stop API, full browser/PM2/platform acceptance,
+C26, or strict CoCo Memory processing.
+
+P6 C41 processor selection policy is shared in
+`src/contracts/backendCapabilities.ts`. Preserve explicit processor profile IDs
+through global/workspace normalization, restore and import even when missing,
+disabled or incomplete; never erase them into a backend/default fallback.
+Preflight registered static roles before discovery/invocation (restricted Memory,
+tool-enabled workflows and sequential gleaning), while retaining native adapter
+guards. Resolve/validate re-dream processors before wiping synthesis, and record
+Context resolution failures as failed runs. Frontend projections/controls in
+`screens/processorProfiles.ts` and `memoryProcessorSelect.jsx` retain unavailable
+saved choices and require explicit changes. Review
+`test/cortexProcessorSelection.test.ts`, the projection/rendered selector tests,
+Memory/dreaming suites and full-bundle import coverage when changing these rules.
+Unset defaults/legacy migrations and strict zero-tool Memory gates remain intact.
+
+P7 C42 desktop profile/catalog projection lives in `profileCatalog.js`, catalog
+ownership in `useProfileBackends.js`, and lazy composer controls in
+`chat/composerPicks.jsx`. Settings/auth saves invalidate catalogs; retain pending
+request generation checks in both the hook and API cache. Same-ID connection
+changes and late/unmounted completions must not restore another catalog. Preserve
+saved CoCo model/effort through unavailable discovery; discovery is not auth proof.
+Keep CoCo remote OAuth in the dedicated setup panel rather than the generic
+account log box. Review `test/cortexDesktopSelection.test.ts`,
+`test/cortexProfileEditor.test.ts`, `test/profileMetadataCache.test.ts` and the
+expanded `scripts/probe-cortex-auth.ts` for native responsive
+profile/catalog/fresh-chat drift. This scoped desktop probe does not certify the
+broader P7 decisions/queues/usage/mobile cases or C26's human handoff.
+
+P7 C43 decision controls use shared `planRevision` role eligibility on conversation
+metadata in both clients. Preserve rendered decision IDs, synchronous duplicate
+exclusion and newer interaction/draft ownership across delayed replies/errors.
+The verified native 1.2.35 planning-entry approve/decline schema may enter planning
+in tool-enabled chat; it never grants finished-plan execution. Headless/restricted
+or unknown entry stays denied. Rejection can end in text or another native gate;
+never synthesize a permission card or resend a prompt. Review
+`test/cortexInteractionUi.test.ts`, the interaction/store/mobile pipeline suites,
+and `plan-entry.json`; run opt-in `scripts/probe-cortex-interactions.ts` for native
+desktop/mobile questions/revision/rejection/approval drift. Its isolated PM2
+fixture uses production assets and shared terminal auth. Do not run asset-mutating
+full Jest concurrently with native browser checks. C26, C44 queue/reconnect,
+usage/full mobile and platform acceptance remain independent.
+
+P7 C44 pauses queues synchronously when Stop begins, before cancellation can
+emit terminal frames or an older refresh can appear idle. Keep desktop Stop
+available with drafts; mobile queue save/drain ownership belongs to
+`useSendPipeline.ts` with current options and per-conversation suspension.
+Preserve newer drafts/uploads and recheck pending/conversation/Stop state after
+queue persistence. Explicit Resume sends queued follow-ups without replaying
+interrupted work. Matching completion IDs resolve only `decisionBound` cards;
+clients key off that frame flag and the input route off the adapter's
+`decisionsRequireActiveTurn` policy, never the decision ID text; mobile
+socket callbacks must retain current socket/conversation ownership. Review
+`test/cortexQueueUi.test.ts`, `test/mobileStreamOwnership.test.ts`, the desktop
+store/reducer and CoCo integration suites. Run opt-in
+`scripts/probe-cortex-queue.ts` for native desktop/mobile question/queue/reconnect/
+abort/resume drift, and the interaction probe when plan completion changes.
+Persisted queues survive reload; mobile drafts retain their existing in-memory
+scope. C26, strict Memory, C46/C47 and platform gates remain separate.
+
+P7 C45 usage display policy lives in browser-safe
+`src/contracts/usagePresentation.ts`; calculators remain provider-specific.
+Keep CoCo Snowflake pricing unknown, cache buckets in total tokens, context
+snapshots distinct from accumulated usage, and mixed ledger totals explicitly
+incomplete. Desktop CoCo cards, Settings projection and mobile usage composition
+belong to `chat/cortexUsage.jsx`, `screens/usageStats.js` and `usageBar.tsx`.
+Review `test/cortexUsageUi.test.ts`, the CoCo integration/usage suites and run
+opt-in `scripts/probe-cortex-usage.ts` for native client/reload/isolated PM2
+restart evidence. Run browser probes separately from asset-mutating full Jest;
+this scoped acceptance does not close C26, strict Memory, C46/C47 or platforms.
+
+P7 C46 mobile attachment ownership belongs to `usePendingAttachments.ts`.
+Chat uploads travel as explicit filename references in `contracts/streams.ts`;
+resolve server-owned metadata under the conversation upload root in
+`chat/attachments.ts` before accepting a turn. Never derive native media from
+paths in prose, trust client paths/kinds, or admit symlink/cross-conversation files.
+Both clients must retain these references for queued as well as immediate sends.
+Keep selected OCR model/effort invocation-only in `contracts/uploads.ts` and the
+upload route; preserve the stored chat selection and native media gates. Bind
+late OCR to job/conversation/session/attachment identity and preserve current
+drafts/selections; require explicit retry after failure. CoCo named-model effort
+storage belongs to `chat/conversationPolicy.ts`: retain valid explicit values
+without inventing a static catalog or loading native metadata under index locks;
+native configuration validates profile-local support. Review the focused mobile
+attachment/selection, contract/route/store/policy and CoCo integration tests.
+Keep `test/chatAttachmentResolution.test.ts` aligned with the upload boundary.
+Run opt-in `scripts/probe-cortex-mobile.ts` for native media/history/recovery and
+the interaction probe for decision regressions. This browser/macOS evidence does
+not certify physical mobile platforms, C26, strict Memory or Windows/Linux.
+Dismiss the Conversation actions sheet when opening session history and keep
+the read-only viewer below preview modals; retain real pointer checks in the probe.
+
+P7 C47 extends `scripts/probe-cortex-auth.ts` with synthetic clipboard/lifecycle
+checks on responsive Welcome/Settings. Keep synthetic callbacks browser-local,
+report them separately from native fresh inference, and retain C26 as the human
+handoff gate. Check complete URL/redirect transfer, terminal/reload clearing and
+no persistent browser storage/history; active UI memory and clipboard are
+transient transfer state. Run full Jest before rebuilding assets/browser probes.
+Use the native URL's textbox role/accessible name in browser checks; exact HTML
+label text can include the textarea value and falsely report absence.
+
+P8 C48 optional install policy belongs to `src/services/cortexInstallation.ts`;
+Install Doctor/Welcome use fresh shared-runtime discovery and require a responding
+Cortex version after official standalone installation. Never treat it as login
+proof or assume an npm package. Keep stable/noninteractive/skip-PATH invocation,
+download-before-execute/temp cleanup, and disclose native shell-completion setup.
+Review `test/cortexInstallation.test.ts` and
+`test/cortexWelcomeInstallation.test.ts`; run opt-in
+`scripts/probe-cortex-install.ts` for disposable macOS installation with spaced
+home/app/override paths. Preserve existing macOS installer/release/update suites.
+Windows stays documentation-only; Linux action policy is not native acceptance.
+C49 update management and C51–C53 platform evidence remain separate.
+
+P8 C49 updater policy/discovery/version projection belongs to
+`src/services/cortexUpdates.ts`. Enable only the proven macOS native 1.2.35
+activation at `~/.local/bin/cortex`, with matching versioned distribution metadata.
+Keep profile auth homes/secrets/channel out of the updater env, group the pinned
+shared executable, and pass the checked full stable distribution to native
+`update <target>`; passive checks must never run an updater. Revalidate before
+mutation, reserve during preflight, recheck active chat, and await CoCo runtime
+draining after successful or failed attempts. Verify fresh activation/version;
+never automatically retry failures. Review `test/cortexUpdates.test.ts`,
+`test/cortexUpdateRoutes.test.ts` and existing CLI/runtime/macOS regressions; run
+opt-in `scripts/probe-cortex-updates.ts` for disposable native download/activation/
+shutdown/failure/retry evidence. Its older build metadata and missing target are
+synthetic controls, not old-release or authentication evidence. Other layouts,
+versions and native Windows/Linux remain manual until certified. Use
+`CORTEX_UPDATE_UI_PROBE=1 npx tsx scripts/probe-cortex-auth.ts` for independent
+update-row acceptance; its explicit scope is never a full auth-suite pass.
+
+P8 C50 CoCo migration policy belongs to `src/services/cortexMigration.ts`.
+Keep full-root bundles/checksums/backup/REPLACE unchanged. Exclude reserved native
+plugin/login/verification temp folders on export and reject them on import,
+including empty directories. OAuth jobs remain memory-only. Post-import checks
+must be passive: resolve the runtime and safely inspect the selected connection,
+never execute imported commands or start login/inference. Present files are not
+auth proof; direct users to Check login. Keep shared/custom home semantics and
+stale absolute paths explicit; never rewrite profile/processor choices during
+import. Review `test/cortexMigration.test.ts`, `test/cortexDataMigration.test.ts`
+and existing migration/route suites. Native cross-machine credentials, C26 and
+C51–C55 acceptance remain separate.
+
+P8 C51 passive CoCo version detection must use `--no-auto-update --version`
+in runtime, Install Doctor and CLI Update. Preserve native user settings/auth.
+Pin runtime commands to the captured executable realpath so version checks and
+ACP/login launch the same retained distribution despite activation changes.
+Keep profile command storage and updater activation discovery unchanged.
+Keep `acp serve` and explicit `update <target>` prefixes exact: 1.2.35 sends a
+prefixed root flag into terminal onboarding and rejects it on ACP. The login PTY
+already disables automatic updates. Review runtime/doctor/updater/fixture tests
+and rerun native install/update probes when changing this boundary.
+`scripts/probe-cortex-macos.ts` exercises a local release package, real installer
+helpers, a unique current-user LaunchAgent/private PM2, shared fresh auth,
+desktop chat/restart/resume/Stop and owned cleanup. Its CLI is pinned;
+retain both terminal HOME and SNOWFLAKE_HOME for shared credentials. A failed
+isolated-HOME auth check is not evidence of a supported account-isolation flow. Its explicit kickstart does
+not prove a new login event; public release/private Node bootstrap, macOS x64,
+C26 and other platforms remain separate. Never run full Jest alongside browser
+probes; rebuild assets afterward. Keep native activation snapshots and do not
+silently certify an automatically downloaded CLI version.
+
+C51 chat abort must await native runtime close before CortexTurn terminal done, even when
+session/cancel acknowledges: native background shells can otherwise continue.
+The next explicit turn reloads its saved session in a fresh process; never replay
+interrupted work. Retained abort handles must match the current owner. Review
+backend/turn/shots/integration/queue suites and rerun the native macOS and
+queue probes when changing this boundary; keep low-level cancellation separate
+from durable chat lease teardown.
+
+C52 Ubuntu acceptance preparation is `scripts/probe-cortex-linux.ts` (opt-in).
+Its preflight and generated-helper tests on macOS are not Linux evidence. Use
+Ubuntu 24.04 x64/glibc as a regular logged-in user with a real systemd user
+manager. The fixture uses a unique user unit/private PM2 and must not import the
+terminal's HOME, D-Bus or credential environment into that manager. Fresh service
+inference must prove saved credential reuse. Official Linux CoCo install/update,
+credential-store behavior and new-login acceptance remain separate C52 gates;
+the prepared runner alone does not certify them or enable managed Linux updates.
+See `docs/research/cortex-code-linux-acceptance.md`.
+
+C53 Windows x64 runtime preparation uses the shared CLI resolver for standalone
+`%LOCALAPPDATA%\cortex\cortex.exe`, PATH and explicit `.exe` commands. Never
+route CoCo through npm/Node/script shims. Normalize Windows child env and auth
+scope case-insensitively; keep managed controls last and shared terminal auth.
+Windows identity snapshots/handle-checked termination belong to
+`cortexWindowsProcess.ts`; do not use POSIX groups or unchecked tree kills.
+Cleanup failures must reject draining rather than authorize new work. Review
+`test/cortexWindows.test.ts`, `test/cortexWindowsLaunch.test.ts` and
+`test/cortexWindowsProcess.test.ts` alongside runtime/process/auth/doctor/update/
+migration suites. Native PowerShell/ConPTY/auth/process/update acceptance is
+still pending; simulated tests do not close C53. Keep Windows install/update
+manual, other harness private-Node wrappers and appDir/macOS activation intact.
+See `docs/research/cortex-code-windows-acceptance.md`.
+
+C54 consolidated native commands are `CORTEX_CODE_E2E=1 npm run e2e:cortex-code`
+and `CORTEX_CODE_E2E=1 npm run e2e:cortex-code-ui`. Use `-- --list` without
+opt-in to inspect their catalogs; `-- --probe <id>` is a selected-scope run.
+The shared runner pins retained 1.2.35, serializes ownership with a temporary
+lock, isolates PM2/TMPDIR, supervises probe descendants and never retries failed
+work. Keep the fixture root directly under `/tmp`: deep system-temp paths exceed
+macOS tsx/PM2 socket limits. Track the private daemon separately from the probe's
+ancestry and drain it without starting a replacement for stale PID files.
+Share only `compatibility-report.json`; raw logs/native fixtures stay
+private. Never remove an active lock or automatically clear a stale one without
+checking its recorded owner and fixture cleanup. Freeze source during full V8
+coverage collection; changing it can mix coverage mappings. Run full Jest before UI probes;
+the UI runner rebuilds both clients. Its macOS catalog does not close C26,
+strict Memory, Ubuntu/Windows, complete workflows or physical mobile gates.
+Review `test/cortexCompatRunner.test.ts`, `test/cortexCompatProcess.test.ts` and
+the consolidated-runner section in `docs/spec-testing.md` when changing it.
+
+C54's native mobile run exposed Stop finishing its HTTP finalizer before the
+CoCo stream consumer released its turn. CoCo may accept a new explicit turn
+behind an aborted owner, but it must await native reset/drain, retain earlier
+drains across another Stop, and never start a cancelled waiting prompt or clear
+a newer owner from an older iterator. Healthy overlapping turns still reject;
+cleanup failures do not start work. Keep the focused backend regression tests
+and native queue/mobile probes aligned with this admission rule. Track pending
+reset/drain promises independently of session-map entries, and include them and
+previous cleanup in reset/shutdown completion even when no consumer is active.
+
+C55 complete native workflows use `CORTEX_CODE_E2E=1 npm run
+e2e:cortex-code-workflows` (chat, KB, Context, Routines, mobile/OCR). Keep the
+separate `e2e:cortex-code-auth-control` expected-failure catalog free of saved
+account selection; an empty native home can omit the model catalog, so preserve
+Cockpit's configuration guard and check native inference separately. Never
+weaken production guards to reach a missing-auth prompt. Validate each fixed
+workflow outcome in `cortexCompatReports.ts`, not just a top-level pass.
+The browser fixture is isolated and PM2-managed; real-adapter service fixtures
+remain in-process. Chat's governed Memory uses a separate authenticated Claude
+processor; C35 separately certifies CoCo strict Memory through its native
+headless path below. KB needs real Ollama/Pandoc/
+LibreOffice; Routine outreach stays a stub. Missing dependencies must fail,
+never silently skip, mock or retry. Preserve short temporary roots, shared auth,
+private report material and full-Jest-before-browser ordering. See the C55
+matrix in `docs/spec-testing.md`; no full browser coverage of every workflow,
+physical mobile, human OAuth or additional platform support is implied.
+
+C56's explicit capability deferrals and evidence needed to lift them live in
+`docs/research/cortex-code-capability-decisions.md`. Keep current vendor docs,
+native terminal features and Cockpit's version-tested contracts distinct. Never
+enable goals/agents/steering, additional media, pricing, account isolation or
+strict Memory from a documentation claim alone. Public setup is documented in
+`docs/user/cortex-code.md`; C59 ADR/mobile/PR preparation and final evidence live
+in `docs/design/cortex-code-review.md`. ADR-0099 remains Proposed until merge
+under ADR-0001. Review preparation does not publish a PR or release.
+
+C35 restricted text ownership lives in `cortexRestricted.ts`,
+`cortexRestrictedPolicy.ts` and `cortexRestrictedStream.ts`, separate from ACP.
+Default/false allowTools must use the native headless zero-tool path; never
+upgrade it to ACP/tool-enabled execution. Admit only macOS arm64 and standalone
+1.2.35+191333.f82de3d91715 after passive pinned version/distribution checks.
+Keep the private CORTEX_HOME **and cwd**, disable hooks via private hooks.json,
+MCP/skills/auto-profiles, force standard mode, retain all 48 exact deny names,
+and require empty tool/skill/plugin/MCP/slash startup catalogs before prompts.
+Wrap arbitrary input as literal JSON text so native slash/shell dispatch cannot
+run it. Preserve terminal HOME/SNOWFLAKE_HOME auth; this is not account isolation.
+Unexpected tool/control/session/result frames fail closed. One deadline covers
+startup/sequences; never replay, and await owned cleanup before temp deletion.
+Review the focused restricted process/stream, Memory/selector and migration tests;
+run `CORTEX_RESTRICTED_PROBE=1 npx tsx scripts/probe-cortex-restricted.ts` or the
+workflow catalog's `--probe restricted` for native drift. Preserve actual outgoing
+zero-schema/resource capture, working hook/MCP positive controls, real governance/
+extraction/consolidation and active abort/fresh inference evidence. Other builds
+and platforms stay gated. Titles/summaries retain fallback. This C35 proof
+supersedes earlier strict-Memory deferrals only in the exact scope documented in
+[the C35 report](docs/research/cortex-code-restricted-processors.md).
 
 # Server Management
 

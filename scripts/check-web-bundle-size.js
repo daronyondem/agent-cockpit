@@ -8,8 +8,8 @@ const DEFAULT_BUILD_DIR = path.join(ROOT, 'public', 'v2-built');
 const KIB = 1024;
 
 const DEFAULT_BUDGETS = {
-  // Copilot context/billing cards and quota add ~3.4 KiB to the goals baseline.
-  totalJs: 907 * KIB,
+  // Combined Cortex/Copilot UI and current release dependencies measure 923.2 KiB.
+  totalJs: 924 * KIB,
   totalCss: 230 * KIB,
   maxJsAsset: 230 * KIB,
   maxCssAsset: 230 * KIB,
@@ -20,9 +20,11 @@ const DEFAULT_BUDGETS = {
     'markdown-vendor.js': 160 * KIB,
     'kbBrowser.js': 115 * KIB,
     'workspaceSettings.js': 95 * KIB,
-    // The same compiler update adds 21 bytes to this 80.0 KiB chunk.
-    'settingsScreen.js': 80.1 * KIB,
+    // Combined native auth/profile controls measure 80.8 KiB.
+    'settingsScreen.js': 81 * KIB,
+    'memoryProcessorSelect.js': 6 * KIB,
     'settingsMigrationTab.js': 20 * KIB,
+    'cortexSetup.js': 8 * KIB,
     'dialog.js': 60 * KIB,
     'filesBrowser.js': 45 * KIB,
     'memoryReview.js': 35 * KIB,

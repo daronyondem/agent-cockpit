@@ -77,6 +77,7 @@ export function useChatStreamConnection(options: UseChatStreamConnectionOptions)
     }
     socketRef.current = socket;
     socket.onopen = () => {
+      if (socketRef.current !== socket) return;
       clearStreamReconnectTimer();
       streamReconnectAttemptsRef.current = 0;
       options.setErrorMessage((current) => (current === 'Stream connection failed.' ? null : current));
@@ -91,10 +92,9 @@ export function useChatStreamConnection(options: UseChatStreamConnectionOptions)
       }
     };
     socket.onerror = () => {
-      if (socketRef.current === socket) {
-        socketRef.current = null;
-        socket.close();
-      }
+      if (socketRef.current !== socket) return;
+      socketRef.current = null;
+      socket.close();
       scheduleStreamReconnect(conversationID);
     };
     socket.onclose = () => {
@@ -188,6 +188,9 @@ export function useChatStreamConnection(options: UseChatStreamConnectionOptions)
 
   function applyChatStreamAction(conversationID: string, action: ChatStreamEventAction) {
     switch (action.type) {
+      case 'complete-decision':
+        options.setPendingInteraction(current => current?.decisionBound && current.decisionId === action.decisionId ? null : current);
+        break;
       case 'set-stream-placeholder':
         setShowStreamPlaceholder(action.value);
         break;
@@ -258,7 +261,8 @@ export function useChatStreamConnection(options: UseChatStreamConnectionOptions)
   }
 
   function markStreamFinished(conversationID: string) {
-    options.setPendingInteraction(current => current?.kind === 'question' && current.requestId ? null : current);
+    if (options.activeConversationRef.current?.id !== conversationID) return;
+    options.setPendingInteraction(current => current?.decisionBound || (current?.kind === 'question' && current.requestId) ? null : current);
     clearStreamReconnectTimer();
     streamReconnectAttemptsRef.current = 0;
     setIsStreaming(false);

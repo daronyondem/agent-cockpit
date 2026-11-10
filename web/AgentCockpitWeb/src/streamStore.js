@@ -1240,7 +1240,8 @@ import { reduceStreamFrame, mergeInitialStreamMessages } from './stream/streamFr
 
   /* Compose the outgoing content string from a QueuedMessage. Wire format is
      unchanged — we still append `[Uploaded files: <abs paths>]` so Claude
-     reads the files from disk. The typed chips are a UI concern only. */
+     reads the files from disk. Explicit filename references also let native
+     media adapters receive trusted uploads without parsing this text. */
   function composeWireContent(qm){
     const text = typeof qm.content === 'string' ? qm.content : '';
     const atts = Array.isArray(qm.attachments) ? qm.attachments : [];
@@ -1271,7 +1272,7 @@ import { reduceStreamFrame, mergeInitialStreamMessages } from './stream/streamFr
 
   async function send(convId, text){
     const s = states.get(convId);
-    if (!s || s.sending || s.streaming) return;
+    if (!s || s.sending || s.streaming || s.pendingInteraction) return;
     const doneAtts = s.pendingAttachments.filter(f => f.status === 'done');
     const hasUploading = s.pendingAttachments.some(f => f.status === 'uploading');
     if (hasUploading) return;
@@ -1330,6 +1331,7 @@ import { reduceStreamFrame, mergeInitialStreamMessages } from './stream/streamFr
     try {
       /** @type {SendMessageRequest} */
       const body = { content };
+      if (attachmentsMeta.length) body.attachments = attachmentsMeta.map(({ name }) => ({ name }));
       if (sendCliProfileId) body.cliProfileId = sendCliProfileId;
       if (sendBackend) body.backend = sendBackend;
       if (sendModel)   body.model   = sendModel;
@@ -1638,6 +1640,8 @@ import { reduceStreamFrame, mergeInitialStreamMessages } from './stream/streamFr
       const { markdown, recoveryMessage } = await AgentApi.conv.ocrAttachment(convId, entry.result.path, {
         cliProfileId: selectedCliProfileId,
         backend: selectedBackend,
+        model: s.composerModel || undefined,
+        effort: s.composerEffort || undefined,
       });
       update(convId, cur => ({
         ...cur,
@@ -1869,7 +1873,7 @@ import { reduceStreamFrame, mergeInitialStreamMessages } from './stream/streamFr
   function resumeSuspendedQueue(convId){
     const s = states.get(convId);
     if (!s) return;
-    update(convId, { queueSuspended: false });
+    update(convId, { queueSuspended: false, streamError: null, streamErrorSource: null });
     drainQueueIfReady(convId);
   }
 
@@ -1907,6 +1911,7 @@ import { reduceStreamFrame, mergeInitialStreamMessages } from './stream/streamFr
   async function stopStream(convId){
     const s = states.get(convId);
     if (!s || !s.streaming) return false;
+    update(convId, { queueSuspended: true });
     const applyAbortFallback = () => {
       update(convId, cur => ({
         ...cur,
@@ -2071,6 +2076,10 @@ import { reduceStreamFrame, mergeInitialStreamMessages } from './stream/streamFr
   async function sendWireContent(convId, queuedMessage){
     const s = states.get(convId);
     if (!s || s.sending || s.streaming) return;
+    if (s.pendingInteraction || s.streamError || s.queueSuspended) {
+      update(convId, { queue: s.queue.map(item => ({ ...item, inFlight: false })) });
+      return;
+    }
     const originalHead = queuedMessage && typeof queuedMessage === 'object'
       ? {
           content: queuedMessage.content || '',
@@ -2134,6 +2143,7 @@ import { reduceStreamFrame, mergeInitialStreamMessages } from './stream/streamFr
 
     try {
       const body = { content };
+      if (originalHead.attachments && originalHead.attachments.length) body.attachments = originalHead.attachments.map(({ name }) => ({ name }));
       if (sendCliProfileId) body.cliProfileId = sendCliProfileId;
       if (sendBackend) body.backend = sendBackend;
       if (sendModel)   body.model   = sendModel;
@@ -2217,11 +2227,12 @@ import { reduceStreamFrame, mergeInitialStreamMessages } from './stream/streamFr
      — we just clear the pending interaction. Otherwise `{mode:'message'}`
      means the stream is over and the answer must be sent as a fresh user
      message via the normal /message endpoint. */
-  async function respond(convId, text){
+  async function respond(convId, text, decisionId){
     const s = states.get(convId);
     if (!s || !text || s.respondPending) return;
     if (!s.pendingInteraction) return;
     const interaction = s.pendingInteraction;
+    if (decisionId !== undefined && interaction.decisionId !== decisionId) return;
 
     update(convId, { respondPending: true, inputError: null });
 
@@ -2229,7 +2240,8 @@ import { reduceStreamFrame, mergeInitialStreamMessages } from './stream/streamFr
     try {
       const streamActive = s.streaming || s.sending;
       /** @type {ConversationInputRequest} */
-      const body = { text, streamActive, ...(interaction.requestId ? { requestId: interaction.requestId } : {}) };
+      const body = { text, streamActive, ...(interaction.decisionId ? { decisionId: interaction.decisionId } : {}),
+        ...(interaction.requestId ? { requestId: interaction.requestId } : {}) };
       const res = await AgentApi.fetch(
         'conversations/' + encodeURIComponent(convId) + '/input',
         { method: 'POST', body }
@@ -2238,11 +2250,9 @@ import { reduceStreamFrame, mergeInitialStreamMessages } from './stream/streamFr
       mode = data && data.mode;
       if (interaction.requestId && mode !== 'stdin') throw new Error('This question is no longer accepting an answer.');
     } catch (err) {
-      if (interaction.requestId) {
-        update(convId, { inputError: err.message || String(err), respondPending: false });
-        return;
-      }
-      update(convId, { streamError: err.message || String(err), streamErrorSource: null, respondPending: false, uiState: 'error' });
+      update(convId, cur => cur.pendingInteraction !== interaction ? { ...cur, respondPending: false }
+        : interaction.requestId ? { ...cur, inputError: err.message || String(err), respondPending: false }
+        : { ...cur, streamError: err.message || String(err), streamErrorSource: null, respondPending: false, uiState: 'error' });
       return;
     }
 
@@ -2262,6 +2272,10 @@ import { reduceStreamFrame, mergeInitialStreamMessages } from './stream/streamFr
       return;
     }
 
+    if (states.get(convId)?.pendingInteraction !== interaction) {
+      update(convId, { respondPending: false });
+      return;
+    }
     update(convId, { pendingInteraction: null, respondPending: false, uiState: null });
     await send(convId, text);
   }

@@ -31,6 +31,7 @@
 // Cross-file dedup is NOT handled here — that lives in Phase 4
 // (Dreaming). Each digest run is self-contained for a single raw file.
 
+import { checkBackendRoleEligibility } from '../../contracts/backendCapabilities';
 import path from 'path';
 import crypto from 'crypto';
 import { promises as fsp } from 'fs';
@@ -781,6 +782,9 @@ export class KbDigestionService {
       return this._failRaw(hash, rawId, db, 'unknown',
         `Configured Digestion CLI profile "${runtime.cliProfileId || runtime.backendId}" uses unregistered backend "${runtime.backendId}".`);
     }
+
+    const eligibility = checkBackendRoleEligibility(adapter.metadata, { role: 'toolEnabled', sequential: gleaningEnabled });
+    if (!eligibility.ok) return this._failRaw(hash, rawId, db, 'unknown', eligibility.message);
 
     const handlerMeta = convertedMeta.metadata as Record<string, unknown> | undefined;
     const handlerUnitCount =

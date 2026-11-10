@@ -129,6 +129,30 @@ describe('BackendRegistry', () => {
     expect(registry.get('nonexistent')).toBeNull();
   });
 
+  test('shutdownAll awaits asynchronous adapter cleanup and continues past failures', async () => {
+    let release!: () => void;
+    class SlowAdapter extends BaseBackendAdapter {
+      get metadata(): BackendMetadata {
+        return { id: 'slow', label: 'Slow', icon: null, capabilities: {} as any, resumeCapabilities: TEST_RESUME_CAPABILITIES };
+      }
+      sendMessage(): SendMessageResult { return { stream: (async function*() {})(), abort: () => {}, sendInput: () => {} }; }
+      async generateSummary(_msgs: any[], fb: string) { return fb; }
+      shutdown() { return new Promise<void>(resolve => { release = resolve; }); }
+    }
+    const claude = new ClaudeCodeAdapter({ workingDir: '/tmp' });
+    const failing = jest.spyOn(claude, 'shutdown').mockImplementation(() => { throw new Error('cleanup failed'); });
+    registry.register(claude);
+    registry.register(new SlowAdapter());
+    let settled = false;
+    const stopping = registry.shutdownAll().then(() => { settled = true; });
+    await new Promise(resolve => setImmediate(resolve));
+    expect(failing).toHaveBeenCalled();
+    expect(settled).toBe(false);
+    release();
+    await stopping;
+    expect(settled).toBe(true);
+  });
+
   test('list returns metadata array', () => {
     const adapter = new ClaudeCodeAdapter({ workingDir: '/tmp' });
     registry.register(adapter);

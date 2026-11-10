@@ -8,9 +8,18 @@
 
 **Framework:** Jest 30.x — run with `npm test`. The script is `node --experimental-vm-modules node_modules/.bin/jest` because the KB handler tests import `unpdf` (ESM-only, wraps `pdfjs-dist`) and Jest's VM needs the flag to allow runtime `import()` calls. `jest.config.js` uses `ts-jest` for TypeScript and also transforms JS/JSX with `allowJs: true`, `module: CommonJS`, and `jsx: react-jsx` so tests can import the V2 frontend ES modules directly instead of evaluating browser globals. Default Jest execution is capped at `maxWorkers: '50%'` so process-spawning suites still run in parallel without stampeding local or CI machines, and the global per-test timeout is 30 seconds so widened harness-specific timeouts can surface their route/process-specific errors before Jest's generic timeout.
 
-**Coverage gate:** Run `npm run test:coverage` for backend coverage. The script keeps plain `npm test` unchanged for fast local iteration and runs Jest with `--coverage --runInBand`; serial execution keeps the full-suite coverage gate stable on local machines where parallel workers can exceed short route-test timeouts. `jest.config.js` collects coverage from `src/**/*.ts` and `server.ts`, excludes declaration-only `src/types/**` and `*.d.ts` files, writes reports under `coverage/`, and uses V8 coverage with `text-summary` plus `lcov` reporters. Global floors are statements/lines 88.85%, branches 77.10%, and functions 93.75%. The November 2, 2026 macOS cleanup coverage baseline at `84de7f4` measured statements/lines 88.28%, branches 74.99%, and functions 93.63% (139 passing suites, 2,720 passing tests; four opt-in suites and 24 tests skipped). The native orphan-cleanup fixture also passed separately with Copilot 1.0.105 on macOS arm64. New process/ownership/platform regressions provide coverage headroom without lowering the CI floor. When meaningful tests land, raise thresholds toward a stable cross-platform baseline; do not lower them merely to merge a regression.
+**Coverage gate:** Run `npm run test:coverage` for backend coverage. The script keeps plain `npm test` unchanged for fast local iteration and runs Jest with `--coverage --runInBand`; serial execution keeps the full-suite coverage gate stable on local machines where parallel workers can exceed short route-test timeouts. `jest.config.js` collects coverage from `src/**/*.ts` and `server.ts`, excludes declaration-only `src/types/**` and `*.d.ts` files, writes reports under `coverage/`, and uses V8 coverage with `text-summary` plus `lcov` reporters. Global floors are statements/lines 89.45%, branches 79.45%, and functions 94.10%. The November 2, 2026 macOS cleanup coverage baseline at `84de7f4` measured statements/lines 88.28%, branches 74.99%, and functions 93.63% (139 passing suites, 2,720 passing tests; four opt-in suites and 24 tests skipped). The native orphan-cleanup fixture also passed separately with Copilot 1.0.105 on macOS arm64. New process/ownership/platform regressions provide coverage headroom without lowering the CI floor. When meaningful tests land, raise thresholds toward a stable cross-platform baseline; do not lower them merely to merge a regression.
 
-Current local Copilot qualification uses CLI 1.0.105 / SDK 1.0.28. The latest
+The November 9, 2026 combined CoCo/Copilot macOS arm64 / Node 26.0.0 baseline
+passes 224 suites / 3,581 tests, with seven opt-in/platform suites / 72 tests
+skipped. V8 measures statements/lines 89.68% (60,172/67,091), branches 79.65%
+(15,987/20,070), and functions 94.31% (3,086/3,272). Source/test/config files
+were frozen during collection. This includes shared auth shutdown failure/drain
+and closed-admission regressions, distinct native input identities, and retained
+mobile drafts/uploads. Floors rise without reducing either branch's prior gate.
+Native/UI evidence and its scope are recorded in the integration checkpoint below.
+
+The pre-CoCo Copilot qualification uses CLI 1.0.105 / SDK 1.0.28. That historical
 full run passes 172 suites / 3,052 tests (70 opt-in/platform skips), with 88.96%
 statements/lines, 77.31% branches and 93.83% functions. Separate retained native
 runs pass 34 SDK cases, 12 Memory/Context/KB/Routine application cases, two
@@ -45,6 +54,32 @@ Test HTTP servers that are contacted through `127.0.0.1` bind explicitly to `127
 
 | File | Focus |
 |------|-------|
+| `test/cortexInteractionUi.test.ts` | Actual desktop/mobile cards use shared capability metadata, preserve Claude/Codex/Grok controls, respect explicit denial, reset identical-text drafts on fresh CoCo generations, bind callbacks to rendered IDs and disable every mobile reply input/action in flight. Expanded stream-store/mobile-pipeline suites cover duplicate/stale callbacks, newer interactions/drafts and delayed success/error/fallback responses. |
+| `test/cortexDesktopSelection.test.ts` | Rendered desktop model/effort/mode/tier/profile controls, incomplete profile retention, same-ID connection changes, late/failing catalog responses, unavailable model replacements, shared catalog projections and saved-profile invalidation. Existing Claude Standard/Interactive, Codex and Grok controls retain coverage. |
+| `test/cortexProfileEditor.test.ts` | Actual Settings profile fields, name/connection save, enable/delete, Harness transitions/auth-home cleanup, connection config removal and incomplete default/model retention. Setup lazy loader is stubbed; its auth UI has separate rendered/native coverage. |
+| `test/profileMetadataCache.test.ts` | Actual browser API cache with deferred HTTP responses: settings invalidation prevents old successes caching and old failures deleting newer pending requests; in-flight and completed requests stay deduplicated. |
+| `test/cortexProcessorSelection.test.ts` | Actual persistence/service/HTTP boundaries: preserve missing/disabled/incomplete global and workspace overrides, failed Context state/ownership, raw restored JSON, tool-role rejection before ingestion/OCR discovery, image-only recovery, digestion/gleaning role gates, Routine/Context rejection, no fallback invocation, and ingestion catalog reuse across raws (non-empty discovered once, empty rediscovered). |
+| `test/cortexRoutinesIntegration.test.ts` | Actual CoCo process fixture through chat proposals and Routines: opt-in instructions, disabled passivity, proposal validation/install, manual manifest config, output/history/explorer/state, scheduler cadence/windows/weekdays, notification off/failure through an injected stub, headless/model errors, overlap/shutdown/deadline without resend/outreach, output retention and 50-record history. |
+| `test/cortexContextIntegration.test.ts` | Actual CoCo process fixture through Workspace Context: global/override profile/model/effort, uploaded sources, direct markdown/state/reports, eligible Memory action/deletion and silent update, disabled Memory exclusion, invalid action blocks/headless questions without retry, stop/overlap/drain/fresh run, disabled/zero-source passivity, scan/maintenance scheduler and seven-day retention. |
+| `test/cortexKbIntegration.test.ts` | Real CoCo process fixture through KB ingestion: JPEG-to-PNG preparation, original bytes, profile/model/effort, conversion records/dedup/location reuse, unsupported Auto refusal, headless failure and shutdown without resend or fabricated retry. |
+| `test/cortexShots.test.ts` | Tool-enabled isolated/native sequential lease ownership, no replay/concurrent reuse, restricted rejection before startup, deadlines, AbortSignal, shutdown draining/reuse, sanitized failures and verified explicit image transport. |
+| `test/processorProfiles.test.ts` | Browser-safe Memory processor choice projection: eligible choices, excluded unverified/missing profiles and disabled saved selections without replacement. |
+| `test/memoryProcessorSelect.test.ts` | Rendered lazy Memory control: disabled saved CoCo selection, no automatic change, explicit eligible selection, unsupported choice exclusion and empty catalog. |
+| `test/cortexProfiles.test.ts` | CoCo config validation, literal names, credential-field rejection, identity/resolution/default completeness, settings round-trip/edit/atomic rejection, read-time repair of malformed stored config and setup-home migration. No native execution. |
+| `test/cortexProtocol.test.ts` | Dedicated strict CoCo JSONL framing/IDs/reverse ownership, limits, failures, deadlines (including zero = no deadline) and private diagnostics. |
+| `test/cortexRuntime.test.ts` | Deterministic executable fixture: exact argv/env/version, realpath pinning across activation changes, profile fingerprints, session replay, cancellation, catalog scope, startup/reset/idle/reusable registry lifecycle, and cleanup of a detached child spawned after prompt completion whose parent exits before runtime shutdown. |
+| `test/cortexProcess.test.ts` | POSIX detached-child cleanup after root exit, unrelated process preservation, identity reuse, bounded stop, enumeration failure and continuous 250 ms POSIX scanning until stop, with idempotent watcher registration. |
+| `test/cortexMobileAttachments.test.ts` | Selected OCR model/effort, synchronous duplicate exclusion, deferred ownership across navigation/reset/removal/clear/model/unmount, cached insertion, failure and explicit retry. |
+| `test/cortexMobileSelection.test.ts` | Saved CoCo model/effort through pending/failed profile discovery, locked profile, unsupported goal capability, and dismissal of the Conversation actions sheet before opening session history. |
+| `test/chatAttachmentResolution.test.ts` | Explicit upload references derive real server metadata; missing, nested, traversal, non-file and symlink references are rejected. CoCo HTTP integration verifies actual PNG blocks and prose-only paths staying text; desktop and mobile tests cover immediate and queued references. |
+| `test/cortexUsageUi.test.ts` | Rendered CoCo desktop/mobile context, token/cache and unknown-cost display; existing harness price regression; shared projection and mixed ledger aggregation. |
+| `test/cortexEvents.test.ts` | Native text/thinking/tool/diff/resource mapping, ownership, fragmented errors/delivery markers, failure classification and token/context counters. |
+| `test/cortexModels.test.ts` | Dynamic configOptions, model/effort/mode selection, auto reset, invalid selections, stale catalogs, profile separation and pinned image evidence. |
+| `test/cortexInteractions.test.ts` | RPC ID 0, exact option/free-form/sequential replies, decision generations with `decisionBound` question/plan cards, stale/double responses, permissions, plan revision and exit cancellation. |
+| `test/cortexTurn.test.ts` | Internal bridge sequencing, retained native excerpt transport, repeated turns, known/unknown/quoted errors, incomplete usage, abort/runtime drain before adapter done, process death, explicit delivery and an inactivity watchdog that waits through pending decisions. |
+| `test/cortexAttachments.test.ts` | Upload-root validation, PNG signatures/decoding, model/version/MIME gates, file/pixel/aggregate limits and traversal/symlink rejection. |
+| `test/cortexArtifacts.test.ts` | Real upload/queue, explicit artifact/storage/download/text-preview and ledger integration; text/code/Office/PDF bytes, deduplication and ownership. |
+| `test/backendCapabilities.test.ts` | Browser-safe role/interaction policy, CoCo fail-closed one-shot metadata, legacy compatibility, sequential and model/media eligibility. Existing `test/mediaCapabilities.test.ts` covers the backend facade. |
 | `test/nodeRuntimeRequirement.test.ts` | Full Node >= engine-floor comparisons, legacy major-only targets and patch floors, plus executable macOS/Linux installer eligibility cases around Node 22.12.0 using fixture Node/npm commands. The updater suite also exercises a same-major minor upgrade through macOS private-runtime activation. Windows version gates retain source guards; native Windows installer execution remains separate evidence. |
 | `test/grokProtocol.test.ts` | ACP framing across split UTF-8/large chunks, bounds, reverse ID zero, malformed frames, error metadata, EOF/exit and pending request timeout cleanup. |
 | `test/grokEvents.test.ts` | Root/child ownership, tools/artifacts/narration, native goals and effort/media catalog, disjoint token buckets, complete/partial costs, per-model rows, resident usage deltas. |
@@ -53,7 +88,7 @@ Test HTTP servers that are contacted through `127.0.0.1` bind explicitly to `127
 | `test/grokIntegration.test.ts` | Local process fixtures for profile metadata and native effort persistence, cached auth precedence, API-key method negotiation including an unadvertised method, access gates/API-key ambiguity, billing route/cache identity/sparse balances, setup auth-home migration, device jobs, incompatible ACP initialization cleanup, and two successive plan approvals through the real WebSocket/input route after revision feedback without repeated native mode entry. |
 | `test/grokProcess.test.ts` | Process ancestry and real POSIX detached descendants: cleanup after root death with TERM/KILL escalation while an unrelated process survives. Mocked process tables and signals cover start-identity PID-reuse exclusion, explicit SIGTERM-then-SIGKILL escalation, the process-group fallback when `ps` fails, and Windows `taskkill` with direct-kill fallback. |
 | `test/grokWindows.test.ts` | Windows native executable preference, managed package/private Node fallback, terminal wrapper repair and missing targets. Native Windows execution still requires a platform run. |
-| `test/grokUi.test.ts` | Rendered desktop sparse/zero billing, Grok-only plan revision feedback, mobile explicit plan decisions with Grok-only revision feedback, and mobile profile switching with late-response isolation. Uses the frontend module loader with React dependencies supplied explicitly. |
+| `test/grokUi.test.ts` | Rendered desktop sparse/zero billing, advertised plan revision feedback, mobile explicit plan decisions, and mobile profile switching with late-response isolation. Uses the frontend module loader with React dependencies supplied explicitly. |
 | `test/planUsageStores.test.ts` Grok coverage | Per-profile cache/request coalescing, subscription notifications, and clearing unavailable billing without affecting another profile. |
 | `test/grokBuild.e2e.test.ts` | Eight opt-in authenticated real-CLI checks through `npm run e2e:grok-build`: terminal auth/catalog, restricted sequential calls/slash protection, empty auth-home isolation and invalid-key failure, real isolated device-login cancellation, hard-exit descendant cleanup/recovery, background children/settled usage, questions/revised plans, goal controls, and full autonomous goal completion. Completion has an external 360-second cancellation deadline. Uses temporary workspaces/native sessions; verified on Grok Build 1.0.52 macOS arm64. |
 | `test/grokWorkflows.e2e.test.ts` | Three native application checks included in `npm run e2e:grok-build`: real KB ingestion/digestion and Memory/KB token-scoped MCP tools/governance, Workspace Context maintenance from a reference, and an opt-in manual Routine with notifications off. Uses isolated HTTP/WS services and temporary data. |
@@ -78,7 +113,7 @@ Test HTTP servers that are contacted through `127.0.0.1` bind explicitly to `127
 | `test/e2e/claudeCodeInteractive.ui.pw.ts` | Optional real-Claude browser drift coverage gated by `CLAUDE_INTERACTIVE_UI_E2E=1`: runs Playwright against the built `/v2` UI with an isolated Agent Cockpit server, scratch `Desktop/test-workspace`, and seeded `CC-Int` Claude Code profile using `protocol: "interactive"`. The suite verifies workspace filtering and conversation selection, composer CLI profile selection, session reset before and after work, real interactive smoke and follow-up turns, browser reload while a turn is active, server-restart interruption recovery, real filesystem Write/Edit side effects from the browser, Stop/abort UI rendering for active turns and pending plan/question cards, reset disabling while a plan/question is waiting, multi-workspace conversation isolation, Bash tool rendering/outcomes, Agent/subagent plus multi-tool rendering, attachment upload/readback, Claude Code Interactive goal set/display/clear, plan approval/resume plus a post-approval follow-up, and browser-driven `AskUserQuestion` answering through both option buttons and typed option-label input plus a post-question follow-up. Current real Claude Code question menus are option-driven, so the typed-input scenario validates option-label-to-menu-index mapping rather than arbitrary free-text question payloads. The file is named `.pw.ts` so Jest does not run it during normal `npm test`. `npm run e2e:claude-interactive-ui` runs against an already available server/base URL, while `npm run e2e:claude-interactive-ui:report` builds the V2 web bundle, starts an isolated server on a random local port, runs the suite with an authenticated real `claude` CLI, stops the server, and stores a Markdown/JSON report under `data/chat/claude-interactive-ui-e2e/<timestamp>/` by default. Arguments after `--` are forwarded to Playwright, so targeted checks such as `npm run e2e:claude-interactive-ui:report -- --grep "clarifying question"` can reuse the same isolated harness. Skipped by default, not part of CI, and intentionally not mocked because it is used to detect future Claude CLI version drift in browser-visible behavior. |
 | `test/fileLinks.test.ts` | V2 frontend file-link helper: resolves Codex-style absolute Markdown hrefs under the active workspace, resolves active-conversation `data/chat/artifacts/{convId}/{filename}` links to uploaded-file metadata, strips optional `:line` / `:line:column` suffixes, decodes URL-encoded paths, accepts `file://` URLs, and rejects web links, relative links, wrong-conversation artifact paths, nested artifact paths, outside-workspace paths, and traversal-looking paths. |
 | `test/filePreviewKinds.test.js` | Desktop Files Browser preview classifier: verifies Astro files are treated as editable text previews rather than unsupported files. |
-| `test/cliProfileConfigDir.test.ts` | Settings account-profile **Config directory** copy: for Claude Code, Codex, and Grok Build, the hint names the variable that harness's real runtime resolver sets from `configDir` (`CLAUDE_CONFIG_DIR`, `CODEX_HOME`, `GROK_HOME`), and Grok Build no longer falls back to the Claude Code hint or placeholder. |
+| `test/cliProfileConfigDir.test.ts` | Settings account-profile **Config directory** copy: for Claude Code, Codex, Grok Build and Cortex Code, the hint names the variable that harness's real runtime resolver sets from `configDir` (`CLAUDE_CONFIG_DIR`, `CODEX_HOME`, `GROK_HOME`, `SNOWFLAKE_HOME`), and Grok Build no longer falls back to the Claude Code hint or placeholder. CoCo uses the current Node executable as a passive executable fixture; the test never launches it and requires no installed CLI or credentials. |
 | `test/dngPreview.test.ts` | Conversation-upload DNG preview parser: extracts embedded JPEG previews from synthetic little-endian and big-endian baseline TIFF/DNG wrappers, parses JPEG SOF dimensions, trims extracted bytes at JPEG EOI even when `StripByteCounts` includes trailing data, rejects non-TIFF bytes, rejects DNGs without a readable JPEG preview, and skips linear raw subimages (`PhotometricInterpretation=34892`) so chat upload support stays preview-extraction-only rather than full RAW demosaic. |
 | `test/frontendMessageIdentity.test.ts` | V2 frontend message identity helpers: system-owned messages such as native-session recovery notices render as Agent Cockpit for author labels, avatars, and pin sources while assistant messages keep harness identity and goal lifecycle system messages keep the Goal identity. |
 | `test/frontendMessageParsing.test.ts` | V2 frontend chat-message parsing helpers: extracts file-delivery comment markers, strips those markers from visible message content, parses uploaded-file tags, and guards hidden stream-error marker ids. |
@@ -91,8 +126,10 @@ Test HTTP servers that are contacted through `127.0.0.1` bind explicitly to `127
 | `test/mediaCapabilities.test.ts` | Shared one-shot media gate helper coverage: accepts only when backend metadata exposes a transport for the requested modality and the selected/default model reports that input modality as `true`, uses the default model when no explicit model is selected, fails when backend transport is absent, fails when the selected model reports no image input, and fails closed for stale explicit model ids instead of falling back to the default model. |
 | `test/chatContracts.test.ts` | Chat contract helper coverage: browser-safe service-tier input normalization, Claude Code mode input normalization for create/send payloads including clear and invalid values, conversation/stream mutation payload normalization including message-pin payload validation, queue update runtime validation, attachment payload validation, OCR attachment payload validation including optional profile/backend runtime hints, settings payload object validation, explorer save payloads, KB enablement/auto-digest/glossary/embedding/folder payloads, memory enabled payloads, Workspace Context enablement/settings payloads, shared object/array/clamped-number validation helpers, and shared `ContractValidationError` detection. |
 | `test/processStream.golden.test.ts` | Direct `processStream` golden traces that bypass the Express/WebSocket test harness: ordered mixed text/thinking/tool/outcome/artifact streams emit the expected browser frame sequence and persist ordered `contentBlocks`; result-only streams synthesize a final text block; and successful plan-file tool outcomes withhold `planContent` from the Write frame while emitting a synthetic `ExitPlanMode` approval frame with the stored plan content. |
+| `test/cortexMigration.test.ts` | CoCo passive destination dependencies, no imported command execution, effective shared/custom Snowflake home, missing/incomplete configuration, sanitized malformed/missing/symlink TOML, Windows runtime policy and reserved native temp paths. |
+| `test/cortexDataMigration.test.ts` | Full-root CoCo profile/settings/chat/queue/media/usage/Memory/Context/Routine preservation, default and unavailable processor IDs, byte integrity and normalized reads, replacement backup, external-home preservation, stale absolute-home warning, native runtime path/empty-directory rejection and tampered CoCo settings rejection. |
 | `test/dataMigrationService.test.ts` | DataMigrationService coverage: export bundle manifest/checksum generation including Memory/KB/Workspace Context/Workspace Routines feature metadata, runtime-file exclusions, PGLite empty runtime directory preservation/repair, checksum mismatch rejection during staged import verification, undeclared data-entry rejection before activation, uncompressed bundle limit rejection, staging cleanup on failure, pending import application with active data-root replacement plus backup preservation and upload cleanup, double-pending import rejection, failed startup import marker handling so retries do not loop forever, and post-import checks for workspace storage/current paths, Memory, KB SQLite `schema_version`, PGLite vectors, embedding warnings, Workspace Context, and Workspace Routines data presence. |
-| `test/chat.dataMigration.test.ts` | Data migration route coverage: export job start/status/download flow, chunked import upload start/chunk/finish preview flow, legacy multipart preview upload and destructive `REPLACE` confirmation flow, pending marker creation on successful restart scheduling, missing-upload client error behavior, status/checks response shapes, active-turn/restart failure behavior, and restart-failure cancellation so a later unrelated restart does not apply a stale import. |
+| `test/chat.dataMigration.test.ts` | Data migration route coverage: export job start/status/download flow, chunked import upload start/chunk/finish preview flow, legacy multipart preview upload and destructive `REPLACE` confirmation flow with CoCo dependency warnings and unchanged staged profile bytes, pending marker creation on successful restart scheduling, missing-upload client error behavior, status/checks response shapes, active-turn/restart failure behavior, and restart-failure cancellation so a later unrelated restart does not apply a stale import. |
 | `test/chat.worktreeIsolation.test.ts` | Workspace worktree-isolation coverage: non-Git/unconfirmed/dirty-base/missing-origin enablement blockers; workspace-scoped active-stream toggle blocking; migration of existing conversations, including archived conversations, to dedicated worktrees; bulk-toggle session reset side effects including backend `onSessionReset` cleanup; deferred cleanup holds the original Git branch/session/mode for both enable/disable and individual reset, blocks sends/goal starts/resume with temporary `503` plus `Retry-After: 1` and repeat resets/mode changes with busy `409`, and releases reservations on cleanup, runtime-preparation, and request-validation failures without mutating checkouts; new-conversation worktree creation after enablement; stream sends, OCR, goals, memory capture, delivered workspace-file previews, and conversation Git status/diff running from the conversation execution directory; session reset fetching latest `origin/main` and moving to a fresh session branch; dirty reset/delete blockers; nested workspace subdirectory mapping into worktrees; disablement dirty-blocker aggregation; and clean disablement removing worktrees while returning conversations to shared-folder execution. |
 | `test/config.test.ts` | Config data-root coverage: default `AGENT_COCKPIT_DATA_DIR` stays at `<cwd>/data`, `AUTH_DATA_DIR` derives from `<data-root>/auth`, and explicit `AUTH_DATA_DIR` overrides only auth storage. |
 | `test/installStateService.test.ts` | Install manifest coverage: missing manifest infers dev/main, corrupt manifests fall back with `stateSource: "corrupt"`, legacy manifests normalize to schema version 1, writes persist normalized `install.json` including Node runtime and startup metadata, preserves POSIX startup kinds, and `markWelcomeCompleted()` stamps `welcomeCompletedAt`. |
@@ -179,7 +216,7 @@ Test HTTP servers that are contacted through `127.0.0.1` bind explicitly to `127
 | `test/knowledgeBase.db.test.ts` | `KbDatabase` unit tests against a temp-dir-backed SQLite file: schema bootstrap (`KB_DB_SCHEMA_VERSION`, root folder auto-insert, all counters zero on empty DB), `normalizeFolderPath` (accepts valid paths, rejects `..`/control chars/over-long segments), raw CRUD (`insertRaw`/`getRawById`/`getRawBySha` round-trip, `updateRawStatus` persists error class + message, `setRawHandler`/`setRawMetadata`/`setRawDigestedAt` update in place, `deleteRaw` cascades to `entries`/`entry_tags`/`raw_locations`), document structure (`upsertDocumentStructure`, `getDocument`, `listDocumentNodes`, replace-on-upsert, raw-delete cascade), `raw_locations` multi-location (`addLocation` auto-creates folders, same rawId across folders listed independently, `removeLocation` + `countLocations` drive ref counting, `listLocations` sorted), folder operations (`createFolder` ancestor-chain idempotent, `renameFolder` moves subtree + rewrites `raw_locations`, rejects target collisions, refuses to drop root, `listFolderSubtree` returns deepest first), `getCounters` status bucket aggregation + pending = ingested + pending-delete, entry CRUD + tag filtering (`insertEntry`/`getEntry` returns tags sorted, `listEntries` filters by rawId/tag/folder, title substring search is case-insensitive and escapes `%`/`_` so LIKE wildcards match literally, multi-tag filter uses AND semantics (must carry every requested tag; dedupes duplicates, ignores empty strings, merges legacy single-tag param), uploaded (`raw.uploaded_at`) and digested (`entries.digested_at`) ISO date ranges filter inclusively and compose with AND, `countEntries` mirrors list filter results ignoring `limit`/`offset` pagination, limit+offset slice the ordered-by-title result set, `listAllTags` returns distinct tags with usage counts ordered by count desc then name asc, `deleteEntriesByRawId` cascades to `entry_tags`, `deleteEntriesByRawId`/`deleteRaw` mark surviving co-topic entries `needs_synthesis` before cascade, `entryIdTaken` detects slug collisions), `listIngestedRawIds`/`listPendingDeleteRaw` status scoping, `openKbDatabase` migration (fresh DB no-op, legacy `state.json` → raw + raw_locations with re-hashed sha256 + JSON renamed to `.migrated`, mid-flight `ingesting`/`digesting` statuses snapped to `failed`, V1→V2 `needs_synthesis` migration ordering, V2→V3 `original_citation_count` backfill, V4 document-structure table availability, and schema-version bump), **synthesis meta** (`get`/`set` round-trips, returns null for missing keys, overwrite existing key), **synthesis runs + topic history** (run lifecycle states, listing order, history row content + entry IDs, preserved across `wipeSynthesis`), **synthesis topics CRUD** (`upsertTopic`/`getTopic`, upsert updates existing, `deleteTopic`, `listTopics`, `listTopicSummaries`), **entry-topic assignments** (`assignEntries`/`listTopicEntryIds`, `unassignEntries`, `listEntryTopicIds`, duplicate assignment idempotent, `entryCount` computed), **connections** (`upsertConnection`/`listConnectionsForTopic`, `removeConnection`, `listAllConnections`, `connectionCount` computed, topic delete cascades connections), **needs_synthesis column** (default 1 on new entries, `clearNeedsSynthesis`, `markAllNeedsSynthesis`, `markCoTopicEntriesStale`), **god-node detection** (empty when no outliers, flags high-entry-count topics), **wipeSynthesis** (removes topics + connections + resets meta), **getSynthesisSnapshot** (topic/connection counts, status, lastRunAt), **connection discovery queries** (`listTopicPairsBySharedEntries` — returns empty when no shared entries, finds pairs sharing entries, excludes already-connected pairs in both directions, orders by shared count descending; `listTransitiveCandidates` — returns empty when no 2-hop paths, finds A→B→C candidates, excludes pairs with direct connections, returns relationship labels for the path), **synthesis reflections** (`insertReflection` + `listReflections` returns inserted reflection, `getReflection` returns full detail with `citedEntryIds`, `getReflection` returns null for missing id, `wipeReflections` removes all reflections and citations, `listStaleReflectionIds` detects stale reflections when entry is re-digested and `getCounters().staleReflectionCount` mirrors that stale count, `deleteReflections` removes specific reflections, synthesis snapshot includes reflection counts, `wipeSynthesis` also wipes reflections). |
 | `test/knowledgeBase.dreamOps.test.ts` | `parseDreamOutput` (clean JSON, markdown fences, preamble text, non-JSON warning, invalid JSON warning, missing operations array, unknown op types, field validation for create/update/merge/split/delete/assign/unassign/add_connection/remove_connection, confidence value validation, **string-aware brace scanner** — handles braces inside string values, escaped quotes inside string values, and does not cut mid-string on trailing unmatched braces), `applyOperations` (create_topic, update_topic with missing-topic warning, delete_topic, assign_entries, unassign_entries, merge_topics combines sources + reassigns entries, split_topic distributes entries + rewires connections, add_connection, add/update connection endpoint pre-checks with explicit skipped warnings before SQLite foreign-key constraints, remove_connection, multi-op transaction, run-id-backed history rows for create/update/merge/split/delete topic ops). |
 | `test/knowledgeBase.dreamMarkdown.test.ts` | `regenerateSynthesisMarkdown` (index.md with topic table, per-topic markdown files with content + entries + connections, connections.md, wipes stale files on regenerate, handles empty DB). |
-| `test/knowledgeBase.dream.test.ts` | `extractAffectedTopicIds` (empty operations, create/update/delete/merge/split topic ID extraction, deduplication, skips non-topic operations, mixed operations), `parseVerificationOutput` (valid JSON, markdown-fenced JSON, no-JSON warning, malformed JSON warning, missing verified array, invalid entry shape skipping, preamble text handling, **string-aware brace scanner handles braces inside string values**), `parseDiscoveryOutput` (valid accepted results with filtering rejected, no-JSON warning, missing results array warning, defaults confidence to inferred, skips entries with missing required fields, markdown-fenced JSON, all-rejected returns empty, **string-aware brace scanner handles braces inside string values**), **parseReflectionOutput** (parses valid reflections, returns warning when no JSON found, returns warning for missing reflections array, defaults invalid type to insight, skips reflections without `cited_entry_ids`, skips items missing title or content, handles markdown fenced JSON, returns empty reflections for empty array, **string-aware brace scanner handles braces inside string values**), **identifyTopicClusters** (returns empty for empty input, returns empty when all topics are singletons, identifies a single connected component, identifies two separate clusters, excludes singletons from clusters), **buildReflectionPrompt** (renders topics with summaries, renders connections with labels, renders entries with titles and body text, handles null/missing summaries gracefully, handles null/missing connection labels, handles null/missing entry body, renders mixed complete and incomplete data, handles empty arrays for each section), **KbDreamService** (isRunning returns false initially, dream sets isRunning true during execution then false after, dream calls backend with correct prompt pipeline, dream emits progress via onEmit callback, redream calls wipeSynthesis before running and starts a `redream` synthesis run, redream clears topic embeddings without deleting entry embeddings, redream refreshes entry embeddings during cold start, dream starts an `incremental` run and finishes run rows as completed/failed/stopped, dream returns error result on failure, dream cleans up isRunning on error, dream resolves settings and backend from registry, dream rejects when backend not found, dream rejects when dreaming CLI backend not configured, dream revokes KB search MCP session on completion, dream revokes KB search MCP session on error, concurrent dream calls for same workspace rejected while running, **parse-failure retry** — retries the CLI once when the parser reports a JSON-parse/extraction failure and processes the entry on the second attempt, writes raw attempt outputs to `_dream_debug/parse-failure-<phase>-<iso>.txt` when both attempts fail to parse, does **not** retry when the first attempt parses cleanly, does **not** retry when the CLI returned `null` on the first attempt and preserves the existing skip behavior), **hasParseFailure** (empty warnings → false, "JSON parse error" → true, "no JSON found"/"no JSON object found" → true, case-insensitive, structural/schema warnings like missing arrays or unknown op types → false, mixed warnings containing any parse failure → true) |
+| `test/knowledgeBase.dream.test.ts` | `extractAffectedTopicIds` (empty operations, create/update/delete/merge/split topic ID extraction, deduplication, skips non-topic operations, mixed operations), `parseVerificationOutput` (valid JSON, markdown-fenced JSON, no-JSON warning, malformed JSON warning, missing verified array, invalid entry shape skipping, preamble text handling, **string-aware brace scanner handles braces inside string values**), `parseDiscoveryOutput` (valid accepted results with filtering rejected, no-JSON warning, missing results array warning, defaults confidence to inferred, skips entries with missing required fields, markdown-fenced JSON, all-rejected returns empty, **string-aware brace scanner handles braces inside string values**), **parseReflectionOutput** (parses valid reflections, returns warning when no JSON found, returns warning for missing reflections array, defaults invalid type to insight, skips reflections without `cited_entry_ids`, skips items missing title or content, handles markdown fenced JSON, returns empty reflections for empty array, **string-aware brace scanner handles braces inside string values**), **identifyTopicClusters** (returns empty for empty input, returns empty when all topics are singletons, identifies a single connected component, identifies two separate clusters, excludes singletons from clusters), **buildReflectionPrompt** (renders topics with summaries, renders connections with labels, renders entries with titles and body text, handles null/missing summaries gracefully, handles null/missing connection labels, handles null/missing entry body, renders mixed complete and incomplete data, handles empty arrays for each section), **KbDreamService** (isRunning returns false initially, dream sets isRunning true during execution then false after, dream calls backend with correct prompt pipeline, dream emits progress via onEmit callback, redream calls wipeSynthesis before running and starts a `redream` synthesis run, redream clears topic embeddings without deleting entry embeddings, redream refreshes entry embeddings during cold start, dream starts an `incremental` run and finishes run rows as completed/failed/stopped, dream returns error result on failure, dream cleans up isRunning on error, dream resolves settings and backend from registry, dream rejects when backend not found, dream rejects when dreaming CLI backend not configured, dream revokes KB search MCP session on completion, dream revokes KB search MCP session on error, concurrent dream calls for same workspace rejected while running, **parse-failure retry** — retries the CLI once when the parser reports a JSON-parse/extraction failure and processes the entry on the second attempt, writes raw attempt outputs to `_dream_debug/parse-failure-<phase>-<iso>.txt` when both attempts fail to parse, does **not** retry when the first attempt parses cleanly, does **not** retry when the CLI returned `null` on the first attempt and preserves the existing skip behavior; no-retry harnesses preserve pending entries after execution/empty/unusable output, including all-invalid items, and apply partially valid output once with its item warnings recorded), **hasParseFailure** (empty warnings → false, "JSON parse error" → true, "no JSON found"/"no JSON object found" → true, case-insensitive, structural/schema warnings like missing arrays or unknown op types → false, mixed warnings containing any parse failure → true) |
 | `test/knowledgeBase.autoDream.test.ts` | Auto-Dream scheduling helpers and scheduler: normalizes invalid persisted configs to off, validates interval/window config payloads, computes same-day and overnight window state, reports next run timing for interval/window modes, starts interval runs only when due and pending synthesis exists, skips when no work is pending or a dream is already running, starts window runs only inside the configured local-time window, requests cooperative stop for scheduler-owned window runs after the window closes, and does not stop manual dream runs at window end. |
 | `test/knowledgeBase.dream.test.ts` Auto-Dream lock coverage | `KbDreamService.dream()` marks a workspace running before the first async pre-flight yield, preventing a manual and scheduled start from racing through the running check together. |
 | `test/chatService.workspace.test.ts` Auto-Dream coverage | Per-workspace KB Auto-Dream config defaults to `{ mode: 'off' }`, persists on `WorkspaceIndex.kbAutoDream`, round-trips through `getWorkspaceKbAutoDream`, and `listKbEnabledWorkspaceHashes()` returns only workspaces with `kbEnabled: true` for scheduler scans. |
@@ -232,7 +269,7 @@ Test HTTP servers that are contacted through `127.0.0.1` bind explicitly to `127
 | `test/sessionFinalizerQueue.test.ts` | Session finalizer queue coverage: persisted enqueue/completion, job identity de-duplication by type/source/conversation/session, retry after transient handler failure, permanent failure after `maxAttempts` with terminal observer notification and warning logs, retry due-time gating via `nextAttemptAt`, observer-error swallowing, configured/default/clamped concurrency, oldest-pending selection across workspace stores, `stop()` persistence-without-drain behavior, `waitForIdle()` timeout, malformed store-record filtering, handler payload clone isolation, recovery of `running` jobs to executable work after restart, and `workspaceId` job records resolving to legacy storage keys when older on-disk queue filenames still live under the original workspace folder. |
 | `test/tabIndicator.test.ts` | Browser tab status state machine (mirrors `web/AgentCockpitWeb/src/tabIndicator.js`): idle default, `running` on stream start, returns to idle when last stream ends with tab visible, transitions to `done`/`error` only when tab is hidden, multi-conversation aggregation (stays running while any stream active), error flag sticky across concurrent streams and consumed on transition, `visibilitychange` clears `done`/`error` back to idle, running state unaffected by visibility change |
 | `test/messageQueue.test.ts` | Message queue: adding, deleting, rendering, in-flight protection, pause/resume, per-conversation isolation, send button state, suspended (restored) state |
-| `test/streamFrameReducer.test.ts` | Pure desktop stream-frame reducer coverage with deterministic state/context inputs: placeholder creation and ordered content-block mutation for text/thinking/tool/artifact frames, plan and question pending interactions, `tool_outcomes` patching, replay start/end cleanup, final assistant message placeholder replacement/deduplication, terminal/non-terminal errors, unread/queue effects on `done`, goal snapshot freshness, goal-clear timestamps, live-only Memory/Workspace Context/KB update projections and browser-event effects, assistant reconciliation delay, plan-usage refresh effects, and browser-safe `src/contracts/responses.StreamEvent` alias coverage for representative stream frames. |
+| `test/streamFrameReducer.test.ts` | Pure desktop stream-frame reducer coverage with deterministic state/context inputs: placeholder creation and ordered content-block mutation for text/thinking/tool/artifact frames, plan and question pending interactions, `tool_outcomes` patching, replay start/end cleanup, final assistant message placeholder replacement/deduplication, terminal/non-terminal errors, unread/queue effects on `done`, goal snapshot freshness, goal-clear timestamps, live-only Memory/Workspace Context/KB update projections and browser-event effects, assistant reconciliation delay, plan-usage refresh effects, browser-safe `src/contracts/responses.StreamEvent` alias coverage for representative stream frames, and matching outcomes resolving only `decisionBound` cards. |
 | `test/streamStore.test.ts` | v2 `StreamStore` (`web/AgentCockpitWeb/src/streamStore.js`) module-loaded into jsdom with mocked `AgentApi` and a fake WebSocket: reducer adapter wiring, `lastFrameAt` updates, plan/question interaction state, stale replayed plan interaction clearing when a final assistant message arrives, artifact frames appended as generated-artifact content blocks, terminal stream-error source preservation (`streamErrorSource` from WS frames and persisted durable messages), ordered replay rebuilds, `respond()` stdin-vs-message behavior, preservation and subsequent answering of questions (including reused tool IDs) and revised plans received before a delayed input acknowledgement, composer profile posting, reset refresh replacing stale composer picker values with the server-returned reset conversation values, reset posting an explicit replacement profile when supplied by the UI, attachment and typed queue helpers, queue auto-drain and 409 rollback including live-tail server PUT payloads after success, 409 rollback, and WebSocket-open failure, per-conversation queue PUT coalescing, stream-error clearing and queue resume, REST-backed `stopStream()` that works with a closed WS and locally unsticks the UI with `source:'abort'` if post-abort refetch fails, failed WebSocket-open cleanup for retry, draft restore on POST failure, unread state, active-goal sidebar state after turn completion, stale goal snapshot rejection, immediate optimistic goal-strip state plus returned goal-event message upsert on `setGoal`, `refreshGoal()` preserving the local active runtime goal when backend status temporarily returns `null`, goal-event messages not replacing streaming placeholders, goal-only stream placeholder cleanup, `load()` hydration of active Codex/Claude Code-family goals, refresh-only `memory_update` frames dispatching `ac:memory-update` without chat bubbles while preserving `writeOutcomes`, displayable `memory_update` frames appending one Memory bubble with `writeOutcomes`, `workspace_context_update` frames patching `conv.workspaceContext` and dispatching `ac:workspace-context-update`, and `subscribeGlobal` first-touch behavior. |
 | `test/streamStore.test.ts` | Also covers `refreshLoadedConversations()` so workspace-level session resets, including Worktrees enable/disable, refetch already-loaded conversation state and clear stale in-memory messages. |
 | `test/goalState.test.ts` | Browser-safe goal helpers: normalizes second-vs-millisecond goal timestamps, identifies active goals, locally ticks active elapsed time from backend snapshots, leaves paused goals at the upstream elapsed snapshot, maps complete goals to the achieved label, checks action support from backend-neutral `supportedActions`, and strips accidental copied goal-card/strip prefixes without stripping ordinary objectives that begin with "Codex". |
@@ -240,8 +277,8 @@ Test HTTP servers that are contacted through `127.0.0.1` bind explicitly to `127
 | `test/cliUpdateStore.test.ts` | Web CLI update store coverage: `ensureFresh()` reads the cached `/cli-updates` snapshot and automatically calls `/cli-updates/check` when a target row is newly created and unprobed (`lastCheckAt:null`, unknown install method, no version/error), then publishes the fresh versions to subscribers; already-probed missing/error rows do not force another check. |
 | `test/frontendRoutes.test.ts` transcript paging static coverage | Asserts desktop transcript paging uses `AgentApi.conv.getConversation`, `AgentApi.conv.getMessageWindow`, `StreamStore.loadOlderMessages`, `loadAroundMessage`, and `loadTailMessages`; verifies `ChatLive` preserves scroll offset after prepending older messages, saves/restores per-conversation feed anchors while switching chats, uses pinned-jump around-message loading, exposes older-page and pinned-window loading status UI, restores the tail before Back to end, and does not add `react-virtuoso`, `@tanstack/react-virtual`, or `react-window` dependencies. |
 | `test/mobileAppModel.test.ts` | Mobile PWA app-model helper coverage: file-delivery/upload marker parsing and previews, reset-session list normalization with explicit null contract fields, conversation-list item projection for empty conversations, optimistic-message replacement/removal and recovered-send reconciliation, live active-conversation ref resolution for queued sends after attaching to an already-running stream, runtime metadata projection including Claude Code Ultracode mode set/clear behavior, OpenCode provider/model display normalization including OpenRouter prefix hiding, reset-profile repair selection, backend-id resolution and profile lookup for GitHub Copilot profiles, stream reconnect delay backoff/cap, backend-neutral goal slash-command parsing, and backend-neutral goal timestamp/elapsed/status/action/stale-snapshot/local-runtime-preservation plus accidental copied goal-card objective cleanup helpers. |
-| `test/mobileSendPipeline.test.ts` | React-mounted mobile send hook coverage: delayed input acknowledgements preserve and allow answering a subsequent question or replacement plan; successful answers clear the submitted interaction; input delivery failures retain it for retry. |
-| `test/mobileChatStreamEvents.test.ts` | Pure Mobile PWA stream-event projection coverage: open-chat action lists for text/thinking placeholders, assistant-message upsert and stream-text reset, plan/question pending interactions and notifications, title/usage/goal/error/done/replay handling, conversation-list action projection for assistant/title/goal/error/done/tool frames, and conversation-list patching from assistant messages. |
+| `test/mobileSendPipeline.test.ts` | React-mounted mobile send hook coverage: delayed input acknowledgements preserve and allow answering a subsequent question or replacement plan; successful answers clear the submitted interaction; `mode:'message'` answers are sent before the cleared card re-renders, while a newer card still blocks them; input delivery failures retain it for retry. |
+| `test/mobileChatStreamEvents.test.ts` | Pure Mobile PWA stream-event projection coverage: open-chat action lists for text/thinking placeholders, assistant-message upsert and stream-text reset, plan/question pending interactions and notifications, title/usage/goal/error/done/replay handling, conversation-list action projection for assistant/title/goal/error/done/tool frames, conversation-list patching from assistant messages, and the `decisionBound` card flag plus outcome completion candidates. |
 | `test/adrLint.test.ts` | ADR lint smoke coverage: runs `scripts/adr-lint.js` against the repository ADR set so current ADRs keep valid frontmatter/sections/live `affects` paths, historical-tagged ADRs can retain archived references to files that were removed later, and retired path prefixes such as `public/v2/` remain individually exempt without disabling validation for other paths in the same ADR. |
 | `mobile/AgentCockpitPWA` | Mobile PWA type/build coverage, run with `npm run mobile:typecheck && npm run mobile:build` from the repository root: validates the Vite React client, same-origin API client, CSRF-backed REST calls, WebSocket URL construction, extracted stream/list monitor hooks and automatic replay reconnect after transient mobile socket loss, extracted send pipeline and queue-drain wiring, sanitized assistant Markdown/GFM rendering dependencies including wrapped code-block copy controls, extracted browser file upload progress/cancel/OCR wiring, queue edit/reorder state, file delivery and generated-artifact preview/share wiring, sessions, session-reset state replacement/list refresh, extracted run-selection state, Claude Code Mode, Codex speed, and backend-neutral goal selection/action payloads, workspace explorer mutation calls, visual-viewport shell code including iOS keyboard focus pinning and idempotent viewport metric updates, and generated `/mobile/` static shell. |
 | `test/graceful-shutdown.test.ts` | Server shutdown on SIGINT/SIGTERM. Spawns `server.ts` through Node with tsx's loader, `NODE_ENV=test`, and an isolated `PORT` so the developer `.env` cannot clobber the child process onto a PM2-owned port; asserts that the server logs signal receipt and HTTP close, and tolerates a matching signal-style exit code if the runtime reports one. |
@@ -273,12 +310,612 @@ Workspace Context no longer has a diagnostic graph-report command. Run history i
 
 Current stream recovery coverage includes:
 
-- `test/chat.websocket.test.ts`: active CLI streams survive longer than the old disconnect grace period, reconnect replay still works, explicit `{ type: 'reconnect' }` replays buffers created after the WebSocket connection opened, live-only `kb_state_update` frames are not replay-buffered, memory delete fan-out reaches idle connected conversations in the same workspace, completed replay buffers use the configured cleanup timeout after replay, legacy WS abort clears stale buffered frames and persists a durable abort `streamError`, connected-at-done replay buffers self-clean, and disconnected terminal errors replay as `assistant_message` + `error` + `done`.
+- `test/chat.websocket.test.ts`: decision answers without a live stream fall back to message mode unless the conversation's adapter reports `decisionsRequireActiveTurn` (then `409`), active CLI streams survive longer than the old disconnect grace period, reconnect replay still works, explicit `{ type: 'reconnect' }` replays buffers created after the WebSocket connection opened, live-only `kb_state_update` frames are not replay-buffered, memory delete fan-out reaches idle connected conversations in the same workspace, completed replay buffers use the configured cleanup timeout after replay, legacy WS abort clears stale buffered frames and persists a durable abort `streamError`, connected-at-done replay buffers self-clean, and disconnected terminal errors replay as `assistant_message` + `error` + `done`.
 - `test/chat.rest.test.ts`: `/active-streams` returns both compatibility `ids` and operational `streams[]` details from runtime streams and durable accepted/preparing jobs, including `runtimeAttached`, `pending`, and recorded backend `runtime` identifiers; `GET /backends` exposes backend `resumeCapabilities`; `GET /install/status` returns install manifest status from `InstallStateService`; `GET /install/doctor` returns install doctor status; `POST /install/welcome-complete` delegates to `InstallStateService.markWelcomeCompleted`; `POST /install/actions/:id/run` delegates to `InstallDoctorService.runInstallAction` with the active-stream guard; `GET /cli-updates` returns the cached CLI update snapshot and `POST /cli-updates/:id/update` delegates with the active-stream guard; `POST /conversations/:id/abort` cancels active streams without requiring an open WS, cancels pending sends before the backend adapter starts, persists a durable abort `streamError` for the accepted user message, remains idempotent after natural completion, coalesces concurrent abort requests without duplicate backend abort calls or duplicate durable `streamError` messages, and does not replace an already-finalizing backend terminal error with a late abort; durable jobs are created during the pre-stream setup window and removed after completion/abort; stream supervisor cleanup aborts and detaches active runtime streams for archive/delete while clearing durable jobs; graceful shutdown marks active jobs finalizing with `Interrupted by server shutdown` for startup reconciliation; startup reconciliation marks unrecoverable active jobs interrupted without re-sending prompts and is idempotent when the interruption marker already exists; reset/archive/delete reject while a send is still pending; update/restart guards include pending sends; `POST /message` returns `409` while a stream is active or another send is still preparing, does not persist a duplicate user message, does not mutate backend/model/effort state on duplicate sends, and concurrent POSTs start only one stream.
 - `test/chat.streaming.test.ts`: terminal stream errors persist durable `Message.streamError` records, preserve partial assistant output first, synthesize `done` when the backend exits without one, run stream cleanup before emitting client-visible `done`, break out of the stream loop even when the backend iterator would otherwise hang, ignore non-terminal warning frames for durable error persistence, and convert internal `session_recovery` events into friendly persisted system messages with diagnostic metadata and a refreshed recovery snapshot that excludes the current failed turn.
 - `test/processStream.golden.test.ts`: direct `processStream` traces guard the ordered browser frame contract and persisted assistant `contentBlocks` without the Express/WebSocket harness, including result-only persistence and synthetic plan approval from plan-file writes.
 - `test/streamFrameReducer.test.ts`: pure reducer traces cover desktop browser state transitions and declarative effects for replay, placeholders, interactions, assistant replacement, goals, live-only workspace updates, unread marking, and queue draining without timers, sockets, browser APIs, or `AgentApi`.
 - `test/streamStore.test.ts`: active stream hydration sets `streaming: true`, active goals keep the sidebar row in the streaming/blue state after the current backend turn's `done`, paused goals remove that goal-derived streaming state, stale replayed `goal_updated` frames cannot overwrite newer goal state, final assistant messages clear stale replayed plan approval state, `setGoal` shows an immediate optimistic goal strip and upserts the returned server goal-event message, `refreshGoal` preserves the local active runtime goal when backend status temporarily returns `null`, goal-event messages do not replace assistant streaming placeholders, goal-only streams remove empty placeholders on done, `load()` and stale-stream refetch rehydrate active `streamError` from the final persisted assistant `streamError` message, older historical `streamError` messages followed by normal conversation activity stay historical, durable stream-error refetch pauses queue draining, non-terminal warnings do not flip `uiState` to `error`, failed WS opens clear stale socket state for retry, unexpected active WS close reconnects, `stopStream` uses REST abort even with a closed WS and refetches durable abort messages so optimistic placeholders are removed, normal-send `409` rolls back optimistic placeholders into active-stream state, and queued-send `409` restores the original queued item with attachments intact while preserving edits made to later queued items during the in-flight send.
+
+## CoCo Phase 0 Native Research
+
+CoCo is not yet a registered harness. `scripts/probe-cortex-phase0.ts` is an
+opt-in research runner, separate from normal Jest/CI and from the planned
+production adapter compatibility suites. It requires macOS, Cortex Code 1.2.35,
+`CORTEX_PHASE0=1`, and `CORTEX_TEST_CONNECTION` naming an authenticated shared
+Snowflake connection. Run it through `./node_modules/.bin/tsx`; optional
+`CORTEX_TEST_COMMAND` and `CORTEX_TEST_MODEL` select command/model. Native
+`CORTEX_ACP_TEST_MODE=1` is rejected because it cannot establish real inference.
+
+The runner uses real inference and synthetic temporary workspaces to verify
+clean ACP startup/instruction delivery, cancel/session reuse, cleanup after root
+death without killing an unrelated process, denied read/write with an unmatched
+allowlist, and inference failure from an empty Snowflake home. Expected lack of
+strict zero-tool support is reported as a capability gate, not a successful
+restricted processor. A private temporary summary records CLI/OS/Node/revision/
+dirty state without connection names, raw stderr, OAuth data or credentials.
+Existing Grok transport/process helpers are research scaffolding only and are
+not production CoCo dependencies. This probe does not test Cockpit routes/UI,
+actual Memory/KB/Context/Routine services or native Windows/Linux behavior.
+
+Seven sanitized ordered native wire excerpts live in
+`test/fixtures/cortex/1.2.35/`, with provenance and scope in their README. They
+preserve protocol shapes for future adapter tests; they are not runnable mocks
+or current application acceptance. Results and the exact invocation are in
+[the research report](research/cortex-code-acp-evaluation.md#phase-0-follow-up--2026-11-05).
+See [Proposed ADR-0099](adr/0099-integrate-cortex-code-through-its-native-acp-interface.md)
+and [the implementation tracker](design/cortex-code-implementation-plan.md).
+
+## CoCo P2 Native Runtime Smoke
+
+`scripts/probe-cortex-runtime.ts` uses CoCo's dedicated runtime/session/transport/
+process modules. It is opt-in and separate from normal Jest/CI, browser checks
+and the future complete adapter compatibility suite. Run:
+
+```sh
+CORTEX_RUNTIME_PROBE=1 CORTEX_TEST_CONNECTION='<existing authenticated connection>' \
+  ./node_modules/.bin/tsx scripts/probe-cortex-runtime.ts
+```
+
+Requires macOS, Cortex Code 1.2.35 and real saved authentication. Optional
+`CORTEX_TEST_COMMAND` and `CORTEX_TEST_MODEL` override the native command/model;
+default model is `claude-sonnet-4-6`. Reject pre-enabled ACP fake-agent test mode.
+Production runtime resolution also forces fake mode off. All file/shell work
+uses private temporary fixture workspaces; the tested profile deliberately
+reuses the intended shared terminal authentication. No application server is
+started and no production Memory/KB/outreach is exercised.
+
+The smoke asserts exact inference markers plus usage, native cancellation and
+subsequent turn, saved session load in a fresh process, child cleanup after root
+SIGKILL while unrelated work survives, no delayed sleeper write, empty-home
+inference failure despite successful session creation, no waiting browser wizard,
+and a fresh runtime after reusable shutdown. Reverse tool permissions are
+explicitly approved only inside this opt-in fixture runner. Normal foundations
+deny unowned reverse requests.
+
+The private 0700 temporary root retains a 0600 report with CLI/OS/Node/revision/
+dirty evidence and assertion booleans, without raw protocol, connection/account,
+stderr or OAuth values. Failures print only error type. On November 6, 2026,
+CoCo 1.2.35 / macOS arm64 / Node 26.0.0 passed every scenario against revision
+869ee8a plus the P2 working tree. A compact result is also recorded in the
+implementation tracker. This certifies the tested runtime paths, not adapter
+event correctness, durable Cockpit chats, browser/mobile behavior, native Linux/
+Windows, full isolation, strict zero-tool execution or delegation finalization.
+
+## CoCo P3 Native Event Acceptance
+
+Run the internal bridge against the real authenticated CLI:
+
+```sh
+CORTEX_EVENTS_PROBE=1 CORTEX_TEST_CONNECTION='<existing authenticated connection>' \
+  ./node_modules/.bin/tsx scripts/probe-cortex-events.ts
+```
+
+`scripts/probe-cortex-events.ts` requires macOS and CoCo 1.2.35; optional
+`CORTEX_TEST_COMMAND` selects its executable. It refuses fake-agent mode. The
+probe uses claude-sonnet-4-6 in private temporary workspaces and exercises the
+actual CortexTurn/decoder/interactions/configuration/attachment/artifact modules.
+It verifies catalog discovery and low-to-auto reset; write/read plus explicit
+FILE_DELIVERY and byte-preserving ArtifactStore persistence; two sequential
+questions including typed free form and rejected duplicate responses; plan
+revision then approval, with the output file absent at both gates; and explicit
+PNG input whose blue square/green circle are identified by actual inference.
+Every successful turn reports final usage once. The fixture permits a final
+newline in generated text and verifies persisted bytes against the actual file.
+It never retries interrupted tool work.
+
+The empty-home case separately checks missing-catalog rejection of configured
+chat and actual unconfigured native inference failure. The latter exercises the
+retained connection-error classifier with no model override and no tool approval;
+it is an explicit probe, not a fallback execution path in CortexTurn. API 408 is
+tested from the sanitized native fixture, not induced against a live service.
+RPC failures, timeouts, missing/partial counters, arbitrary paths, unknown
+models/formats and duplicate callbacks are deterministic tests.
+
+On November 6, 2026 all native scenarios passed on CoCo 1.2.35 / macOS arm64 /
+Node 26.0.0, revision 549f111 plus the P3 working tree. A private 0700 temporary
+root retains a 0600 summary with platform/version/revision/dirty state and
+assertion booleans. It excludes raw account/connection data, protocol, stderr,
+OAuth values and transcript text. No production Cockpit server, real Memory/KB
+services or outreach is used. This is not yet an adapter/desktop/mobile/native
+Windows/Linux compatibility suite; durable chat and UI remain P5/P7.
+
+The six P3 Jest suites contain 30 tests. They include existing conversation
+upload/queue/artifact/preview/download and ledger storage without registering a
+CortexCodeAdapter. Whole app/native UI acceptance is separate; normalization
+fixtures do not certify a processor role or native image generation.
+
+## Cortex mobile media/history acceptance (P7 C46)
+
+Run after building web/mobile, separately from asset-mutating full Jest:
+
+```sh
+CORTEX_MOBILE_PROBE=1 CORTEX_TEST_CONNECTION=<saved-connection> \
+  npx tsx scripts/probe-cortex-mobile.ts
+```
+
+The opt-in macOS/CoCo 1.2.35 runner starts only an isolated PM2/data/workspace
+fixture, uses shared terminal auth and production Chromium assets at 390×844.
+It selects a different configured profile, Sonnet 4.6/medium, checks hidden
+Goal/Fast/Ultracode and rejects a valid unsupported Goal request. It uploads real
+PNG/text files, rejects Auto image OCR before inference, runs native OCR with
+selected model/effort (while stored chat still says Auto), and verifies cache
+reuse without another native request. A dedicated native chat turn reads the
+image/text before the CSV fixture exists. A second turn reviews and runs a
+syntax-checked bounded Python gate, renders thinking/tools, survives
+socket replay, and delivers an explicit artifact. Changing the source CSV must
+not change the preview or actual downloaded bytes. The runner reloads, checks
+profile locking, resets and reads old session/artifact history (including actual
+preview-dialog Close clicks above the read-only screen), then Stops a
+bounded descendant and verifies its final file is absent and only one attempt
+ran. A fresh reply proves recovery without prompt/tool replay. The ten-minute
+external deadline closes Chromium; PM2 allows twenty seconds for cleanup.
+Reports contain CLI/OS/Node/revision/dirty and sanitized flags; failure text and
+screenshots remain in private temp directories. Model refusal ends a fixture
+gate check promptly rather than being retried by the application.
+
+C46's matrix also uses the real C43 interaction probe for questions, free text,
+revision/rejection/approval and stale IDs, C44 for queue semantics, and C45 for
+usage/restart/ledger. None certifies physical iOS/Android/Safari, native Web Share,
+Windows/Linux, C26's human setup handoff, or strict Memory. New deterministic
+attachment/selection suites and extended contract/route/store/policy/CoCo
+integration tests cover the associated selection and late-response fixes. The
+integration trace requires low then medium native effort configuration and fresh
+storage restoration; other harness effort normalization remains covered.
+
+## Cortex usage display and persistence (P7 C45)
+
+`test/cortexUsageUi.test.ts` renders desktop CoCo cards and mobile `usageBar.tsx`,
+checks missing/zero context, all four token buckets (including zero caches),
+unknown-vs-reported-zero cost and existing Claude/Interactive/Codex/Kiro/Grok
+reported/estimated formatting. It tests shared browser-safe usage projection
+and pure period/model/service-tier aggregation, including mixed priced/unpriced
+ledgers. This replaces the mobile source-string usage test. The profile-editor fixture
+loads the new projection dependencies and renders standalone/mixed Usage
+settings, retaining unknown CoCo prices, known estimates and cached-token chart totals. CoCo HTTP/WS
+integration adds nonzero cache/context fixture counters, two-turn event totals,
+fresh ChatService restoration, daily ledger agreement and replay without another
+native prompt or duplicate accounting. Existing pricing/usage ledger suites
+remain the calculator/storage regression checks.
+
+Run the native probe separately from asset-mutating full Jest, after building
+both clients:
+
+```sh
+CORTEX_USAGE_PROBE=1 CORTEX_TEST_CONNECTION=<saved-connection> \
+  npx tsx scripts/probe-cortex-usage.ts
+```
+
+This opt-in macOS/1.2.35 probe uses shared terminal credentials and isolated
+PM2/data/workspace fixtures. It selects Sonnet 4.6/low through each client,
+asserts outgoing model/effort, makes two native prompts per client and compares
+live usage, tooltip/breakdown, fresh-page values, exact cache totals and unknown
+prices with REST. Replay events are excluded from live-event counts; persisted
+usage must remain unchanged. It restarts only its fixture PM2 app and verifies
+both clients and daily ledger totals again. Desktop Usage settings must show
+unpriced totals/table prices and an honest empty cost-chart explanation.
+Conversation auto-title changes are resolved before selecting a reloaded row.
+The six-minute external deadline closes Chromium; PM2 permits twenty seconds
+for owned shutdown. Temporary reports include CLI/OS/Node/revision/dirty state,
+numeric usage and success flags; screenshots, failure details and fixture
+configuration remain in private temp directories. Never print/share auth config.
+This certifies C45 scope only; C26, strict Memory, C46/C47 and platform gates
+remain independent. Mobile PWA manifests/service worker/auth policy do not change.
+
+Native acceptance on November 7 local / November 8 UTC passed in
+`cockpit-cortex-usage-xaTzNR/report.json` under system temp: four native prompts,
+exact both-client totals after reload/PM2 restart, n/a Snowflake costs and a
+reconciled ledger (20 input, 573 output, 187806 cache read, 14426 cache write).
+Desktop/mobile/Usage settings screenshots were inspected; shared auth was
+retained and the fixture PM2 app removed. Earlier failed runner expectations
+were a stale auto-renamed title and mobile's sub-10-percent precision, recorded
+in the tracker; they are not product compatibility passes.
+
+C45's shared summary markup preserves the 80 KiB Settings chunk limit. Total
+JS allowance increases from 913 to 914 KiB; CSS/index/other chunk limits remain.
+
+## Cortex queued input, abort and reconnect (P7 C44)
+
+Normal coverage adds `test/cortexQueueUi.test.ts` for the actual mobile send
+pipeline: duplicate enqueue exclusion, save-failure/new draft/upload retention,
+latest-render draining, intervention by question/conversation change, explicit
+resume after interruption and synchronous Stop suspension. New
+`test/mobileStreamOwnership.test.ts` exercises the actual mobile connection hook
+with controlled sockets/timers: reconnect ownership, matching versus stale CoCo
+outcomes, superseded socket rejection and terminal cleanup without a new prompt;
+unflagged cards survive matching outcomes and stream end. Desktop store tests
+cover replayed decision completion (decision-bound cards only), pending-question send
+protection, queue preservation after abort, scheduled-send races and suspension
+before cancellation finishes. `test/cortexIntegration.test.ts` checks actual
+HTTP/WS input rejection during native work/after cancellation, persisted queues,
+exactly one native prompt and one original user message. Existing C43/reducer/
+mobile projection/pipeline tests remain aligned. The Claude Interactive browser
+abort case now checks Stop with a nonempty retained draft; its known native
+startup limit and Grok's model/auth limit from C43 remain unverified here.
+
+Build both clients before this opt-in paid native check:
+
+```sh
+CORTEX_QUEUE_PROBE=1 CORTEX_TEST_CONNECTION='<saved-name>' npx tsx scripts/probe-cortex-queue.ts
+```
+
+The runner requires macOS and CoCo 1.2.35, seeds isolated data/workspace/profile,
+serves production assets with PM2, selects Sonnet 4.6/low through each client and
+asserts the outgoing selection. Native Python fixtures are bounded by two-minute
+file gates. Each client exercises one question/queue flow and one abort/resume
+flow: retained draft through a disabled question and socket reconnect, held input
+HTTP acknowledgement after native completion, rejection of the closed decision,
+matching completion replay, persisted queue, one native script attempt, one
+queued prompt and preserved newer unsent draft. Stop must drain the owned Python
+descendant, leave its final file absent, pause the queue, retain it across a fresh
+page and resume only on explicit user action. Real native inference after abort
+must not rerun interrupted tools. Reports retain only sanitized flags/stages and
+CLI/OS/Node/revision/dirty evidence, with private failure diagnostics; the external
+eight-minute deadline closes the browser and PM2 allows twenty seconds to drain.
+Shared terminal auth stays intact. Run asset-mutating full Jest separately, then
+rebuild desktop/mobile assets. This certifies C44 scope, not C26, native steering,
+mobile full-reload draft persistence, C45–C47/P9 or Windows/Linux acceptance.
+
+The November 7 local / November 8 UTC native C44 report
+`cockpit-cortex-queue-NIIXq0/report.json` under system temp passed all four flows.
+The first run passed desktop queueing but exposed the older-refresh/abort race;
+its automatic queued send is retained as failed evidence. The corrected run
+paused before cancellation and drained native descendants. The existing C43
+interaction probe also passed (`cockpit-cortex-interactions-wwZkRe/report.json`)
+with revised plans and approvals on both clients. An earlier interaction recheck
+stopped at a missing Model selector before inference; no result is inferred from
+that attempt. Failure artifacts now include private UI text as well as the stack,
+while summary reports remain sanitized. All owned PM2 fixtures were deleted.
+
+C44 adds approximately 0.5 KiB of desktop JS for role guidance, Stop availability,
+decision completion and queue guards; the aggregate budget moves from 912 to
+913 KiB. Per-screen/index/CSS limits stay unchanged; verify actual production
+output with `npm run web:budget`.
+
+## Cortex desktop/mobile interaction controls (P7 C43)
+
+The normal rendered tests listed above exercise the cards and actual reply
+orchestrators with deferred HTTP responses; deterministic native interaction and
+HTTP/WS integration suites continue to cover generation IDs and exact
+approve/revise/reject/option/free-form outcomes. A new sanitized `plan-entry.json`
+captures the separate native approve/decline entry schema; interaction tests
+verify chat entry without execution and restricted/headless/unknown rejection.
+The Claude Interactive native UI suite adds an assertion that revision
+controls remain absent; it is reviewed/aligned here, not a new real-Claude CLI
+version compatibility claim.
+
+Build both clients, then opt in with:
+
+```sh
+CORTEX_INTERACTION_PROBE=1 CORTEX_TEST_CONNECTION=<saved-name> npx tsx scripts/probe-cortex-interactions.ts
+```
+
+This macOS/CoCo 1.2.35 probe serves real production assets from an isolated
+PM2/data/workspace fixture and retains shared terminal credentials. It selects
+the verified Sonnet 4.6/low pair through both clients (asserted in outgoing message
+requests), answers sequential questions
+with custom text and an option, requests a revised plan, checks fresh decisions,
+rejects old/duplicate REST replies and verifies no file exists before approval.
+Separate rejection conversations verify nonexecution whether native planning
+finishes in text or returns to another approval gate; any remaining live turn is
+explicitly stopped and drained. Each conversation has one original user prompt,
+so replies cannot silently become prompt resends. The external eight-minute
+deadline closes the owned browser; PM2 allows twenty seconds for native shutdown.
+Only sanitized stages/booleans/version/revision/platform evidence go into the
+private temp report; failures keep a private diagnostic file. This is interaction
+acceptance only, not C26's human OAuth, full C44–C47/P9 or Windows/Linux evidence.
+
+The November 7 native run passed, with private evidence under system temp at
+`cockpit-cortex-interactions-MVtAcg/report.json`. The PM2 fixture was deleted and
+shared credentials were retained. Scoped existing-harness UI attempts do not
+count as passes: Claude 2.1.318 exited code 1 before SessionStart/plan handling
+(the serial question case did not run). Grok 1.0.52 could not select the suite's
+4.7 model from the available fallback catalog; a temporary 4.6-scoped copy then
+reported Authentication required before questions. The temporary test copy was
+removed. Native compatibility for these environments remains unverified;
+rendered policy/ownership regression coverage passed. No Claude/Grok protocol,
+credentials or production model policy was changed to obtain a pass.
+
+## Cortex desktop profile controls (P7 C42)
+
+The rendered selection/editor and browser API cache suites listed above replace
+the former source-string composer metadata assertions. They exercise the actual
+lazy control implementation and shared hook with deferred responses, exact
+model/effort retention, missing model replacement, incomplete configuration,
+profile saves and cross-harness controls. Shared profile lookup tests cover
+Claude Interactive identity and reject scoped metadata for a different backend.
+The existing Claude Interactive UI suite was reviewed for profile selection and
+reset/composer assumptions; C42 does not alter its private CLI protocol or claim
+new real-Claude version compatibility.
+
+The opt-in `CORTEX_AUTH_PROBE=1 CORTEX_TEST_CONNECTION=<saved-name> npx tsx
+scripts/probe-cortex-auth.ts` retains isolated PM2/data/workspace ownership and
+saved terminal auth. In addition to the auth cases, it exercises actual profile
+editing/save, responsive editor layout, default selection, native model/effort
+discovery, icon rendering, hidden CoCo mode/tier/goal controls, and a browser-sent
+exact-response inference. Failures retain a private `failure.txt`; the shared
+JSON report contains stages/booleans without native auth URLs or response bodies.
+This is scoped macOS/CoCo 1.2.35 evidence, not full P7/P9 mobile/interaction or
+platform acceptance. C26's human remote-browser OAuth remains independent.
+The November 7, 2026 successful private report is
+`cockpit-cortex-auth-ui-TBZF6r/report.json` under system temp. Its PM2 fixture
+allows twenty seconds for native shutdown draining. Earlier fixture label/
+workspace locators were corrected; one independent fresh-auth check remained
+inconclusive rather than bypassing the exact-response gate.
+
+The selectors now lazy-load outside the main composer. Shared catalog helpers
+replace duplicated Settings/workspace/shell projection. The aggregate JS budget
+increases by 2 KiB to 912 KiB for the C42 fields/request ownership; existing
+per-screen/index/CSS caps remain unchanged. Rebuild both clients after the full
+Jest run, then check the actual production output with `npm run web:budget`.
+
+## Cortex processor selection boundaries (P6 C41)
+
+`test/cortexProcessorSelection.test.ts` exercises normalized global/workspace
+selections and actual service/HTTP boundaries using registered policy fixtures.
+The expanded `test/processorProfiles.test.ts` verifies exact saved identity,
+unset defaults, configuration/disablement/availability/metadata identity and
+sequential eligibility; rendered `test/memoryProcessorSelect.test.ts` covers the
+shared tool controls, missing-ID placeholders, disabled selections, explicit
+changes and synthetic-event rejection. Existing Memory tests verify note,
+extraction, consolidation proposal and rewrite rejection before CoCo invocation;
+dream tests verify role rejection precedes destructive rebuild. The added
+`test/dataMigrationService.test.ts` round trip uses actual export/checksum/stage/
+replace/import and normalized reads, preserving unavailable selections without
+altering the full-bundle contract. Backend/web/mobile typechecks cover the
+browser-safe shared contract; the declaration-only HTTP augmentation explicitly
+imports express-session's types to make its module visible from browser builds.
+
+No new native protocol probe is required for this settings/service policy.
+The existing `CORTEX_PROCESSOR_PROBE=1 CORTEX_TEST_CONNECTION=<saved-name> npx tsx
+scripts/probe-cortex-processors.ts` passed on CoCo 1.2.35/macOS arm64/Node 26.0.0,
+with private evidence `cockpit-cortex-processors-YeAnIZ/report.json` under system
+temp. It confirms restricted rejection, sequential continuity, actual headless
+question, HTTP OCR/model gate, cancellation and fresh authenticated inference
+after these service guards. Native client/PM2/Windows/Linux acceptance and strict
+zero-tool Memory remain separate. Rebuild desktop/mobile assets after the full
+Jest suite, then run the desktop bundle budget; the shared lazy selector retains
+the existing Settings/selector limits.
+
+## Cortex native Routines (P6 C40)
+
+Normal coverage uses `test/cortexRoutinesIntegration.test.ts` with the real
+CoCo adapter/processor and deterministic `test/fixtures/cortex/chat-acp.cjs`.
+The fixture's explicit `CORTEX_FIXTURE_ROUTINE_ITEMS` branch authors a synthetic
+proposal or writes run output/tmp/notify/cursor files; the hold case leaves the
+native prompt pending after partial file writes. The deadline test fires the
+actual registered one-minute processor timer after prompt submission; it does
+not claim one minute of wall-clock waiting. Actual timing is checked separately:
+
+```sh
+CORTEX_ROUTINES_PROBE=1 CORTEX_TEST_CONNECTION=<saved-connection-name> \
+  npx tsx scripts/probe-cortex-routines.ts
+```
+
+Optional `CORTEX_TEST_COMMAND` selects the executable; test mode/non-macOS are
+rejected. The probe creates isolated HTTP/data/workspace files, private 0700
+evidence/0600 reports, a ten-minute external completion deadline and tracked
+run promises that drain before cleanup. Shared terminal auth is retained.
+Actual HTTP/WS CoCo chat authors a routine from the installed authoring contract,
+leaves it proposed, and emits the normal marker. Validation/install and run
+routes use a fixture-mounted `createRoutineRouter` with an injected notifier
+stub. Fake destination/token settings never reach a real delivery transport;
+no external messages are sent. The default app fixture's execution routes are
+not used for these notification-configured runs.
+
+Native acceptance checks explicit installation, manual files/final/history,
+selected profile/model/effort/timeout, output explorer, persistent cursor
+continuity across a scheduled run, interval checks, mtime-based output pruning,
+disabled no-scaffolding/no-run behavior and instruction removal with data
+preserved. A real one-minute manifest deadline interrupts a foreground native
+shell/Python task sleeping 120 seconds after writing a marker/notify file;
+the run must fail in 55–100 seconds, make one native prompt, drain, retain its
+partial output/state, omit a completed final and send no stub notification.
+Fresh exact-response inference then verifies reusable authenticated execution.
+Successful prompts require complete native usage; interrupted counters remain
+unknown. Reports include only stages, assertion/execution category/source line,
+versions/platform/revision and result flags/timing, not prompts, credentials,
+notification contents or native diagnostics. Full browser/PM2/Windows/Linux,
+C26, strict tool-free Memory and C41 selection acceptance remain independent.
+
+CoCo 1.2.35/macOS arm64/Node 26.0.0 passed with exit 0 on November 7, 2026;
+private report `cockpit-cortex-routines-SC2AiJ/report.json` under system temp.
+Five native prompts covered four successful complete-usage responses and one
+intentional timeout. The actual one-minute run failed after 60,247 ms, retained
+its partial marker/state, made no resend or notification delivery, and fresh
+exact-response inference succeeded. Nine deterministic process tests plus the
+full 160-suite/2,833-test coverage run passed. Full browser/PM2 acceptance and
+real Telegram delivery are not claimed by this stub-only compatibility probe.
+
+## Cortex native Workspace Context (P6 C39)
+
+`test/cortexContextIntegration.test.ts` uses the real adapter and ephemeral
+processor transport with the deterministic `test/fixtures/cortex/chat-acp.cjs`
+executable. Its explicit `CORTEX_FIXTURE_CONTEXT_MODE` branch writes only the
+synthetic prompt's context directory and generates valid or deliberately invalid
+Memory action blocks; other CoCo fixture behavior is unchanged. Native behavior
+is verified separately using saved terminal credentials:
+
+```sh
+CORTEX_CONTEXT_PROBE=1 CORTEX_TEST_CONNECTION=<saved-connection-name> \
+  npx tsx scripts/probe-cortex-context.ts
+```
+
+Optional `CORTEX_TEST_COMMAND` selects the binary. The probe rejects test mode
+and non-macOS platforms, creates an isolated HTTP/data/workspace fixture and
+private 0700 report directory/0600 report, and applies a ten-minute external
+deadline. It invokes actual Workspace Context service/scheduler paths, with
+synthetic session exports/uploads, references, an asset, active and superseded
+Memory inbox notes and expiring run records. It checks direct native markdown
+updates, selected global/override profile/model/effort, accepted inbox folding
+and server-owned deletion, silent Memory events, reference/asset preservation,
+seven-day report/history pruning, zero-source scans without startup, disabled
+passivity, scan/maintenance cadence using an injected clock, cancellation after
+native prompt submission without resend/deletion, and fresh exact-response
+inference. Teardown stops/drains service and native jobs before deleting files.
+No real external messages, credential reset, production restart or shared
+Snowflake profile changes are involved. Usage assertions cover successful native
+prompts; interrupted counters remain unknown and no processor billing ledger is
+invented. Failure reports include only stage, assertion/execution category and
+probe source line when available, not native error text. This fixture does not certify full browser/PM2, Windows/Linux, C26 or
+strict tool-free Memory processing.
+
+CoCo 1.2.35/macOS arm64/Node 26.0.0 passed with exit 0 on November 7, 2026;
+private reports `cockpit-cortex-context-n84NPH/report.json` and
+`cockpit-cortex-context-8fvaS7/report.json` under system temp.
+Each successful run's six native prompts covered five complete-usage responses and one
+intentional interruption. The first `41FmBi` attempt failed during `native-scan`
+without retaining the cause; it remains failed evidence. Two explicit separate
+runs passed the entire workflow without runtime retry or auth reset. Normal
+coverage passed 159 suites/2,824 tests; actual browser/PM2 acceptance is separate.
+
+## Cortex native KB workflows (P6 C37/C38)
+
+Normal coverage adds `test/cortexKbIntegration.test.ts` using the deterministic
+CoCo executable and actual ingestion/database/media paths. Page-conversion and
+handler tests cover required PNG normalization without upscaling, original-byte
+preservation, retries for existing harnesses, and zero-retry failure provenance
+for all four format handlers. Dream tests verify CoCo-style execution errors,
+empty output, JSON parse warnings and schema warnings run once and retain pending
+entries; existing retry-enabled behavior stays covered. CoCo backend tests pin
+the two server-only policy getters.
+
+Opt-in native macOS acceptance, using saved terminal auth and installed
+Pandoc/LibreOffice plus local Ollama `nomic-embed-text` (768 dimensions):
+
+```sh
+CORTEX_KB_PROBE=1 CORTEX_TEST_CONNECTION=<saved-connection-name> \
+  npx tsx scripts/probe-cortex-kb.ts
+```
+
+Optional `CORTEX_TEST_COMMAND` selects the binary; test mode and other platforms
+are rejected. `test/helpers/cortexKbFixtures.ts` generates a synthetic JPEG,
+embedded-image DOCX/PPTX through Pandoc, and PDF through a private LibreOffice
+profile. No installation or shared Office/Snowflake profile is modified.
+`scripts/probe-cortex-kb.ts` creates an isolated HTTP/data/SQLite/PGLite fixture
+and private 0700 report directory/0600 report. An external ten-minute completion
+deadline shuts down active native work and rejects subsequent calls. It verifies
+real visual conversion/records/reuse, one-session digestion/gleaning, persisted
+topics/Markdown/history, glossary expansion, real embeddings and vector search,
+native KB MCP search/read, re-dreaming, interrupted digestion without resend and
+fresh exact-response inference afterward. It records native complete usage only
+for successful calls, without synthesizing counters for the cancelled call.
+The MCP endpoint is a fixture-only loopback route and token. Teardown drains
+native jobs and closes PGLite/SQLite before removing data; reports omit raw
+prompts, OAuth material, accounts, native diagnostics and MCP tokens.
+
+CoCo 1.2.35/macOS arm64/Node 26.0.0, Pandoc 3.9.0.2 and LibreOffice 26.2.3.2
+passed with exit 0: private `cockpit-cortex-kb-XyBPEJ/report.json` under system
+temp. Eleven prompts covered ten successful calls with complete usage and one
+intentional interruption. Native `search_entries`, `search_topics`, `get_topic`
+were observed. `simoDC` is earlier successful conversion/digestion/cold-start
+evidence without native search acceptance. C26, conditional C35, C39–C41,
+full browser/PM2 and native Windows/Linux acceptance remain independent.
+
+## Cortex background processors and OCR (P6 C33/C34/C36)
+
+Normal coverage includes the processor/selector suites listed above, the
+headless ordinary/question/plan/malformed-permission/cancellation-failure cases
+in the CoCo turn/interaction suites, and the restored CoCo selection case in
+`test/memoryMcp.test.ts`. The latter exercises the real Memory notes HTTP route,
+verifies no runtime startup or fallback note, and retains the selected profile.
+
+Opt-in native primitive/OCR probe (paid inference, macOS, shared saved auth):
+
+```sh
+CORTEX_PROCESSOR_PROBE=1 CORTEX_TEST_CONNECTION=<saved-connection-name> \
+  npx tsx scripts/probe-cortex-processors.ts
+```
+
+Optional `CORTEX_TEST_COMMAND` selects the executable. Test mode is rejected.
+The probe creates an isolated HTTP fixture/data root and writes a private
+0700 report directory/0600 JSON report, without recording credentials or native
+RPC diagnostics. It records CLI/OS/Node/revision/dirty status, exact sequential
+nonce recall, headless native question failure, actual OCR endpoint output for
+a synthetic PNG, unsupported Auto image rejection, caller cancellation after
+native image submission and exact fresh-process output afterward. The OCR
+HTTP call uses a 150-second client deadline rather than the ordinary test
+helper's 15-second request deadline. Teardown awaits adapter draining and
+database closure before deleting fixtures. It preserves shared login and
+does not add automatic retries.
+
+Native CoCo 1.2.35/macOS arm64/Node 26.0.0 passed with exit 0, private report
+`cockpit-cortex-processors-8Vg2wG/report.json` in the system temp directory,
+repeated after the shutdown-draining refinement; `lD74CG` also passed.
+Earlier reports failed an acknowledgment punctuation assertion, then the short
+HTTP helper deadline; neither is treated as successful evidence. Full native
+browser/PM2/platform acceptance, C26 human auth handoff, strict zero-tool work
+and individual C37–C41 workflow/selection certification remain separate gates.
+
+## Cortex durable chat and managed MCP (P5)
+
+Normal Jest coverage adds `test/cortexBackend.test.ts` (registered adapter,
+profile-local catalog/roles, instructions, session IDs, usage/terminal ownership,
+idle/restart load, MCP config refresh, classified recovery and cancellation,
+no fixed chat deadline with a one-hour inactivity stop and recovery, and runtime
+retirement after a failed native config change),
+`test/cortexPlugin.test.ts` (private modes, child env placeholders, actual Node,
+independent tokens, cleanup and conservative dead-owner pruning), and
+`test/cortexIntegration.test.ts` (real process fixture through HTTP/WS and stores:
+metadata, multi-turn persistence, idle/restart load/replay suppression, questions
+through REST/WS/reconnect/stale rejection, recovery snapshot, queue/abort/reset/
+archive/delete/profile lock, worktree/Git/download artifacts and canonical
+workspace relocation/Workspace Context/instruction refresh). Its deterministic
+executable is `test/fixtures/cortex/chat-acp.cjs`, separate from the P2 fixture.
+`load-missing.json` retains the actual synthetic missing-session error signature.
+Desktop reducer/store and mobile projection/send-pipeline suites verify opaque
+decision IDs and preservation of newer interactions during HTTP acknowledgement.
+The runtime registry test now uses the real CortexCodeAdapter.
+
+Opt-in native app probe (paid inference through CoCo plus a separate authenticated
+Claude Memory processor; no shared credential changes):
+
+```sh
+CORTEX_CHAT_PROBE=1 CORTEX_TEST_CONNECTION='<authenticated native connection>' \
+  npx tsx scripts/probe-cortex-chat.ts
+```
+
+Optional command overrides are `CORTEX_TEST_COMMAND` and
+`CORTEX_TEST_MEMORY_COMMAND`. This probe certifies CoCo 1.2.35 on macOS only.
+It creates isolated real ChatService/HTTP/WS data through the existing test
+fixture, selects shared setup-account profiles and real Claude `haiku` as the
+Memory processor. Native Memory/KB discovery and actual stdio shims must execute
+memory_note, memory_search, search_topics and get_topic; governed Memory state
+and separate processor invocation are checked. Actual SQLite/PGLite stores are
+seeded with synthetic knowledge. Embeddings intentionally point at an unavailable
+loopback endpoint; actual PGLite keyword fallback and SQLite topic read are
+tested, not Ollama/semantic embedding availability.
+
+The same conversation must recall its nonce after idle process eviction and
+adapter shutdown/reuse, retain its native ID, persist exactly one **final** answer
+and usage per turn (progress messages are allowed), and deliver a verified native
+write/read file as an artifact in existing conversation storage. It then moves
+the workspace and requires the loaded native session to retain canonical
+workspace/native IDs and nonce while reading/writing in the new cwd. The websocket
+fixture clears a completed replay buffer before a deliberately new send; the
+dedicated reconnect test retains buffers while the current decision is pending.
+Reports are private 0700/0600 temporary summary artifacts with version/platform/
+Node/revision/dirty state and assertion booleans, without native credentials,
+OAuth values, raw protocol or transcript content. Native turns have an external
+180-second completion deadline; adapter shutdown drains owned processes in finally.
+Full OS-process restart/browser UI/other platform acceptance remains P7/P9.
+
+On November 6, 2026 the native app assertions passed on CoCo 1.2.35,
+macOS arm64, Node 26.0.0, revision 5679917 plus P5 work. An earlier assertion
+incorrectly included intermediate progress messages in the final-answer count;
+it was corrected before the complete assertion run. A later native run issued
+no required MCP calls and remains failed; its cause was not established. The
+final complete run passed all checks, including native relocation, and exited
+zero. The standalone fixture explicitly closes its PGLite/vector and SQLite
+stores before deleting data; unclosed PGLite initialization leaves a process
+exit code of 99 even when application assertions pass. No automatic prompt/tool
+retry was added. The unchanged native
+runtime probe also passed all startup/cancel/load/root-exit/missing-auth/reusable
+shutdown scenarios with the P5 pool. Current service tokens have no TTL; token,
+endpoint and feature refresh are deterministic pool tests, and invalid/revoked
+token authorization remains the real Memory/KB service suites. No token-expiry
+policy is claimed. C26 human remote-browser setup stays open; strict processor
+capabilities and one-shot execution remain unavailable.
 
 ## CI/CD
 
@@ -297,6 +934,737 @@ Copilot updater regressions cover full semver precedence: stable after prereleas
 **Version bump** (`.github/workflows/version-bump.yml`): Runs on push to `main`. Skips `chore: bump version` commits. Steps: `npm version patch --no-git-tag-version`, commit the package files, and push `main`. It does not create or force-push `v*` tags; public production releases are explicit GitHub Releases.
 
 **Production release workflow** (`.github/workflows/release.yml`): Manual `workflow_dispatch` promotion to a GitHub Release. Inputs are `version`, `source_ref` (default `main`), `prerelease` (default `false`), and `smoke_only` (default `false`). The `windows-smoke` job runs on `windows-latest`: it checks out the selected ref with `fetch-depth: 0`, sets up Node.js 22, runs root/mobile `npm ci`, root/web/mobile TypeScript checks, web/mobile production builds, the web bundle budget check, `npm run lint`, Windows-focused installer/doctor/install-state Jest tests plus the Windows-named update-service Jest tests, parses `scripts/install-windows.ps1` with PowerShell's parser API, runs `npm run release:package`, verifies the release manifest has macOS/Linux/Windows app and installer artifacts, then runs `scripts/install-windows.ps1 -Channel dev` against a temporary checkout with forced private Node, an install path containing spaces, `-SkipOpen`, and a fixed high port. The Windows installer smoke step verifies the `AgentCockpit` ONLOGON scheduled task, probes `/auth/setup`, checks Install Doctor `node`/`npm`/`pm2`, and runs the generated stop script. The `linux-smoke` job runs on `ubuntu-latest`: it performs the same root/mobile install, typecheck, build, web-budget checks, and lint gate, runs Linux installer static coverage plus install doctor/install-state tests and the Linux-named update-service tests, parses `scripts/install-linux.sh` with `bash -n`, runs `npm run release:package`, verifies the release manifest has macOS/Linux/Windows app and installer artifacts, then runs `scripts/install-linux.sh --channel dev` against a temporary checkout and install root, verifies the systemd user unit file exists, probes `/auth/setup`, checks Install Doctor `node`/`npm`/`pm2`, disables/removes the test user unit, and deletes the PM2 process. When `smoke_only` is false, the publish job depends on both smoke jobs, checks out the selected ref on Ubuntu, normalizes the version, updates package files in the runner when needed, runs `npm ci`, `npm --prefix mobile/AgentCockpitPWA ci`, `npm run typecheck`, `npm run web:typecheck`, `npm run web:build`, `npm run web:budget`, `npm run mobile:typecheck`, `npm run lint`, `npm run maintainability:check`, `npm run spec:drift`, `npm run mobile:build`, `npm test`, and `npm run adr:lint`, then runs `npm run release:package` and `npm run release:notes`. It creates GitHub Release `v<version>` with the rendered release-notes file as `--notes-file`, and uploads `agent-cockpit-v<version>.tar.gz`, `agent-cockpit-v<version>.zip`, `release-manifest.json`, `SHA256SUMS`, `install-macos.sh`, `install-linux.sh`, and `install-windows.ps1`.
+
+## Cortex shared authentication setup (P4)
+
+Focused suites:
+
+- `test/cortexConnections.test.ts`: safe summaries, TOML quoting/Unicode,
+  byte-preserved original content, duplicate/create-only behavior, private
+  permissions, file bounds/symlinks/malformed input, write locks/concurrency,
+  observed external edit rejection, exact-body input validation.
+- `test/cortexOAuth.test.ts`: PKCE URL ownership, strict loopback/state/issuer,
+  malicious/duplicate/foreign/expired-target inputs, split terminal output,
+  known first-run prompts and exact native account selection.
+- `test/cortexLogin.test.ts`: pinned no-shell PTY argv, process-scope ownership,
+  idempotent teardown and late terminal suppression.
+- `test/cortexAuthVerification.test.ts`: independent private workspaces, exact
+  nonce/usage success, initialization-only failure, missing connection, grant/
+  credential/API errors, tool/reverse-request rejection, cancellation/deadline,
+  sanitized failures and cleanup without a paid retry loop.
+- `test/cortexAuth.test.ts`: shared facade defaults, explicit-isolation gate,
+  reserved auth-home exclusion across profiles/checks, one-time generation-bound
+  handoff, native-completion-before-verification, timeout/cancel/retry, shutdown
+  generation and late callbacks, abortable version detection, direct-check drain,
+  version/authenticator gates and secret removal.
+- `test/chat.cortexAuth.test.ts`: real route registration, exact bodies, CSRF,
+  no-store headers, safe summaries, profile persistence/default preservation,
+  explicit profile retention, redirect delegation/error behavior and awaited
+  server shutdown draining.
+- `test/cortexSetupUi.test.ts`: rendered React controls for create/check,
+  transient redirect submission, polling/completion/cancel and reload recovery
+  without persisting secrets, full native-URL focus selection, exact untruncated
+  redirect submission, immediate input clearing while a request is pending, and
+  removal on failed/cancelled polls. The test module loader accepts optional globals
+  to exercise browser timers directly.
+
+Existing CLI auth/service/profile suites remain regression gates. POSIX
+shebang auth/runtime fixtures skip Windows; the separate C53 simulated-platform
+suites cover Windows runtime behavior. TOML
+symlink checks are POSIX-only because Windows symlink privileges are optional.
+These guards do not establish native Windows support. For native
+saved-login/browser compatibility after building web/mobile assets:
+
+```sh
+CORTEX_AUTH_PROBE=1 CORTEX_TEST_CONNECTION='<authenticated-name>' \
+  npx tsx scripts/probe-cortex-auth.ts
+```
+
+This opt-in runner uses a PM2-managed isolated server/data/workspace and normal
+shared terminal auth. It makes several tiny real inference requests, checks
+remote API authentication rejection, Welcome setup login, cached-auth jobs,
+cancellation/retry, narrow viewport fit and absence of handoff material in
+settings. It stops its PM2 fixture and writes a private sanitized report with
+CLI/OS/Node/revision evidence. It does not clear saved credentials or force a
+new OAuth login. **It is not C26's actual human remote-browser handoff** and
+is not a full CoCo chat/processor suite. Do not run browser checks alongside
+full Jest suites that replace ignored production assets; rebuild those assets
+first. Native first-run PTY onboarding was separately exercised with temporary
+connection metadata and existing credentials; this does not certify isolated
+OS-keychain auth or a new remote-browser callback.
+
+P7 C47 extends this runner with a separate synthetic browser-handoff matrix on
+Welcome and Settings at 1280, 390 and 320 px widths. Only that browser context
+intercepts auth endpoints; synthetic codes never reach native auth or Snowflake.
+Real native saved-auth inference and the synthetic matrix have separate report
+fields. The matrix uses Chromium clipboard copy/paste to preserve the complete
+long native URL and encoded loopback redirect. It checks live form/control fit,
+immediate clearing during a held submission, success/cancel/rejection and
+terminal failed/expiry snapshots,
+recovery of a server-owned URL after reload with an empty unsent redirect, and
+absence of handoff values in local/session storage, cookies or history. Isolated
+desktop contexts must create no IndexedDB or Cache Storage. Clipboard contents
+are intentionally transient transfer state and are cleared during fixture cleanup;
+no claim is made that plaintext never exists in active UI/React memory. Reports
+contain only synthetic flags, viewport sizes and counts; screenshots/errors remain
+private. Backend expiry timers remain covered by the focused auth suites. Use
+the textbox role/accessible name for the native URL: exact HTML label text can
+include the textarea value. A ten-minute external deadline closes Chromium and PM2 gets twenty
+seconds to drain, with a thirty-second command bound. Native C26 human handoff,
+physical browsers, native platform certification and C54 suite packaging remain
+independent. Run full Jest first, rebuild both production clients, then run the
+browser probe; do not let asset-mutating tests run concurrently.
+
+
+### CoCo optional standalone installation (P8 C48)
+
+`test/cortexInstallation.test.ts` verifies optional detection, refresh without
+PATH changes, official standalone/platform action policy, successful/failing
+install/postcheck paths, download failure/temp cleanup, active/concurrent
+exclusion, spaced paths/explicit commands and executable/auth-home separation.
+`test/cortexWelcomeInstallation.test.ts` renders official actions, refreshed
+status and failure recovery while retaining dedicated CoCo authentication.
+Existing doctor/macOS installer/release-package/update suites remain regression
+gates. No new endpoint/body or PWA setup surface is introduced.
+
+Run `CORTEX_INSTALL_PROBE=1 npx tsx scripts/probe-cortex-install.ts` on macOS for
+a real official installation in a disposable child-process HOME/app/command path
+with spaces. It strips user-local PATH entries, invokes the production doctor
+action, requires 1.2.35 native version detection and automatic/explicit runtime
+launch, checks auth-home separation and absence of credentials, and removes its
+installed distribution. Native logs/completions are permitted; existing shell
+profile bytes must remain a prefix and no installer PATH line may be added.
+Reports stay in the private temporary fixture. This uses an injected install
+state and optional-tool detectors; it is not a full package install, auth/chat
+or PM2 acceptance and does not certify Linux/Windows. The saved-auth PM2 browser
+probe now also waits for Welcome's separate executable-only status. C49 update
+management, C51–C53 platform acceptance and C26 remain independent.
+
+
+C48 measured V8 coverage: 173 suites / 2,941 tests passed; 88.62% statements/lines,
+76.69% branches and 93.82% functions. Floors rise to 88.62 statements/lines and
+76.65 branches, retaining 93.8 functions. Existing macOS installer/release/update
+regressions pass; rebuilt desktop/mobile assets retain the 914 KiB JS budget.
+
+
+### CoCo native CLI updates (P8 C49)
+
+`test/cortexUpdates.test.ts` covers shared executable grouping and profile env
+exclusion, canonical native layout/metadata/version gating, full build lookup,
+pinned updater invocation, reserved preflight/duplicate and newly active chat,
+network/metadata failure recovery, awaited invalidation, one failed native
+attempt with explicit retry, changed activation, exit-zero postcheck failure and
+unverified versions/platforms. `test/cortexUpdateRoutes.test.ts` holds real HTTP
+responses until CoCo draining finishes on success/failure. The existing CLI update
+foundation case now expects a visible non-actionable CoCo target rather than
+excluding the harness. Existing runtime/backend and macOS installer/release/
+updater suites remain required regressions.
+
+Run `CORTEX_UPDATE_PROBE=1 npx tsx scripts/probe-cortex-updates.ts` on macOS for
+a real official install and native updater in a disposable home/app path with
+spaces. Genuine 1.2.35 with synthetic older build metadata forces actual stable
+package download/checksum/extraction/activation; this is not old-release evidence.
+A one-time injected missing stable target exercises real native failure,
+activation preservation, cache invalidation and explicit retry. Registry shutdown
+is awaited; idle native ACP runtimes close and fresh native runtimes start after
+success/failure/retry. ACP creation is not authentication. Reports/logs remain
+private in the fixture, the installed distribution is removed, and normal CLI/
+terminal credentials are untouched. Full package/PM2/platform acceptance remains
+C51–C53; C26 remains human OAuth. The saved-auth PM2 browser runner additionally
+checks CoCo's normal desktop update row without executing its updater. Run full
+Jest first, rebuild both clients, then run browser checks separately.
+
+
+C49 full V8 baseline: 175 suites / 2,956 tests passed; 88.66% statements/lines,
+76.83% branches and 93.86% functions. Coverage floors rise to 88.65 statements/
+lines, 76.8 branches and 93.85 functions. Focused native-update, route/runtime/
+backend and macOS installer/release/updater regression suites pass.
+
+
+For independent update-status acceptance, run
+`CORTEX_UPDATE_UI_PROBE=1 npx tsx scripts/probe-cortex-auth.ts`. This explicit
+scope uses a fixture connection name, makes no login/inference/update request,
+and checks the normal native installation's Update row/controls and fit at
+1280/390/320 px. Its report says `scope: updates-ui-only`; it must not be reported
+as an auth-suite pass. The ordinary `CORTEX_AUTH_PROBE=1` path retains every
+cached-login, cancellation, chat and responsive handoff assertion.
+
+During C49, the first full auth repeat failed native verification; the second
+passed fresh inference but timed out at the cached-login job. A separate exact
+fresh-process verification also passed. Both failed reports are retained;
+no auth code/retry policy or credentials were changed. This is an outstanding
+native auth compatibility observation for C26/C54, independently of C49 update
+execution/status evidence; do not count either full repeat as passed.
+
+
+### CoCo full data-root migration (P8 C50)
+
+Focused verification:
+
+```sh
+npm test -- test/cortexMigration.test.ts test/cortexDataMigration.test.ts test/dataMigrationService.test.ts test/chat.dataMigration.test.ts test/cortexAuth.test.ts test/cortexPlugin.test.ts --runInBand
+```
+
+The 46 focused tests cover passive destination checks, runtime exclusions and
+import rejection (including manifest-only and empty-directory entries), settings
+integrity, CoCo shared/custom/disabled profiles, defaults and unavailable
+processor IDs, durable data, backup replacement, unchanged external native files,
+stale absolute homes, checksum tampering and the existing REPLACE route guard.
+The executable fixture would write a sentinel if run; migration checks leave it
+absent. No normal data root, native connection, credential store or installation
+is modified. Existing Memory/KB/PGLite/Ollama/Pandoc/LibreOffice coverage remains
+in the full suite. No CoCo native inference/browser probe is required for this
+passive policy; cross-machine credential validity, C26 human OAuth and full
+macOS/Linux/Windows acceptance remain independent gates. The C49 cached-login
+repeat observation remains open.
+
+Mobile impact: unchanged storage/contracts preserve profile/model/effort,
+queue/media/usage data. Mobile has no migration administration UI. Both client
+types/builds and the existing desktop migration projections remain applicable;
+there is no new PWA metadata, asset-source or native mobile behavior.
+
+C50 full V8 baseline: 177 suites / 2,973 tests passed (three suites / 20 native
+opt-in tests skipped), 88.67% statements/lines (55,980/63,128), 76.90% branches
+(13,280/17,269), 93.87% functions (2,850/3,036). Floors raised to 88.66%
+statements/lines, 76.85% branches and 93.86% functions. Backend/web/mobile types,
+zero-warning lint, maintainability, 189-route spec drift and 92-ADR validation
+pass. Rebuild both client assets after the full suite, before any browser probe.
+
+
+### CoCo macOS acceptance (P8 C51)
+
+Run native checks only after full Jest and rebuilding both clients:
+
+```sh
+CORTEX_INSTALL_PROBE=1 npx tsx scripts/probe-cortex-install.ts
+CORTEX_UPDATE_PROBE=1 npx tsx scripts/probe-cortex-updates.ts
+CORTEX_AUTH_PROBE=1 CORTEX_TEST_CONNECTION=<saved-name> npx tsx scripts/probe-cortex-auth.ts
+CORTEX_MACOS_PROBE=1 CORTEX_TEST_CONNECTION=<saved-name> npx tsx scripts/probe-cortex-macos.ts
+```
+
+The saved connection may also be selected privately by the macOS probe from the
+native connection reader. Reports omit its value. Optional CORTEX_TEST_COMMAND
+pins a retained executable; require the version-tested 1.2.35 binary rather than
+silently certifying a new auto-downloaded version. Root passive version queries
+use `--no-auto-update --version`; ACP and explicit updates keep their native
+prefixes. The deterministic ACP executable enforces both query and dispatch
+rules. Runtime tests change activation after resolution and verify version
+detection/startup retain the original distribution while a fresh resolution sees
+the new version/fingerprint. Review `test/cortexRuntime.test.ts`, `test/cortexInstallation.test.ts`,
+`test/cortexUpdates.test.ts`, `test/cortexUpdateRoutes.test.ts` and the existing
+CLI update/auth/backend/process/macOS installer/release/update suites.
+
+The update probe now retains `autoUpdate:true`, asserts passive activation and
+settings preservation, then executes the explicit target update and native
+failure/retry. Synthetic older build metadata remains separate from older
+release evidence. The macOS probe uses a checksummed local release package, real
+root/mobile npm ci and installer helper functions, spaced paths, production
+current symlink/install manifest, fixture RunAtLoad plist, unique LaunchAgent
+and private PM2. The profile uses a retained pinned binary and both shared terminal
+homes; one isolated-HOME/shared-Snowflake run failed fresh verification and
+does not certify that auth configuration. It explicitly kickstarts its registered current-user job because
+this host can hold the GUI domain in on-demand-only mode. It checks exact
+HTTP package version, shared fresh service inference, packaged mobile assets,
+desktop file write/usage, PM2 restart/native session resume, Stop of an observed
+shell, no late write/replay and identity-based process cleanup. Only the fixture
+label/daemon/plist are removed. Normal executable activation is snapshotted;
+native settings/credentials and normal services remain intact. The source
+executable is checked and successful fixtures remove their app/dependencies,
+private PM2 state and fixture runtime state.
+
+This is macOS arm64/current Node evidence, not native macOS x64, public release
+download, private Node bootstrap, an actual logout/login event, C26 human OAuth,
+strict Memory, Windows/Linux or physical mobile certification. Initial C51
+saved-auth/browser checks passed, including the previously timed-out cached-job
+path; C49 failed reports remain historical observations without a claimed root
+cause. A first macOS fixture failed health because launchd left RunAtLoad pending
+in on-demand-only mode and detected automatic native activation drift; retain
+that failed report alongside corrected acceptance evidence. No failed report
+counts as a pass and no auth retry policy is weakened.
+
+Runtime version/launch consistency is independent of native automatic activation:
+C51 also observed activation drift after adding query flags, with the originating
+process unproven. Pin the retained distribution; never infer global upgrade
+containment from one argv flag. Preserve the failed isolated-HOME auth report
+and the stale-title selector failure (the corrected probe selects the immutable conversation ID).
+
+C51 aborted-turn regression: acknowledged native cancel alone allowed the
+background Bash fixture to write its late file. `CortexTurn` now awaits native
+close before done; next explicit turns use fresh-process saved-session load.
+Backend/turn tests cover close-before-done, no prompt replay and a retained
+completed handle attempting to cancel a newer active prompt. The existing
+native queue runner now selects desktop conversations by immutable ID and reads
+current titles for mobile, avoiding asynchronous title changes. Native macOS
+and all four desktop/mobile queue/abort cases passed with the close policy.
+
+Passed native C51 reports (private temporary artifacts, revision 4c05a35 plus
+C51 working tree; all dirty states are explicit):
+
+- `cockpit cortex install aADkrK/report.json`: disposable official install,
+  physical executable pinning and spaced alias/auth-home checks.
+- `cockpit cortex updates VebO4v/report.json`: autoUpdate:true passive activation
+  preservation, genuine native explicit download/activation, cleanup and retry.
+- `cockpit cortex macos qvQpiE/report.json`: macOS 26.5 / Darwin 25.5.0 arm64,
+  Node 26.0.0, CoCo 1.2.35+191333.f82de3d91715; local release/dependencies,
+  fixture LaunchAgent/private PM2, source-binary observation, shared fresh auth,
+  desktop write/usage, restart/resume, Stop and removal of fixture installation.
+- `cockpit-cortex-queue-6gCILM/report.json`: all four desktop/mobile queue/abort
+  cases with close-before-done, owned descendants gone and explicit resume once.
+- `cockpit-cortex-auth-ui-tt3HA4/report.json`: full native saved auth/cached jobs,
+  cancel/retry, responsive setup/profile/catalog/fresh chat and synthetic handoff
+  checks. Uses the retained command; this run does not check its update row.
+
+These are temporary folder basenames under the probe's printed report path.
+The normal activation was restored to original 1.2.35 after all native jobs
+closed; native settings/credentials were not edited and downloaded 1.2.37 was
+retained. C51 also retains failed on-demand startup, stale-title, isolated-HOME
+null-auth and background-shell late-write reports. Only the last two native
+Stop/queue reports establish the corrected cancellation behavior. C26 remains
+pending human handoff. Root causes of C49 auth repeats and later native activation
+drift are not inferred from clean reruns.
+
+Final C51 full V8: 177 suites / 2,975 tests passed; three native opt-in suites /
+20 tests skipped. Statements/lines 88.67% (55,989/63,137), branches 76.93%
+(13,294/17,279), functions 93.87% (2,850/3,036). Floors rise to 88.67%
+statements/lines and 76.90% branches; functions remain 93.86%. Focused cancellation
+coverage passes 52 tests; the earlier macOS/CLI regressions pass 122 tests.
+Backend/web/mobile/probe types, zero-warning lint, maintainability, 189-route
+spec drift, 92-ADR checks, client builds and existing bundle budgets pass. Client
+assets are rebuilt after final Jest; no browser suite runs concurrently with it.
+
+
+### CoCo Ubuntu acceptance preparation (P8 C52, native pending)
+
+See [the pending Ubuntu runbook](research/cortex-code-linux-acceptance.md).
+The prepared opt-in entrypoint is:
+
+```sh
+CORTEX_LINUX_PROBE=1 npx tsx scripts/probe-cortex-linux.ts --preflight
+CORTEX_LINUX_PROBE=1 npx tsx scripts/probe-cortex-linux.ts
+```
+
+The read-only preflight rejects unsupported hosts before credentials/fixtures.
+Full execution requires an authenticated retained native 1.2.35 distribution,
+Ubuntu 24.04 x64/glibc, regular user, actual systemd user manager, locked project
+dependencies, rebuilt client bundles and Playwright Chromium. It uses actual
+release packaging/Linux installer helpers, a unique user unit and private PM2.
+It tests service-side fresh auth without terminal environment injection,
+chat/file/usage, /proc native identity, PM2 resume, user-unit restart/fresh auth,
+Stop/no replay and owned cleanup. Reports state which checks ran and omit auth
+values. Work deadline is 18 minutes; cleanup commands are separately bounded.
+Do not run full Jest concurrently with the native browser probe.
+
+`test/cortexLinuxProbe.test.ts` executes the real probe in child processes for
+missing opt-in and non-Linux rejection before native invocation/fixture creation.
+`test/linuxInstallerScript.test.ts` executes actual generated start/stop helpers
+against a recording npx shim and materializes the real unit under a private
+configuration path containing spaces and a quote. This is not native systemd,
+Linux/auth or installer-download evidence. Existing macOS installer/package and
+update regressions remain required if shared production behavior changes.
+
+Native execution is pending an Ubuntu environment. Separate official CoCo
+install/update and credential-store/new-login tests must also pass to close C52;
+macOS-only install/update probes must not have their guards bypassed. Mobile
+impact is limited to served packaged assets, with no source or contract changes.
+
+Local preparation regression: 178 suites / 2,979 tests pass (3 native opt-in
+suites / 20 tests skipped). V8 measures 88.72% statements/lines (56,017/63,137),
+76.93% branches (13,304/17,292), 93.93% functions (2,852/3,036). Floors raised to
+88.70% statements/lines and 93.90% functions; branches retain 76.90%. The
+additional POSIX doctor test executes a recording shell executable through the
+actual default command runner, asserting passive argv, no login claim and
+nonzero-exit warning. The platform is mocked; no native Linux execution occurred.
+
+
+### CoCo consolidated compatibility runners (P9 C54)
+
+The opt-in commands wrap existing probes without turning their evidence into a
+claim about a broader platform, a human OAuth handoff or unsupported roles:
+
+```sh
+npm run e2e:cortex-code -- --list
+npm run e2e:cortex-code-ui -- --list
+CORTEX_CODE_E2E=1 npm run e2e:cortex-code
+CORTEX_CODE_E2E=1 npm run e2e:cortex-code-ui
+CORTEX_CODE_E2E=1 npm run e2e:cortex-code-ui -- --probe auth
+```
+
+`--help`/`--list` are read-only and require no native CLI or credentials. Other
+arguments are repeated `--probe <id>` pairs; unknown/missing/duplicate names are
+rejected. Selections run in catalog order. An explicit subset is reported as
+selected catalog probes, including omitted IDs; it never counts as a full
+catalog pass. Native runs require CORTEX_CODE_E2E=1, macOS, a regular user and
+non-fake native mode. CORTEX_TEST_CONNECTION optionally chooses a saved name;
+otherwise the connection reader selects its first entry privately. Optional
+CORTEX_TEST_COMMAND chooses the retained executable. The runner requires the
+versioned official 1.2.35 distribution, resolves its realpath before the passive
+version query, and passes that same file to every probe. The model is fixed to
+claude-sonnet-4-6. Inherited update-UI-only mode is removed, so it cannot turn
+full auth into a synthetic/passive check. Native root/ACP argument boundaries
+remain unchanged.
+
+| Command | Default catalog, in order | External per-probe deadlines |
+|---|---|---|
+| e2e:cortex-code | runtime, events, processors | 8, 15, 12 minutes |
+| e2e:cortex-code-ui | auth, interactions, queue, usage, mobile | 12, 12, 10, 12, 15 minutes |
+| e2e:cortex-code-workflows | chat, kb, context, routines, mobile | 12, 12, 12, 12, 15 minutes |
+| e2e:cortex-code-auth-control | missing-auth | 3 minutes |
+
+Backend, UI, workflow and auth-control wrapper deadlines are 40, 70, 70 and
+5 minutes. The UI and workflow runners first
+builds production web/mobile assets (two-minute deadline each). It does not run
+Jest: finish asset-mutating full Jest before starting it. The default catalog
+excludes installer/updater downloads, packaged platform installation, the
+research phase-0 restriction probe. Full workflows have their own C55 command
+described below. Those dedicated probes remain independently opt-in. Processor primitives are
+not complete KB/Context/Routine or strict Memory acceptance.
+
+Ownership/report logic lives in scripts/run-cortex-code-compat.ts, report
+validation/catalogs in scripts/cortexCompatReports.ts, and process supervision
+in scripts/cortexCompatProcess.ts. The two npm entrypoints remain thin. Both
+commands reserve the same agent-cockpit-cortex-e2e.lock in the user's temporary
+directory before native work/builds. It records PID and an opaque owner nonce;
+competing runs fail without removing another lock. Normal completion removes
+only its exact lock value. A crash can leave it behind: inspect the recorded
+owner and fixture/native/PM2 cleanup before manually removing it. Never infer
+permission to resend interrupted work from lock age or a missing PID alone.
+
+Each run creates a mode-0700 root directly under /tmp, private PM2 home and per-job TMPDIR.
+The short root is required for macOS tsx/PM2 Unix socket path limits; the
+user-temporary lock location remains shared by both commands.
+HOME/SNOWFLAKE_HOME remain the normal terminal values for shared credentials;
+no logout or account-isolation certification is attempted. Browser fixture
+servers remain PM2-managed. Each probe runs as a detached owned process with
+an external deadline, cancellation handler and eight-MiB private output limit.
+The supervisor uses CortexProcessScope plus captured PID/birth identities,
+and separately discovers the private PM2 daemon by its PID file and matching
+God Daemon command/home so a detached or reused daemon is not lost from ownership,
+awaits shutdown, verifies observed descendants have gone, and identity-checks
+any additional cleanup. SIGINT/SIGTERM abort the active work; failure, timeout,
+invalid evidence or failed cleanup stops the sequence without automatic retry.
+Cleanup remains outside the cancelled work signal and PM2 kill has a separate
+30-second bound. Each job drains private PM2 before verifying observed
+processes. A dead/reused private PID file is removed without spawning a daemon
+or signalling unrelated work; an unobservable/invalid owner cannot pass.
+The normal activation and retained executable snapshot must
+remain unchanged; drift fails the run without silently restoring/certifying a
+new native version.
+
+Shareable compatibility-report.json includes start/end, suite, selected/omitted
+IDs, scope, CLI version/full distribution, OS/kernel/architecture/Node,
+revision/dirty state, each job's exit/deadline/cancellation/log-limit/observed
+process cleanup outcomes and validated native pass metadata. A report file
+must be a regular non-symlink file of at most one MiB in exactly one expected
+probe directory. Native version/OS/architecture/Node/revision must match;
+missing/false pass or deadlineExceeded:true fails. Processor version metadata
+may live under results.cliVersion. Only the fixed projected metadata/outcomes
+enter the wrapper report; raw native keys, text, diagnostic errors, credentials,
+connection/account/OAuth values and arbitrary result payloads are not copied.
+Raw stdout/stderr, failure detail and native fixture directories are private
+and must not be shared as an artifact bundle. Share only the wrapper JSON.
+
+The report retains three historical observations independently of a later pass:
+C49 saved-auth verification failure/cached-job timeout; C51 native activation
+drift to 1.2.37 with unproven originating process; and isolated HOME with shared
+SNOWFLAKE_HOME returning null auth. A clean rerun establishes neither root
+cause nor supported isolation. C26, conditional C35, native Ubuntu/Windows and
+physical mobile devices remain pending gates in every report. Complete workflows
+remain outside the scope of backend/UI/auth-control and selected workflow reports.
+C49's independent update-row-only mode remains outside the auth catalog.
+
+Focused tests: test/cortexCompatRunner.test.ts covers catalog/argument scope,
+metadata validation, absent/duplicate/symlink/oversize/malformed reports,
+secret-bearing report projection, read-only listing, opt-in and competing lock.
+test/cortexCompatProcess.test.ts exercises real POSIX child processes for private
+output, timeout with detached SIGTERM-resistant descendants, unrelated process
+preservation, no replay, cancellation, spawn failure, bounded output, stale/reused
+PM2 PID files and an independently detached private daemon. The lock fixture
+also opens a real Unix socket at the nested tsx-shaped path to catch path-limit
+regressions. These
+supervision fixtures are not authenticated native evidence; run the commands
+with the actual retained CLI for that evidence. Mobile client source/contracts remain unchanged; CoCo server admission after
+Stop now waits safely for the native drain, verified by the existing mobile probe.
+
+C54 runner development retained an initial UI failure at PM2 fixture startup:
+the former nested system-temp path exceeded the macOS tsx socket limit (EINVAL).
+No auth check ran. The root moved to /tmp, and cleanup stopped invoking PM2 for
+already-dead/stale daemon PID files. This diagnosed runner path failure does not
+explain the distinct historical C49 authentication failures. The failed report
+remains failed; corrected native evidence must be recorded separately. Run
+from a developer checkout with locked root/mobile dependencies and Playwright
+Chromium, since processor probes use test/helpers; these are not production
+setup commands.
+
+
+C54 also retained a native mobile abort-recovery failure after successful auth,
+interactions, queues, usage, media, history and descendant cleanup: the next
+explicit HTTP message hit the still-active CoCo owner and its response timed
+out. The dedicated backend regression suspends the old stream consumer and
+blocks native close to reproduce it. CoCo admission now waits for the aborted
+owner's reset/drain before executing the explicit follow-up, retains that fence
+through another Stop and rejects starting work after cleanup failure. Old
+iterator cleanup cannot delete a newer owner. See test/cortexBackend.test.ts;
+rerun native queue/mobile and interaction probes when this behavior changes.
+No native prompt is retried and the shared HTTP terminal finalizer is unchanged.
+
+
+The follow-up lifecycle regression holds an old native close while its session
+entry has already been removed: both reset and shutdown must remain pending and
+cancel the waiting successor. The adapter tracks direct reset promises outside
+the session map and includes them/previous stopping in lifecycle completion.
+Tests assert no extra native client/prompt, not merely the returned error text.
+
+
+C54 acceptance: macOS 26.5 / Darwin 25.5.0 arm64, Node 26.0.0 and retained
+CoCo 1.2.35+191333.f82de3d91715. Backend catalog 3/3 passed in
+cockpit-cortex-backend-compat-P5CRXI; full UI catalog 5/5 passed in
+cockpit-cortex-ui-compat-0UtAeo, including the previously failing explicit
+post-Stop send. After final detached-drain lifecycle tracking, the affected
+queue/mobile subset passed 2/2 (selected 2/5, with auth/interactions/usage omitted)
+in cockpit-cortex-ui-compat-9uvXrT. Each directory retains its private
+compatibility-report.json. Reports record revision 0cb97bb with dirty state;
+these are working-tree validation, not a public release artifact or a new OS
+login. They confirm observed process cleanup, private PM2 drain and unchanged
+normal activation/retained executable. No failed report counts toward a pass.
+
+Final frozen full V8: 180 suites / 3,002 tests pass; 3 opt-in native suites /
+20 tests skipped. Statements/lines 88.72% (56,033/63,153), branches 76.95%
+(13,319/17,307), functions 93.94% (2,853/3,037). Branch floor raised from 76.90%
+to 76.92%; statements/lines retain 88.70% and functions 93.90%. The 74-test
+focused backend/turn/runtime/shots/integration/queue set also passed. Finish
+full Jest with frozen source before rebuilding clients/browser checks; mixed
+source versions previously inflated V8 mappings and are not acceptance data.
+Backend/web/mobile/tool types, zero-warning lint, maintainability, API spec
+and ADR checks pass. Both client assets and bundle budget remain verified.
+
+### CoCo complete workflow fixtures (P9 C55)
+
+```sh
+npm run e2e:cortex-code-workflows -- --list
+npm run e2e:cortex-code-auth-control -- --list
+CORTEX_CODE_E2E=1 npm run e2e:cortex-code-auth-control
+CORTEX_CODE_E2E=1 npm run e2e:cortex-code-workflows
+CORTEX_CODE_E2E=1 npm run e2e:cortex-code-workflows -- --probe kb
+```
+
+These catalogs use the same retained executable, serialization lock, bounded
+process supervision, private temporary folders, validated metadata projection
+and activation checks as C54. The workflow command builds both production clients
+before native work. Finish full Jest first. Its real-account catalog uses shared
+terminal auth; it never logs out or copies credentials. Test data, workspace files,
+SQLite/PGLite and app settings are temporary. The browser fixture server is
+PM2-managed with an isolated data root and private PM2 home. The service fixtures
+use the existing in-process HTTP/WS test helper with the real CoCo adapter; its
+registered mock adapter is never the selected profile. They do not claim that
+every workflow was driven through a browser or a production process manager.
+
+| Fixture | Actual workflow boundary and required results |
+|---|---|
+| chat | Real Cockpit HTTP/WS durable chat, native plugin/stdio MCP discovery, governed Memory note/search, SQLite topic reads/PGLite keyword search, usage once per turn, idle and adapter restart resume, delivered artifact, immutable workspace identity through relocation and native read/write in its new cwd. Memory governance runs through a separate authenticated Claude CLI; this does not enable strict CoCo Memory processors. |
+| kb | Real ingestion/digestion/dream services and isolated stores; JPEG/PDF/DOCX/PPTX native AI conversion and duplicate reuse, PNG media preparation without changing original bytes, sequential digestion/gleaning, glossary expansion, real Ollama embeddings/vector search, native KB MCP, dreaming/re-dreaming/materialized topics, interrupted digestion with one attempt and fresh later inference. |
+| context | Actual Workspace Context service and scheduler: disabled passivity, zero sources without inference, scan/uploaded sources, global/workspace profile/model/effort selection, direct markdown maintenance, eligible Memory consumption while retaining inactive entries/references/assets, run retention, scheduled scan/maintenance, Stop retaining pending Memory, and fresh inference afterward. Scheduler clock advancement is a fixture control. |
+| routines | Actual chat proposal/validation/install plus Routine service/routes/scheduler: opt-in instructions, manual/scheduled runs, persistent state, output/temp/history/retention, explorer access, duplicate exclusion, real one-minute native deadline with no retry or failed-run notification, and disabled passivity. Outreach is an injected stub; no external message is sent. |
+| mobile | Production Chromium mobile viewport and isolated PM2 app: profile/model/effort, real upload/image/text/OCR, cached OCR and model denial, invocation-only OCR choices, thinking/tools, socket replay, delivered artifact/preview/download, read-only history/reset, Stop/descendant drain and a fresh explicit turn with one interrupted tool attempt. This is browser evidence, not physical iOS/Android acceptance. |
+
+Prerequisites beyond locked root/mobile dependencies and Playwright Chromium:
+authenticated CoCo 1.2.35 with the selected connection and claude-sonnet-4-6;
+authenticated `claude` (or CORTEX_TEST_MEMORY_COMMAND) for chat's separate Memory
+governance; real Pandoc, LibreOffice and a running local Ollama containing
+nomic-embed-text for KB. No fallback installs, mocked AI, skipped prerequisite
+or automatic native retry can turn a missing dependency into a pass. Native
+Routine timeout takes at least a minute. Strict Memory consolidation requires
+restrictedText and now has its separate C35 catalog fixture on the exact retained
+macOS arm64 build; KB dreaming remains tool-enabled. Titles/summaries retain
+their existing fallback behavior. Unsupported native goals/agents/steering/media
+and unknown Snowflake pricing retain their independent gates.
+
+`CORTEX_WORKFLOW_CHECKS` in cortexCompatReports.ts lists fixed nested boolean
+outcomes for each workflow. Full/selected workflow reports validate all required
+checks in addition to native pass/version/revision/platform metadata. Missing
+outcomes and truthy strings fail; the shareable report includes only the fixed
+check labels and `evidenceComplete`, never raw native values. A full workflow
+catalog pass removes the outside-workflow scope marker only for that catalog;
+backend/UI/auth-control and selected workflow runs retain it. Other platform,
+human OAuth and physical-device gates remain independent. A selected run without
+restricted retains an explicit C35-outside-this-run marker.
+
+The separate auth-control command does not select/read a saved connection or
+pass CORTEX_TEST_CONNECTION into its probe. It still validates the real retained
+executable using a synthetic name, then runs probe-cortex-missing-auth.ts with an
+empty custom SNOWFLAKE_HOME. Its profile's custom home overrides only its child
+environment; the parent's normal terminal credential home is unchanged. First,
+the actual Cockpit HTTP/WS path must fail model selection before prompting,
+because native empty auth omits its model catalog: one terminal frame, no tools
+or usage, one saved user message. Then a separate low-level native prompt must
+produce the version-tested no-connection error without complete usage, tool work
+or a waiting login wizard. ACP/session creation never proves login. This is
+expected failure evidence only, with an explicit authScope; it does not certify
+account isolation, a real invalid account/key, token expiry or successful auth.
+The fixture does not relax production configuration guards to reach inference.
+
+Focused deterministic coverage lives in test/cortexCompatRunner.test.ts and
+test/cortexCompatProcess.test.ts, alongside existing CoCo chat/KB/Context/Routine/
+processor/mobile regression suites. There is no product UI, route, contract,
+installer, capability or mobile source change in C55. Raw native reports/logs,
+fixture settings and screenshots are private; share only compatibility-report.json.
+
+C55 acceptance: all five workflow probes passed (62 required individual checks)
+in /tmp/cockpit-cortex-workflows-compat-nlmgTo/compatibility-report.json;
+the separate missing-auth catalog passed all eight required checks in
+/tmp/cockpit-cortex-auth-control-compat-C2s9H4/compatibility-report.json.
+Both record macOS/Darwin 25.5.0 arm64, Node 26.0.0,
+CoCo 1.2.35+191333.f82de3d91715, revision ad0c55e and dirty working-tree state.
+All observed processes and private PM2 drained, and native activation/retained
+executable snapshots stayed unchanged. These are developer-checkout acceptance
+reports, not public release or account-isolation evidence. Earlier auth-control
+fixture expectations were corrected to retain the unavailable-model guard and
+trim native error whitespace; their failed reports remain failed. Production
+configuration/auth guards were unchanged.
+
+Frozen full Jest: 180 suites / 3,003 tests pass; three opt-in suites / 20 tests
+skipped. Statements/lines 88.71% (56,028/63,153), branches 76.94%
+(13,320/17,310), functions 93.94% (2,853/3,037); existing floors remain intact.
+Root/web/mobile/strict tooling types, zero-warning lint, maintainability,
+189-route spec drift and 92 ADR checks pass. Both clients were rebuilt after
+Jest by the workflow runner; desktop bundle budget passes. C26, conditional C35,
+native Ubuntu/Windows, physical devices and C56–C59 remain separate.
+
+
+### CoCo final scope and guard review (C56–C59)
+
+`test/cortexIntegration.test.ts` adds behavior checks for all five native-goal
+HTTP actions: 400 unsupported responses, no adapter goal invocation, no native
+startup and no persisted prompt. Valid uploaded PDF/audio/video references emit
+an unsupported-format terminal error/done without a native `session/prompt`,
+tool activity or usage; request validation is distinct from native media admission. Existing
+interaction/queue suites retain supported questions/plans and reject unsolicited
+steering. Model/attachment/processor/usage suites preserve the versioned PNG,
+strict Memory and unknown Snowflake cost gates. The 6-suite/53-test focused set
+passed before frozen full coverage.
+
+C56 decisions are [recorded separately](research/cortex-code-capability-decisions.md).
+C57 public/reference docs describe the implemented scope without new runtime
+switches or schemas. C59 [review preparation](design/cortex-code-review.md)
+records ADR/mobile impact, residual gates and local PR text. Full C58 commands
+run before browser probes; the final review records exact results and selected
+native catalogs. Existing C55 workflow evidence remains applicable only while
+production runtime/client/scripts/config match the tested tree. A fresh UI pass
+does not replace workflow/platform/human OAuth evidence.
+
+
+C58 final acceptance: raised-floor frozen full V8 passed 180 suites/3,005 tests
+(20 opt-in tests skipped), 88.75% statements/lines, 77.04% branches and 93.94%
+functions. Floors are 88.72/77.00/93.90 respectively. Fresh full native backend
+3/3, UI 5/5 and separate missing-auth 1/1 passed on retained 1.2.35/macOS arm64,
+with no omitted probes, observed process/private PM2 drain and unchanged native
+activation/executable. Both UI assets were rebuilt after full Jest. Exact report
+roots, metadata, retained C55 workflow scope, type/lint/spec/ADR/budget checks
+and residual gates are recorded in [the final review](design/cortex-code-review.md#final-c58-validation).
+This review does not certify C26, C35, native Ubuntu/Windows, physical devices,
+new CLI versions or the deferred C56 feature set.
+
+## CoCo Windows runtime preparation (C53)
+
+Native Windows acceptance remains open. The implementation and native checklist
+are in [Windows acceptance preparation](research/cortex-code-windows-acceptance.md).
+
+- `test/cortexWindows.test.ts`: simulated Windows x64 standalone/explicit/PATH
+  discovery, literal argv, environment casing and forced controls, shared/custom
+  auth homes, synthetic OAuth with post-login verification, passive import,
+  responding Install Doctor and manual install/update policy.
+- `test/cortexWindowsLaunch.test.ts`: pinned executable/version/ACP ownership,
+  hidden non-detached piped startup, abort and failed-negotiation draining.
+- `test/cortexWindowsProcess.test.ts`: identity-only snapshot parsing, held-handle
+  script construction, detached/reused/older/unrelated identity handling,
+  enumeration/helper failures, surviving owners and idempotent stop. PowerShell
+  is mocked; script assertions do not prove actual Windows execution.
+- Existing runtime/process/login/auth/connection/migration/update/doctor and
+  Windows/macOS installer/release/private-Node wrapper tests remain regressions.
+  Invalid migrated Windows CoCo commands become per-target errors before any
+  version command, rather than aborting the whole CLI Update check.
+
+No web/mobile source, API, persisted schema or PWA metadata changes. Full Jest
+must finish before rebuilding assets or running native browser checks. The
+existing native CoCo catalogs remain macOS-scoped; no Windows pass is implied.
+
+C53's final frozen full V8 passes 183 suites / 3,028 tests (20 opt-in tests
+skipped): 88.75% statements/lines, 77.21% branches, 93.94% functions. Floors are
+88.74/77.12/93.90. Focused Windows/macOS regressions pass 20 suites / 219 tests;
+the final three Windows-specific suites pass 21 cases. The follow-up in
+[the implementation review](design/cortex-code-review.md#c53-autonomous-follow-up-2026-11-09)
+records exact native subset scope and remaining gates.
+
+
+## CoCo restricted Memory (C35)
+
+`test/cortexRestricted.test.ts` runs an actual JSONL process fixture through the
+adapter. It covers private home/cwd and forced env, exact deny argv, wrapped
+slash input, sequential continuity, build/platform guards, zero-catalog startup,
+timeout/abort/shutdown/reuse and fail-closed native output with no retry.
+`test/cortexRestrictedStream.test.ts` covers catalog/session/result ownership,
+UTF-8 fragmentation, tool/control frames, incomplete usage, oversized/malformed
+output, exit and cleanup errors. Existing processor, Memory and rendered selector
+suites verify role eligibility and retained unavailable choices. Migration suites
+exclude/reject transient restricted homes, including empty directories.
+
+Run native proof only with authenticated shared terminal credentials and the
+exact macOS arm64 distribution:
+
+```sh
+CORTEX_RESTRICTED_PROBE=1 npx tsx scripts/probe-cortex-restricted.ts
+CORTEX_CODE_E2E=1 npm run e2e:cortex-code-workflows -- --probe restricted
+```
+
+The workflow catalog now includes six probes: chat, restricted, kb, context,
+routines and mobile; its outer deadline is 85 minutes. The restricted probe is
+an isolated HTTP/service fixture, with working hook/MCP positive controls,
+private-config hostile-input/sequential checks and real Memory governance,
+extraction, proposal, rewrite/apply. Native debug capture projects actual request
+schema/resource counts before production temp cleanup; it never publishes raw
+prompts/account fields. Abort waits for an observed active request, then verifies
+cleanup and fresh inference. Runner validation requires every outcome, not just
+exit success. Full Jest must finish before catalog builds/browser checks.
+
+The retained report and failed first harness attempt are documented in
+[the C35 evidence](research/cortex-code-restricted-processors.md). Nine actual
+requests in eight inference jobs passed with zero tools/resources; a ninth job
+rejected empty connection configuration before inference. The final selected
+catalog validates 14 outcomes, including actual MCP initialize/tools-list. This certifies strict
+Memory only on that distribution/platform; prior strict-Memory deferrals in
+historical checkpoint sections are superseded for this scope. C26, C52/C53,
+physical devices, new releases and account isolation remain independent.
+
+
+### Post-review descendant and mobile draft regressions (2026-11-09)
+
+The ACP executable fixture starts a short-lived parent during a prompt and
+returns the prompt result before that parent forks a detached child. The real
+runtime test waits for the parent to exit, then closes the runtime and requires
+the detached child to be gone. It failed with prompt-dependent scan pacing and
+passes with continuous runtime-lifetime scans. Process tests also verify one
+watcher, normal cadence through idle time and no scans after stop.
+
+The rendered mobile pipeline tests hold a message-mode answer request pending
+while keeping a separate composer draft/uploads. They verify no initial clearing,
+no unrelated uploads in the answer request, and preservation of newer draft/
+upload edits after both success and failure. The cases failed before the fix.
+
+Final frozen full V8 run: 185 suites / 3,084 tests passed, with the existing
+three opt-in suites / 20 tests skipped. Statements/lines: 88.81%
+(56,463/63,572), branches: 77.36% (13,677/17,678), functions: 94.02%
+(2,882/3,065). Floors raised to 88.80/77.34/93.98 and verified against the same
+LCOV collection; unchanged tests were not recollected solely for that config edit.
+Backend/web/mobile types, zero-warning lint, maintainability, spec/ADR checks,
+production client builds and web bundle budget passed.
+
+Native CoCo 1.2.35/macOS arm64 selected runtime probe passed 1/1 (selected 1/3)
+at `/tmp/cockpit-cortex-backend-compat-GZ0xmU/compatibility-report.json`; selected
+production desktop/mobile queue probe passed 1/1 (selected 1/5) at
+`/tmp/cockpit-cortex-ui-compat-vyRYFi/compatibility-report.json`. These retain
+shared terminal auth and prove their scoped cancellation/root-exit/resume and
+question/draft/reconnect/Stop/queue paths. The delayed post-prompt fork and
+message-mode composer preservation are the dedicated deterministic regressions;
+no new native platform, human OAuth, full-catalog or physical-device claim.
 
 Reset admission client regressions in `test/streamStore.test.ts` distinguish active-stream `409` from temporary reset `503` for direct and queued sends: both retain drafts/attachments or queue entries, but only `409` enters streaming state. `test/mobileSendPipeline.test.ts` exercises a real send through the hook with a reset `503`, verifies only-if-active recovery, restores the draft/attachments, removes optimistic text, and finishes local streaming.
 
@@ -672,3 +2040,59 @@ creates no inference session and changes no login. This limits hosted testing
 in this environment; it does not override the owner's reported successful
 20-model catalog on the same CLI version or establish that both probes used
 the same account/policy. Account identity was not recorded in the owner report.
+
+
+### CoCo/Copilot main integration (2026-11-09)
+
+The CoCo branch incorporates `main` at `6cbbb3b`, including Copilot SDK support
+and the current release dependency/security updates. Shared harness registration,
+profile/auth routes, input contracts, reducers, desktop/mobile controls and docs
+retain both integrations. CoCo's Proposed ADR is renumbered 0099 because main's
+Copilot ADR already owns 0093; Accepted Copilot records are unchanged.
+
+The extracted composer picker retains Copilot profile-local goal/steering
+metadata, timer/focus discovery, missing-model preservation and fallback labels.
+The mobile composer uses the current owned input token for its steering hint;
+static Copilot metadata intentionally leaves SDK controls disabled. The existing
+native mobile steering cases reproduced the incorrect hint and pass after the
+fix. CoCo decision generations remain separate from Copilot request/turn/input
+IDs. Both retain exact question ownership, duplicate exclusion and newer drafts.
+
+Shared auth shutdown closes admission before CoCo checks are delegated, aborts
+both owners and waits for every drain before propagating a cleanup error. The
+new `copilotDeviceAuth.test.ts` regression reproduced early completion when a
+Copilot cleanup error raced a pending CoCo drain; it also checks late CoCo status
+and login admission without invoking native work. Focused auth tests pass 64
+cases. The final frozen full run passes 224 suites / 3,581 tests (seven suites /
+72 tests skipped); statements/lines 89.68%, branches 79.65%, functions 94.31%.
+Floors are raised to 89.45/79.45/94.10. The subsequent mobile hint-only correction
+is outside backend coverage and has fresh mobile types/lint/native UI evidence.
+
+Native macOS arm64 evidence:
+
+- CoCo 1.2.35 selected runtime passes 1/1 (selected 1/3), including cancellation,
+  root-exit/descendant cleanup and session reuse. Report:
+  `/tmp/cockpit-cortex-backend-compat-ndyBG2/compatibility-report.json`.
+- CoCo selected production desktop/mobile interaction and queue probes pass 2/2
+  (selected 2/5), with owned cleanup. Report:
+  `/tmp/cockpit-cortex-ui-compat-O75DxQ/compatibility-report.json`.
+- CoCo saved-auth/setup/catalog/responsive handoff probe passes 1/1 (selected
+  1/5), including real fresh-process inference and separately labeled synthetic
+  handoff/clipboard lifecycle cases. Report:
+  `/tmp/cockpit-cortex-ui-compat-WbTkZd/compatibility-report.json`. This is not C26.
+- Copilot CLI 1.0.105 / SDK 1.0.28 passes 36 native SDK cases and two isolated
+  logged-out/device-code cancellation cases. Reports are
+  `copilot-sdk-compat-SzfIjw/compatibility-report.json` and
+  `copilot-auth-compat-3VWjnV/compatibility-report.json` under the system temp root.
+- Copilot production desktop/mobile Chromium passes all 42 cases, with 84 SDK
+  launches and exit 0. This includes actual steering during running tools,
+  questions, Stop/resume, goals, media/artifacts and auth/catalog projections.
+  Report: `cockpit-copilot-ui-1RYKCM/compatibility-report.json` under the system
+  temp root. Replies/auth are isolated fixtures; hosted entitlement is not proved.
+
+Backend/web/mobile types, zero-warning lint, maintainability, spec drift and ADR
+lint pass. Both clients rebuild after full Jest; combined desktop JS measures
+923.2 KiB against 924 KiB and CSS 202.5 KiB against 230 KiB. The combined Settings
+chunk measures 80.8 KiB against 81 KiB. Keep full Jest separate from native UI.
+These results do not close human CoCo OAuth C26, native Ubuntu C52, native Windows
+C53, physical-device or hosted-account qualification.

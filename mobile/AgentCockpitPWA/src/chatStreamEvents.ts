@@ -13,7 +13,12 @@ export type StreamEventNotification = {
   body: string;
 };
 
+function decisionIdentity(event: Extract<StreamEvent, { type: 'tool_activity' }>): Pick<PendingInteraction, 'decisionId' | 'decisionBound'> {
+  return { ...(event.id ? { decisionId: event.id } : {}), ...(event.decisionBound ? { decisionBound: true } : {}) };
+}
+
 export type ChatStreamEventAction =
+  | { type: 'complete-decision'; decisionId: string }
   | { type: 'set-stream-placeholder'; value: boolean }
   | { type: 'append-stream-text'; content: string }
   | { type: 'set-stream-text'; value: string }
@@ -107,12 +112,12 @@ export function chatStreamEventActions(event: StreamEvent): ChatStreamEventActio
       break;
     case 'tool_activity': {
       if (event.isPlanMode && (event.planContent || event.planAction === 'exit')) {
-        actions.push({ type: 'set-pending-interaction', interaction: { kind: 'plan', prompt: event.planContent || 'Plan ready for approval.' } });
+        actions.push({ type: 'set-pending-interaction', interaction: { kind: 'plan', prompt: event.planContent || 'Plan ready for approval.', ...decisionIdentity(event) } });
       } else if (event.isQuestion && event.questions?.length) {
         const question = event.questions[0];
         actions.push({
           type: 'set-pending-interaction',
-          interaction: { kind: 'question', prompt: question.question, options: question.options || [],
+          interaction: { kind: 'question', prompt: question.question, options: question.options || [], ...decisionIdentity(event),
             ...(event.inputRequestId ? { requestId: event.inputRequestId } : {}),
             ...(question.allowFreeform !== undefined ? { allowFreeform: question.allowFreeform } : {}) },
         });
@@ -126,6 +131,10 @@ export function chatStreamEventActions(event: StreamEvent): ChatStreamEventActio
       actions.push({ type: 'set-input-turn', turnId: event.turnId });
       break;
     case 'tool_outcomes':
+      // Each harness resolves only its own correlated interaction.
+      for (const outcome of event.outcomes || []) {
+        if (outcome.toolUseId) actions.push({ type: 'complete-decision', decisionId: outcome.toolUseId });
+      }
       actions.push({ type: 'resolve-input-requests', requestIds: (event.outcomes || []).map(outcome => outcome.toolUseId) });
       actions.push({ type: 'update-stream-tools', frame: event });
       break;

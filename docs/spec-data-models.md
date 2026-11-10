@@ -1076,7 +1076,7 @@ Audits are append-only review records. They do not change `snapshot.json` direct
     paths: string[]        // workspace-relative files detected for that source
   }],
   harnesses: [{
-    harness: 'codex' | 'claude-code' | 'kiro' | 'opencode' | 'grok-build' | 'copilot',
+    harness: 'codex' | 'claude-code' | 'kiro' | 'opencode' | 'grok-build' | 'cortex-code' | 'copilot',
     label: string,
     sourceId: 'agents' | 'claude' | 'kiro',
     expectedPath: string,
@@ -1686,7 +1686,7 @@ type CliInstallMethod = 'npm-global' | 'self-update' | 'unknown' | 'missing';
 
 interface CliUpdateStatus {
   id: string;
-  harness: 'claude-code' | 'codex' | 'kiro' | 'opencode' | 'grok-build' | 'copilot';
+  harness: 'claude-code' | 'codex' | 'kiro' | 'opencode' | 'grok-build' | 'cortex-code' | 'copilot';
   label: string;
   command: string;
   resolvedPath: string | null;
@@ -1724,6 +1724,34 @@ interface CliUpdatesResponse {
 ```
 
 ## Settings (`data/chat/settings.json`)
+
+Cortex Code profile foundations add `harness:'cortex-code'` and optional
+`cortexCode:{connection:string}`. Omitted configuration is a retained setup
+draft, excluded from automatic defaults and runtime resolution. Supplied config
+accepts only a nonempty named connection without control characters, preserved
+verbatim; credentials/unknown fields are rejected. A malformed stored object is
+repaired on read to its valid connection, or omitted (unconfigured), rather
+than failing settings reads. Setup account identities
+strip `configDir`/`SNOWFLAKE_HOME`, while explicit profile home metadata remains
+unverified for runtime isolation. See [the complete CoCo contract](spec-cortex-code.md)
+for validation, defaults, migration, capability fields and current availability.
+CoCo is registered for durable chat and tool-enabled one-shot/sequential work,
+with shared authentication and scoped installation/update integration.
+Its one-shot capabilities are restrictedText:true on macOS arm64 (with an exact
+distribution guard at execution; false elsewhere), toolEnabled:true and
+sequential:true, with explicit image transport and independently gated models.
+The internal `RunOneShotAttachment` declaration lives in `src/types/backends.ts`
+and is re-exported by the base adapter: `{path:string, kind:ModelInputModality,
+mimeType?:string, name?:string}`. It describes trusted server files for processor
+requests and adds no persisted credential or conversation fields.
+
+CoCo KB visual preparation preserves original media and adds a `.ai.png`
+sibling to the existing converted `mediaFiles` list. Standalone-image metadata
+uses `aiImagePrepared:true` for this path; existing legacy `downscaled:true`
+records remain valid. Per-image/page/slide `aiRetries` records 0 for CoCo
+failures because its automatic retry policy is disabled; failure annotations
+say `without retry` where present. No SQLite schema or stored-record migration
+is introduced. See [KB workflows](spec-cortex-code.md#knowledge-base-workflows-p6-c37c38).
 
 ```json
 {
@@ -1794,6 +1822,15 @@ Welcome setup auth can create first-run account profiles named `setup-codex-acco
 
 `defaultCliProfileId` points at the CLI profile used by the V2 UI for new conversations. New conversations still accept/return `backend` for compatibility, but new profile-based selection derives `backend` from `CliProfile.harness + CliProfile.protocol` instead of exposing a separate backend/provider picker. `ChatService.createConversation()` accepts an optional `cliProfileId`; when supplied without an explicit backend, the profile's protocol-derived backend is stored. A conflicting explicit `backend` is rejected. When neither profile nor backend is supplied, the service uses `settings.defaultCliProfileId` when valid and derives the backend from that profile; otherwise it falls back only to legacy `settings.defaultBackend` when present. If neither is configured, creation fails with a CLI-profile-required error. When only a backend is supplied, the service derives `cliProfileId` from the selected backend's physical server-configured profile. Legacy settings and request payloads that still provide `CliProfile.vendor` are accepted only as migration input, normalized to `harness` on read/write, and never emitted as the canonical saved field.
 
+Processor profile IDs in Memory, KB ingestion/digestion/dreaming and global or
+workspace-override Context settings are retained even when the profile is
+missing, disabled or incomplete. Known profiles still align legacy backend
+mirrors; an explicit missing ID keeps its mirror but fails exact runtime
+resolution rather than selecting the mirror/default. This applies to saves,
+restored settings and imported bundles, with no schema migration. Unset/legacy
+backend-only selections keep existing defaults. Shared role eligibility is
+specified in [CoCo C41](spec-cortex-code.md#processor-selection-boundaries-p6-c41).
+
 `memory.cliProfileId` selects the profile used by the Memory CLI for `memory_note` formatting/deduping and post-session extraction. `memory.cliBackend` is retained as a legacy fallback and is kept aligned to the selected profile's protocol-derived backend on settings save. Runtime resolution uses `memory.cliProfileId` first, then legacy `memory.cliBackend`, then `defaultCliProfileId`, then legacy `defaultBackend`; if none exists, Memory processor actions record a graceful unavailable failure instead of assuming a provider.
 
 `memory.lastProcessorStatus` stores the last redacted Memory processor status known to Agent Cockpit ([ADR-0053](adr/0053-persist-memory-processor-status.md)). Shape: `{ status, updatedAt, backendId?, profileId?, profileName?, chatBackendId?, chatProfileId?, chatProfileName?, differsFromChatProfile?, error? }`. `status` is one of `last_succeeded`, `authentication_failed`, `unavailable`, `runtime_failed`, or `bad_output`. Successful `memory_note` write/skip decisions store `last_succeeded`; processor profile resolution, adapter availability, `runOneShot`, and bad-output failures store the corresponding failure class. `error` is bounded and redacted before persistence, including credential-looking paths and token values. Chat profile fields are present only when the active conversation runtime supplied them while issuing the Memory MCP session.
@@ -1810,7 +1847,7 @@ The `systemPrompt` is passed to the CLI via `--append-system-prompt` at the star
 
 The `memory` block configures the globally-shared **Memory CLI profile** used for `memory_note` MCP processing and post-session extraction (see [Backend Services — Workspace Memory](spec-backend-services.md#workspace-memory)).
 
-The `knowledgeBase` block configures the globally-shared **Ingestion CLI profile**, **Digestion CLI profile**, and **Dreaming CLI profile** for the per-workspace Knowledge Base feature (see **Workspace Knowledge Base** subsection under `ChatService` below). The matching legacy `*CliBackend` fields are retained as fallbacks and are aligned to the selected profile's protocol-derived backend on save. Ingestion is opt-in and is used only for AI-assisted page/slide/image conversion at ingest time; leaving it unset falls back to image-only references for visual content. The Ingestion CLI must pass the backend media gate: profile-aware backend metadata must expose `capabilities.oneShotMediaInput.image`, and the selected/default model must expose `capabilities.input.image === true`. Unknown or stale model media support fails closed. Digestion and Dreaming are text/tool workflows and are not gated on image support. `cliConcurrency` (default 2) caps how many documents are processed in parallel by ingestion, digestion, and dreaming pipelines per workspace; within a single document, work stays sequential. `kbGleaningEnabled` (default `false`) opts digestion into a second per-chunk pass that asks for missed entries after the first extraction. `convertSlidesToImages` opts into the LibreOffice-backed PPTX slide rasterization path; when enabled but LibreOffice is absent from refreshed detection, ingestion logs a warning and falls back to text + speaker notes + embedded media only. LibreOffice presence is detected with `which soffice` / `where.exe soffice`, cached at module level, and refreshed by Settings, Install Doctor, and rasterization attempts so newly installed tools are picked up without restarting Agent Cockpit. `dreamingStrongMatchThreshold` (default 0.75) and `dreamingBorderlineThreshold` (default 0.45) control the retrieval-based routing score thresholds: entries with a top hybrid-search score ≥ strong go directly to synthesis, ≥ borderline go to LLM verification, and below borderline create new topics.
+The `knowledgeBase` block configures the globally-shared **Ingestion CLI profile**, **Digestion CLI profile**, and **Dreaming CLI profile** for the per-workspace Knowledge Base feature (see **Workspace Knowledge Base** subsection under `ChatService` below). The matching legacy `*CliBackend` fields are retained as fallbacks and are aligned to the selected profile's protocol-derived backend on save. Ingestion is opt-in and is used only for AI-assisted page/slide/image conversion at ingest time; leaving it unset falls back to image-only references for visual content. The Ingestion CLI must pass the backend media gate: profile-aware backend metadata must expose `capabilities.oneShotMediaInput.image`, and the selected/default model must expose `capabilities.input.image === true`. Unknown or stale model media support fails closed. Ingestion reuses a profile's non-empty metadata for up to 60 seconds across raws, so bulk conversions do not rerun native catalog discovery per file; failed or empty discovery is retried by the next raw. Digestion and Dreaming are text/tool workflows and are not gated on image support. `cliConcurrency` (default 2) caps how many documents are processed in parallel by ingestion, digestion, and dreaming pipelines per workspace; within a single document, work stays sequential. `kbGleaningEnabled` (default `false`) opts digestion into a second per-chunk pass that asks for missed entries after the first extraction. `convertSlidesToImages` opts into the LibreOffice-backed PPTX slide rasterization path; when enabled but LibreOffice is absent from refreshed detection, ingestion logs a warning and falls back to text + speaker notes + embedded media only. LibreOffice presence is detected with `which soffice` / `where.exe soffice`, cached at module level, and refreshed by Settings, Install Doctor, and rasterization attempts so newly installed tools are picked up without restarting Agent Cockpit. `dreamingStrongMatchThreshold` (default 0.75) and `dreamingBorderlineThreshold` (default 0.45) control the retrieval-based routing score thresholds: entries with a top hybrid-search score ≥ strong go directly to synthesis, ≥ borderline go to LLM verification, and below borderline create new topics.
 
 The `workspaceContext` block configures globally-shared Workspace Context
 processor defaults for workspaces that opt into Workspace Context and keep
@@ -2504,6 +2541,35 @@ The dreaming CLI returns `{ "operations": [...] }` JSON. 10 supported operation 
 Connection confidence levels: `extracted` (entry explicitly states relationship), `inferred` (deduced from overlapping concepts), `speculative` (weaker thematic connection). Most connections should be `inferred`.
 
 All operations are parsed by `parseDreamOutput()` (extracts JSON from potentially noisy CLI output via markdown-fence matching or a string-aware balanced-brace scanner that ignores braces inside JSON string literals), validated by `validateOp()`, and applied transactionally by `applyOperations()` in `dreamOps.ts`. The same string-aware scanner backs `parseVerificationOutput()`, `parseDiscoveryOutput()`, and `parseReflectionOutput()` in `dream.ts`.
+
+### Cortex setup/authentication DTOs
+
+CoCo adds no persisted credential fields. `CliProfile.cortexCode` continues to
+contain only a named `connection`. Server auth job/check declarations now live
+in `src/types/cliAuth.ts`, re-exported through `src/types/index.ts` and the
+existing service facade. Optional `CliAuthJobSnapshot.cortex` is transient:
+`{phase:'starting'|'waiting-for-browser'|'verifying', generation, connection,
+version?, authorizationUrl?, expiresAt?}`. It exists only while a CoCo job is
+running and disappears after submission/completion/cancel/timeout as specified
+in [CoCo P4](spec-cortex-code.md#shared-connection-and-authentication-setup-p4).
+`CortexConnectionSummary` is `{name,manualOAuth,browserTimeoutMs}`; account and
+user metadata stays in native connection TOML; credential storage/cache remains
+native-owned and machine-dependent, not a Cockpit profile credential field.
+Request validators and browser-safe handoff declarations live in `src/contracts/cortexAuth.ts`.
+These API objects are not a persisted settings/history schema.
+
+CoCo C46 selection clarification: conversation `effort` still uses the existing
+EffortLevel scalar and JSON storage. A named CoCo model retains recognized saved
+effort while static/profile catalog discovery is unavailable; native runtime
+configuration validates support. Other harnesses keep existing normalization.
+OCR's optional model/effort request fields are invocation-only overrides and do
+not add persisted fields or modify the saved chat selection. No migration is
+required.
+
+Chat request upload references are optional `{name}` objects in the browser-safe
+stream contract. Actual attachment paths/kinds/sizes come from the server upload
+directory. Existing message wire text and persisted queued AttachmentMeta objects
+are unchanged; this adds no on-disk schema or migration.
 
 ### Copilot native goal fields
 

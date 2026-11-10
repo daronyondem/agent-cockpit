@@ -14,8 +14,8 @@ export const AFTER_ASSISTANT_MESSAGE_RECONCILE_DELAY_MS = 5000;
 export type StreamUiState = 'streaming' | 'awaiting' | 'error' | null;
 
 export type PendingInteraction =
-  | { type: 'planApproval'; planContent: string }
-  | { type: 'userQuestion'; question: string; options: Array<{ label: string; description?: string }>; requestId?: string; allowFreeform?: boolean };
+  | { type: 'planApproval'; planContent: string; decisionId?: string; decisionBound?: boolean }
+  | { type: 'userQuestion'; question: string; options: Array<{ label: string; description?: string }>; decisionId?: string; decisionBound?: boolean; requestId?: string; allowFreeform?: boolean };
 
 export interface StreamMemoryUpdateMessage {
   id: string;
@@ -136,6 +136,8 @@ export function reduceStreamFrame(
           pendingInteraction: {
             type: 'planApproval',
             planContent: stringOrEmpty(frame.planContent),
+            ...(frame.id ? { decisionId: frame.id } : {}),
+            ...(frame.decisionBound ? { decisionBound: true } : {}),
           },
           planModeActive: false,
           uiState: 'awaiting',
@@ -149,6 +151,8 @@ export function reduceStreamFrame(
         ...next,
         pendingInteraction: {
           ...question,
+          ...(frame.id ? { decisionId: frame.id } : {}),
+          ...(frame.decisionBound ? { decisionBound: true } : {}),
           ...(frame.inputRequestId ? { requestId: frame.inputRequestId } : {}),
         },
         uiState: 'awaiting',
@@ -167,11 +171,14 @@ export function reduceStreamFrame(
     }, context));
   }
   if (frame.type === 'tool_outcomes') {
-    const requestId = next.pendingInteraction?.type === 'userQuestion' ? next.pendingInteraction.requestId : undefined;
-    if (requestId && frame.outcomes?.some(outcome => outcome.toolUseId === requestId)) {
-      next = { ...next, pendingInteraction: null, uiState: next.streaming ? 'streaming' : null };
+    const outcomes = Array.isArray(frame.outcomes) ? frame.outcomes : [];
+    const interaction = next.pendingInteraction;
+    const requestId = interaction?.type === 'userQuestion' ? interaction.requestId : undefined;
+    if ((interaction?.decisionBound && interaction.decisionId && outcomes.some(outcome => outcome.toolUseId === interaction.decisionId))
+      || (requestId && outcomes.some(outcome => outcome.toolUseId === requestId))) {
+      next = { ...next, pendingInteraction: null, uiState: next.streamError ? 'error' : next.streaming ? 'streaming' : null };
     }
-    return withEffects(patchToolOutcomes(next, Array.isArray(frame.outcomes) ? frame.outcomes : [], context.nowMs));
+    return withEffects(patchToolOutcomes(next, outcomes, context.nowMs));
   }
   if (frame.type === 'input_ready') return withEffects({ ...next, inputTurnId: frame.turnId });
   if (frame.type === 'artifact') {

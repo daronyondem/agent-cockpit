@@ -60,6 +60,8 @@ export type BrowserStreamFrame =
       planFilePath?: string;
       isQuestion?: boolean;
       questions?: ToolQuestion[];
+      /** Answerable only through the live turn; a matching outcome resolves it. */
+      decisionBound?: boolean;
       inputRequestId?: string;
     })
   | { type: 'tool_outcomes'; outcomes?: ToolOutcome[] }

@@ -79,28 +79,41 @@ function isAlreadyStreamingError(error: unknown): error is AgentAPIError {
     && /conversation is already streaming/i.test(error.message);
 }
 
+/** Interrupted runs retain queued follow-ups until the user explicitly resumes. */
+function queueRequiresResume(conversation: Conversation): boolean {
+  return Boolean([...conversation.messages].reverse().find(message => message.role === 'assistant')?.streamError);
+}
+
 export function useSendPipeline(options: UseSendPipelineOptions) {
   const sendInFlightRef = useRef(false);
+  const queueInFlightRef = useRef(false);
+  const suspendedQueues = useRef(new Set<string>());
+  const latest = useRef(options);
+  latest.current = options;
   const [isSending, setIsSending] = useState(false);
   const [steeringPending, setSteeringPending] = useState(false);
-  const [interactionPending, setInteractionPending] = useState(false);
-  const answeringRef = useRef(false);
-  const interactionRef = useRef(options.pendingInteraction);
-  const previousInteractionRef = useRef(options.pendingInteraction);
-  interactionRef.current = options.pendingInteraction;
-  const { pendingInteraction, setInteractionAnswer } = options;
+  const [isResponding, setIsResponding] = useState(false);
+  const interactionInFlight = useRef(false);
+  const interactionOwner = useRef({ conversationId: options.activeConversation?.id, interaction: options.pendingInteraction });
+  interactionOwner.current = { conversationId: options.activeConversation?.id, interaction: options.pendingInteraction };
+  const interactionKey = JSON.stringify([options.activeConversation?.id, options.pendingInteraction?.decisionId, options.pendingInteraction?.kind === 'question' ? options.pendingInteraction.requestId : undefined,
+    options.pendingInteraction?.kind, options.pendingInteraction?.prompt]);
+  const setInteractionAnswer = options.setInteractionAnswer;
+  const previousInteraction = useRef({ key: interactionKey, interaction: options.pendingInteraction });
+  const pendingInteraction = options.pendingInteraction;
   useEffect(() => {
-    if (previousInteractionRef.current !== pendingInteraction) setInteractionAnswer('');
-    previousInteractionRef.current = pendingInteraction;
-  }, [pendingInteraction, setInteractionAnswer]);
+    if (previousInteraction.current.key !== interactionKey || previousInteraction.current.interaction !== pendingInteraction) setInteractionAnswer('');
+    previousInteraction.current = { key: interactionKey, interaction: pendingInteraction };
+  }, [interactionKey, pendingInteraction, setInteractionAnswer]);
 
   async function sendDraft() {
-    if (sendInFlightRef.current) {
+    if (sendInFlightRef.current || queueInFlightRef.current
+      || options.activeConversation?.id !== latest.current.activeConversation?.id) {
       return;
     }
     const content = options.draft.trim();
     const attachments = completedAttachmentMetas(options.pendingAttachments);
-    if (options.pendingInteraction) {
+    if (latest.current.pendingInteraction) {
       options.setErrorMessage('Answer the prompt above to continue.');
       return;
     }
@@ -178,13 +191,16 @@ export function useSendPipeline(options: UseSendPipelineOptions) {
 
   async function sendMessageNow(
     message: QueuedMessage,
-    sendOptions: { clearComposer?: boolean; restoreDraftOnFailure?: boolean; conversationID?: string } = {},
+    sendOptions: { clearComposer?: boolean; restoreDraftOnFailure?: boolean; conversationID?: string; answering?: PendingInteraction } = {},
   ): Promise<SendMessageResult> {
+    const options = latest.current;
     const conversation = conversationForSend(options.activeConversation, options.activeConversationRef, sendOptions.conversationID);
     if (!conversation) {
       return { ok: false, reason: 'busy' };
     }
-    if (sendInFlightRef.current) {
+    // An answered card clears through React state, so the latest render can
+    // still show it. Only that exact interaction may send its answer.
+    if (sendInFlightRef.current || (options.pendingInteraction && options.pendingInteraction !== sendOptions.answering)) {
       return { ok: false, reason: 'busy' };
     }
     sendInFlightRef.current = true;
@@ -232,6 +248,7 @@ export function useSendPipeline(options: UseSendPipelineOptions) {
       });
       const response = await options.clientRef.current.sendMessage(conversation.id, {
         content,
+        ...(message.attachments?.length ? { attachments: message.attachments.map(({ name }) => ({ name })) } : {}),
         backend: options.selectedBackend,
         cliProfileId: options.selectedCliProfileId,
         model: options.selectedModel,
@@ -325,21 +342,32 @@ export function useSendPipeline(options: UseSendPipelineOptions) {
   }
 
   async function enqueueDraft() {
-    const conversation = options.activeConversation;
-    const content = options.draft.trim();
-    const attachments = completedAttachmentMetas(options.pendingAttachments);
-    if (!conversation || (!content && !attachments.length)) {
-      return;
-    }
+    const current = latest.current;
+    const conversation = current.activeConversationRef.current;
+    const content = current.draft.trim();
+    const attachments = completedAttachmentMetas(current.pendingAttachments);
+    if (!conversation || queueInFlightRef.current || (!content && !attachments.length)) return;
+    queueInFlightRef.current = true;
+    setIsSending(true);
+    suspendedQueues.current.delete(conversation.id);
     try {
       const queue = [...(conversation.messageQueue || []), { content, attachments: attachments.length ? attachments : undefined }];
-      const saved = await options.clientRef.current.saveQueue(conversation.id, queue);
-      options.setActiveConversation({ ...conversation, messageQueue: saved });
-      options.setDraft('');
-      options.setPendingAttachments([]);
+      const saved = await current.clientRef.current.saveQueue(conversation.id, queue);
+      setActiveConversationQueue(conversation.id, saved);
+      if (latest.current.activeConversationRef.current?.id === conversation.id) {
+        if (latest.current.draft === current.draft) current.setDraft('');
+        const queuedIds = new Set(current.pendingAttachments.map(attachment => attachment.id));
+        current.setPendingAttachments(pending => pending.filter(attachment => !queuedIds.has(attachment.id)));
+      }
     } catch (error) {
-      options.onError(error);
+      current.onError(error);
+      return;
+    } finally {
+      queueInFlightRef.current = false;
+      setIsSending(false);
     }
+    const conversationNow = latest.current.activeConversationRef.current;
+    if (conversationNow?.id === conversation.id) await drainNextQueuedMessage(conversationNow);
   }
 
   function setActiveConversationQueue(conversationID: string, queue: QueuedMessage[]) {
@@ -351,28 +379,40 @@ export function useSendPipeline(options: UseSendPipelineOptions) {
     });
   }
 
-  async function drainNextQueuedMessage(conversation: Conversation) {
+  async function drainNextQueuedMessage(conversation: Conversation, resume = false) {
+    const current = latest.current;
     const queue = conversation.messageQueue || [];
-    if (options.isStreaming || options.pendingInteraction || sendInFlightRef.current || !queue.length) {
-      return;
-    }
+    if (current.activeConversationRef.current?.id !== conversation.id || current.loading || current.isStreaming
+      || current.pendingInteraction || sendInFlightRef.current || queueInFlightRef.current || !queue.length
+      || (!resume && (suspendedQueues.current.has(conversation.id) || queueRequiresResume(conversation)))) return;
+    if (resume) suspendedQueues.current.delete(conversation.id);
+    queueInFlightRef.current = true;
+    setIsSending(true);
     const [nextMessage, ...remaining] = queue;
+    const restore = async () => {
+      await current.clientRef.current.saveQueue(conversation.id, queue);
+      setActiveConversationQueue(conversation.id, queue);
+    };
     try {
-      const savedQueue = await options.clientRef.current.saveQueue(conversation.id, remaining);
+      const savedQueue = await current.clientRef.current.saveQueue(conversation.id, remaining);
       setActiveConversationQueue(conversation.id, savedQueue);
+      const now = latest.current;
+      if (now.activeConversationRef.current?.id !== conversation.id || now.isStreaming || now.pendingInteraction || suspendedQueues.current.has(conversation.id)) {
+        await restore();
+        return;
+      }
       const result = await sendMessageNow(nextMessage, {
         clearComposer: false,
         restoreDraftOnFailure: false,
         conversationID: conversation.id,
       });
-      if (!result.ok) {
-        await options.clientRef.current.saveQueue(conversation.id, queue).catch(() => undefined);
-        setActiveConversationQueue(conversation.id, queue);
-      }
+      if (!result.ok) await restore();
     } catch (error) {
-      await options.clientRef.current.saveQueue(conversation.id, queue).catch(() => undefined);
-      setActiveConversationQueue(conversation.id, queue);
-      options.onError(error);
+      await restore().catch(() => undefined);
+      current.onError(error);
+    } finally {
+      queueInFlightRef.current = false;
+      setIsSending(false);
     }
   }
 
@@ -380,26 +420,28 @@ export function useSendPipeline(options: UseSendPipelineOptions) {
     const conversation = options.activeConversation;
     const interaction = options.pendingInteraction;
     const answer = (answerOverride ?? options.interactionAnswer).trim();
-    if (!conversation || !interaction || !answer || answeringRef.current) {
+    const ownsInteraction = () => interactionOwner.current.conversationId === conversation?.id && interactionOwner.current.interaction === interaction;
+    if (!conversation || !interaction || !answer || interactionInFlight.current || !ownsInteraction()) {
       return;
     }
-    answeringRef.current = true;
-    setInteractionPending(true);
+    interactionInFlight.current = true;
+    setIsResponding(true);
     try {
       const requestId = interaction.kind === 'question' ? interaction.requestId : undefined;
       const response = await options.clientRef.current.sendInput(conversation.id, answer, options.isStreaming || options.loading,
-        ...(requestId ? [{ requestId }] : []));
+        { ...(interaction.decisionId ? { decisionId: interaction.decisionId } : {}), ...(requestId ? { requestId } : {}) });
+      if (!ownsInteraction()) return;
       if (requestId && response.mode !== 'stdin') throw new Error('This question is no longer accepting an answer.');
       options.setPendingInteraction((current) => current === interaction ? null : current);
-      if (interactionRef.current === interaction) options.setInteractionAnswer('');
+      options.setInteractionAnswer('');
       if (response.mode === 'message') {
-        await sendMessageNow({ content: answer });
+        await sendMessageNow({ content: answer }, { answering: interaction, clearComposer: false, restoreDraftOnFailure: false });
       }
     } catch (error) {
-      options.onError(error);
+      if (ownsInteraction()) options.onError(error);
     } finally {
-      answeringRef.current = false;
-      setInteractionPending(false);
+      interactionInFlight.current = false;
+      setIsResponding(false);
     }
   }
 
@@ -432,11 +474,13 @@ export function useSendPipeline(options: UseSendPipelineOptions) {
 
   return {
     isSending,
+    isResponding,
+    interactionPending: isResponding,
     steeringPending,
-    interactionPending,
     steerDraft,
     sendDraft,
     drainNextQueuedMessage,
     submitInteraction,
+    suspendQueue: (conversationID: string) => { suspendedQueues.current.add(conversationID); },
   };
 }

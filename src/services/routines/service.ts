@@ -1,3 +1,4 @@
+import { requireBackendRole } from '../../contracts/backendCapabilities';
 import crypto from 'crypto';
 import fs from 'fs';
 import fsp from 'fs/promises';
@@ -495,6 +496,7 @@ export class RoutinesService {
       const runtime = await this.resolveRuntime(manifest);
       const adapter = this.backendRegistry?.get(runtime.backendId);
       if (!adapter) throw new Error(`Unknown backend: ${runtime.backendId}`);
+      requireBackendRole(adapter.metadata, { role: 'toolEnabled' });
       const timeoutMs = Math.max(1, manifest.timeoutMinutes || DEFAULT_RUN_TIMEOUT_MINUTES) * 60_000;
       const runOptions: RunOneShotOptions = {
         model: manifest.harness?.model,

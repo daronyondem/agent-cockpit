@@ -1,8 +1,11 @@
+import { modelDisplayLabel } from './profileCatalog.js';
 import React from 'react';
 
 import { AgentApi } from './api.js';
 import { StreamStore } from './streamStore.js';
 import { CliUpdateStore } from './cliUpdateStore.js';
+
+export { modelDisplayLabel };
 
 export function ScreenLoading({ label = 'Loading...' }){
   return <div className="u-dim" style={{padding:'16px'}}>{label}</div>;
@@ -158,12 +161,6 @@ export function opencodeProviderLabel(provider){
     .join(' ');
 }
 
-export function modelDisplayLabel(modelOrId){
-  const raw = typeof modelOrId === 'string'
-    ? modelOrId
-    : String((modelOrId && (modelOrId.label || modelOrId.id)) || '');
-  return raw.startsWith('openrouter/') ? raw.slice('openrouter/'.length) : raw;
-}
 
 export function assistantDisplayNameFor(backends, profiles, backend, cliProfileId, fallback = 'assistant'){
   if (!backend) return fallback;

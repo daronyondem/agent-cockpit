@@ -1,5 +1,11 @@
 # 7. Frontend Behavior
 
+CoCo P1 adds browser-safe profile/capability types and shared pure eligibility
+helpers, described in [CoCo foundations](spec-cortex-code.md). It adds no CoCo
+Harness option, setup controls or composer execution path yet. Existing desktop
+behavior/assets remain unchanged; runtime/client phases will consume the new
+execution and interaction contracts.
+
 [← Back to index](SPEC.md)
 
 Grok Build profile, billing, interaction, and native goal behavior is specified in
@@ -326,7 +332,7 @@ After a Worktrees enable or disable succeeds, `workspaceSettings.jsx` refreshes 
   **Stream error card:** when `state.streamError` is non-null (set by a terminal WS `error` frame, a failed `/message` POST, or reconnect exhaustion/connect-open failure), `<ChatLive>` renders a `<StreamErrorCard>` at the foot of the feed (after `InteractionCard`). Non-terminal backend warning frames (`terminal: false`) are logged and do not show this card; transient socket `onerror`/`onclose` events during an active stream schedule reconnect instead of turning into backend-looking errors. The store preserves `state.streamErrorSource` from durable messages and terminal WS frames; `source: 'abort'` renders as an **Operation aborted** cancellation notice using the amber `.err-card-abort` variant, with no **Retry** action. Other sources render as **Stream error** and may show **Retry** when a prior user message can be re-sent. The server still persists terminal stream failures as assistant `streamError` messages for durable reload/restart recovery, but while the matching error is active, `<ChatLive>` suppresses that latest persisted marker from the normal transcript so the user sees only the styled card instead of a duplicate assistant bubble. Durable abort markers are always suppressed from the normal transcript, even after the cancellation notice is dismissed, because they are recovery markers rather than assistant output. Older non-abort `streamError` messages followed by normal user/assistant activity remain historical transcript entries. The card uses the mock's `.err-card` / `.err-head` / `.err-actions` classes: accent left border, uppercase mono head with the message in dim mono on the right, a prose body that says how many queued messages are paused, and actions — **Dismiss** (always shown, clears the error), **Retry** (non-abort errors only when there is a last user message), and **Resume queue** (only rendered when `queue.length > 0`). These buttons call `StreamStore.clearStreamError(convId, opts)` before retrying/resuming; clearing nulls `streamError` and `streamErrorSource`, recomputes `uiState` (`'awaiting'` if a `pendingInteraction` is still set, else `null`), and — when `opts.resumeQueue === true` — immediately calls `drainQueueIfReady(convId)` so the head of the queue fires as a fresh `/message` POST. Because `drainQueueIfReady` checks `streamError` before acting, the error must be cleared first.
 
   **Card rendering (inside `<ChatLive>`):** when `state.pendingInteraction` is set, `<ChatLive>` renders an `<InteractionCard>` at the bottom of the feed (after messages, before `streamError`). The card dispatches on interaction type:
-  - `PlanApprovalCard` — amber-top `.plan` card with a `NEEDS YOU` chip, the rendered `planContent` inside a `.prose` container (via the same `marked + DOMPurify` pipeline used for message bodies), and `.plan-actions` with `Reject` (danger) / `Approve & run` (primary) buttons. Clicking either calls `StreamStore.respond(convId, 'yes' | 'no')`. Grok Build conversations also render a `Plan revision feedback` textarea and `Request changes` button, sending trimmed non-empty feedback through the same input route. Submission disables the feedback/actions; the next native plan requests a fresh approval. Other harnesses retain their existing controls.
+  - `PlanApprovalCard` — amber-top `.plan` card with a `NEEDS YOU` chip, the rendered `planContent` inside a `.prose` container (via the same `marked + DOMPurify` pipeline used for message bodies), and `.plan-actions` with `Reject` (danger) / `Approve & run` (primary) buttons. Clicking either calls `StreamStore.respond(convId, 'yes' | 'no', decisionId)`. The card receives the conversation's backend metadata and checks shared `planRevision` eligibility: CoCo's explicit support and Grok's legacy default enable `Plan revision feedback` / `Request changes`, while explicit false overrides the fallback. Claude and other non-advertising harnesses retain approval/rejection only. Feedback is trimmed/non-empty. Submission disables feedback/actions; a fresh decision or changed plan document remounts the draft state. CoCo `no` keeps native planning active without execution, while approval chooses native proceed.
   - `QuestionCard` — accent-top `.plan` card with a `Clarifying question` header, question text as `.plan-title`, option buttons, and (unless `allowFreeform:false`) a focused answer input with `Send`/Enter submission. Options prefill the answer input when freeform is allowed; otherwise clicking a choice submits it directly. `title` carries option descriptions. The card is keyed by `requestId` when present, resetting typed answers even for repeated identical questions. Submission calls `StreamStore.respond(convId, text)`.
 
   While `pendingInteraction` is set, the composer's textarea is disabled with placeholder `"Answer the prompt above to continue…"` and the send button is disabled (`awaiting` joins `sending`/`streaming` in `canSend`'s guard). Users cannot send an ordinary composer message while an interaction is pending — they must click Approve/Reject or answer the question.
@@ -367,6 +373,7 @@ After a Worktrees enable or disable succeeds, `workspaceSettings.jsx` refreshes 
   checkpoint measurements separately.
 
   **Lifecycle edges:**
+  - Pending plan/question interactions retain an optional opaque `decisionId` from `tool_activity.id`; `respond()` echoes it to `/input`. CoCo requires this current generation and returns 409 for stale/invalid replies; the error is surfaced without falling back to a new user message. Other harnesses may ignore the field.
   - `reset(convId)` clears `pendingInteraction` and `uiState` along with the rest of the session.
   - `send(convId, text)` clears `pendingInteraction` as part of the optimistic update — if the user bypasses the card by typing into the composer (which only happens when we're not correctly guarding — see above), we don't leave a stale interaction behind.
   - `archive(convId)` deletes the whole entry so `pendingInteraction` naturally goes away.
@@ -385,7 +392,7 @@ After a Worktrees enable or disable succeeds, `workspaceSettings.jsx` refreshes 
   **Cascade reconciliation** — a `useEffect` inside `ComposerPicks` watches `(backends, selectedProfileBackend, composerCliProfileId, composerBackend, composerModel, composerEffort, composerServiceTier)` and pushes reconciled values to the store whenever the catalog shifts under the user's selection:
   - If the selected CLI profile exists, the effective backend snaps to the backend derived from that profile (`harness`, plus Claude Code `protocol` when present). If there is no selected profile, reconciliation uses the conversation/composer backend already stored for that session and does not create a global default.
   - If profile-specific metadata is pending for the selected profile, preserve the current `composerModel`, `composerEffort`, and `composerClaudeCodeMode` instead of reconciling them against the static backend fallback.
-  - If the current `composerModel` isn't in the effective backend's `models[]` after the selected profile metadata has loaded or failed, reset to the backend's `default` model (falling back to the first model). Copilot preserves the selected ID, labels its disabled option `(unavailable)`, and offers the current catalog for correction. Rendering/catalog changes do not rewrite saved conversations; sends receive an actionable server error for an unavailable selection.
+  - If the current `composerModel` isn't in the effective backend's `models[]` after the selected profile metadata has loaded or failed, reset to the backend's `default` model (falling back to the first model). Copilot and CoCo preserve the selected ID as a disabled option and offer the current catalog for correction; Copilot labels it `(unavailable)`. Rendering/catalog changes do not rewrite saved conversations; sends receive an actionable server error for an unavailable selection.
   - If the current `composerEffort` isn't in the selected effective model's `supportedEffortLevels` after the selected profile metadata has loaded or failed, reset to `'high'` when supported, else the first level.
   - If the effective backend is not Codex, clear `composerServiceTier` so stale Fast overrides are not sent to other adapters.
   - If the effective backend is not `claude-code`/`claude-code-interactive`, or the selected Claude model does not advertise `xhigh`, clear `composerClaudeCodeMode` so stale Ultracode selections are not sent to other adapters/models.
@@ -410,7 +417,7 @@ After a Worktrees enable or disable succeeds, `workspaceSettings.jsx` refreshes 
   - **Drag-and-drop** — the entire `<section className="main">` wrapper attaches `onDragEnter` / `onDragOver` / `onDragLeave` / `onDrop`. The drag-state is tracked with a counter ref so child re-enters don't flicker the overlay. While dragging files over the pane, a `.drop-overlay` absolute-positioned overlay (dashed accent border, "Drop files to attach" label) renders on top of the feed and composer. `dataTransfer.types.includes('Files')` gates the handlers so text/URL drags don't trigger the overlay.
   - **Clipboard paste** — the composer textarea has an `onPaste` handler (v1 parity). If `clipboardData.items` contains any file entries (screenshots, copied images, dragged-in files), the handler calls `preventDefault()`, rewrites each file's name to `<basename>-<ts>-<n>.<ext>` so concurrent pastes don't collide, and forwards them via `StreamStore.addAttachments`. Otherwise, if `clipboardData.getData('text/plain')` is ≥ 1000 characters, the handler synthesises a `File` named `pasted-text-YYYYMMDD-HHMMSS.txt` (mime `text/plain`) and forwards that as an attachment instead of letting the textarea absorb a wall of text. Shorter text pastes fall through to the default textarea behavior.
   - **Dissolve (reverse paste-to-attachment)** — `PendingAttChip` exposes an extra "inline back into message" button (`.att-dissolve`, `Ico.up` glyph, positioned to the left of the existing `×` remove button) when the chip represents a *fresh* paste-text attachment that still has its in-memory `Blob` — specifically `entry.file instanceof Blob` AND `entry.file.name.startsWith('pasted-text-')` AND `!entry.restored`. Clicking it reads the blob via `file.text()`, splices the recovered text into the composer textarea at the current cursor via the shared `insertAtComposerCursor(text)` helper (uses the textarea's `selectionStart` / `selectionEnd` through `composerTextRef`; falls back to appending if no selection range is available), then calls `StreamStore.removeAttachment` to drop the pending attachment (which aborts a still-in-flight upload or DELETEs a completed one — same path as the regular `×`). After the splice, focus returns to the textarea with the caret positioned at the end of the inserted text via `requestAnimationFrame` + `setSelectionRange`. **Confirm threshold** — when the recovered text is > 50,000 characters the handler calls `dialog.confirm` first ("Inline this text into the message?" with the character count) so a huge dump doesn't surprise the user; below the threshold the splice happens silently. **Why restored entries don't dissolve:** entries rehydrated from `localStorage` after a session-expired full reload no longer have a `Blob` in memory (only a `{ name, size }` stub plus the server-side `result`), so client-side text recovery is impossible without re-fetching from the server. Dissolve is intentionally scoped to within-session pastes — the typical "wait, undo that paste I just did" affordance — rather than a permanent feature of the attachment.
-  - **OCR (image → Markdown at cursor)** — `PendingAttChip` exposes an "OCR image to Markdown" button (`.att-ocr`, `Ico.fileText` glyph; sits in the same right-of-`×` slot as `.att-dissolve` since the two never co-exist — dissolve is paste-text-only, OCR is image-only) when the chip is an image attachment whose upload has landed (`status === 'done'` AND `result.path` present). Restored entries qualify too since the file still lives on the server. Clicking it calls `ocrAttachment(entry)` in `chat/composer.jsx`, which delegates to `StreamStore.ocrAttachment(convId, attachmentId)`. The store flips the entry's `ocrStatus` to `'running'` (the chip swaps the icon for a small spinner via `.att-ocr-spin` and disables the button) and POSTs to `/conversations/:id/attachments/ocr` with the attachment's absolute `path` plus the current composer-selected `cliProfileId` and `backend` when available. The server gates the request on profile-aware metadata before starting the one-shot: the backend must expose one-shot image transport and the selected/default model must expose image input support. If the stored conversation profile no longer resolves, OCR may repair the conversation to the selected profile before running; when that happens the route returns a persisted Agent Cockpit system `recoveryMessage`, and the store appends it immediately to both `messages` and `conv.messages` while mirroring the selected runtime on the local conversation object. On success the returned Markdown is cached on the entry as `ocrMarkdown` (with `ocrStatus: 'done'`); on failure `ocrStatus: 'error'` + `ocrError: msg` and a red `toast.error('OCR failed: ' + msg)` surfaces — the composer is left untouched. Either way the result Markdown (or cached value on a re-click) is spliced into the composer at the cursor through the same shared `insertAtComposerCursor(text)` helper that dissolve uses, with caret positioned at the end of the insert. **Cache semantics** — the cache lives on the `PendingAttachment` (composer-state, not server-persisted), so a re-click is instant with no second CLI spin-up. The button title flips to "Insert OCR Markdown (cached)" once the cache is populated. The cache is dropped with the rest of the composer state when the message ships or the conversation is left. **Original image stays put** — OCR never removes the attachment; the user decides whether to keep the image alongside the inlined text (mixed text+diagram screenshots) or remove it (text-only screenshots) before sending. **Re-entrancy guard** — clicking again while `ocrStatus === 'running'` throws inside the store (the button is also `disabled` in the running state, so this is defense-in-depth for keyboard activations / programmatic callers).
+  - **OCR (image → Markdown at cursor)** — `PendingAttChip` exposes an "OCR image to Markdown" button (`.att-ocr`, `Ico.fileText` glyph; sits in the same right-of-`×` slot as `.att-dissolve` since the two never co-exist — dissolve is paste-text-only, OCR is image-only) when the chip is an image attachment whose upload has landed (`status === 'done'` AND `result.path` present). Restored entries qualify too since the file still lives on the server. Clicking it calls `ocrAttachment(entry)` in `chat/composer.jsx`, which delegates to `StreamStore.ocrAttachment(convId, attachmentId)`. The store flips the entry's `ocrStatus` to `'running'` (the chip swaps the icon for a small spinner via `.att-ocr-spin` and disables the button) and POSTs to `/conversations/:id/attachments/ocr` with the attachment's absolute `path` plus the current composer-selected `cliProfileId`, `backend`, `model` and `effort` when available. OCR model/effort overrides are invocation-only; omission falls back to saved values without changing chat selection. The server gates the request on profile-aware metadata before starting the one-shot: the backend must expose one-shot image transport and the selected/default model must expose image input support. If the stored conversation profile no longer resolves, OCR may repair the conversation to the selected profile before running; when that happens the route returns a persisted Agent Cockpit system `recoveryMessage`, and the store appends it immediately to both `messages` and `conv.messages` while mirroring the selected runtime on the local conversation object. On success the returned Markdown is cached on the entry as `ocrMarkdown` (with `ocrStatus: 'done'`); on failure `ocrStatus: 'error'` + `ocrError: msg` and a red `toast.error('OCR failed: ' + msg)` surfaces — the composer is left untouched. Either way the result Markdown (or cached value on a re-click) is spliced into the composer at the cursor through the same shared `insertAtComposerCursor(text)` helper that dissolve uses, with caret positioned at the end of the insert. **Cache semantics** — the cache lives on the `PendingAttachment` (composer-state, not server-persisted), so a re-click is instant with no second CLI spin-up. The button title flips to "Insert OCR Markdown (cached)" once the cache is populated. The cache is dropped with the rest of the composer state when the message ships or the conversation is left. **Original image stays put** — OCR never removes the attachment; the user decides whether to keep the image alongside the inlined text (mixed text+diagram screenshots) or remove it (text-only screenshots) before sending. **Re-entrancy guard** — clicking again while `ocrStatus === 'running'` throws inside the store (the button is also `disabled` in the running state, so this is defense-in-depth for keyboard activations / programmatic callers).
 
   `StreamStore.addAttachments(convId, files)` creates one `PendingAttachment` entry per file with a unique `id`, initial `status: 'uploading'`, `progress: 0`, and an `xhr: null` slot. Each entry then fires `AgentApi.conv.uploadFile(convId, file, onProgress, onXhr)`:
   - `onXhr(xhr)` is called synchronously at XHR creation — the store patches `xhr` onto the entry so `removeAttachment` can abort it cleanly.
@@ -461,7 +468,175 @@ After a Worktrees enable or disable succeeds, `workspaceSettings.jsx` refreshes 
   - **Persistence** — every mutator (`enqueue`, `removeFromQueue`, `reorderQueue`, `updateQueueItem`) optimistically updates `state.queue` then schedules a full-queue PUT; `clearQueue` schedules DELETE. Queue persistence is serialized per conversation with a single pending snapshot: if another mutation occurs while a PUT/DELETE is in flight, the pending request is replaced with the latest queue shape (or latest clear), and the drainer sends that newest request after the current request settles. Client-only `inFlight` markers are stripped before PUT. This guarantees the final server queue matches the latest local queue even when auto-drain success/rollback persistence overlaps with user edits.
   - **Auto-drain on `done`** — when a stream completes with no `pendingInteraction` and no `streamError`, the store marks `queue[0]` as in-flight and composes the entry's wire-format content via `composeWireContent` (content + `[Uploaded files: …]` tag rebuilt from `attachments[]`). The content is sent via the internal `sendWireContent(convId, queuedMessage)` helper (bypasses the pendingAttachments pipeline since attachments were already uploaded at enqueue time). The server-side queue is shortened only after `/message` accepts the send; on success the follow-up PUT persists the current non-in-flight queue tail, not the stale tail captured at drain start. If `/message` returns 409 because the server still owns an active stream, or the send fails before the POST can start, the original queued item, including attachments, is restored at the head and the restored queue is PUT back to the server. Rollback merges that original head with the current non-in-flight queue tail, so edits to later queued items made while the head was in flight are preserved locally and across reloads.
 
+  Immediate and queued `/message` requests also send explicit `attachments: [{name}]` references from their uploaded attachment snapshot. The server resolves real metadata within the conversation upload root before accepting the turn; pasted paths cannot produce native image blocks. Existing wire text remains for disk tools and historical rendering.
+
   **Backwards compatibility (historical transcripts):** messages saved before the typed queue existed may carry `[Uploaded files: /abs/path1, /abs/path2]` trailing text on `Message.content` (user messages). The renderer feeds these through `StreamStore.parseUploadedFilesTag(content)`, which strips the tag and returns `{ content, attachments }` where each `AttachmentMeta` has `name` + `path` + `kind` (inferred from extension via `attachmentKindFromPath`). `size`/`meta` are unavailable for legacy entries — the `md` chip shows only the filename and kind badge in that case. Users receive the same typed-chip UX for old transcripts at read-time; the on-disk bytes are untouched.
+
+### Plan and question ownership (CoCo C43)
+
+Both clients obtain revision eligibility from browser-safe
+`checkBackendRoleEligibility(metadata,{role:'planRevision'})`; UI containers pass
+metadata for the conversation backend. A missing catalog disables revision
+feedback until metadata is available. Approval/rejection controls remain.
+Desktop card drafts are keyed by decision ID plus displayed question/document,
+so identical text with a fresh CoCo generation starts blank. Rendered callbacks
+pass their decision ID to `StreamStore.respond`; it rejects a stale generation
+before HTTP and synchronously blocks duplicates with `respondPending`.
+A late successful stdin acknowledgement preserves a newer pending interaction.
+Native decision generations remain distinct from RPC/tool IDs and travel through
+existing REST/WS bodies without new fields.
+
+Mobile uses the same role policy. Its send pipeline owns a synchronous in-flight
+reply guard and an `isResponding` flag wired through App/ChatScreen to every card
+input/action. The current conversation and interaction snapshot must still match
+before submission, clearing state, sending a legacy fallback message or reporting
+an input error. New decision/prompt keys clear old answer text; delayed replies
+cannot erase a newer draft. Delivery failure retains the current answer and
+interaction. The existing legacy `mode:'message'` fallback remains available only
+for the still-current interaction; CoCo stale/completed decisions return 409 and
+never become a new prompt. C44 queue/abort/reconnect behavior is specified below.
+
+### CoCo queued input and cancellation (C44)
+
+The composer checks shared steering eligibility for its active backend. While
+CoCo runs it explicitly states that live steering is unavailable and Enter queues
+the next turn. Stop remains visible alongside the queue action when text is
+present; a question may disable queuing while retaining that text and Stop.
+The store rejects a direct send while a decision is pending. Matching CoCo
+completion outcomes clear the decision in the pure reducer; replayed older
+outcomes cannot clear a newer one. Composer text is never reused as a decision.
+
+Stop immediately suspends the queue before the abort HTTP request. Native done
+frames or older transcript refreshes during cancellation must not drain it.
+Scheduled drains recheck live interaction/error/suspension state and unmark a
+blocked head, keeping it editable. Explicit Resume clears suspension and stream
+error state, then sends only the queued follow-up. Restored queues still require
+Resume. Draft text stays independent through replay, auto-drain and cancellation.
+See [C44 ownership details](spec-cortex-code.md#queued-input-abort-and-reconnect-p7-c44).
+
+### Cortex Code profiles and setup
+
+Settings → Memory excludes CoCo from new processor choices through
+`screens/processorProfiles.ts`, which uses the shared restrictedText eligibility
+policy. An unsupported saved profile remains visible as a disabled option with
+its reason and an instruction to select another profile. Rendering does not
+rewrite the saved setting or choose another harness. The control lazy-loads
+`screens/memoryProcessorSelect.jsx` when a processor control renders, with a disabled
+loading select as its Suspense fallback. This keeps the shared selection policy
+out of the 80 KiB Settings entry chunk; the control has its own 6 KiB JS budget.
+Tool-enabled sequential
+execution and verified PNG OCR are backend capabilities. C41 extends the same
+control as named `ProcessorProfileSelect` to global KB ingestion/digestion/
+dreaming/Context and workspace Context/Routine selections. Shared pure
+`processorProfileForSetting` resolves explicit IDs exactly; disabled/incomplete
+profiles remain visible when selected, missing IDs have disabled placeholders,
+and role/configuration/stale-metadata gates exclude unsupported new choices.
+Only explicit eligible changes are emitted. Gleaning checks sequential support;
+ingestion keeps separate image/model gates. Missing saved text models receive a
+disabled option rather than appearing to select the first model. Workspace
+override activation preserves unresolved global identity. Full native browser
+acceptance remains P7. See [the C41 contract](spec-cortex-code.md#processor-selection-boundaries-p6-c41).
+
+Welcome's CLI panel and Settings → CLI Profiles lazy-load the shared focused
+`cortexSetup.jsx`/CSS component. Its explicit expansion loads native connection
+summaries and any live job. It supports create-only OAuth connections, named
+selection, paid minimal Check login, Authenticate, Cancel, a selectable native
+URL/deadline and complete remote redirect submission. The panel polls once per
+second, recovers active jobs after reload, ignores older update timestamps,
+clears pasted redirect fields and removes terminal handoff URLs. No CoCo handoff data
+is stored in local/session storage, cookies, browser history or settings. The
+C47 browser matrix verifies complete clipboard transfer, live form fit and
+terminal/reload clearing on Welcome and Settings at 1280/390/320 px; active
+component memory and clipboard are transient transfer state. Synthetic callback
+checks are separate from native inference and C26 human OAuth. Settings merges only the returned setup
+profile into its current draft. Setup leaves defaults unchanged. See
+[CoCo P4](spec-cortex-code.md#shared-connection-and-authentication-setup-p4) for
+all transport/state rules. The mobile PWA gains no administrative setup flow;
+the desktop browser panel wraps at narrow viewports.
+
+The dedicated lazy setup chunk has an 8 KiB JS budget; the existing 260 KiB
+index limit is unchanged. C42 raises the total JS budget from 910 to 912 KiB for
+profile editing and metadata ownership; measured output is approximately
+911.3 KiB at C42. C44 adds approximately 0.5 KiB for live-role guidance, Stop
+availability, decision completion and queue race guards; its aggregate cap is
+913 KiB with measured output approximately 912.3 KiB. Individual Settings (80 KiB), workspace (95 KiB) and setup limits stay
+unchanged. CSS retains its existing 230 KiB aggregate limit.
+
+CoCo appears in the standard Harness selector and profile cards, including
+profiles created by shared setup. Its executable default is `cortex`; its icon
+is supplied by backend metadata. The editor supports name, enable/delete,
+command override, named `cortexCode.connection`, and explicit account home/env
+overrides. Switching from another harness into CoCo selects account mode and
+clears that harness's auth-home/env; switching away removes `cortexCode`.
+`cliConfigDirField` describes `SNOWFLAKE_HOME`, with blank meaning shared terminal
+login. CoCo's generic account Authenticate/log box is hidden: the setup panel
+owns shared remote OAuth. Isolated homes/custom commands use terminal auth;
+the editor does not imply that setup verified those configurations. Connection
+edits are drafts until Save; model discovery uses the persisted profile.
+Incomplete profiles cannot be selected as a new default or composer choice;
+a stored incomplete composer/default selection stays visible and disabled.
+
+`profileCatalog.js` owns shared backend identity, scoped catalog selection,
+model labels/defaults and effort projection. A catalog whose backend ID differs
+from the profile's harness/protocol is discarded. Existing shell/chat helper
+exports remain compatibility facades. `useProfileBackends.js` owns view-local
+catalogs for global/workspace Settings and composer picks: in-flight loads are
+deduplicated, failed discovery is remembered as null, and the settings-saved
+event invalidates catalogs and pending ownership. Old completions and unmounted
+view completions cannot populate the current generation. Composer cache keys
+also include the selected profile snapshot, so a changed connection under the
+same ID cannot retain an old catalog. Keys stay in memory and are never logged
+or persisted. The API cache separately checks promise identity: an invalidated
+success returns null instead of caching stale metadata; an old failure cannot
+delete a newer pending request. Copilot picker refreshes explicitly bypass the
+view-local cache on its 60-second timer/window focus while retaining pending
+request exclusion and generation ownership. The extracted picker publishes
+profile-local metadata to its parent for native goal controls and steering
+availability; static Copilot metadata does not advertise those SDK controls.
+
+`chat/composerPicks.jsx` owns the Profile/model/effort/mode/tier controls, lazy
+loaded by `ChatComposer` with an empty picks fallback. CoCo shows loading or
+unavailable-model guidance without exposing native errors. It preserves saved
+model/effort during pending/empty/failed discovery and retains an unknown saved
+model as a disabled row alongside available replacements. It never infers login
+success from a model list. Claude mode and Codex speed remain harness-specific;
+CoCo goals, agents and steering remain unavailable. The shared Memory selector
+accepts its restrictedText capability on macOS arm64; execution verifies the
+exact C35 build. Saved unavailable choices remain visible and are never changed
+automatically. Native
+browser acceptance for interactions, queues, usage and the mobile PWA is tracked
+separately under the remaining P7 tasks.
+
+### CoCo usage display (P7 C45)
+
+`chip-renderers.jsx` registers the CoCo renderer backed by `chat/cortexUsage.jsx`.
+It displays session context, all four token counters and n/a for unknown
+Snowflake Cost/Estimated Cost, without querying another provider's billing.
+`src/contracts/usagePresentation.ts` shares token-total and unavailable-price
+projection with mobile and Usage settings. `screens/usageStats.js` owns the pure
+period/model/tier projections; unpriced usage retains tokens, displays n/a in
+CoCo-only totals/rows and marks mixed totals as excluding unpriced usage. Token
+charts and daily totals include caches. Context absence is distinct from zero.
+No pricing formulas or persistence formats change. C45's shared summary markup
+keeps Settings within its existing 80 KiB chunk budget; total JS grows from 913
+to 914 KiB (measure the production build with `npm run web:budget`).
+
+
+Welcome includes the optional `cortex-cli` doctor row, official install/docs
+buttons and refreshed detection/failure output. CoCo authentication remains in
+its dedicated lazy setup panel; the generic per-row account controls stay absent.
+The detected row explicitly says login has not been checked. Installation uses
+the existing narrow-browser button layout. See
+[C48](spec-cortex-code.md#optional-installation-and-detection-p8-c48).
+
+
+The existing desktop CLI Updates panel also renders CoCo C49 targets, full build
+versions, native `self-update`, manual/network errors and compatibility caution.
+Update/Run updater uses the existing API/store/dialog behavior. No new generic
+login control or frontend source change is required. The native auth browser
+probe checks the normal installation's row/button without running that updater;
+actual update execution uses a disposable native fixture. Mobile PWA has no
+server-admin update flow.
 
 ### Copilot native goal controls
 

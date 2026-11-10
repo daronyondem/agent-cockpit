@@ -701,6 +701,9 @@ describe('workspace instruction compatibility', () => {
     expect(status!.shouldNotify).toBe(true);
     expect(status!.primarySourceId).toBe('agents');
     expect(status!.missingHarnesses.map(item => item.harness).sort()).toEqual(['claude-code', 'kiro']);
+    expect(status!.harnesses.find(item => item.harness === 'cortex-code')).toMatchObject({
+      label: 'Cortex Code (CoCo)', sourceId: 'agents', expectedPath: 'AGENTS.md', covered: true,
+    });
   });
 
   test('creates missing pointers from AGENTS.md without overwriting existing files', async () => {
@@ -715,6 +718,7 @@ describe('workspace instruction compatibility', () => {
     expect(fs.readFileSync(path.join(ws.dir, 'CLAUDE.md'), 'utf8')).toBe('existing claude instructions\n');
     expect(fs.readFileSync(path.join(ws.dir, '.kiro', 'steering', 'agents-md.md'), 'utf8')).toContain('#[[file:AGENTS.md]]');
     expect(result!.status.shouldNotify).toBe(false);
+    expect(result!.status.harnesses.find(item => item.harness === 'cortex-code')?.covered).toBe(true);
     expect(result!.status.compatible).toBe(true);
   });
 
@@ -723,12 +727,16 @@ describe('workspace instruction compatibility', () => {
     fs.writeFileSync(path.join(ws.dir, 'CLAUDE.md'), '# Claude Instructions\n');
     await service.createConversation('Test', ws.dir);
 
+    const before = await service.getWorkspaceInstructionCompatibility(ws.hash);
+    expect(before!.missingHarnesses.some(item => item.harness === 'cortex-code')).toBe(true);
+
     const result = await service.createWorkspaceInstructionPointers(ws.hash);
     expect(result).not.toBeNull();
     expect(result!.created.map(item => item.path)).toEqual(['AGENTS.md', '.kiro/steering/agents-md.md']);
     expect(fs.readFileSync(path.join(ws.dir, 'AGENTS.md'), 'utf8')).toContain('[CLAUDE.md](CLAUDE.md)');
     expect(fs.readFileSync(path.join(ws.dir, '.kiro', 'steering', 'agents-md.md'), 'utf8')).toContain('#[[file:AGENTS.md]]');
     expect(result!.status.shouldNotify).toBe(false);
+    expect(result!.status.harnesses.find(item => item.harness === 'cortex-code')?.covered).toBe(true);
   });
 
   test('dismisses only the current compatibility fingerprint', async () => {

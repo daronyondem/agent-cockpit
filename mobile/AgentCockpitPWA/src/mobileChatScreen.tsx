@@ -1,6 +1,7 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type MouseEvent } from 'react';
 import DOMPurify from 'dompurify';
 import { marked } from 'marked';
+import { checkBackendRoleEligibility } from '../../../src/contracts/backendCapabilities';
 import type { Tokens } from 'marked';
 import type { AgentCockpitAPI } from './api';
 import {
@@ -9,7 +10,6 @@ import {
   displayMessagePreview,
   fileReferencesFromParsed,
   formatGoalElapsed,
-  formatPercent,
   goalElapsedSeconds,
   goalStatusLabel,
   goalSupportsAction,
@@ -38,7 +38,8 @@ import {
 } from './mobileIcons';
 import { Button, ErrorBanner, ProgressBar } from './mobilePrimitives';
 import { GrokBilling } from './grokBilling';
-import { CopilotQuota, CopilotUsage } from './copilotUsage';
+import { UsageBar } from './usageBar';
+import { CopilotQuota } from './copilotUsage';
 import { InteractionCard } from './interactionCard';
 import { AgentToolsProvider, ToolActivityView } from './agentTools';
 import type {
@@ -80,6 +81,7 @@ export function ChatScreen(props: {
   goalMode: boolean;
   goalCapable: boolean;
   pendingInteraction: PendingInteraction | null;
+  respondPending?: boolean;
   interactionAnswer: string;
   setInteractionAnswer: (value: string) => void;
   pendingAttachments: PendingAttachment[];
@@ -107,6 +109,7 @@ export function ChatScreen(props: {
   onEditQueued: (index: number) => void;
   onMoveQueued: (index: number, direction: -1 | 1) => void;
   onClearQueue: () => void;
+  onResumeQueue?: () => void;
   onTogglePin: (messageID: string, pinned: boolean) => void;
   onOpenFile: (reference: FileReference) => void;
   onShareFile: (reference: FileReference) => void;
@@ -255,9 +258,10 @@ export function ChatScreen(props: {
     props.steeringPending ||
     !!props.pendingInteraction ||
     (props.goalMode && props.isStreaming);
-  const composerPlaceholder = props.goalMode
+  const composerPlaceholder = props.pendingInteraction ? 'Answer the prompt above to continue.' : props.goalMode
     ? (props.isStreaming ? 'Goal can be set after this stream finishes.' : 'Set a goal')
-    : (props.isStreaming ? 'Message will be queued while the stream runs.' : 'Message Agent Cockpit');
+    : (props.isStreaming ? (props.steeringAvailable || checkBackendRoleEligibility(props.backends.find(backend => backend.id === conversation.backend), { role: 'steering' }).ok
+      ? 'Message will be queued while the stream runs.' : 'Live steering unavailable — messages queue for the next turn.') : 'Message Agent Cockpit');
   const sendLabel = props.goalMode ? 'Set goal' : (props.isStreaming ? 'Queue' : 'Send');
 
   return (
@@ -352,6 +356,8 @@ export function ChatScreen(props: {
           onEdit={props.onEditQueued}
           onMove={props.onMoveQueued}
           onClear={props.onClearQueue}
+          busy={props.isSending}
+          onResume={!props.isStreaming && !props.pendingInteraction ? props.onResumeQueue : undefined}
         />
       ) : null}
       <UsageBar usage={conversation.sessionUsage || conversation.usage} backend={conversation.backend} />
@@ -361,8 +367,8 @@ export function ChatScreen(props: {
         <InteractionCard
           interaction={props.pendingInteraction}
           answer={props.interactionAnswer}
-          pending={props.interactionPending}
-          allowPlanFeedback={conversation.backend === 'grok-build'}
+          backend={props.backends.find(backend => backend.id === conversation.backend)}
+          pending={props.interactionPending || props.respondPending}
           setAnswer={props.setInteractionAnswer}
           onSubmit={props.onSubmitInteraction}
         />
@@ -844,22 +850,25 @@ function QueueStack(props: {
   onEdit: (index: number) => void;
   onMove: (index: number, direction: -1 | 1) => void;
   onClear: () => void;
+  busy?: boolean;
+  onResume?: () => void;
 }) {
   return (
     <section className="queue-stack">
       <div className="row">
         <strong>Queued</strong>
-        <Button label="Clear" onClick={props.onClear} />
+        {props.onResume ? <Button label="Resume queue" disabled={props.busy} onClick={props.onResume} /> : null}
+        <Button label="Clear" disabled={props.busy} onClick={props.onClear} />
       </div>
       {props.queue.map((item, index) => (
         <div key={`${index}-${item.content.slice(0, 16)}`} className="queue-item">
           <p>{item.content || '[Attachment]'}</p>
           {item.attachments?.length ? <span className="meta">{item.attachments.length} attachment(s)</span> : null}
           <div className="button-row">
-            <Button label="Up" disabled={index === 0} onClick={() => props.onMove(index, -1)} />
-            <Button label="Down" disabled={index === props.queue.length - 1} onClick={() => props.onMove(index, 1)} />
-            <Button label="Edit" onClick={() => props.onEdit(index)} />
-            <Button label="Remove" onClick={() => props.onRemove(index)} />
+            <Button label="Up" disabled={props.busy || index === 0} onClick={() => props.onMove(index, -1)} />
+            <Button label="Down" disabled={props.busy || index === props.queue.length - 1} onClick={() => props.onMove(index, 1)} />
+            <Button label="Edit" disabled={props.busy} onClick={() => props.onEdit(index)} />
+            <Button label="Remove" disabled={props.busy} onClick={() => props.onRemove(index)} />
           </div>
         </div>
       ))}
@@ -896,42 +905,6 @@ function AttachmentTray(props: { attachments: PendingAttachment[]; onRemove: (id
           </div>
         </div>
       ))}
-    </div>
-  );
-}
-
-function UsageBar({ usage, backend }: { usage?: Usage; backend?: string }) {
-  if (!usage) {
-    return null;
-  }
-  if (backend === 'copilot') return <CopilotUsage usage={usage} />;
-  const tokens = usage.inputTokens + usage.outputTokens + usage.cacheReadTokens + usage.cacheWriteTokens;
-  const context = usage.contextUsagePercentage ?? 0;
-  const reportedCost = Number(usage.costUsd) || 0;
-  const estimatedCost = Number(usage.estimatedCostUsd) || 0;
-  const estimatedCostLabel = estimatedCost > 0 ? `$${Math.ceil(estimatedCost).toLocaleString()}` : backend === 'grok-build' ? 'n/a' : '$0';
-  return (
-    <div className="usage-bar">
-      <div>
-        <span className="usage-label">Tokens</span>
-        <span className="usage-value">{tokens.toLocaleString()}</span>
-        <span className="usage-track"><i style={{ width: `${Math.min(100, Math.max(4, context))}%` }} /></span>
-      </div>
-      <div>
-        <span className="usage-label">{backend === 'grok-build' ? 'Reported model cost' : 'Cost'}</span>
-        <span className="usage-value">{usage.costSource === 'none' ? 'n/a' : `$${reportedCost.toFixed(4)}`}</span>
-        <span className="usage-track"><i style={{ width: `${reportedCost > 0 ? 18 : 4}%` }} /></span>
-      </div>
-      <div>
-        <span className="usage-label">Estimated Cost</span>
-        <span className="usage-value">{estimatedCostLabel}</span>
-        <span className="usage-track"><i style={{ width: `${estimatedCost > 0 ? 18 : 4}%` }} /></span>
-      </div>
-      <div>
-        <span className="usage-label">Context</span>
-        <span className="usage-value">{usage.contextUsagePercentage !== undefined ? formatPercent(usage.contextUsagePercentage) : 'n/a'}</span>
-        <span className="usage-track"><i style={{ width: `${Math.min(100, Math.max(4, context))}%` }} /></span>
-      </div>
     </div>
   );
 }

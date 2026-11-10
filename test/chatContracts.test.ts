@@ -122,6 +122,10 @@ describe('chat API contracts', () => {
   });
 
   test('validates domain-specific mutation payloads with contract errors', () => {
+    expect(validateSendMessageRequest({ content: 'image', attachments: [{ name: 'safe.png', path: '/untrusted', kind: 'text' }] }).attachments).toEqual([{ name: 'safe.png' }]);
+    for (const attachments of ['safe.png', [null], [{}], [{ name: '' }], [{ name: '../other.png' }], [{ name: 'other\\file.png' }], [{ name: '.' }], [{ name: '..' }], [{ name: 'bad\u0000.png' }]]) {
+      expect(() => validateSendMessageRequest({ content: 'image', attachments })).toThrow();
+    }
     expect(validateExplorerSaveFileRequest({ path: 'a.txt', content: '' })).toEqual({ path: 'a.txt', content: '' });
     expect(validateAttachmentOcrRequest({ path: '/tmp/image.png', cliProfileId: 'profile-1', backend: 'codex' })).toEqual({
       path: '/tmp/image.png',

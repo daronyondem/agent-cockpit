@@ -9,8 +9,10 @@ import type {
   ServiceTier,
   CliProfile,
   ThreadGoal,
-  ModelInputModality,
+  RunOneShotAttachment,
 } from '../../types';
+
+export type { RunOneShotAttachment } from '../../types';
 
 export interface BackendCallOptions {
   /** Full CLI profile for adapters that support profile-isolated runtimes. */
@@ -58,13 +60,6 @@ export interface RunOneShotOptions {
   attachments?: RunOneShotAttachment[];
 }
 
-export interface RunOneShotAttachment {
-  path: string;
-  kind: ModelInputModality;
-  mimeType?: string;
-  name?: string;
-}
-
 /**
  * Base adapter class for CLI backends.
  *
@@ -78,6 +73,15 @@ export class BaseBackendAdapter {
   constructor(options: { workingDir?: string } = {}) {
     this.workingDir = options.workingDir || null;
   }
+
+  /** Execution policy for service-owned retries, including malformed output. */
+  get allowAutomaticOneShotRetry(): boolean { return true; }
+
+  /** A processor may require a prepared raster format; originals stay intact. */
+  get oneShotImageFormat(): 'png' | undefined { return undefined; }
+
+  /** Decision answers bind to the live native turn; never resend them as messages. */
+  get decisionsRequireActiveTurn(): boolean { return false; }
 
   get metadata(): BackendMetadata {
     throw new Error('BaseBackendAdapter.metadata must be implemented by subclass');
@@ -166,8 +170,9 @@ export class BaseBackendAdapter {
   }
 
   /**
-   * Called during server shutdown.  Subclasses that spawn long-lived
-   * processes should override this to kill them.
+   * Called during server shutdown and after CLI updates.  Subclasses that
+   * spawn long-lived processes should override this to kill them, returning a
+   * Promise when cleanup is asynchronous; the adapter must stay reusable.
    */
   shutdown(_options?: { permanent?: boolean }): void | Promise<void> {
     // no-op by default

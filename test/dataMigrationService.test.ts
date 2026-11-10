@@ -7,6 +7,9 @@ import AdmZip from 'adm-zip';
 import Database from 'better-sqlite3';
 import { DATA_EXPORT_SCHEMA_VERSION, type DataExportManifest } from '../src/contracts/dataMigration';
 import { DataMigrationService } from '../src/services/dataMigrationService';
+import { SettingsService } from '../src/services/settingsService';
+import { normalizeWorkspaceContextWorkspaceSettings } from '../src/services/chat/workspaceFeatureSettingsStore';
+import { resolveCliProfileRuntime } from '../src/services/cliProfiles';
 
 const NOW = new Date('2026-05-21T12:00:00.000Z');
 
@@ -21,6 +24,33 @@ afterEach(async () => {
 });
 
 describe('DataMigrationService', () => {
+  test('full-bundle import preserves unavailable processor selections through normalized reads', async () => {
+    const sourceRoot = path.join(tmpDir, 'source'); const destinationRoot = path.join(tmpDir, 'destination');
+    await fsp.mkdir(path.join(sourceRoot, 'chat'), { recursive: true });
+    const settingsService = new SettingsService(path.join(sourceRoot, 'chat'));
+    const settings = await settingsService.saveSettings({ theme: 'system', sendBehavior: 'enter', systemPrompt: '',
+      cliProfiles: [{ id: 'default', name: 'Default', harness: 'claude-code', authMode: 'account', createdAt: '', updatedAt: '' },
+        { id: 'disabled-cortex', name: 'Disabled CoCo', harness: 'cortex-code', disabled: true, authMode: 'account', cortexCode: { connection: 'fixture' }, createdAt: '', updatedAt: '' }],
+      defaultCliProfileId: 'default', memory: { cliProfileId: 'disabled-cortex' },
+      knowledgeBase: { ingestionCliProfileId: 'missing', digestionCliProfileId: 'disabled-cortex', dreamingCliProfileId: 'missing' },
+      workspaceContext: { cliProfileId: 'missing' },
+    });
+    const indexDir = path.join(sourceRoot, 'chat/workspaces/fixture'); await fsp.mkdir(indexDir, { recursive: true });
+    await fsp.writeFile(path.join(indexDir, 'index.json'), JSON.stringify({ workspaceContext: { processorMode: 'override', cliProfileId: 'missing', cliBackend: 'claude-code' } }));
+    const source = new DataMigrationService({ dataRoot: sourceRoot, appVersion: 'test' });
+    const destination = new DataMigrationService({ dataRoot: destinationRoot, appVersion: 'test' });
+    const bundle = await source.createExportBundle(); const uploaded = path.join(tmpDir, 'selection.acexport'); await fsp.copyFile(bundle.filePath, uploaded);
+    await destination.scheduleImport(await destination.saveImportUpload(uploaded));
+    expect(DataMigrationService.applyPendingImport(destinationRoot).applied).toBe(true);
+    const loaded = await new SettingsService(path.join(destinationRoot, 'chat')).getSettings();
+    expect(loaded.memory?.cliProfileId).toBe(settings.memory?.cliProfileId);
+    expect(loaded.knowledgeBase).toMatchObject({ ingestionCliProfileId: 'missing', digestionCliProfileId: 'disabled-cortex', dreamingCliProfileId: 'missing' });
+    expect(resolveCliProfileRuntime(loaded, loaded.memory?.cliProfileId, 'claude-code').error).toMatch(/disabled/);
+    const imported = JSON.parse(await fsp.readFile(path.join(destinationRoot, 'chat/workspaces/fixture/index.json'), 'utf8'));
+    const override = normalizeWorkspaceContextWorkspaceSettings(imported.workspaceContext, loaded.cliProfiles || []);
+    expect(override.cliProfileId).toBe('missing'); expect(resolveCliProfileRuntime(loaded, override.cliProfileId, override.cliBackend).error).toMatch(/not found/);
+  });
+
   test('exports the data root with manifest metadata and excludes runtime files', async () => {
     const dataRoot = path.join(tmpDir, 'data');
     const workspaceStorageKey = 'workspace-storage-key';

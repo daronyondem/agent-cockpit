@@ -31,6 +31,7 @@ import crypto from 'crypto';
 import { promises as fsp } from 'fs';
 import * as napiCanvas from '@napi-rs/canvas';
 import { runPandoc } from '../pandoc';
+import { logger } from '../../../utils/logger';
 import type { Handler, HandlerResult } from './types';
 import {
   convertImageToMarkdown,
@@ -221,7 +222,7 @@ export const docxHandler: Handler = async ({
       let aiRel = rel;
       const sidecarAbs = abs + '.ai.png';
       const sidecarRel = rel + '.ai.png';
-      const resolved = await ensureAiReadyImage(abs, sidecarAbs);
+      const resolved = await ensureAiReadyImage(abs, sidecarAbs, ingestionAdapter?.oneShotImageFormat);
       if (resolved !== abs) {
         aiAbs = sidecarAbs;
         aiRel = sidecarRel;
@@ -268,13 +269,13 @@ export const docxHandler: Handler = async ({
           aiRetries: retried ? 1 : 0,
         });
       } else {
-        console.warn(`[kb/docx] AI description failed for ${aiRel} of "${filename}": ${aiError}`);
+        logger.warn('KB DOCX image conversion failed', { filename, mediaPath: aiRel, error: aiError });
         imageRecords.push({
           mediaPath: aiRel,
           width,
           source: 'ai-failed',
           aiCallDurationMs,
-          aiRetries: 1,
+          aiRetries: ingestionAdapter.allowAutomaticOneShotRetry === false ? 0 : 1,
         });
       }
     }

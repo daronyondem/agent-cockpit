@@ -1,0 +1,576 @@
+{
+  "source": {
+    "cliVersion": "1.2.35",
+    "distribution": "1.2.35+191333.f82de3d91715",
+    "platform": "darwin-arm64",
+    "capturedAt": "2026-11-02",
+    "probe": "advanced",
+    "selection": "ordered excerpt; identities, paths, endpoints sanitized; model catalog sampled"
+  },
+  "frames": [
+    {
+      "direction": "out",
+      "frame": {
+        "jsonrpc": "2.0",
+        "id": 6,
+        "method": "session/prompt",
+        "params": {
+          "sessionId": "fixture-id-6",
+          "prompt": [
+            {
+              "type": "text",
+              "text": "Plan creating approved.txt in this temporary directory containing exactly PLAN_APPROVED. Use exit_plan_mode for approval before making the file. Incorporate any revision feedback and ask for native approval again. Only modify approved.txt; do not spawn any agents."
+            }
+          ]
+        }
+      }
+    },
+    {
+      "direction": "in",
+      "frame": {
+        "jsonrpc": "2.0",
+        "method": "session/update",
+        "params": {
+          "sessionId": "fixture-id-6",
+          "update": {
+            "sessionUpdate": "usage_update",
+            "size": 1000000,
+            "used": 55805
+          }
+        }
+      }
+    },
+    {
+      "direction": "in",
+      "frame": {
+        "jsonrpc": "2.0",
+        "method": "session/update",
+        "params": {
+          "sessionId": "fixture-id-6",
+          "update": {
+            "sessionUpdate": "tool_call",
+            "toolCallId": "fixture-tool-7",
+            "title": "exit_plan_mode",
+            "kind": "other",
+            "status": "pending",
+            "rawInput": {
+              "plan": "Create `approved.txt` in `/fixture/workspace/advanced/` containing exactly `PLAN_APPROVED`."
+            }
+          }
+        }
+      }
+    },
+    {
+      "direction": "in",
+      "frame": {
+        "jsonrpc": "2.0",
+        "method": "session/update",
+        "params": {
+          "sessionId": "fixture-id-6",
+          "update": {
+            "sessionUpdate": "plan",
+            "entries": [
+              {
+                "content": "Create `approved.txt` in `/fixture/workspace/advanced/` containing exactly `PLAN_APPROVED`.",
+                "status": "pending",
+                "priority": "medium"
+              }
+            ],
+            "_meta": {
+              "kind": "plan_document",
+              "planDocument": "Create `approved.txt` in `/fixture/workspace/advanced/` containing exactly `PLAN_APPROVED`."
+            }
+          }
+        }
+      }
+    },
+    {
+      "direction": "in",
+      "frame": {
+        "jsonrpc": "2.0",
+        "id": 0,
+        "method": "session/request_permission",
+        "params": {
+          "sessionId": "fixture-id-6",
+          "toolCall": {
+            "toolCallId": "fixture-tool-8",
+            "title": "Execute this plan?",
+            "status": "pending",
+            "kind": "switch_mode"
+          },
+          "options": [
+            {
+              "kind": "allow_once",
+              "name": "Execute plan",
+              "optionId": "proceed"
+            },
+            {
+              "kind": "reject_once",
+              "name": "Keep planning",
+              "optionId": "keep_planning"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "direction": "out",
+      "frame": {
+        "jsonrpc": "2.0",
+        "id": 0,
+        "result": {
+          "outcome": {
+            "outcome": "selected",
+            "optionId": "keep_planning",
+            "_meta": {
+              "freeFormText": "Add a verification step that reads the file and checks its contents, then present the revised plan for approval."
+            }
+          }
+        }
+      }
+    },
+    {
+      "direction": "in",
+      "frame": {
+        "jsonrpc": "2.0",
+        "method": "session/update",
+        "params": {
+          "sessionId": "fixture-id-6",
+          "update": {
+            "sessionUpdate": "tool_call_update",
+            "toolCallId": "fixture-tool-7",
+            "status": "failed",
+            "content": [
+              {
+                "type": "content",
+                "content": {
+                  "type": "text",
+                  "text": "User requested to keep planning. Feedback: Add a verification step that reads the file and checks its contents, then present the revised plan for approval."
+                }
+              }
+            ],
+            "rawOutput": "User requested to keep planning. Feedback: Add a verification step that reads the file and checks its contents, then present the revised plan for approval."
+          }
+        }
+      }
+    },
+    {
+      "direction": "in",
+      "frame": {
+        "jsonrpc": "2.0",
+        "method": "session/update",
+        "params": {
+          "sessionId": "fixture-id-6",
+          "update": {
+            "sessionUpdate": "usage_update",
+            "size": 1000000,
+            "used": 55948
+          }
+        }
+      }
+    },
+    {
+      "direction": "in",
+      "frame": {
+        "jsonrpc": "2.0",
+        "method": "session/update",
+        "params": {
+          "sessionId": "fixture-id-6",
+          "update": {
+            "sessionUpdate": "tool_call",
+            "toolCallId": "fixture-tool-9",
+            "title": "exit_plan_mode",
+            "kind": "other",
+            "status": "pending",
+            "rawInput": {
+              "plan": "1. Create `approved.txt` in `/fixture/workspace/advanced/` containing exactly `PLAN_APPROVED`.\n2. Read the file back and verify its contents match `PLAN_APPROVED` exactly."
+            }
+          }
+        }
+      }
+    },
+    {
+      "direction": "in",
+      "frame": {
+        "jsonrpc": "2.0",
+        "method": "session/update",
+        "params": {
+          "sessionId": "fixture-id-6",
+          "update": {
+            "sessionUpdate": "plan",
+            "entries": [
+              {
+                "content": "Create `approved.txt` in `/fixture/workspace/advanced/` containing exactly `PLAN_APPROVED`.",
+                "status": "pending",
+                "priority": "medium"
+              },
+              {
+                "content": "Read the file back and verify its contents match `PLAN_APPROVED` exactly.",
+                "status": "pending",
+                "priority": "medium"
+              }
+            ],
+            "_meta": {
+              "kind": "plan_document",
+              "planDocument": "1. Create `approved.txt` in `/fixture/workspace/advanced/` containing exactly `PLAN_APPROVED`.\n2. Read the file back and verify its contents match `PLAN_APPROVED` exactly."
+            }
+          }
+        }
+      }
+    },
+    {
+      "direction": "in",
+      "frame": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "session/request_permission",
+        "params": {
+          "sessionId": "fixture-id-6",
+          "toolCall": {
+            "toolCallId": "fixture-tool-10",
+            "title": "Execute this plan?",
+            "status": "pending",
+            "kind": "switch_mode"
+          },
+          "options": [
+            {
+              "kind": "allow_once",
+              "name": "Execute plan",
+              "optionId": "proceed"
+            },
+            {
+              "kind": "reject_once",
+              "name": "Keep planning",
+              "optionId": "keep_planning"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "direction": "out",
+      "frame": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "result": {
+          "outcome": {
+            "outcome": "selected",
+            "optionId": "proceed"
+          }
+        }
+      }
+    },
+    {
+      "direction": "in",
+      "frame": {
+        "jsonrpc": "2.0",
+        "method": "session/update",
+        "params": {
+          "sessionId": "fixture-id-6",
+          "update": {
+            "sessionUpdate": "tool_call_update",
+            "toolCallId": "fixture-tool-9",
+            "status": "completed",
+            "content": [
+              {
+                "type": "content",
+                "content": {
+                  "type": "text",
+                  "text": "Plan mode has ended. You are no longer in read-only mode. User confirmed plan. You MUST now proceed with implementation.\n\nPlan saved to `/fixture/workspace/advanced/.cortex/plans/plan_2026-11-03_0356.md`.\nThe confirmed plan is available in this conversation history. Reference it as you execute each step.\n\nCRITICAL REQUIREMENTS for plan execution:\n\nPHASE 0 \u2014 Create a task for this plan:\n  1. Read the confirmed plan in this conversation\n  2. For each task needed to implement this plan, create it with: `cortex ctx task add \"<task name>\" --plan /fixture/workspace/advanced/.cortex/plans/plan_2026-11-03_0356.md`\n  3. The --plan flag links the task to this specific plan. Only use it for tasks that implement this plan.\n\nPHASE 1 \u2014 Create executable steps:\n  1. Create concrete ctx steps from that plan using `cortex ctx step add \"<step>\" -t <task_id>`\n  2. If needed, add dependencies using `cortex ctx step block <step_id> <blocker_id> -t <task_id>`\n\nPHASE 2 \u2014 Execute ready steps:\n  1. Run `cortex ctx step ready -t <task_id>` to get steps with no blockers\n  2. For each ready step, either execute directly or launch subagents in parallel\n  3. As each step completes, run `cortex ctx step done <step_id> -t <task_id>` immediately\n  4. Repeat until no steps remain\n\nPHASE 3 \u2014 Complete the task:\n  After all steps complete, run `cortex ctx task done <task_id>`"
+                }
+              }
+            ],
+            "rawOutput": "Plan mode has ended. You are no longer in read-only mode. User confirmed plan. You MUST now proceed with implementation.\n\nPlan saved to `/fixture/workspace/advanced/.cortex/plans/plan_2026-11-03_0356.md`.\nThe confirmed plan is available in this conversation history. Reference it as you execute each step.\n\nCRITICAL REQUIREMENTS for plan execution:\n\nPHASE 0 \u2014 Create a task for this plan:\n  1. Read the confirmed plan in this conversation\n  2. For each task needed to implement this plan, create it with: `cortex ctx task add \"<task name>\" --plan /fixture/workspace/advanced/.cortex/plans/plan_2026-11-03_0356.md`\n  3. The --plan flag links the task to this specific plan. Only use it for tasks that implement this plan.\n\nPHASE 1 \u2014 Create executable steps:\n  1. Create concrete ctx steps from that plan using `cortex ctx step add \"<step>\" -t <task_id>`\n  2. If needed, add dependencies using `cortex ctx step block <step_id> <blocker_id> -t <task_id>`\n\nPHASE 2 \u2014 Execute ready steps:\n  1. Run `cortex ctx step ready -t <task_id>` to get steps with no blockers\n  2. For each ready step, either execute directly or launch subagents in parallel\n  3. As each step completes, run `cortex ctx step done <step_id> -t <task_id>` immediately\n  4. Repeat until no steps remain\n\nPHASE 3 \u2014 Complete the task:\n  After all steps complete, run `cortex ctx task done <task_id>`"
+          }
+        }
+      }
+    },
+    {
+      "direction": "in",
+      "frame": {
+        "jsonrpc": "2.0",
+        "method": "session/update",
+        "params": {
+          "sessionId": "fixture-id-6",
+          "update": {
+            "sessionUpdate": "usage_update",
+            "size": 1000000,
+            "used": 56496
+          }
+        }
+      }
+    },
+    {
+      "direction": "in",
+      "frame": {
+        "jsonrpc": "2.0",
+        "method": "session/update",
+        "params": {
+          "sessionId": "fixture-id-6",
+          "update": {
+            "sessionUpdate": "tool_call",
+            "toolCallId": "fixture-tool-11",
+            "title": "write",
+            "kind": "edit",
+            "status": "pending",
+            "rawInput": {
+              "content": "PLAN_APPROVED",
+              "file_path": "/fixture/workspace/advanced/approved.txt"
+            }
+          }
+        }
+      }
+    },
+    {
+      "direction": "in",
+      "frame": {
+        "jsonrpc": "2.0",
+        "id": 2,
+        "method": "session/request_permission",
+        "params": {
+          "sessionId": "fixture-id-6",
+          "toolCall": {
+            "toolCallId": "fixture-tool-12",
+            "title": "write: /fixture/workspace/advanced/approved.txt",
+            "status": "pending",
+            "kind": "other"
+          },
+          "options": [
+            {
+              "kind": "allow_once",
+              "name": "Allow",
+              "optionId": "allow"
+            },
+            {
+              "kind": "allow_always",
+              "name": "Always allow writing files in /fixture/workspace/advanced",
+              "optionId": "always_0"
+            },
+            {
+              "kind": "allow_always",
+              "name": "Allow writing files in /fixture/workspace/advanced for this session",
+              "optionId": "always_1"
+            },
+            {
+              "kind": "reject_once",
+              "name": "Deny",
+              "optionId": "deny"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "direction": "out",
+      "frame": {
+        "jsonrpc": "2.0",
+        "id": 2,
+        "result": {
+          "outcome": {
+            "outcome": "selected",
+            "optionId": "allow"
+          }
+        }
+      }
+    },
+    {
+      "direction": "in",
+      "frame": {
+        "jsonrpc": "2.0",
+        "method": "session/update",
+        "params": {
+          "sessionId": "fixture-id-6",
+          "update": {
+            "sessionUpdate": "tool_call_update",
+            "toolCallId": "fixture-tool-11",
+            "status": "completed",
+            "content": [
+              {
+                "type": "diff",
+                "path": "/fixture/workspace/advanced/approved.txt",
+                "newText": "PLAN_APPROVED"
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "direction": "in",
+      "frame": {
+        "jsonrpc": "2.0",
+        "method": "session/update",
+        "params": {
+          "sessionId": "fixture-id-6",
+          "update": {
+            "sessionUpdate": "usage_update",
+            "size": 1000000,
+            "used": 60802
+          }
+        }
+      }
+    },
+    {
+      "direction": "in",
+      "frame": {
+        "jsonrpc": "2.0",
+        "method": "session/update",
+        "params": {
+          "sessionId": "fixture-id-6",
+          "update": {
+            "sessionUpdate": "tool_call",
+            "toolCallId": "fixture-tool-13",
+            "title": "read",
+            "kind": "read",
+            "status": "pending",
+            "rawInput": {
+              "file_path": "/fixture/workspace/advanced/approved.txt"
+            }
+          }
+        }
+      }
+    },
+    {
+      "direction": "in",
+      "frame": {
+        "jsonrpc": "2.0",
+        "method": "session/update",
+        "params": {
+          "sessionId": "fixture-id-6",
+          "update": {
+            "sessionUpdate": "tool_call_update",
+            "toolCallId": "fixture-tool-13",
+            "status": "completed",
+            "content": [
+              {
+                "type": "content",
+                "content": {
+                  "type": "text",
+                  "text": "1... PLAN_APPROVED"
+                }
+              }
+            ],
+            "rawOutput": "1... PLAN_APPROVED"
+          }
+        }
+      }
+    },
+    {
+      "direction": "in",
+      "frame": {
+        "jsonrpc": "2.0",
+        "method": "session/update",
+        "params": {
+          "sessionId": "fixture-id-6",
+          "update": {
+            "sessionUpdate": "agent_message_chunk",
+            "content": {
+              "type": "text",
+              "text": "Contents"
+            }
+          }
+        }
+      }
+    },
+    {
+      "direction": "in",
+      "frame": {
+        "jsonrpc": "2.0",
+        "method": "session/update",
+        "params": {
+          "sessionId": "fixture-id-6",
+          "update": {
+            "sessionUpdate": "agent_message_chunk",
+            "content": {
+              "type": "text",
+              "text": " verified"
+            }
+          }
+        }
+      }
+    },
+    {
+      "direction": "in",
+      "frame": {
+        "jsonrpc": "2.0",
+        "method": "session/update",
+        "params": {
+          "sessionId": "fixture-id-6",
+          "update": {
+            "sessionUpdate": "agent_message_chunk",
+            "content": {
+              "type": "text",
+              "text": ": `approved"
+            }
+          }
+        }
+      }
+    },
+    {
+      "direction": "in",
+      "frame": {
+        "jsonrpc": "2.0",
+        "method": "session/update",
+        "params": {
+          "sessionId": "fixture-id-6",
+          "update": {
+            "sessionUpdate": "agent_message_chunk",
+            "content": {
+              "type": "text",
+              "text": ".txt` contains exactly `PLAN"
+            }
+          }
+        }
+      }
+    },
+    {
+      "direction": "in",
+      "frame": {
+        "jsonrpc": "2.0",
+        "method": "session/update",
+        "params": {
+          "sessionId": "fixture-id-6",
+          "update": {
+            "sessionUpdate": "agent_message_chunk",
+            "content": {
+              "type": "text",
+              "text": "_APPROVED`."
+            }
+          }
+        }
+      }
+    },
+    {
+      "direction": "in",
+      "frame": {
+        "jsonrpc": "2.0",
+        "method": "session/update",
+        "params": {
+          "sessionId": "fixture-id-6",
+          "update": {
+            "sessionUpdate": "usage_update",
+            "size": 1000000,
+            "used": 57092
+          }
+        }
+      }
+    },
+    {
+      "direction": "in",
+      "frame": {
+        "jsonrpc": "2.0",
+        "id": 6,
+        "result": {
+          "stopReason": "end_turn",
+          "usage": {
+            "inputTokens": 2895,
+            "outputTokens": 432,
+            "cachedReadTokens": 273598,
+            "cachedWriteTokens": 9650,
+            "totalTokens": 286575
+          }
+        }
+      }
+    }
+  ]
+}

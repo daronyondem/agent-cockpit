@@ -1,6 +1,8 @@
 import { UsageProjection } from './usageProjection.ts';
 import { CopilotUsageDetails } from './chat/copilotUsage.jsx';
 import { GrokBillingSection } from './chat/grokBillingSection.jsx';
+import { CortexTokenCard } from './chat/cortexUsage.jsx';
+import { isUsageCostUnavailable, usageTokenTotal as _usageTotalTokens } from '../../../src/contracts/usagePresentation';
 /* ============================================================
    ContextChip renderers — per-CLI registry
 
@@ -34,13 +36,6 @@ function _withCostSuffix(base, usage){
 }
 function _fmtInt(n){
   return (n || 0).toLocaleString();
-}
-function _usageTotalTokens(usage){
-  if (!usage) return 0;
-  return (usage.inputTokens || 0)
-    + (usage.outputTokens || 0)
-    + (usage.cacheReadTokens || 0)
-    + (usage.cacheWriteTokens || 0);
 }
 function _usageFreshTokens(usage){
   if (!usage) return 0;
@@ -643,6 +638,15 @@ function DefaultTokenCard({ usage }){
 }
 
 const CHIP_RENDERERS = {
+  'cortex-code': {
+    renderChipText(usage){
+      const total = _usageTotalTokens(usage);
+      const context = usage.contextUsagePercentage;
+      const base = context === undefined ? `${_fmtTokensShort(total)} tokens` : `${context.toFixed(2)}% context · ${_fmtTokensShort(total)} tokens`;
+      return isUsageCostUnavailable(usage, 'cortex-code') ? `${base} · cost n/a` : _withCostSuffix(base, usage);
+    },
+    renderTooltipCard(usage){ return <CortexTokenCard usage={usage}/>; },
+  },
   'copilot': {
     renderChipText(usage) { return CHIP_RENDERERS.codex.renderChipText({ ...usage, costUsd: 0, estimatedCostUsd: 0 }) || 'Copilot usage'; },
     renderTooltipCard(usage, opts) { return <><CodexTokenCard usage={{ ...usage, costUsd: 0, estimatedCostUsd: 0 }}/><CopilotUsageDetails usage={usage} quota={opts?.planUsage}/></>; },

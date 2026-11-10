@@ -3,7 +3,7 @@ import { act, createElement, useState, type Dispatch, type SetStateAction } from
 import { createRoot } from 'react-dom/client';
 import { loadMobileModule } from './mobileModuleLoader';
 
-type PendingInteraction = { kind: 'question' | 'plan'; prompt: string; options?: unknown[]; requestId?: string };
+type PendingInteraction = { kind: 'question' | 'plan'; prompt: string; options?: unknown[]; decisionId?: string; requestId?: string };
 
 class MockApiError extends Error {
   constructor(message: string, readonly status: number) { super(message); }
@@ -12,7 +12,7 @@ const { useSendPipeline } = loadMobileModule('useSendPipeline.ts', {
   react: require('react'), './api': { AgentAPIError: MockApiError }, './appModel': loadMobileModule('appModel.ts'),
 });
 
-async function renderPipeline(first: PendingInteraction, sendInput: jest.Mock) {
+async function renderPipeline(first: PendingInteraction, sendInput: jest.Mock, extra: Record<string, unknown> = {}, client: Record<string, unknown> = {}) {
   (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
   const container = document.createElement('div');
   const root = createRoot(container);
@@ -20,8 +20,7 @@ async function renderPipeline(first: PendingInteraction, sendInput: jest.Mock) {
     interaction: PendingInteraction | null;
     setInteraction: Dispatch<SetStateAction<PendingInteraction | null>>;
     submitInteraction: (answer?: string) => Promise<void>;
-    answer: string;
-    setAnswer: Dispatch<SetStateAction<string>>;
+    answer: string; setAnswer: Dispatch<SetStateAction<string>>; isResponding: boolean;
   };
   const onError = jest.fn();
   function Harness() {
@@ -29,10 +28,10 @@ async function renderPipeline(first: PendingInteraction, sendInput: jest.Mock) {
     const [answer, setAnswer] = useState('Blue');
     const pipeline = useSendPipeline({
       activeConversation: { id: 'fixture' }, pendingInteraction: interaction, interactionAnswer: answer,
-      isStreaming: true, loading: false, clientRef: { current: { sendInput } },
-      setPendingInteraction: setInteraction, setInteractionAnswer: setAnswer, onError,
+      isStreaming: true, loading: false, clientRef: { current: { sendInput, ...client } },
+      setPendingInteraction: setInteraction, setInteractionAnswer: setAnswer, onError, ...extra,
     });
-    current = { interaction, setInteraction, submitInteraction: pipeline.submitInteraction, answer, setAnswer };
+    current = { interaction, setInteraction, answer, setAnswer, isResponding: pipeline.isResponding, submitInteraction: pipeline.submitInteraction };
     return createElement('p', null, interaction?.prompt);
   }
   await act(async () => { root.render(createElement(Harness)); });
@@ -46,23 +45,25 @@ const question: PendingInteraction = { kind: 'question', prompt: 'Color?', optio
 test.each<{ first: PendingInteraction; next: PendingInteraction }>([
   { first: question, next: { kind: 'question', prompt: 'Size?', options: [] } },
   { first: { kind: 'plan', prompt: '# Original plan' }, next: { kind: 'plan', prompt: '# Revised plan' } },
+  { first: { ...question, decisionId: 'cortex-decision:original' }, next: { ...question, decisionId: 'cortex-decision:next' } },
 ])('mobile preserves a follow-up $next.kind received before the input response', async ({ first, next }) => {
   let acknowledge!: (response: { mode: string }) => void;
   const sendInput = jest.fn(() => new Promise(resolve => { acknowledge = resolve; }));
   const view = await renderPipeline(first, sendInput);
   try {
     let answering!: Promise<void>;
-    await act(async () => { answering = view.current.submitInteraction(); });
+    await act(async () => { answering = view.current.submitInteraction('Blue'); });
     await act(async () => { view.current.setInteraction(next); });
     await act(async () => { view.current.setAnswer('A newer answer'); });
     await act(async () => { acknowledge({ mode: 'stdin' }); await answering; });
     expect(view.current.interaction).toBe(next);
     expect(view.current.answer).toBe('A newer answer');
     expect(view.container.textContent).toBe(next.prompt);
-    expect(sendInput).toHaveBeenCalledWith('fixture', 'Blue', true);
+    expect(sendInput).toHaveBeenCalledWith('fixture', 'Blue', true, first.decisionId ? { decisionId: first.decisionId } : {});
     sendInput.mockResolvedValueOnce({ mode: 'stdin' });
     await act(async () => { await view.current.submitInteraction('Large'); });
     expect(sendInput).toHaveBeenCalledTimes(2);
+    expect(sendInput).toHaveBeenLastCalledWith('fixture', 'Large', true, next.decisionId ? { decisionId: next.decisionId } : {});
     expect(view.current.interaction).toBeNull();
   } finally { await view.close(); }
 });
@@ -70,7 +71,7 @@ test.each<{ first: PendingInteraction; next: PendingInteraction }>([
 test('mobile clears the answered interaction after a successful input response', async () => {
   const view = await renderPipeline(question, jest.fn().mockResolvedValue({ mode: 'stdin' }));
   try {
-    await act(async () => { await view.current.submitInteraction(); });
+    await act(async () => { await view.current.submitInteraction('Blue'); });
     expect(view.current.interaction).toBeNull();
   } finally { await view.close(); }
 });
@@ -79,10 +80,117 @@ test('mobile keeps the interaction available when input delivery fails', async (
   const error = new Error('Input unavailable');
   const view = await renderPipeline(question, jest.fn().mockRejectedValue(error));
   try {
-    await act(async () => { await view.current.submitInteraction(); });
+    await act(async () => { await view.current.submitInteraction('Blue'); });
     expect(view.current.interaction).toBe(question);
     expect(view.onError).toHaveBeenCalledWith(error);
   } finally { await view.close(); }
+});
+
+test.each([false, true])('mobile blocks duplicates/stale callbacks and preserves a newer draft (old reply fails=%s)', async fail => {
+  let acknowledge!: (response: { mode: string }) => void;
+  const sendInput = jest.fn(() => new Promise(resolve => { acknowledge = resolve; }));
+  let reject!: (error: Error) => void;
+  sendInput.mockImplementation(() => new Promise((resolve, no) => { acknowledge = resolve; reject = no; }));
+  const first = { ...question, decisionId: 'cortex-decision:first' };
+  const view = await renderPipeline(first, sendInput);
+  try {
+    const staleSubmit = view.current.submitInteraction;
+    let answering!: Promise<void>;
+    await act(async () => { answering = staleSubmit('Blue'); void staleSubmit('Blue'); });
+    expect(sendInput).toHaveBeenCalledTimes(1); expect(view.current.isResponding).toBe(true);
+    const next = { ...question, decisionId: 'cortex-decision:next' };
+    await act(async () => view.current.setInteraction(next));
+    expect(view.current.answer).toBe('');
+    await act(async () => view.current.setAnswer('Violet draft'));
+    await act(async () => { if (fail) reject(new Error('old reply failed')); else acknowledge({ mode: 'stdin' }); await answering; });
+    expect(view.onError).not.toHaveBeenCalled();
+    expect(view.current.answer).toBe('Violet draft'); expect(view.current.interaction).toBe(next); expect(view.current.isResponding).toBe(false);
+    await act(async () => staleSubmit('Blue')); expect(sendInput).toHaveBeenCalledTimes(1);
+    sendInput.mockResolvedValueOnce({ mode: 'stdin' });
+    await act(async () => view.current.submitInteraction()); expect(sendInput).toHaveBeenLastCalledWith('fixture', 'Violet draft', true, next.decisionId ? { decisionId: next.decisionId } : {});
+  } finally { await view.close(); }
+});
+
+function messageSendFixture() {
+  const sendMessage = jest.fn().mockResolvedValue({ userMessage: { id: 'server-user', role: 'user', content: 'Blue' }, streamReady: true });
+  const startStream = jest.fn();
+  const extra = { activeConversationRef: { current: null }, isStreaming: false, startStream, markStreamFinished: jest.fn(),
+    recoverActiveStream: jest.fn().mockResolvedValue(false), setDraft: jest.fn(), setPendingAttachments: jest.fn(),
+    setErrorMessage: jest.fn(), setStreamText: jest.fn(), setShowStreamPlaceholder: jest.fn(), setIsStreaming: jest.fn(),
+    setActiveStreamIDs: jest.fn(), setActiveConversation: jest.fn() };
+  return { sendMessage, startStream, extra };
+}
+
+test('mobile sends a message-mode answer before its cleared card re-renders', async () => {
+  const { sendMessage, startStream, extra } = messageSendFixture();
+  const sendInput = jest.fn().mockResolvedValue({ mode: 'message' });
+  const view = await renderPipeline(question, sendInput, extra, { sendMessage });
+  try {
+    await act(async () => { await view.current.submitInteraction('Blue'); });
+    expect(sendInput).toHaveBeenCalledWith('fixture', 'Blue', false, {});
+    expect(sendMessage).toHaveBeenCalledWith('fixture', expect.objectContaining({ content: 'Blue' }));
+    expect(startStream).toHaveBeenCalledWith('fixture');
+    expect(view.current.interaction).toBeNull();
+    expect(view.onError).not.toHaveBeenCalled();
+  } finally { await view.close(); }
+});
+
+test('a message-mode answer cannot bypass a newer card', async () => {
+  const { sendMessage, extra } = messageSendFixture();
+  let acknowledge!: (response: { mode: string }) => void;
+  const view = await renderPipeline(question, jest.fn(() => new Promise(resolve => { acknowledge = resolve; })), extra, { sendMessage });
+  try {
+    let answering!: Promise<void>;
+    await act(async () => { answering = view.current.submitInteraction('Blue'); });
+    const next: PendingInteraction = { kind: 'plan', prompt: '# Newer plan' };
+    await act(async () => { view.current.setInteraction(next); });
+    await act(async () => { acknowledge({ mode: 'message' }); await answering; });
+    expect(sendMessage).not.toHaveBeenCalled();
+    expect(view.current.interaction).toBe(next);
+  } finally { await view.close(); }
+});
+
+test.each([false, true])('message-mode answers preserve separate drafts/uploads before and after a send (failure=%s)', async fail => {
+  const fixture = messageSendFixture();
+  let resolve!: (response: unknown) => void, reject!: (error: Error) => void;
+  fixture.sendMessage.mockImplementation(() => new Promise((yes, no) => { resolve = yes; reject = no; }));
+  const sendInput = jest.fn().mockResolvedValue({ mode: 'message' });
+  const originalUploads = [{ id: 'original-upload', status: 'done' }];
+  const newerUploads = [{ id: 'newer-upload', status: 'done' }];
+  const onError = jest.fn();
+  (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
+  const root = createRoot(document.createElement('div')); let view: any;
+  function Harness() {
+    const [draft, setDraft] = useState('Separate follow-up');
+    const [uploads, setUploads] = useState(originalUploads);
+    const [interaction, setInteraction] = useState<PendingInteraction | null>(question);
+    const pipeline = useSendPipeline({ ...fixture.extra,
+      activeConversation: { id: 'fixture', messages: [] }, pendingInteraction: interaction, interactionAnswer: 'Blue',
+      clientRef: { current: { sendInput, sendMessage: fixture.sendMessage } },
+      draft, setDraft, pendingAttachments: uploads, setPendingAttachments: setUploads,
+      setPendingInteraction: setInteraction, setInteractionAnswer: jest.fn(), onError,
+    });
+    view = { ...pipeline, draft, uploads, setDraft, setUploads }; return null;
+  }
+  let sending: Promise<void> | undefined;
+  try {
+    await act(async () => { root.render(createElement(Harness)); });
+    await act(async () => { sending = view.submitInteraction('Blue'); });
+    expect(fixture.sendMessage).toHaveBeenCalledWith('fixture', expect.objectContaining({ content: 'Blue' }));
+    expect(fixture.sendMessage.mock.calls[0][1]).not.toHaveProperty('attachments');
+    expect(view.draft).toBe('Separate follow-up'); expect(view.uploads).toBe(originalUploads);
+    await act(async () => { view.setDraft('Newer follow-up'); view.setUploads(newerUploads); });
+    await act(async () => {
+      if (fail) reject(new Error('Answer send failed'));
+      else resolve({ userMessage: { id: 'answer', role: 'user', content: 'Blue' }, streamReady: true });
+      await sending;
+    });
+    expect(view.draft).toBe('Newer follow-up'); expect(view.uploads).toBe(newerUploads);
+    expect(onError).toHaveBeenCalledTimes(fail ? 1 : 0);
+    expect(fixture.sendMessage).toHaveBeenCalledTimes(1);
+  } finally {
+    await act(async () => { resolve?.({ userMessage: { id: 'answer', role: 'user', content: 'Blue' }, streamReady: true }); await sending; root.unmount(); });
+  }
 });
 
 test('mobile submits a correlated question once and refuses message fallback', async () => {

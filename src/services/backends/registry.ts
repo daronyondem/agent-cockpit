@@ -33,8 +33,9 @@ export class BackendRegistry {
   }
 
   /**
-   * Call shutdown() on every registered adapter.
-   * Used during graceful server shutdown to clean up long-lived processes.
+   * Call shutdown() on every registered adapter and await any asynchronous
+   * cleanup. Used by graceful server shutdown and CLI updates; one adapter's
+   * failure does not stop the others.
    */
   async shutdownAll(options?: { permanent?: boolean }): Promise<void> {
     const adapters = [...this._adapters.values()];

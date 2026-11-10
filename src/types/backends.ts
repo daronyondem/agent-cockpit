@@ -3,6 +3,7 @@
 import type { EffortLevel, ClaudeCodeMode, ServiceTier, CliProfile } from './cliProfiles';
 import type { SessionRecoveryOptions } from './sessionRecovery';
 import type { BackendInputRequest, BackendInputResult, StreamEvent } from './streams';
+import type { AttachmentMeta } from './attachments';
 
 export interface BackendCapabilities {
   thinking: boolean;
@@ -11,11 +12,28 @@ export interface BackendCapabilities {
   toolActivity: boolean;
   userQuestions: boolean;
   stdinInput: boolean;
+  /** Whether an existing plan can be returned to the harness with revision feedback. */
+  planRevision?: boolean;
+  oneShot?: BackendOneShotCapabilities;
   oneShotMediaInput?: OneShotMediaInputCapabilities;
   goals?: boolean | BackendGoalCapability;
 }
 
+export interface BackendOneShotCapabilities {
+  restrictedText: boolean;
+  toolEnabled: boolean;
+  sequential: boolean;
+}
+
 export type ModelInputModality = 'text' | 'image' | 'audio' | 'pdf' | 'video';
+
+/** Trusted server-owned file supplied to a background processor. */
+export interface RunOneShotAttachment {
+  path: string;
+  kind: ModelInputModality;
+  mimeType?: string;
+  name?: string;
+}
 
 export type ModelOutputModality = 'text' | 'image' | 'audio' | 'pdf' | 'video';
 
@@ -111,6 +129,8 @@ export interface SendMessageOptions {
   sessionId: string;
   /** Stable conversation ID (does not change on session reset). */
   conversationId?: string;
+  /** Immutable workspace identity; required by Cortex runtime ownership. */
+  workspaceId?: string;
   /** Runtime CLI profile selected for the conversation. */
   cliProfileId?: string;
   /** Full profile record for adapters that support profile-isolated runtimes. */
@@ -143,6 +163,9 @@ export interface SendMessageOptions {
    * Memory MCP stub.  Backends that don't support MCP ignore this.
    */
   mcpServers?: McpServerConfig[];
+  /** Server-validated conversation uploads, never arbitrary model/user paths. */
+  attachments?: AttachmentMeta[];
+  attachmentRoot?: string;
   /** Explicit native Copilot goal credit window, required on resume. */
   goalAiCreditLimit?: number;
 }
@@ -150,6 +173,6 @@ export interface SendMessageOptions {
 export interface SendMessageResult {
   stream: AsyncGenerator<StreamEvent>;
   abort: () => void;
-  sendInput: (text: string) => void;
+  sendInput: (text: string, decisionId?: string) => void | boolean;
   deliverInput?: (input: BackendInputRequest) => Promise<BackendInputResult>;
 }

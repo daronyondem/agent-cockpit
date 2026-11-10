@@ -1,0 +1,772 @@
+{
+  "source": {
+    "cliVersion": "1.2.35",
+    "distribution": "1.2.35+191333.f82de3d91715",
+    "platform": "darwin-arm64",
+    "capturedAt": "2026-11-02",
+    "probe": "reload",
+    "selection": "ordered excerpt; identities, paths, endpoints sanitized; model catalog sampled"
+  },
+  "frames": [
+    {
+      "direction": "out",
+      "frame": {
+        "jsonrpc": "2.0",
+        "id": 2,
+        "method": "session/load",
+        "params": {
+          "sessionId": "fixture-id-1",
+          "cwd": "/fixture/workspace/core",
+          "mcpServers": []
+        }
+      }
+    },
+    {
+      "direction": "in",
+      "frame": {
+        "jsonrpc": "2.0",
+        "method": "session/update",
+        "params": {
+          "sessionId": "fixture-id-1",
+          "update": {
+            "sessionUpdate": "user_message_chunk",
+            "content": {
+              "type": "text",
+              "text": "Use native file tools to read fixture.txt in your working directory and create result.txt containing ONLY the value after FIXTURE_VALUE= with no newline. Then run a shell command to verify the result matches fixture.txt. Do not read or modify any files outside this temporary directory. Return the fixture value."
+            }
+          }
+        }
+      }
+    },
+    {
+      "direction": "in",
+      "frame": {
+        "jsonrpc": "2.0",
+        "method": "session/update",
+        "params": {
+          "sessionId": "fixture-id-1",
+          "update": {
+            "sessionUpdate": "tool_call",
+            "toolCallId": "fixture-tool-1",
+            "title": "read",
+            "kind": "read",
+            "status": "completed",
+            "rawInput": {
+              "file_path": "/fixture/workspace/core/fixture.txt"
+            }
+          }
+        }
+      }
+    },
+    {
+      "direction": "in",
+      "frame": {
+        "jsonrpc": "2.0",
+        "method": "session/update",
+        "params": {
+          "sessionId": "fixture-id-1",
+          "update": {
+            "sessionUpdate": "tool_call_update",
+            "toolCallId": "fixture-tool-1",
+            "status": "completed",
+            "content": [
+              {
+                "type": "content",
+                "content": {
+                  "type": "text",
+                  "text": "1... FIXTURE_VALUE=COCO-b1bfeae504ef4582\n2... "
+                }
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "direction": "in",
+      "frame": {
+        "jsonrpc": "2.0",
+        "method": "session/update",
+        "params": {
+          "sessionId": "fixture-id-1",
+          "update": {
+            "sessionUpdate": "tool_call",
+            "toolCallId": "fixture-tool-2",
+            "title": "write",
+            "kind": "edit",
+            "status": "completed",
+            "rawInput": {
+              "content": "COCO-b1bfeae504ef4582",
+              "file_path": "/fixture/workspace/core/result.txt"
+            }
+          }
+        }
+      }
+    },
+    {
+      "direction": "in",
+      "frame": {
+        "jsonrpc": "2.0",
+        "method": "session/update",
+        "params": {
+          "sessionId": "fixture-id-1",
+          "update": {
+            "sessionUpdate": "tool_call_update",
+            "toolCallId": "fixture-tool-2",
+            "status": "completed",
+            "content": [
+              {
+                "type": "content",
+                "content": {
+                  "type": "text",
+                  "text": "File written successfully: /fixture/workspace/core/result.txt (1 lines)"
+                }
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "direction": "in",
+      "frame": {
+        "jsonrpc": "2.0",
+        "method": "session/update",
+        "params": {
+          "sessionId": "fixture-id-1",
+          "update": {
+            "sessionUpdate": "tool_call",
+            "toolCallId": "fixture-tool-3",
+            "title": "bash: grep -o 'FIXTURE_VALUE=.*' /fixture/workspace/core/fixture.txt | cut -d= -f2 | tr -d '\\n' > /t\u2026",
+            "kind": "execute",
+            "status": "completed",
+            "rawInput": {
+              "command": "grep -o 'FIXTURE_VALUE=.*' /fixture/workspace/core/fixture.txt | cut -d= -f2 | tr -d '\\n' > /tmp/expected.txt && diff /tmp/expected.txt /fixture/workspace/core/result.txt && echo \"MATCH\"",
+              "description": "Verify result matches fixture value"
+            }
+          }
+        }
+      }
+    },
+    {
+      "direction": "in",
+      "frame": {
+        "jsonrpc": "2.0",
+        "method": "session/update",
+        "params": {
+          "sessionId": "fixture-id-1",
+          "update": {
+            "sessionUpdate": "tool_call_update",
+            "toolCallId": "fixture-tool-3",
+            "status": "completed",
+            "content": [
+              {
+                "type": "content",
+                "content": {
+                  "type": "text",
+                  "text": "Bash command `grep -o 'FIXTURE_VALUE=.*' /fixture/workspace/core/fixture.txt | cut -d= -f2 | tr -d '\\n' > /tmp/expected.txt && diff /tmp/expected.txt /fixture/workspace/core/result.txt && echo \"MATCH\"` with description `Verify result matches fixture value` returned output: MATCH"
+                }
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "direction": "in",
+      "frame": {
+        "jsonrpc": "2.0",
+        "method": "session/update",
+        "params": {
+          "sessionId": "fixture-id-1",
+          "update": {
+            "sessionUpdate": "agent_message_chunk",
+            "content": {
+              "type": "text",
+              "text": "The fixture value is **COCO-b1bfeae504ef4582**. The result.txt was written with just that value and verified to match."
+            }
+          }
+        }
+      }
+    },
+    {
+      "direction": "in",
+      "frame": {
+        "jsonrpc": "2.0",
+        "method": "session/update",
+        "params": {
+          "sessionId": "fixture-id-1",
+          "update": {
+            "sessionUpdate": "user_message_chunk",
+            "content": {
+              "type": "text",
+              "text": "Remember this nonce only in our conversation: RECALL-ea32c993baa24875. Reply exactly ACK. Do not use tools."
+            }
+          }
+        }
+      }
+    },
+    {
+      "direction": "in",
+      "frame": {
+        "jsonrpc": "2.0",
+        "method": "session/update",
+        "params": {
+          "sessionId": "fixture-id-1",
+          "update": {
+            "sessionUpdate": "agent_message_chunk",
+            "content": {
+              "type": "text",
+              "text": "ACK"
+            }
+          }
+        }
+      }
+    },
+    {
+      "direction": "in",
+      "frame": {
+        "jsonrpc": "2.0",
+        "method": "session/update",
+        "params": {
+          "sessionId": "fixture-id-1",
+          "update": {
+            "sessionUpdate": "user_message_chunk",
+            "content": {
+              "type": "text",
+              "text": "For this compatibility test, you MUST invoke ask_user_question to ask: Which fixture color should I use? Offer exactly Blue and Green. Wait for my selection and then repeat only the selected color. Do not use any file or shell tools."
+            }
+          }
+        }
+      }
+    },
+    {
+      "direction": "in",
+      "frame": {
+        "jsonrpc": "2.0",
+        "method": "session/update",
+        "params": {
+          "sessionId": "fixture-id-1",
+          "update": {
+            "sessionUpdate": "tool_call",
+            "toolCallId": "fixture-tool-4",
+            "title": "ask_user_question",
+            "kind": "other",
+            "status": "completed",
+            "rawInput": {
+              "answers": {},
+              "questions": [
+                {
+                  "header": "Fixture color",
+                  "multiSelect": false,
+                  "options": [
+                    {
+                      "description": "Use blue as the fixture color",
+                      "label": "Blue"
+                    },
+                    {
+                      "description": "Use green as the fixture color",
+                      "label": "Green"
+                    }
+                  ],
+                  "question": "Which fixture color should I use?"
+                }
+              ]
+            }
+          }
+        }
+      }
+    },
+    {
+      "direction": "in",
+      "frame": {
+        "jsonrpc": "2.0",
+        "method": "session/update",
+        "params": {
+          "sessionId": "fixture-id-1",
+          "update": {
+            "sessionUpdate": "tool_call_update",
+            "toolCallId": "fixture-tool-4",
+            "status": "completed",
+            "content": [
+              {
+                "type": "content",
+                "content": {
+                  "type": "text",
+                  "text": "User has answered your questions:\n\"Which fixture color should I use?\" = \"Blue\""
+                }
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "direction": "in",
+      "frame": {
+        "jsonrpc": "2.0",
+        "method": "session/update",
+        "params": {
+          "sessionId": "fixture-id-1",
+          "update": {
+            "sessionUpdate": "agent_message_chunk",
+            "content": {
+              "type": "text",
+              "text": "Blue"
+            }
+          }
+        }
+      }
+    },
+    {
+      "direction": "in",
+      "frame": {
+        "jsonrpc": "2.0",
+        "method": "session/update",
+        "params": {
+          "sessionId": "fixture-id-1",
+          "update": {
+            "sessionUpdate": "user_message_chunk",
+            "content": {
+              "type": "text",
+              "text": "Plan adding plan-result.txt containing PLAN_OK to this temporary directory. Use the native plan and approval flow and wait for approval before creating the file. Do not touch anything outside this directory."
+            }
+          }
+        }
+      }
+    },
+    {
+      "direction": "in",
+      "frame": {
+        "jsonrpc": "2.0",
+        "method": "session/update",
+        "params": {
+          "sessionId": "fixture-id-1",
+          "update": {
+            "sessionUpdate": "tool_call",
+            "toolCallId": "fixture-tool-5",
+            "title": "exit_plan_mode",
+            "kind": "other",
+            "status": "completed",
+            "rawInput": {
+              "plan": "**Create plan-result.txt**\n\nSingle file write to the working directory:\n\n- Write `/fixture/workspace/core/plan-result.txt` with contents `PLAN_OK` (no newline)\n\nNo other files touched."
+            }
+          }
+        }
+      }
+    },
+    {
+      "direction": "in",
+      "frame": {
+        "jsonrpc": "2.0",
+        "method": "session/update",
+        "params": {
+          "sessionId": "fixture-id-1",
+          "update": {
+            "sessionUpdate": "tool_call_update",
+            "toolCallId": "fixture-tool-5",
+            "status": "completed",
+            "content": [
+              {
+                "type": "content",
+                "content": {
+                  "type": "text",
+                  "text": "Plan mode has ended. You are no longer in read-only mode. User confirmed plan. You MUST now proceed with implementation.\n\nPlan saved to `/fixture/workspace/core/.cortex/plans/plan_2026-11-03_0349.md`.\nThe confirmed plan is available in this conversation history. Reference it as you execute each step.\n\nCRITICAL REQUIREMENTS for plan execution:\n\nPHASE 0 \u2014 Create a task for this plan:\n  1. Read the confirmed plan in this conversation\n  2. For each task needed to implement this plan, create it with: `cortex ctx task add \"<task name>\" --plan /fixture/workspace/core/.cortex/plans/plan_2026-11-03_0349.md`\n  3. The --plan flag links the task to this specific plan. Only use it for tasks that implement this plan.\n\nPHASE 1 \u2014 Create executable steps:\n  1. Create concrete ctx steps from that plan using `cortex ctx step add \"<step>\" -t <task_id>`\n  2. If needed, add dependencies using `cortex ctx step block <step_id> <blocker_id> -t <task_id>`\n\nPHASE 2 \u2014 Execute ready steps:\n  1. Run `cortex ctx step ready -t <task_id>` to get steps with no blockers\n  2. For each ready step, either execute directly or launch subagents in parallel\n  3. As each step completes, run `cortex ctx step done <step_id> -t <task_id>` immediately\n  4. Repeat until no steps remain\n\nPHASE 3 \u2014 Complete the task:\n  After all steps complete, run `cortex ctx task done <task_id>`"
+                }
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "direction": "in",
+      "frame": {
+        "jsonrpc": "2.0",
+        "method": "session/update",
+        "params": {
+          "sessionId": "fixture-id-1",
+          "update": {
+            "sessionUpdate": "tool_call",
+            "toolCallId": "fixture-tool-6",
+            "title": "write",
+            "kind": "edit",
+            "status": "completed",
+            "rawInput": {
+              "content": "PLAN_OK",
+              "file_path": "/fixture/workspace/core/plan-result.txt"
+            }
+          }
+        }
+      }
+    },
+    {
+      "direction": "in",
+      "frame": {
+        "jsonrpc": "2.0",
+        "method": "session/update",
+        "params": {
+          "sessionId": "fixture-id-1",
+          "update": {
+            "sessionUpdate": "tool_call_update",
+            "toolCallId": "fixture-tool-6",
+            "status": "completed",
+            "content": [
+              {
+                "type": "content",
+                "content": {
+                  "type": "text",
+                  "text": "File written successfully: /fixture/workspace/core/plan-result.txt (1 lines)"
+                }
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "direction": "in",
+      "frame": {
+        "jsonrpc": "2.0",
+        "method": "session/update",
+        "params": {
+          "sessionId": "fixture-id-1",
+          "update": {
+            "sessionUpdate": "agent_message_chunk",
+            "content": {
+              "type": "text",
+              "text": "`plan-result.txt` created with contents `PLAN_OK`."
+            }
+          }
+        }
+      }
+    },
+    {
+      "direction": "in",
+      "frame": {
+        "jsonrpc": "2.0",
+        "method": "session/update",
+        "params": {
+          "sessionId": "fixture-id-1",
+          "update": {
+            "sessionUpdate": "session_info_update",
+            "title": "Extracting Fixture Value and Verifying Result"
+          }
+        }
+      }
+    },
+    {
+      "direction": "in",
+      "frame": {
+        "jsonrpc": "2.0",
+        "id": 2,
+        "result": {
+          "configOptions": [
+            {
+              "id": "model",
+              "name": "Model",
+              "category": "model",
+              "type": "select",
+              "currentValue": "claude-sonnet-4-6",
+              "options": [
+                {
+                  "value": "auto",
+                  "name": "Auto (Balanced)"
+                },
+                {
+                  "value": "claude-sonnet-4-6",
+                  "name": "Claude Sonnet 4.6"
+                }
+              ]
+            },
+            {
+              "id": "mode",
+              "name": "Mode",
+              "description": "Controls the agent's operating mode",
+              "category": "mode",
+              "type": "select",
+              "currentValue": "standard",
+              "options": [
+                {
+                  "value": "standard",
+                  "name": "Standard",
+                  "description": "Normal coding mode"
+                },
+                {
+                  "value": "plan",
+                  "name": "Plan",
+                  "description": "Plan before making changes"
+                },
+                {
+                  "value": "bypass",
+                  "name": "Bypass",
+                  "description": "Auto-approve all tool calls"
+                }
+              ]
+            },
+            {
+              "id": "thought_level",
+              "name": "Effort",
+              "description": "How much the agent thinks before responding",
+              "category": "thought_level",
+              "type": "select",
+              "currentValue": "low",
+              "options": [
+                {
+                  "value": "auto",
+                  "name": "Auto"
+                },
+                {
+                  "value": "minimal",
+                  "name": "Minimal"
+                },
+                {
+                  "value": "low",
+                  "name": "Low"
+                },
+                {
+                  "value": "medium",
+                  "name": "Medium"
+                },
+                {
+                  "value": "high",
+                  "name": "High"
+                },
+                {
+                  "value": "xhigh",
+                  "name": "Xhigh"
+                },
+                {
+                  "value": "max",
+                  "name": "Max"
+                }
+              ]
+            },
+            {
+              "id": "_restricted_session_scope",
+              "name": "Restricted scope",
+              "description": "Restrict the roles and privileges the agent's SQL can use. Applies to the SQL session shared across sessions on this connection.",
+              "category": "_restricted_session_scope",
+              "type": "select",
+              "currentValue": "none",
+              "options": [
+                {
+                  "value": "none",
+                  "name": "None (unrestricted)",
+                  "description": "Agent SQL runs with your full privileges"
+                },
+                {
+                  "value": "SNOWFLAKE$DATA_READ_WITH_AI",
+                  "name": "Read-only",
+                  "description": "Agent SQL is limited to reading data"
+                }
+              ]
+            }
+          ]
+        }
+      }
+    },
+    {
+      "direction": "out",
+      "frame": {
+        "jsonrpc": "2.0",
+        "id": 3,
+        "method": "session/prompt",
+        "params": {
+          "sessionId": "fixture-id-1",
+          "prompt": [
+            {
+              "type": "text",
+              "text": "What exact nonce did I ask you to remember only in this conversation? Return only that nonce; do not use any tools."
+            }
+          ]
+        }
+      }
+    },
+    {
+      "direction": "in",
+      "frame": {
+        "jsonrpc": "2.0",
+        "method": "session/update",
+        "params": {
+          "sessionId": "fixture-id-1",
+          "update": {
+            "sessionUpdate": "agent_message_chunk",
+            "content": {
+              "type": "text",
+              "text": "RECALL"
+            }
+          }
+        }
+      }
+    },
+    {
+      "direction": "in",
+      "frame": {
+        "jsonrpc": "2.0",
+        "method": "session/update",
+        "params": {
+          "sessionId": "fixture-id-1",
+          "update": {
+            "sessionUpdate": "agent_message_chunk",
+            "content": {
+              "type": "text",
+              "text": "-"
+            }
+          }
+        }
+      }
+    },
+    {
+      "direction": "in",
+      "frame": {
+        "jsonrpc": "2.0",
+        "method": "session/update",
+        "params": {
+          "sessionId": "fixture-id-1",
+          "update": {
+            "sessionUpdate": "agent_message_chunk",
+            "content": {
+              "type": "text",
+              "text": "ea"
+            }
+          }
+        }
+      }
+    },
+    {
+      "direction": "in",
+      "frame": {
+        "jsonrpc": "2.0",
+        "method": "session/update",
+        "params": {
+          "sessionId": "fixture-id-1",
+          "update": {
+            "sessionUpdate": "agent_message_chunk",
+            "content": {
+              "type": "text",
+              "text": "32"
+            }
+          }
+        }
+      }
+    },
+    {
+      "direction": "in",
+      "frame": {
+        "jsonrpc": "2.0",
+        "method": "session/update",
+        "params": {
+          "sessionId": "fixture-id-1",
+          "update": {
+            "sessionUpdate": "agent_message_chunk",
+            "content": {
+              "type": "text",
+              "text": "c993"
+            }
+          }
+        }
+      }
+    },
+    {
+      "direction": "in",
+      "frame": {
+        "jsonrpc": "2.0",
+        "method": "session/update",
+        "params": {
+          "sessionId": "fixture-id-1",
+          "update": {
+            "sessionUpdate": "agent_message_chunk",
+            "content": {
+              "type": "text",
+              "text": "b"
+            }
+          }
+        }
+      }
+    },
+    {
+      "direction": "in",
+      "frame": {
+        "jsonrpc": "2.0",
+        "method": "session/update",
+        "params": {
+          "sessionId": "fixture-id-1",
+          "update": {
+            "sessionUpdate": "agent_message_chunk",
+            "content": {
+              "type": "text",
+              "text": "aa"
+            }
+          }
+        }
+      }
+    },
+    {
+      "direction": "in",
+      "frame": {
+        "jsonrpc": "2.0",
+        "method": "session/update",
+        "params": {
+          "sessionId": "fixture-id-1",
+          "update": {
+            "sessionUpdate": "agent_message_chunk",
+            "content": {
+              "type": "text",
+              "text": "24"
+            }
+          }
+        }
+      }
+    },
+    {
+      "direction": "in",
+      "frame": {
+        "jsonrpc": "2.0",
+        "method": "session/update",
+        "params": {
+          "sessionId": "fixture-id-1",
+          "update": {
+            "sessionUpdate": "agent_message_chunk",
+            "content": {
+              "type": "text",
+              "text": "875"
+            }
+          }
+        }
+      }
+    },
+    {
+      "direction": "in",
+      "frame": {
+        "jsonrpc": "2.0",
+        "method": "session/update",
+        "params": {
+          "sessionId": "fixture-id-1",
+          "update": {
+            "sessionUpdate": "usage_update",
+            "size": 1050000,
+            "used": 54059
+          }
+        }
+      }
+    },
+    {
+      "direction": "in",
+      "frame": {
+        "jsonrpc": "2.0",
+        "id": 3,
+        "result": {
+          "stopReason": "end_turn",
+          "usage": {
+            "inputTokens": 127,
+            "outputTokens": 94,
+            "cachedReadTokens": 1616,
+            "cachedWriteTokens": 52316,
+            "totalTokens": 54153
+          }
+        }
+      }
+    }
+  ]
+}

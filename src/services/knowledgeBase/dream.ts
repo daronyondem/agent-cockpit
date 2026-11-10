@@ -23,6 +23,7 @@
 //
 // Post-dream: regenerate markdown, detect god nodes, emit WS frames.
 
+import { requireBackendRole } from '../../contracts/backendCapabilities';
 import type {
   KbStateUpdateEvent,
   McpServerConfig,
@@ -538,6 +539,8 @@ export class KbDreamService {
 
       // Issue a KB Search MCP session for the duration of this dream run.
       const mcpSession = this.kbSearchMcp.issueKbSearchSession(hash, hash);
+      const settings = await this.chatService.getSettings();
+      const { adapter, runtime } = await this._resolveCli(settings);
       if (mode === 'full-rebuild') {
         db.wipeSynthesis();
         db.markAllNeedsSynthesis();
@@ -551,8 +554,6 @@ export class KbDreamService {
         }
       }
 
-      const settings = await this.chatService.getSettings();
-      const { adapter, runtime } = await this._resolveCli(settings);
       const baseRunOptions = this._buildRunOptions(hash, settings, runtime);
       const runOptionsWithMcp = { ...baseRunOptions, mcpServers: mcpSession.mcpServers };
       const concurrency = settings.knowledgeBase?.cliConcurrency ?? DEFAULT_CONCURRENCY;
@@ -1340,7 +1341,8 @@ export class KbDreamService {
   ): Promise<string | null> {
     try {
       return await adapter.runOneShot(prompt, options);
-    } catch {
+    } catch (error) {
+      if (adapter.allowAutomaticOneShotRetry === false) throw error;
       // Retry once.
       try {
         return await adapter.runOneShot(prompt, options);
@@ -1366,8 +1368,20 @@ export class KbDreamService {
     phase: string,
   ): Promise<T | null> {
     const first = await this._runCliWithRetry(adapter, prompt, options);
+    if (adapter.allowAutomaticOneShotRetry === false && !first?.trim()) {
+      throw new Error('Dreaming CLI returned empty output; automatic retry is disabled for this harness.');
+    }
     if (!first) return null;
     const parsedFirst = parse(first);
+    if (adapter.allowAutomaticOneShotRetry === false) {
+      // Unusable output fails without a resend. Partially valid output is
+      // applied like other harnesses, with per-item warnings kept as run errors.
+      if (parsedFirst.warnings.length > 0 && !hasParsedItems(parsedFirst)) {
+        this._writeParseFailureLog(hash, phase, [first]);
+        throw new Error('Dreaming CLI output failed validation; automatic retry is disabled for this harness.');
+      }
+      return parsedFirst;
+    }
     if (!hasParseFailure(parsedFirst.warnings)) return parsedFirst;
 
     // Parse failed — one more CLI attempt.
@@ -1416,6 +1430,7 @@ export class KbDreamService {
     if (!adapter) {
       throw new Error(`Dreaming CLI backend "${runtime.backendId}" is not registered for profile "${runtime.cliProfileId || runtime.backendId}".`);
     }
+    requireBackendRole(adapter.metadata, { role: 'toolEnabled' });
     return { adapter, runtime };
   }
 
@@ -1708,6 +1723,11 @@ function scanBalancedObject(raw: string): string | null {
  */
 export function hasParseFailure(warnings: string[]): boolean {
   return warnings.some((w) => /json parse error|no json (object )?found/i.test(w));
+}
+
+/** True when a parse result holds at least one parsed item besides its warnings. */
+function hasParsedItems(parsed: { warnings: string[] }): boolean {
+  return Object.entries(parsed).some(([key, value]) => key !== 'warnings' && Array.isArray(value) && value.length > 0);
 }
 
 /** Extract topic IDs affected by a set of operations. */

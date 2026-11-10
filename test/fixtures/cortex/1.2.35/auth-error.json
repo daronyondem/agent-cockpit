@@ -1,0 +1,56 @@
+{
+  "source": {
+    "cliVersion": "1.2.35",
+    "distribution": "1.2.35+191333.f82de3d91715",
+    "platform": "darwin-arm64",
+    "capturedAt": "2026-11-02",
+    "probe": "isolated-inference",
+    "selection": "ordered excerpt; identities, paths, endpoints sanitized; model catalog sampled"
+  },
+  "frames": [
+    {
+      "direction": "out",
+      "frame": {
+        "jsonrpc": "2.0",
+        "id": 5,
+        "method": "session/prompt",
+        "params": {
+          "sessionId": "fixture-id-8",
+          "prompt": [
+            {
+              "type": "text",
+              "text": "Reply exactly ISOLATION_PROBE. Do not use any tools."
+            }
+          ]
+        }
+      }
+    },
+    {
+      "direction": "in",
+      "frame": {
+        "jsonrpc": "2.0",
+        "method": "session/update",
+        "params": {
+          "sessionId": "fixture-id-8",
+          "update": {
+            "sessionUpdate": "agent_message_chunk",
+            "content": {
+              "type": "text",
+              "text": "\n\nError: Connection error: Error: No Snowflake connection available. Run 'cortex' interactively to set up a connection, or configure connections in $SNOWFLAKE_HOME/connections.toml or ~/.snowflake/connections.toml"
+            }
+          }
+        }
+      }
+    },
+    {
+      "direction": "in",
+      "frame": {
+        "jsonrpc": "2.0",
+        "id": 5,
+        "result": {
+          "stopReason": "end_turn"
+        }
+      }
+    }
+  ]
+}

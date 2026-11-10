@@ -60,7 +60,7 @@ describe('browser profile metadata cache', () => {
     fetcher.mockImplementationOnce(async () => response({ backend: { id: 'copilot', label: 'new account', models: [] } }));
     const latest = await api.getCliProfileMetadata('a');
     finish(response({ backend: { id: 'copilot', label: 'old account', models: [] } }));
-    expect((await old).label).toBe('old account');
+    expect(await old).toBeNull();
     expect(latest.label).toBe('new account');
     expect((await api.getCliProfileMetadata('a')).label).toBe('new account');
     expect(metadataCalls()).toBe(3);

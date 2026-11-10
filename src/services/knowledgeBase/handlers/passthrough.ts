@@ -13,6 +13,7 @@
 // and vision conversion adds no value over reading the SVG directly.
 
 import path from 'path';
+import { logger } from '../../../utils/logger';
 import { promises as fsp } from 'fs';
 import type { Handler, HandlerResult } from './types';
 import { IMAGE_EXTS, TEXT_EXTS, passthroughSupports } from './passthroughSupport';
@@ -86,10 +87,10 @@ export const passthroughHandler: Handler = async ({
       await import(PAGE_CONVERSION_MODULE) as typeof import('../ingestion/pageConversion');
     const aiSidecarAbs = mediaPath + '.ai.png';
     const aiSidecarRel = relMedia + '.ai.png';
-    const aiPath = await ensureAiReadyImage(mediaPath, aiSidecarAbs);
-    const downscaled = aiPath !== mediaPath;
-    const linkRel = downscaled ? aiSidecarRel : relMedia;
-    const mediaFiles = downscaled ? [relMedia, aiSidecarRel] : [relMedia];
+    const aiPath = await ensureAiReadyImage(mediaPath, aiSidecarAbs, ingestionAdapter?.oneShotImageFormat);
+    const prepared = aiPath !== mediaPath;
+    const linkRel = prepared ? aiSidecarRel : relMedia;
+    const mediaFiles = prepared ? [relMedia, aiSidecarRel] : [relMedia];
 
     const aiEligible = AI_ELIGIBLE_IMAGE_EXTS.has(ext);
     let source: ImageSource = 'image-only';
@@ -116,9 +117,9 @@ export const passthroughHandler: Handler = async ({
         aiRetries = result.retried ? 1 : 0;
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
-        console.warn(`[kb/passthrough] AI conversion failed for "${filename}": ${message}`);
-        note = 'AI conversion failed after retry';
-        aiRetries = 1;
+        logger.warn('KB image conversion failed', { filename, error: message });
+        aiRetries = ingestionAdapter.allowAutomaticOneShotRetry === false ? 0 : 1;
+        note = `AI conversion failed ${aiRetries ? 'after' : 'without'} retry`;
       }
       aiCallDurationMs = Date.now() - startedAt;
     }
@@ -143,7 +144,7 @@ export const passthroughHandler: Handler = async ({
         sourceCounts,
         aiCallDurationMs,
         aiRetries,
-        ...(downscaled ? { downscaled: true } : {}),
+        ...(prepared ? (ingestionAdapter?.oneShotImageFormat ? { aiImagePrepared: true } : { downscaled: true }) : {}),
         ...(note ? { note } : {}),
       },
     };

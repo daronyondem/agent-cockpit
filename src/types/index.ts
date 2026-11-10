@@ -1,6 +1,8 @@
 // Server type modules are declaration-only and level-ordered; keep dependencies flowing downward.
 export type * from './usage';
 export type * from './cliProfiles';
+export type * from './cliAuth';
+export type * from './cortex';
 export type * from './tools';
 export type * from './attachments';
 export type * from './goals';

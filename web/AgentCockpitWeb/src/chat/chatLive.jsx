@@ -5,7 +5,7 @@ import { Ico } from '../icons.jsx';
 import { StreamStore } from '../streamStore.js';
 import { useDialog } from '../dialog.jsx';
 import { useToasts } from '../toast.jsx';
-import { useCliProfileSettings, useConversationSelector, shallowEqual } from '../shellState.jsx';
+import { useBackendList, useCliProfileSettings, useConversationSelector, shallowEqual } from '../shellState.jsx';
 import { hiddenStreamErrorMessageIds } from './messageParsing';
 import { collapseProgressRuns, messageScrollSignature } from './messageModel.js';
 import { backendIdForProfile, workspaceRefForConv } from './chatHelpers.js';
@@ -77,6 +77,7 @@ function selectChatLiveState(s){
 export function ChatLive({ convId, onArchived, onDeleted, onOpenMemoryUpdate, onOpenWorkspaceSettings, onOpenSettings }){
   const state = useConversationSelector(convId, selectChatLiveState, shallowEqual);
   const { profiles: cliProfiles } = useCliProfileSettings();
+  const backends = useBackendList();
   const dialog = useDialog();
   const toast = useToasts();
   const feedRef = React.useRef(null);
@@ -852,7 +853,7 @@ export function ChatLive({ convId, onArchived, onDeleted, onOpenMemoryUpdate, on
                 convId={convId}
                 interaction={pendingInteraction}
                 respondPending={!!respondPending}
-                allowPlanFeedback={conv.backend === 'grok-build'}
+                backend={backends.find(backend => backend.id === conv.backend)}
               />
             ) : null}
             {streamError && (

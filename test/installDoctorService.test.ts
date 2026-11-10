@@ -87,14 +87,15 @@ describe('InstallDoctorService', () => {
           installStateSource: 'stored',
         }),
       } as any,
-      commandRunner: async () => ({ ok: true, stdout: '1.0.0', stderr: '' }),
+      commandRunner: async (command) => ({ ok: true, stdout: command.endsWith('cortex') ? 'Cortex Code v1.2.35' : '1.0.0', stderr: '' }),
       detectPandoc: async () => ({ available: true, binaryPath: '/usr/local/bin/pandoc', version: '3.1.1', checkedAt: '2026-05-12T00:00:00.000Z' }),
       detectLibreOffice: async () => ({ available: true, binaryPath: '/usr/local/bin/soffice', checkedAt: '2026-05-12T00:00:00.000Z' }),
     });
 
     const status = await service.getStatus();
 
-    expect(status.overallStatus).toBe('ok');
+    // Native CoCo is deliberately unavailable on Windows until its platform gate.
+    expect(status.overallStatus).toBe(process.platform === 'win32' ? 'warning' : 'ok');
     expect(status.install.channel).toBe('production');
     expect(status.checks).toEqual(expect.arrayContaining([
       expect.objectContaining({ id: 'node', status: 'ok', required: true }),

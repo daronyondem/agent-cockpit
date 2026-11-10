@@ -9,6 +9,7 @@ import type { CliProfile, CliHarness, Request, Response, Settings } from '../../
 import { isCliProfileResolutionError, param, sendError } from './routeUtils';
 import { GrokBillingCache } from '../../services/backends/grokBilling';
 import type { GrokBillingResponse } from '../../contracts/grokBilling';
+import { validateCortexConnectionCreate, validateCortexRedirect, validateCortexSetup } from '../../contracts/cortexAuth';
 import type { CopilotQuotaResponse } from '../../contracts/copilotUsage';
 import { CopilotAdapter } from '../../services/backends/copilot';
 
@@ -22,6 +23,26 @@ export function createCliProfileRouter(opts: CliProfileRoutesOptions): express.R
   const { chatService, backendRegistry, cliProfileAuth } = opts;
   const router = express.Router();
   const grokBilling = new GrokBillingCache();
+
+  router.get('/cli-profiles/cortex-code/connections', async (_req: Request, res: Response) => {
+    res.set('Cache-Control', 'no-store');
+    try { res.json({ connections: await cliProfileAuth.cortexAuth.connections.list(), job: cliProfileAuth.cortexAuth.activeJob() }); }
+    catch (error) { sendError(res, 400, error); }
+  });
+
+  router.post('/cli-profiles/cortex-code/connections', csrfGuard, async (req: Request, res: Response) => {
+    res.set('Cache-Control', 'no-store');
+    try { res.json({ connections: await cliProfileAuth.cortexAuth.connections.create(validateCortexConnectionCreate(req.body)) }); }
+    catch (error) { sendError(res, 400, error); }
+  });
+
+  router.post('/cli-profiles/auth-jobs/:jobId/redirect', csrfGuard, (req: Request, res: Response) => {
+    res.set('Cache-Control', 'no-store');
+    try {
+      const { generation, redirectUrl } = validateCortexRedirect(req.body);
+      res.json({ job: cliProfileAuth.cortexAuth.redirect(param(req, 'jobId'), generation, redirectUrl) });
+    } catch (error) { sendError(res, 400, error); }
+  });
 
   router.get('/cli-profiles/:profileId/copilot-quota', async (req: Request, res: Response) => {
     try {
@@ -141,6 +162,7 @@ export function createCliProfileRouter(opts: CliProfileRoutesOptions): express.R
   });
 
   router.post('/cli-profiles/:id/auth/start', csrfGuard, async (req: Request, res: Response) => {
+    res.set('Cache-Control', 'no-store');
     try {
       const settings = await chatService.getSettings();
       const prepared = cliProfileAuth.profileWithAuthDefaults(settings, param(req, 'id'));
@@ -162,7 +184,7 @@ export function createCliProfileRouter(opts: CliProfileRoutesOptions): express.R
   router.post('/cli-profiles/setup-auth/:harness/test', csrfGuard, async (req: Request, res: Response) => {
     try {
       const harness = setupAuthHarness(param(req, 'harness'));
-      const prepared = await prepareSetupAuthProfile(chatService, harness);
+      const prepared = await prepareSetupAuthProfile(chatService, harness, req.body);
       const result = await cliProfileAuth.checkProfile(prepared.profile);
       try {
         const runtime = await chatService.resolveCliProfileRuntime(prepared.profile.id);
@@ -183,9 +205,10 @@ export function createCliProfileRouter(opts: CliProfileRoutesOptions): express.R
   });
 
   router.post('/cli-profiles/setup-auth/:harness/start', csrfGuard, async (req: Request, res: Response) => {
+    res.set('Cache-Control', 'no-store');
     try {
       const harness = setupAuthHarness(param(req, 'harness'));
-      const prepared = await prepareSetupAuthProfile(chatService, harness);
+      const prepared = await prepareSetupAuthProfile(chatService, harness, req.body);
       const job = await cliProfileAuth.startAuth(prepared.profile);
       res.json({ job, profile: prepared.profile, settings: prepared.settings });
     } catch (err: unknown) {
@@ -194,6 +217,7 @@ export function createCliProfileRouter(opts: CliProfileRoutesOptions): express.R
   });
 
   router.get('/cli-profiles/auth-jobs/:jobId', async (req: Request, res: Response) => {
+    res.set('Cache-Control', 'no-store');
     const job = cliProfileAuth.getJob(param(req, 'jobId'));
     if (!job) {
       res.status(404).json({ error: 'Auth job not found' });
@@ -245,16 +269,16 @@ function prepareProfileForTest(
 ): { settings: Settings; profile: CliProfile; changed: boolean } {
   const profile = settings.cliProfiles?.find(candidate => candidate.id === profileId);
   if (!profile) throw new Error(`CLI profile not found: ${profileId}`);
-  if (profile.authMode === 'account' && (profile.harness === 'codex' || profile.harness === 'claude-code' || profile.harness === 'grok-build')) {
+  if (profile.authMode === 'account' && (profile.harness === 'codex' || profile.harness === 'claude-code' || profile.harness === 'grok-build' || profile.harness === 'cortex-code')) {
     return cliProfileAuth.profileWithAuthDefaults(settings, profileId);
   }
   return { settings, profile, changed: false };
 }
 
-type SetupAuthHarness = Extract<CliHarness, 'codex' | 'claude-code' | 'grok-build'>;
+type SetupAuthHarness = Extract<CliHarness, 'codex' | 'claude-code' | 'grok-build' | 'cortex-code'>;
 
 function setupAuthHarness(value: string): SetupAuthHarness {
-  if (value === 'codex' || value === 'claude-code' || value === 'grok-build') return value;
+  if (value === 'codex' || value === 'claude-code' || value === 'grok-build' || value === 'cortex-code') return value;
   if (value === 'kiro') throw new Error('Remote authentication is not supported for Kiro profiles yet.');
   throw new Error(`Unsupported setup authentication harness: ${value}`);
 }
@@ -262,9 +286,11 @@ function setupAuthHarness(value: string): SetupAuthHarness {
 async function prepareSetupAuthProfile(
   chatService: ChatService,
   harness: SetupAuthHarness,
+  body?: unknown,
 ): Promise<{ settings: Settings; profile: CliProfile }> {
   const settings = await chatService.getSettings();
-  const preparedProfile = setupAuthProfile(settings, harness);
+  const connection = harness === 'cortex-code' ? validateCortexSetup(body).connection : undefined;
+  const preparedProfile = setupAuthProfile(settings, harness, connection);
   const savedSettings = preparedProfile.changed
     ? await chatService.saveSettings(preparedProfile.settings)
     : settings;
@@ -272,19 +298,21 @@ async function prepareSetupAuthProfile(
   return { settings: savedSettings, profile };
 }
 
-function setupAuthProfile(settings: Settings, harness: SetupAuthHarness): { settings: Settings; profile: CliProfile; changed: boolean } {
+function setupAuthProfile(settings: Settings, harness: SetupAuthHarness, connection?: string): { settings: Settings; profile: CliProfile; changed: boolean } {
   const profiles = Array.isArray(settings.cliProfiles) ? settings.cliProfiles : [];
   const setupIdPrefix = `setup-${harness}-account`;
   const existingAccount = profiles.find(profile =>
     profile.harness === harness
     && profile.authMode === 'account'
     && !profile.disabled
+    && (harness !== 'cortex-code' || profile.id.startsWith(setupIdPrefix))
     && (!hasSetupAuthHome(profile, harness) || profile.id.startsWith(setupIdPrefix))
   );
   if (existingAccount) {
-    const profile = existingAccount.id.startsWith(setupIdPrefix)
+    let profile = existingAccount.id.startsWith(setupIdPrefix)
       ? setupProfileWithoutAuthHome(existingAccount, harness)
       : existingAccount;
+    if (connection && profile.cortexCode?.connection !== connection) profile = { ...profile, cortexCode: { connection }, updatedAt: new Date().toISOString() };
     const nextProfiles = profile === existingAccount
       ? profiles
       : profiles.map(candidate => candidate.id === profile.id ? profile : candidate);
@@ -300,11 +328,12 @@ function setupAuthProfile(settings: Settings, harness: SetupAuthHarness): { sett
   const now = new Date().toISOString();
   const profile: CliProfile = {
     id: uniqueSetupProfileId(profiles, `setup-${harness}-account`),
-    name: harness === 'codex' ? 'Codex Account' : harness === 'grok-build' ? 'Grok Build Account' : 'Claude Code Account',
+    name: harness === 'cortex-code' ? 'Cortex Code Account' : harness === 'codex' ? 'Codex Account' : harness === 'grok-build' ? 'Grok Build Account' : 'Claude Code Account',
     harness,
     authMode: 'account',
     createdAt: now,
     updatedAt: now,
+    ...(connection ? { cortexCode: { connection } } : {}),
     ...(harness === 'claude-code' ? { protocol: cliProtocolForBackend(settings.defaultBackend, harness) || 'standard' } : {}),
   };
   const promoted = maybePromoteSetupProfile(settings, profiles, profile, harness);
@@ -363,7 +392,7 @@ function setupProfileWithoutAuthHome(profile: CliProfile, harness: SetupAuthHarn
 
 function hasSetupAuthHome(profile: CliProfile, harness: SetupAuthHarness): boolean {
   if (profile.configDir) return true;
-  const key = harness === 'claude-code' ? 'CLAUDE_CONFIG_DIR' : harness === 'grok-build' ? 'GROK_HOME' : 'CODEX_HOME';
+  const key = harness === 'cortex-code' ? 'SNOWFLAKE_HOME' : harness === 'claude-code' ? 'CLAUDE_CONFIG_DIR' : harness === 'grok-build' ? 'GROK_HOME' : 'CODEX_HOME';
   return Boolean(Object.entries(profile.env || {}).some(([name, value]) =>
     name.toUpperCase() === key && String(value || '').trim().length > 0,
   ));
@@ -374,7 +403,7 @@ function stripSetupAuthHomeEnv(
   env: Record<string, string> | undefined,
 ): Record<string, string> | undefined {
   if (!env) return env;
-  const key = harness === 'claude-code' ? 'CLAUDE_CONFIG_DIR' : harness === 'grok-build' ? 'GROK_HOME' : 'CODEX_HOME';
+  const key = harness === 'cortex-code' ? 'SNOWFLAKE_HOME' : harness === 'claude-code' ? 'CLAUDE_CONFIG_DIR' : harness === 'grok-build' ? 'GROK_HOME' : 'CODEX_HOME';
   const stripped: Record<string, string> = {};
   let changed = false;
   for (const [name, value] of Object.entries(env)) {

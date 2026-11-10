@@ -1,0 +1,20 @@
+{
+  "version": "1.2.35",
+  "description": "Native session/load for a synthetic nonexistent UUID; macOS arm64. No inference or authentication change.",
+  "frames": [
+    {
+      "direction": "in",
+      "frame": {
+        "jsonrpc": "2.0",
+        "id": 2,
+        "error": {
+          "code": -32603,
+          "message": "Internal error",
+          "data": {
+            "details": "Failed to load session 00000000-0000-4000-8000-000000000000: Session '00000000-0000-4000-8000-000000000000' not found"
+          }
+        }
+      }
+    }
+  ]
+}

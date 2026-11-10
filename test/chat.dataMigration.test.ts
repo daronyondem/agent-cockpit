@@ -4,6 +4,7 @@ import http from 'http';
 import path from 'path';
 import { DATA_IMPORT_CONFIRMATION } from '../src/contracts/dataMigration';
 import { DataMigrationService } from '../src/services/dataMigrationService';
+import { CORTEX_MIGRATION_WARNING } from '../src/services/cortexMigration';
 import { createChatRouterEnv, destroyChatRouterEnv, CSRF_TOKEN, type ChatRouterEnv, type HttpResult } from './helpers/chatEnv';
 
 let env: ChatRouterEnv;
@@ -77,7 +78,8 @@ describe('chat data migration routes', () => {
       stop: jest.fn(),
     };
     env = await createChatRouterEnv({ updateService: fakeUpdateService });
-    const bundle = await createBundle(env.tmpDir);
+    const settings = JSON.stringify({ cliProfiles: [{ id: 'fixture-cortex', name: 'Fixture CoCo', harness: 'cortex-code', authMode: 'account', cortexCode: { connection: 'fixture' } }] });
+    const bundle = await createBundle(env.tmpDir, settings);
     const preview = await env.multipartRequest(
       'POST',
       '/api/chat/migration/import/preview',
@@ -91,6 +93,7 @@ describe('chat data migration routes', () => {
     expect(preview.body.uploadId).toMatch(/^upload-/);
     expect(preview.body.manifest.counts.files).toBe(1);
     expect(preview.body.warnings).toContain('Import replaces the active Agent Cockpit data root after backup. Existing data will no longer be active after restart.');
+    expect(preview.body.warnings).toContain(CORTEX_MIGRATION_WARNING);
 
     const rejected = await env.request('POST', '/api/chat/migration/import/confirm', {
       uploadId: preview.body.uploadId,
@@ -98,6 +101,8 @@ describe('chat data migration routes', () => {
     });
     expect(rejected.status).toBe(400);
     expect(fakeUpdateService.restart).not.toHaveBeenCalled();
+    const controlDir = DataMigrationService.controlDirForDataRoot(path.join(env.tmpDir, 'data'));
+    expect(fs.existsSync(path.join(controlDir, 'pending-import.json'))).toBe(false);
 
     const confirmed = await env.request('POST', '/api/chat/migration/import/confirm', {
       uploadId: preview.body.uploadId,
@@ -109,8 +114,9 @@ describe('chat data migration routes', () => {
     expect(confirmed.body.pending).toBe(true);
     expect(confirmed.body.backupPath).toContain('data-backup-');
     expect(fakeUpdateService.restart).toHaveBeenCalledTimes(1);
-    const controlDir = DataMigrationService.controlDirForDataRoot(path.join(env.tmpDir, 'data'));
     expect(fs.existsSync(path.join(controlDir, 'pending-import.json'))).toBe(true);
+    const pending = JSON.parse(await fsp.readFile(path.join(controlDir, 'pending-import.json'), 'utf8'));
+    expect(await fsp.readFile(path.join(pending.stagingDataDir, 'chat/settings.json'), 'utf8')).toBe(settings);
   });
 
   test('returns migration status and post-import checks', async () => {
@@ -213,10 +219,10 @@ function rawRequest(method: string, urlPath: string, body: Buffer): Promise<Http
   });
 }
 
-async function createBundle(tmpDir: string): Promise<string> {
+async function createBundle(tmpDir: string, settings = '{"theme":"dark"}'): Promise<string> {
   const sourceRoot = path.join(tmpDir, 'source-data');
   await fsp.mkdir(path.join(sourceRoot, 'chat'), { recursive: true });
-  await fsp.writeFile(path.join(sourceRoot, 'chat', 'settings.json'), '{"theme":"dark"}');
+  await fsp.writeFile(path.join(sourceRoot, 'chat', 'settings.json'), settings);
   const service = new DataMigrationService({
     dataRoot: sourceRoot,
     appVersion: '0.0.0-test',

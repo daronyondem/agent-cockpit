@@ -197,3 +197,30 @@ test('an already-cancelled job creates no native process', async () => {
   await expect(runCopilotDeviceAuth(profile, AbortSignal.abort(), jest.fn())).rejects.toThrow('cancelled');
   expect(jest.mocked(spawnCopilotProcess).mock.calls).toHaveLength(0);
 });
+
+
+test('a Copilot cleanup failure waits for CoCo draining and shuts admission for both harnesses', async () => {
+  const cleanupError = new CopilotRuntimeCleanupError('Owned Copilot cleanup failed');
+  stop.mockRejectedValue(cleanupError);
+  const job = await service.startAuth(profile); exit(); await settled(job.id);
+  let release!: () => void;
+  const draining = new Promise<void>(resolve => { release = resolve; });
+  jest.spyOn(service.cortexAuth, 'drain').mockReturnValue(draining);
+  const cortexProfile: CliProfile = { ...profile, id: 'cortex', harness: 'cortex-code', authMode: 'account',
+    command: undefined, cortexCode: { connection: 'fixture' } };
+  const check = jest.spyOn(service.cortexAuth, 'check').mockResolvedValue({ profileId: 'cortex', harness: 'cortex-code',
+    command: 'cortex', available: true, authenticated: true, status: 'ok', output: 'Synthetic success' });
+  let finished = false;
+  const ending = service.shutdown();
+  void ending.then(() => { finished = true; }, () => { finished = true; });
+  try {
+    await tick();
+    expect(finished).toBe(false);
+    expect(await service.checkProfile(cortexProfile)).toMatchObject({ command: 'cortex', available: false, authenticated: null,
+      status: 'error', error: expect.stringContaining('shutting down') });
+    expect(check).not.toHaveBeenCalled();
+    await expect(service.startAuth(cortexProfile)).rejects.toThrow('shutting down');
+  } finally {
+    release(); await expect(ending).rejects.toThrow('Copilot login cleanup failed');
+  }
+});

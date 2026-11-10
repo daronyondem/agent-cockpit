@@ -1,0 +1,33 @@
+{
+  "source": {
+    "cliVersion": "1.2.35",
+    "distribution": "1.2.35+191333.f82de3d91715",
+    "platform": "darwin-arm64",
+    "capturedAt": "2026-11-07",
+    "probe": "C43 standard chat enter_plan_mode",
+    "selection": "single native reverse request; identities sanitized"
+  },
+  "frames": [
+    {
+      "direction": "in",
+      "frame": {
+        "jsonrpc": "2.0",
+        "id": 0,
+        "method": "session/request_permission",
+        "params": {
+          "sessionId": "fixture-session",
+          "toolCall": {
+            "toolCallId": "fixture-plan-enter",
+            "title": "Create a plan before executing?",
+            "status": "pending",
+            "kind": "switch_mode"
+          },
+          "options": [
+            { "kind": "allow_once", "name": "Yes, plan first", "optionId": "approve" },
+            { "kind": "reject_once", "name": "No, execute directly", "optionId": "decline" }
+          ]
+        }
+      }
+    }
+  ]
+}

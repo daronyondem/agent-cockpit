@@ -1,21 +1,23 @@
 import React from 'react';
+import { checkBackendRoleEligibility } from '../../../../src/contracts/backendCapabilities';
 
-import { AgentApi } from '../api.js';
 import { Ico } from '../icons.jsx';
 import { StreamStore } from '../streamStore.js';
 import { useDialog } from '../dialog.jsx';
 import { useToasts } from '../toast.jsx';
-import { BackendInlineIcon, modelDisplayLabel, useBackendList, useCliProfileSettings, useConversationSelector, shallowEqual } from '../shellState.jsx';
+import { useBackendList, useCliProfileSettings, useConversationSelector, shallowEqual } from '../shellState.jsx';
 import { goalElapsedSeconds, goalStatusLabel, goalSupportsAction } from '../goalState.js';
 import { AttTray } from './attachments.jsx';
 import { QueueStack, SuspendedQueueBanner } from './queue.jsx';
-import { backendIdForProfile, CLAUDE_CODE_INTERACTIVE_BACKEND_ID, cliHarnessForBackend, isClaudeBackend, workspaceRefForConv } from './chatHelpers.js';
+import { backendIdForProfile, CLAUDE_CODE_INTERACTIVE_BACKEND_ID, workspaceRefForConv } from './chatHelpers.js';
 import {
   ComposerCliUpdateIcon,
   ComposerInstructionCompatibilityIcon,
   ComposerNotifIcon,
   ComposerWorkspaceContextIcon,
 } from './composerNotifications.jsx';
+
+const ComposerPicks = React.lazy(() => import('./composerPicks.jsx'));
 
 function selectChatComposerState(s){
   if (!s) return null;
@@ -177,6 +179,9 @@ export const ChatComposer = React.memo(function ChatComposer({ convId, profileLo
       : (state.composerBackend || conv.backend);
   const goalCapability = goalCapabilityForBackend(backends, topbarBackendId,
     goalProfileMetadata?.profileId === topbarCliProfileId ? goalProfileMetadata.backend : null);
+  const canSteer = checkBackendRoleEligibility(
+    (goalProfileMetadata?.profileId === topbarCliProfileId && goalProfileMetadata.backend)
+      || backends.find(backend => backend.id === topbarBackendId), { role: 'steering' }).ok;
   const goalCapable = goalCapability.set === true;
   const goalMode = goalCapable && !!state.goalMode;
   const activeGoal = state.goal || null;
@@ -415,7 +420,7 @@ export const ChatComposer = React.memo(function ChatComposer({ convId, profileLo
             placeholder={
               awaiting
                 ? 'Answer the prompt above to continue…'
-                : streaming ? 'Agent is running — Enter queues behind the current run.'
+                : streaming ? (canSteer ? 'Agent is running — Enter queues behind the current run.' : 'Live steering unavailable — Enter queues the next turn.')
                   : goalMode ? 'Set a goal…' : 'Message Agent Cockpit…'
             }
             value={input}
@@ -472,7 +477,7 @@ export const ChatComposer = React.memo(function ChatComposer({ convId, profileLo
             />
           ) : null}
           <div className="composer-foot">
-            <ComposerPicks
+            <React.Suspense fallback={<span className="picks"/>}><ComposerPicks
               convId={convId}
               backends={backends}
               onProfileMetadata={setGoalProfileMetadata}
@@ -485,7 +490,7 @@ export const ChatComposer = React.memo(function ChatComposer({ convId, profileLo
               composerServiceTier={state.composerServiceTier != null ? state.composerServiceTier : (conv.serviceTier || 'default')}
               profileLocked={profileLocked}
               disabled={awaiting || sending}
-            />
+            /></React.Suspense>
             <span className="attach">
               <button
                 type="button"
@@ -529,7 +534,8 @@ export const ChatComposer = React.memo(function ChatComposer({ convId, profileLo
               </button>
             ) : null}
             {streaming ? (
-              hasContent && !state.steeringPending && !awaiting ? (
+              <>
+              {hasContent && !state.steeringPending && !awaiting ? (
                 <button
                   className="send"
                   onClick={doEnqueue}
@@ -540,7 +546,7 @@ export const ChatComposer = React.memo(function ChatComposer({ convId, profileLo
                 >
                   {Ico.up(14)}
                 </button>
-              ) : (
+              ) : null}
                 <button
                   className="send stop"
                   onClick={doStop}
@@ -549,7 +555,7 @@ export const ChatComposer = React.memo(function ChatComposer({ convId, profileLo
                 >
                   {Ico.stop(14)}
                 </button>
-              )
+              </>
             ) : (
               <button
                 className="send"
@@ -568,239 +574,3 @@ export const ChatComposer = React.memo(function ChatComposer({ convId, profileLo
     </div>
   );
 });
-
-/* Cascading pickers below the composer: Profile → Model → Effort → Speed.
-   Values flush to the server with the next /message POST (see StreamStore.send).
-   Each chip wraps a transparent native <select> so we get native dropdown
-   UX, keyboard/a11y for free, and the chip's styled shell. */
-function ComposerPicks({ convId, backends, cliProfiles, onProfileMetadata, composerCliProfileId, composerBackend, composerModel, composerEffort, composerClaudeCodeMode, composerServiceTier, profileLocked, disabled }){
-  const activeProfiles = Array.isArray(cliProfiles) ? cliProfiles.filter(p => p && !p.disabled) : [];
-  const exactProfile = activeProfiles.find(p => p.id === composerCliProfileId) || null;
-  const canRepairMissingProfile = profileLocked && !!composerCliProfileId && !exactProfile;
-  const canChangeProfile = !profileLocked || canRepairMissingProfile;
-  const selectedProfile = exactProfile
-    || (canChangeProfile && composerBackend ? activeProfiles.find(p => p.harness === cliHarnessForBackend(composerBackend)) : null)
-    || (canChangeProfile && activeProfiles.length === 1 ? activeProfiles[0] : null)
-    || null;
-  const selectedProfileId = selectedProfile ? selectedProfile.id : null;
-  const effectiveBackendId = selectedProfile
-    ? backendIdForProfile(selectedProfile)
-    : composerBackend;
-  const [profileBackend, setProfileBackend] = React.useState(null);
-  const [profileBackendLoadedFor, setProfileBackendLoadedFor] = React.useState(null);
-
-  React.useEffect(() => {
-    if (!selectedProfileId) {
-      setProfileBackend(null);
-      setProfileBackendLoadedFor(null);
-      return;
-    }
-    let cancelled = false;
-    setProfileBackend(null);
-    setProfileBackendLoadedFor(null);
-    onProfileMetadata({ profileId: selectedProfileId, backend: null });
-    const load = () => AgentApi.getCliProfileMetadata(selectedProfileId)
-      .then(backend => {
-        if (!cancelled) {
-          setProfileBackend(backend || null);
-          onProfileMetadata({ profileId: selectedProfileId, backend: backend || null });
-          setProfileBackendLoadedFor(selectedProfileId);
-        }
-      })
-      .catch(() => {
-        if (!cancelled) {
-          setProfileBackend(null);
-          onProfileMetadata({ profileId: selectedProfileId, backend: null });
-          setProfileBackendLoadedFor(selectedProfileId);
-        }
-      });
-    load();
-    const refresh = selectedProfile?.harness === 'copilot';
-    const timer = refresh ? setInterval(load, 60_000) : null;
-    if (refresh) window.addEventListener('focus', load);
-    return () => {
-      cancelled = true;
-      if (timer) clearInterval(timer);
-      if (refresh) window.removeEventListener('focus', load);
-    };
-  }, [selectedProfileId, selectedProfile?.harness, onProfileMetadata]);
-  React.useEffect(() => {
-    if (!canChangeProfile || !selectedProfileId || !effectiveBackendId) return;
-    if (composerCliProfileId !== selectedProfileId || composerBackend !== effectiveBackendId) {
-      StreamStore.setComposerCliProfile(convId, selectedProfileId, effectiveBackendId);
-    }
-  }, [convId, canChangeProfile, selectedProfileId, effectiveBackendId, composerCliProfileId, composerBackend]);
-
-  const profileMetadataPending = !!selectedProfileId && profileBackendLoadedFor !== selectedProfileId;
-  const backend = (selectedProfile && profileBackend && profileBackend.id === effectiveBackendId)
-    ? profileBackend
-    : (backends.find(b => b.id === effectiveBackendId) || null);
-  const backendModels = (backend && Array.isArray(backend.models)) ? backend.models : [];
-  const modelFromCatalog = backendModels.find(m => m.id === composerModel) || null;
-  const fallbackModel = profileMetadataPending
-    ? null
-    : (backendModels.find(m => m.default) || backendModels[0] || null);
-  const unavailableModel = backend?.id === 'copilot' && !profileMetadataPending && composerModel && !modelFromCatalog;
-  const pendingModel = (profileMetadataPending || unavailableModel) && composerModel
-    ? { id: composerModel, label: composerModel + (unavailableModel ? ' (unavailable)' : '') }
-    : null;
-  const model = modelFromCatalog
-    || pendingModel
-    || fallbackModel
-    || null;
-  const modelOptions = profileMetadataPending && !modelFromCatalog
-    ? (pendingModel ? [{ value: pendingModel.id, label: modelDisplayLabel(pendingModel), disabled: true }] : [])
-    : [
-      ...(unavailableModel ? [{ value: composerModel, label: pendingModel.label, disabled: true }] : []),
-      ...backendModels.map(m => ({ value: m.id, label: modelDisplayLabel(m) + costTierDot(m.costTier) })),
-    ];
-  const backendId = backend ? backend.id : null;
-  const modelId = model ? model.id : null;
-  const effortLevels = (model && Array.isArray(model.supportedEffortLevels)) ? model.supportedEffortLevels : [];
-  const effort = effortLevels.includes(composerEffort)
-    ? composerEffort
-    : (effortLevels.includes('high') ? 'high' : (effortLevels[0] || null));
-  const claudeCodeModeSupported = isClaudeBackend(effectiveBackendId) && effortLevels.includes('xhigh');
-  const claudeCodeMode = composerClaudeCodeMode === 'ultracode' ? 'ultracode' : 'default';
-  const serviceTier = composerServiceTier === 'fast' ? 'fast' : 'default';
-
-  /* If picker state drifted out of the backend's catalog (e.g. backend change
-      invalidated the chosen model), push the reconciled value back down so
-     the next send uses a valid pair. */
-  React.useEffect(() => {
-    if (profileMetadataPending) return;
-    if (backendId && modelId && composerModel !== modelId) {
-      StreamStore.setComposerModel(convId, modelId);
-    }
-  }, [convId, backendId, modelId, composerModel, profileMetadataPending]);
-  React.useEffect(() => {
-    if (profileMetadataPending) return;
-    if (effort !== composerEffort) {
-      StreamStore.setComposerEffort(convId, effort);
-    }
-  }, [convId, effort, composerEffort, profileMetadataPending]);
-  React.useEffect(() => {
-    if (profileMetadataPending) return;
-    if (!claudeCodeModeSupported && composerClaudeCodeMode) {
-      StreamStore.setComposerClaudeCodeMode(convId, null);
-    }
-  }, [convId, claudeCodeModeSupported, composerClaudeCodeMode, profileMetadataPending]);
-
-  if (backends.length === 0) return <span className="picks"/>;
-
-  return (
-    <span className="picks">
-      {activeProfiles.length > 0 ? (
-        <PickChip
-          label="Profile"
-          value={selectedProfile ? selectedProfile.name : 'Select profile'}
-          disabled={disabled || !canChangeProfile}
-          options={[
-            ...(!selectedProfile ? [{ value: '', label: 'Select profile', disabled: true }] : []),
-            ...activeProfiles.map(p => ({ value: p.id, label: p.name })),
-          ]}
-          currentValue={selectedProfile ? selectedProfile.id : ''}
-          icon={selectedProfile ? <BackendInlineIcon backends={backends} backendId={effectiveBackendId}/> : null}
-          onChange={v => {
-            const profile = activeProfiles.find(p => p.id === v);
-            if (profile) {
-              const nextBackend = backendIdForProfile(profile);
-              StreamStore.setComposerCliProfile(convId, profile.id, nextBackend);
-            }
-          }}
-          title={canRepairMissingProfile ? 'Select replacement CLI profile' : (profileLocked ? 'CLI profile locked for this session' : 'CLI Profile')}
-        />
-      ) : (
-        <PickChip
-          label="Backend"
-          value={backend ? backend.label : (composerBackend || '—')}
-          disabled={disabled || profileLocked}
-          options={backends.map(b => ({ value: b.id, label: b.label }))}
-          currentValue={backend ? backend.id : ''}
-          icon={backend ? <BackendInlineIcon backends={backends} backendId={backend.id}/> : null}
-          onChange={v => StreamStore.setComposerBackend(convId, v)}
-          title={profileLocked ? 'Backend locked for this session' : 'Backend'}
-        />
-      )}
-      {modelOptions.length > 0 ? (
-        <PickChip
-          label="Model"
-          value={model ? modelDisplayLabel(model) : (composerModel ? modelDisplayLabel(composerModel) : '—')}
-          disabled={disabled || (profileMetadataPending && !modelFromCatalog)}
-          options={modelOptions}
-          currentValue={model ? model.id : ''}
-          onChange={v => StreamStore.setComposerModel(convId, v)}
-          title="Model"
-        />
-      ) : null}
-      {backend?.modelCatalog?.source === 'fallback' ? <span className="meta" title={backend.modelCatalog.reason}>Fallback models</span> : null}
-      {effortLevels.length > 0 ? (
-        <PickChip
-          label="Effort"
-          value={effort || '—'}
-          disabled={disabled}
-          options={effortLevels.map(lv => ({ value: lv, label: lv[0].toUpperCase() + lv.slice(1) }))}
-          currentValue={effort || ''}
-          onChange={v => StreamStore.setComposerEffort(convId, v)}
-          title="Adaptive reasoning effort"
-        />
-      ) : null}
-      {claudeCodeModeSupported ? (
-        <PickChip
-          label="Mode"
-          value={claudeCodeMode === 'ultracode' ? 'Ultracode' : 'Default'}
-          disabled={disabled}
-          options={[
-            { value: 'default', label: 'Default' },
-            { value: 'ultracode', label: 'Ultracode' },
-          ]}
-          currentValue={claudeCodeMode}
-          onChange={v => StreamStore.setComposerClaudeCodeMode(convId, v)}
-          title="Claude Code mode"
-        />
-      ) : null}
-      {effectiveBackendId === 'codex' ? (
-        <PickChip
-          label="Speed"
-          value={serviceTier === 'fast' ? 'Fast' : 'Default'}
-          disabled={disabled}
-          options={[
-            { value: 'default', label: 'Default' },
-            { value: 'fast', label: 'Fast' },
-          ]}
-          currentValue={serviceTier}
-          onChange={v => StreamStore.setComposerServiceTier(convId, v)}
-          title="Codex service tier"
-        />
-      ) : null}
-    </span>
-  );
-}
-
-function costTierDot(tier){
-  if (tier === 'high') return ' \u25cf';  // ●
-  if (tier === 'low')  return ' \u25cb';  // ○
-  return '';
-}
-
-function PickChip({ label, value, options, currentValue, onChange, disabled, title, icon }){
-  const accessibleLabel = title || label;
-  return (
-    <span className="pick" title={accessibleLabel} aria-disabled={disabled ? 'true' : 'false'}>
-      {icon ? <span className="pick-icon">{icon}</span> : null}
-      <b>{value}</b>
-      <span className="chev">{Ico.chevD(10)}</span>
-      <select
-        className="pick-select"
-        value={currentValue}
-        onChange={e => onChange(e.target.value)}
-        disabled={disabled}
-        aria-label={accessibleLabel}
-      >
-        {options.map(o => (
-          <option key={o.value} value={o.value} disabled={!!o.disabled}>{o.label}</option>
-        ))}
-      </select>
-    </span>
-  );
-}

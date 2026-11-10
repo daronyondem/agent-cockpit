@@ -116,3 +116,28 @@ active-stream jobs are intentionally excluded from exported bundles.
 Production installers also write install-state metadata used by self-update and
 Install Doctor. See [spec-deployment.md](../spec-deployment.md) for the full
 manifest contract.
+
+## Cortex Code native state
+
+Cockpit stores `harness:'cortex-code'`, `cortexCode.connection` and existing
+profile/model/effort selections in its normal settings/conversation formats.
+CoCo native history/configuration is owned by the native Snowflake home
+(normally `~/.snowflake`, with connections in `connections.toml` and CoCo state
+under `cortex/`). Credential validity/cache ownership remains native and
+machine-dependent; separate-home/account isolation is not certified.
+
+External Snowflake homes and CLI executables are not part of a data-root
+bundle. Explicit native homes inside the data root follow the existing
+full-root durable-file contract and may include credential-bearing data.
+Export/import does not rewrite these homes or absolute profile/processor
+choices. Reserved `agent-cockpit-cortex-plugin-*` and
+`cockpit-cortex-auth-*`/`cockpit-cortex-login-*`/`cockpit-cortex-restricted-*` native temporary directories
+with native six-character generated suffixes are excluded and rejected on
+import, including empty directories. OAuth jobs,
+URLs, state and redirects remain memory-only.
+
+Post-import checks only locate the executable and safely read the selected
+connection. They never run imported commands, inference or login, and present
+files are not auth proof. Restore external dependencies, review paths, then use
+**Check Cortex login** in CLI Profiles. Full-root checksums/backup and exact
+`REPLACE` confirmation remain unchanged. See [CoCo migration](../spec-cortex-code.md#p8-c50--full-data-root-migration).

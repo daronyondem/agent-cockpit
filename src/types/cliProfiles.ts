@@ -9,7 +9,7 @@ export type ClaudeCodeMode = 'ultracode';
 /** Backend service tier override. Omit to use the selected CLI profile's own configuration. */
 export type ServiceTier = 'fast';
 
-export type CliHarness = 'codex' | 'claude-code' | 'kiro' | 'opencode' | 'grok-build' | 'copilot';
+export type CliHarness = 'codex' | 'claude-code' | 'kiro' | 'opencode' | 'grok-build' | 'cortex-code' | 'copilot';
 
 export type CliAuthMode = 'server-configured' | 'account';
 
@@ -34,6 +34,11 @@ export interface ClaudeCodeProfileConfig {
   bedrock?: ClaudeCodeBedrockConfig;
 }
 
+export interface CortexCodeProfileConfig {
+  /** Named connection in the effective Snowflake configuration; never credentials. */
+  connection: string;
+}
+
 export interface CliProfile {
   id: string;
   name: string;
@@ -42,6 +47,8 @@ export interface CliProfile {
   protocol?: CliCommunicationProtocol;
   /** Claude Code only: provider and provider-specific model routing configuration. */
   claudeCode?: ClaudeCodeProfileConfig;
+  /** Cortex Code only: omitted while the profile is awaiting connection setup. */
+  cortexCode?: CortexCodeProfileConfig;
   /** OpenCode only: provider choice for this logical profile. model is retained for legacy saved profiles; new UI selections happen in the composer. */
   opencode?: {
     provider?: string;
