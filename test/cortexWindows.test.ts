@@ -71,9 +71,12 @@ describe('CoCo standalone Windows resolution (simulated platform)', () => {
   test('shared setup auth ignores private overrides; Windows env casing cannot override managed controls', () => {
     file(path.join(process.env.LOCALAPPDATA!, 'cortex/cortex.exe'));
     const config = resolve({ id: 'setup-cortex-code-account', configDir: path.join(root, 'private'),
-      env: { snowflake_home: 'private', cortex_oauth_manual: '0', cortex_enable_memory: '1', cortex_acp_test_mode: '1' } });
+      env: { snowflake_home: 'private', cortex_oauth_manual: '0', cortex_enable_memory: '1', cortex_acp_test_mode: '1',
+        cortex_code_experimental_features: JSON.stringify({ managedMcpDiscovery: true, useThreads: false }) } });
     expect(config.env).toMatchObject({ SNOWFLAKE_HOME: process.env.SNOWFLAKE_HOME, CORTEX_OAUTH_MANUAL: '1', CORTEX_ENABLE_MEMORY: '0', CORTEX_ACP_TEST_MODE: '0' });
     expect(config.env.snowflake_home).toBeUndefined();
+    expect(config.env.cortex_code_experimental_features).toBeUndefined();
+    expect(JSON.parse(config.env.CORTEX_CODE_EXPERIMENTAL_FEATURES!)).toEqual({ managedMcpDiscovery: false, useThreads: false });
     const custom = resolve({ configDir: '~/custom auth' });
     expect(custom.env.SNOWFLAKE_HOME).toBe(path.join(os.homedir(), 'custom auth'));
     expect(custom.command).toBe(config.command);

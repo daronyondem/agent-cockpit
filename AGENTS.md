@@ -335,6 +335,12 @@ and `test/cortexProcess.test.ts` when changing those boundaries. Run the opt-in
 `scripts/probe-cortex-runtime.ts` for native runtime drift, as documented in
 `docs/spec-testing.md`; it is not yet a full Cockpit adapter/UI suite. Retain
 generation-safe reusable shutdown and identity-checked descendant cleanup.
+Disable account-managed MCP auto-discovery in the child runtime through
+`CORTEX_CODE_EXPERIMENTAL_FEATURES` / `managedMcpDiscovery:false`, retaining
+other JSON env options and explicit Cockpit MCP plugins. Native
+`--only-explicit-mcp-servers` does not disable account discovery; 1.2.37 can
+stall session setup there despite valid terminal credentials. Keep this policy
+independent of version allowlists and never edit shared native settings/auth.
 Keep descendant scans at the normal 250 ms POSIX / 1 s Windows cadence until
 runtime close, including cached idle sessions. Prompt completion does not prove
 background tools finished; slowing scans can lose a detached child's ancestry.

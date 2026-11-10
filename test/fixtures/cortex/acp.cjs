@@ -35,5 +35,6 @@ readline.createInterface({ input: process.stdin }).on('line', line => {
     if (!process.env.FIXTURE_IGNORE_CANCEL && pending) { reply(pending, { stopReason: 'cancelled' }); pending = undefined; }
   } else if (frame.method === 'session/close') reply(frame.id, {});
   else if (frame.method === '_test/state') reply(frame.id, { argv: process.argv.slice(2), cwd: process.cwd(), prompts,
-    memory: process.env.CORTEX_ENABLE_MEMORY, test: process.env.CORTEX_ACP_TEST_MODE, manual: process.env.CORTEX_OAUTH_MANUAL });
+    memory: process.env.CORTEX_ENABLE_MEMORY, test: process.env.CORTEX_ACP_TEST_MODE, manual: process.env.CORTEX_OAUTH_MANUAL,
+    features: process.env.CORTEX_CODE_EXPERIMENTAL_FEATURES });
 });

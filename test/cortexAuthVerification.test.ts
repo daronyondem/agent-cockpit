@@ -72,4 +72,18 @@ verificationSuite('Cortex fresh-process auth verification', () => {
     expect(result.available).toBe(false); expect(JSON.stringify(result)).not.toMatch(/PRIVATE|SECRET|example.invalid/);
     expect((await verifyCortexAuthentication({ ...profile, command: '/missing-private-command' })).authenticated).toBeNull();
   });
+  test('session setup failures identify the stage without claiming bad credentials or echoing native errors', async () => {
+    const startup: typeof startCortexRuntime = async (config, onClient, signal) => {
+      const runtime = await start()(config, onClient, signal);
+      runtime.sessionId = null;
+      jest.spyOn(runtime, 'prepare').mockRejectedValueOnce(new Error('PRIVATE_TOKEN https://example.invalid/?code=SECRET'));
+      return runtime;
+    };
+    const result = await verifyCortexAuthentication(profile, undefined, startup);
+    expect(result).toMatchObject({ available: true, authenticated: null, status: 'error' });
+    expect(result.error).toContain('ACP session setup failed before login could be verified');
+    expect(JSON.stringify(result)).not.toMatch(/PRIVATE|SECRET|example.invalid/);
+    expect(fixtures[0].client.isClosed).toBe(true);
+    expect(fixtures[0].writes.some(message => message.method === 'session/prompt')).toBe(false);
+  });
 });
