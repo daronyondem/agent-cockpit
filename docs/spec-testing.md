@@ -2051,6 +2051,15 @@ Backend/web/mobile typechecks, zero-warning lint, maintainability, spec drift,
 ADR lint and the unchanged client bundle budget pass. No production behavior,
 coverage floor or platform authentication claim changes in this follow-up.
 
+The desktop/mobile goal pause/resume browser case waits for HTTP 200 with the
+completed native goal snapshot before checking its objective, fresh AI-credit
+limit and absent token budget. A terminal goal frame and visible Send control
+can precede the native owner's reset-cleanup drain; an immediate status read can
+return the temporary `Copilot is shutting down or resetting.` error. Use bounded
+`expect.poll` for the status response and snapshot together, preserving all
+final-state assertions rather than adding sleeps, retries of goal execution or
+changes to production cleanup/admission. A persistent status error still fails.
+
 A fresh local read-only shared-auth/catalog probe on 2026-11-05 at 16:16 UTC
 reports authenticated credentials but zero available models and HTTP 403. It
 creates no inference session and changes no login. This limits hosted testing
