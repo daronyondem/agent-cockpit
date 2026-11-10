@@ -7,7 +7,8 @@ native mobile chat acceptance remains a later phase.
 
 P7 C42 updates the desktop/shared responsive setup and Settings profile editor,
 desktop catalog ownership and the backend-supplied CoCo icon. Mobile receives
-the icon through existing metadata. No PWA administration screen, endpoint,
+the supplied blue Snowflake logo through existing metadata and renders it in
+assistant identities on light and dark themes. No PWA administration screen, endpoint,
 manifest, service worker, asset source or protocol change is introduced. The
 desktop's profile-catalog hook is not imported by mobile; broader native mobile
 model/usage/media acceptance is recorded under C45/C46 below; C47 keeps

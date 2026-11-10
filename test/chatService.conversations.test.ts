@@ -543,9 +543,10 @@ describe('listConversations', () => {
       cliProfiles: [deletedProfile, fallbackProfile],
     });
 
-    const conv = await service.createConversation('Deleted Profile Reset', undefined, undefined, undefined, undefined, deletedProfile.id);
+    const conv = await service.createConversation('Deleted Profile Reset', undefined, undefined, 'gpt-5.6-sol', undefined, deletedProfile.id);
     expect(conv.backend).toBe('codex');
     expect(conv.cliProfileId).toBe(deletedProfile.id);
+    expect(conv.model).toBe('gpt-5.6-sol');
 
     const saved = await service.getSettings();
     await service.saveSettings({
@@ -559,7 +560,19 @@ describe('listConversations', () => {
 
     expect(result!.conversation.backend).toBe('claude-code');
     expect(result!.conversation.cliProfileId).toBe(fallbackProfile.id);
+    expect(result!.conversation.model).toBeUndefined();
     expect(result!.newSessionNumber).toBe(2);
+  });
+
+  test('resetSession keeps the model when the profile is unchanged', async () => {
+    (service as any)._generateSessionSummary = async (_msgs: any, fallback: string) => fallback;
+    const conv = await service.createConversation('Keep Model Reset', undefined, undefined, 'opus');
+    await service.addMessage(conv.id, 'user', 'Hello', 'claude-code');
+
+    const result = await service.resetSession(conv.id);
+
+    expect(result!.conversation.cliProfileId).toBe(conv.cliProfileId);
+    expect(result!.conversation.model).toBe('opus');
   });
 
   test('resetSession fails clearly when the assigned profile was deleted and no profiles remain', async () => {
@@ -924,6 +937,16 @@ describe('updateConversationBackend', () => {
     const usage = await service.getUsage(conv.id);
     expect(usage!.contextUsagePercentage).toBe(42);
   });
+
+  test('clears a model selected from the previous backend catalog', async () => {
+    const conv = await service.createConversation('Test', undefined, undefined, 'opus');
+
+    await service.updateConversationBackend(conv.id, 'kiro');
+
+    const loaded = await service.getConversation(conv.id);
+    expect(loaded!.model).toBeUndefined();
+    expect(loaded!.effort).toBeUndefined();
+  });
 });
 
 describe('updateConversationCliProfile', () => {
@@ -971,6 +994,57 @@ describe('updateConversationCliProfile', () => {
 
     const usage = await service.getUsage(conv.id);
     expect(usage!.contextUsagePercentage).toBeUndefined();
+  });
+
+  test('clears model and effort selected from the previous profile catalog', async () => {
+    const settings = await service.getSettings();
+    const profile: CliProfile = {
+      id: 'profile-cortex-switch',
+      name: 'CoCo Switch',
+      harness: 'cortex-code',
+      authMode: 'account',
+      cortexCode: { connection: 'TEST_CONNECTION' },
+      createdAt: '2026-04-29T00:00:00.000Z',
+      updatedAt: '2026-04-29T00:00:00.000Z',
+    };
+    const otherProfile: CliProfile = { ...profile, id: 'profile-cortex-other', name: 'CoCo Other' };
+    await service.saveSettings({
+      ...settings,
+      cliProfiles: [...(settings.cliProfiles || []), profile, otherProfile],
+    });
+    const conv = await service.createConversation('Test', undefined, undefined, 'gpt-5.6-sol');
+
+    await service.updateConversationCliProfile(conv.id, profile.id);
+    let loaded = await service.getConversation(conv.id);
+    expect(loaded!.backend).toBe('cortex-code');
+    expect(loaded!.model).toBeUndefined();
+
+    await service.updateConversationModel(conv.id, 'auto-intelligent');
+    await service.updateConversationEffort(conv.id, 'xhigh');
+    loaded = await service.getConversation(conv.id);
+    expect(loaded!.model).toBe('auto-intelligent');
+    expect(loaded!.effort).toBe('xhigh');
+    await service.updateConversationCliProfile(conv.id, otherProfile.id);
+    loaded = await service.getConversation(conv.id);
+    expect(loaded!.model).toBeUndefined();
+    expect(loaded!.effort).toBeUndefined();
+  });
+
+  test('keeps the model when only the Claude Code protocol changes', async () => {
+    const conv = await service.createConversation('Test', undefined, undefined, 'opus');
+    const settings = await service.getSettings();
+    await service.saveSettings({
+      ...settings,
+      cliProfiles: (settings.cliProfiles || []).map(profile => (
+        profile.id === conv.cliProfileId ? { ...profile, protocol: 'interactive' } : profile
+      )),
+    });
+
+    await service.updateConversationCliProfile(conv.id, conv.cliProfileId!);
+
+    const loaded = await service.getConversation(conv.id);
+    expect(loaded!.backend).toBe('claude-code-interactive');
+    expect(loaded!.model).toBe('opus');
   });
 });
 

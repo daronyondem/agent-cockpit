@@ -97,6 +97,7 @@ import {
   effectiveEffort,
   effectiveServiceTier,
   hardCutTitle,
+  modelSelectionCarriesOver,
   titleFallbackFromMessage,
 } from './chat/conversationPolicy';
 import {
@@ -835,6 +836,7 @@ export class ChatService {
       if (!result) return;
       const { index, convEntry } = result;
       const prevBackend = convEntry.backend;
+      const prevCliProfileId = convEntry.cliProfileId;
       convEntry.backend = backend;
       if (cliProfileId) {
         convEntry.cliProfileId = cliProfileId;
@@ -852,6 +854,10 @@ export class ChatService {
       if (backend !== 'codex') {
         delete convEntry.serviceTier;
       }
+      if (!modelSelectionCarriesOver({ backend: prevBackend, cliProfileId: prevCliProfileId }, convEntry)) {
+        delete convEntry.model;
+        delete convEntry.effort;
+      }
       convEntry.claudeCodeMode = this._effectiveClaudeCodeMode(convEntry.backend, convEntry.model, convEntry.claudeCodeMode);
       await this._writeWorkspaceIndex(hash, index);
     });
@@ -868,6 +874,7 @@ export class ChatService {
       if (!result) return;
       const { index, convEntry } = result;
       const prevBackend = convEntry.backend;
+      const prevCliProfileId = convEntry.cliProfileId;
       convEntry.backend = runtime.backendId;
       convEntry.cliProfileId = runtime.cliProfileId;
       if (prevBackend !== runtime.backendId) {
@@ -877,6 +884,10 @@ export class ChatService {
       }
       if (runtime.backendId !== 'codex') {
         delete convEntry.serviceTier;
+      }
+      if (!modelSelectionCarriesOver({ backend: prevBackend, cliProfileId: prevCliProfileId }, convEntry)) {
+        delete convEntry.model;
+        delete convEntry.effort;
       }
       convEntry.claudeCodeMode = this._effectiveClaudeCodeMode(convEntry.backend, convEntry.model, convEntry.claudeCodeMode);
       await this._writeWorkspaceIndex(hash, index);
@@ -1139,6 +1150,7 @@ export class ChatService {
 
       const runtime = opts.runtime || await this.resolveCliProfileRuntimeForSessionReset(convEntry.cliProfileId, convEntry.backend);
       const previousBackend = convEntry.backend;
+      const previousCliProfileId = convEntry.cliProfileId;
       convEntry.backend = runtime.backendId;
       if (runtime.cliProfileId) {
         convEntry.cliProfileId = runtime.cliProfileId;
@@ -1151,6 +1163,10 @@ export class ChatService {
       }
       if (runtime.backendId !== 'codex') {
         delete convEntry.serviceTier;
+      }
+      if (!modelSelectionCarriesOver({ backend: previousBackend, cliProfileId: previousCliProfileId }, convEntry)) {
+        delete convEntry.model;
+        delete convEntry.effort;
       }
       convEntry.claudeCodeMode = this._effectiveClaudeCodeMode(convEntry.backend, convEntry.model, convEntry.claudeCodeMode);
 

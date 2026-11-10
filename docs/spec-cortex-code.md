@@ -436,7 +436,13 @@ The setup panel explains manual installation when the CLI is unavailable.
 Restricted Memory has its separate C35
 version/platform guard. Optional installation/doctor actions are specified in P8 C48 below; CLI Update
 management is specified in P8 C49 below.
-Metadata supplies an inline blue snowflake-shaped icon to both clients.
+Metadata supplies the user-provided `snowflake-bug-color-rgb.svg` Snowflake logo
+as inline SVG to both clients (28×28 default size, original `0 0 146.36 139.16`
+viewBox and path, fixed `#29b5e8` fill with `evenodd` fill rule, transparent
+background). The source styling is inlined on the path to avoid global SVG
+class/ID collisions when multiple icons render. Existing desktop profile,
+composer and assistant-avatar consumers and mobile assistant identities use
+this same metadata icon in both light and dark themes.
 
 Desktop model/effort discovery uses the saved profile. The shared
 `useProfileBackends.js` owns catalog state for global/workspace Settings and lazy
@@ -689,7 +695,7 @@ administration, PWA manifest, service-worker/offline or auth protocol is introdu
 ## Durable chat and managed MCP (P5)
 
 `src/services/backends/cortex.ts` is the registered public adapter facade.
-Its static metadata has ID `cortex-code`, label `Cortex Code (CoCo)`, null icon,
+Its static metadata has ID `cortex-code`, label `Cortex Code (CoCo)`, the inline Snowflake logo,
 and an empty model list. `getMetadata({cliProfile})` discovers this profile's
 live catalog through an ephemeral `CortexSessions` lease. Discovery failure
 returns an empty catalog, never another profile's models or raw native errors.

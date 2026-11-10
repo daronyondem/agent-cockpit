@@ -13,6 +13,7 @@ import {
   effectiveEffort,
   effectiveServiceTier,
   hardCutTitle,
+  modelSelectionCarriesOver,
   titleFallbackFromMessage,
 } from '../src/services/chat/conversationPolicy';
 import {
@@ -94,6 +95,23 @@ describe('extracted chat modules', () => {
     expect(effectiveServiceTier('claude-code', 'fast')).toBeUndefined();
     expect(titleFallbackFromMessage('line one\nline two')).toBe('line one line two');
     expect(hardCutTitle('one two three four five six seven eight nine')).toBe('one two three four five six seven eight');
+  });
+
+  test('conversationPolicy scopes model selections to the profile and harness catalog', () => {
+    const coco = { backend: 'cortex-code', cliProfileId: 'setup-cortex-code-account' };
+    expect(modelSelectionCarriesOver({ backend: 'codex', cliProfileId: 'profile-codex' }, coco)).toBe(false);
+    expect(modelSelectionCarriesOver({ backend: 'cortex-code', cliProfileId: 'profile-other-connection' }, coco)).toBe(false);
+    expect(modelSelectionCarriesOver(coco, { ...coco })).toBe(true);
+    expect(modelSelectionCarriesOver(
+      { backend: 'claude-code', cliProfileId: 'profile-claude' },
+      { backend: 'claude-code-interactive', cliProfileId: 'profile-claude' },
+    )).toBe(true);
+    // Legacy conversations without a profile ID implicitly use the server-configured profile.
+    expect(modelSelectionCarriesOver(
+      { backend: 'claude-code' },
+      { backend: 'claude-code', cliProfileId: serverConfiguredCliProfileId('claude-code') },
+    )).toBe(true);
+    expect(modelSelectionCarriesOver({ backend: 'claude-code' }, { backend: 'kiro' })).toBe(false);
   });
 
   test('transcriptMarkdown renders session and conversation transcripts', () => {

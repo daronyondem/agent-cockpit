@@ -668,6 +668,25 @@ describe('Codex goal endpoints', () => {
     expect(loaded?.messages.find(m => m.goalEvent?.kind === 'achieved')?.content).toBe('Goal achieved: Ship the dashboard');
   });
 
+  test.each([
+    ['without a model drops the previous backend model', undefined, undefined],
+    ['keeps an explicit model equal to the previous selection', 'opus', 'opus'],
+  ])('a goal backend switch %s', async (_label, sentModel, expectedModel) => {
+    const codexBackend = new CodexGoalMockBackend();
+    env.backendRegistry.register(codexBackend);
+    const conv = await env.chatService.createConversation('Goal Model Switch', '/tmp/goal-model-switch', 'claude-code', 'opus');
+
+    const res = await env.request('POST', `/api/chat/conversations/${conv.id}/goal`, {
+      objective: 'Ship the dashboard',
+      backend: 'codex',
+      ...(sentModel ? { model: sentModel } : {}),
+    });
+
+    expect(res.status).toBe(200);
+    expect(codexBackend.lastGoalOptions?.model).toBe(expectedModel);
+    expect((await env.chatService.getConversation(conv.id))!.model).toBe(expectedModel);
+  });
+
   test('normalizes goal-card text before starting a Codex goal', async () => {
     const codexBackend = new CodexGoalMockBackend();
     env.backendRegistry.register(codexBackend);
