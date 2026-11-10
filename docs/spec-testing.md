@@ -1062,7 +1062,7 @@ updater suites remain required regressions.
 
 Run `CORTEX_UPDATE_PROBE=1 npx tsx scripts/probe-cortex-updates.ts` on macOS for
 a real official install and native updater in a disposable home/app path with
-spaces. Genuine 1.2.35 with synthetic older build metadata forces actual stable
+spaces. Genuine 1.2.35/1.2.37 with synthetic older build metadata forces actual stable
 package download/checksum/extraction/activation; this is not old-release evidence.
 A one-time injected missing stable target exercises real native failure,
 activation preservation, cache invalidation and explicit retry. Registry shutdown
@@ -1073,6 +1073,20 @@ terminal credentials are untouched. Full package/PM2/platform acceptance remains
 C51–C53; C26 remains human OAuth. The saved-auth PM2 browser runner additionally
 checks CoCo's normal desktop update row without executing its updater. Run full
 Jest first, rebuild both clients, then run browser checks separately.
+
+`CORTEX_UPDATE_TEST_COMMAND=/absolute/path/to/<distribution>/cortex` optionally
+selects a retained distribution to copy into the disposable installation, with
+both HOME and SNOWFLAKE_HOME isolated. Native macOS arm64/Node 26 runs passed
+for retained `1.2.35+191333.f82de3d91715` and `1.2.37+221950.87518d294789`, each
+targeting stable `1.2.37+221950.87518d294789`: download/activation, passive-query
+preservation, runtime draining/reuse, missing-target failure and explicit retry.
+Managed updates stay enabled after upgrade; already-current installs have no
+update caution. Focused regressions cover later 1.2.37 builds, unknown versions,
+distinct platform/layout errors and the separate chat/login/media caution.
+The update-row-only browser mode accepts 1.2.35/1.2.37; the full auth probe still
+requires 1.2.35, so updater evidence does not broaden authentication claims.
+The 1.2.37 update-row-only run passed at 1280/390/320 px with an enabled Run
+updater button and no error/caution text, without updating or authenticating.
 
 
 C49 full V8 baseline: 175 suites / 2,956 tests passed; 88.66% statements/lines,

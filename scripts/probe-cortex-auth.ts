@@ -26,7 +26,8 @@ async function main(): Promise<void> {
     command: process.env.CORTEX_TEST_COMMAND || 'cortex', cortexCode: { connection }, createdAt: now, updatedAt: now };
   await fs.writeFile(path.join(data, 'chat/settings.json'), JSON.stringify({ cliProfiles: [profile], theme: 'light', sendBehavior: 'enter', systemPrompt: '' }), { mode: 0o600 });
   const version = await cortexVersion(resolveCortexRuntime({ profile, cwd: workspace, workspaceId: 'auth-probe' }));
-  assert.equal(version, '1.2.35', 'Review native login compatibility before certifying another version');
+  if (updatesUiOnly) assert.ok(['1.2.35', '1.2.37'].includes(version), 'Review native updater compatibility before certifying another version');
+  else assert.equal(version, '1.2.35', 'Review native login compatibility before certifying another version');
   const port = await new Promise<number>((resolve, reject) => {
     const server = net.createServer(); server.on('error', reject); server.listen(0, '127.0.0.1', () => {
       const value = (server.address() as net.AddressInfo).port; server.close(() => resolve(value));
@@ -191,7 +192,8 @@ async function main(): Promise<void> {
 async function verifyUpdateRow(page: import('@playwright/test').Page): Promise<void> {
   const row = page.locator('.cli-update-row').filter({ hasText: 'Cortex Code (CoCo)' });
   await row.getByText('self-update', { exact: true }).waitFor();
-  await baseExpect(row).toContainText('1.2.35+');
+  await baseExpect(row).toContainText(/1\.2\.(35|37)\+/);
+  await baseExpect(row.locator('.cli-update-error')).toHaveCount(0);
   await baseExpect(row.getByRole('button', { name: 'Run updater', exact: true })).toBeEnabled();
 }
 

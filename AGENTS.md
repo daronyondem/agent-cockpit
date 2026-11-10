@@ -550,8 +550,14 @@ Windows stays documentation-only; Linux action policy is not native acceptance.
 C49 update management and C51–C53 platform evidence remain separate.
 
 P8 C49 updater policy/discovery/version projection belongs to
-`src/services/cortexUpdates.ts`. Enable only the proven macOS native 1.2.35
+`src/services/cortexUpdates.ts`. Enable only the proven macOS native 1.2.35/1.2.37
 activation at `~/.local/bin/cortex`, with matching versioned distribution metadata.
+Keep updater eligibility separate from chat/login/media/strict-processor gates;
+distinguish unverified updater versions from platform/layout failures, and show
+update cautions only for differing stable targets. The native update probe can
+copy a retained distribution via `CORTEX_UPDATE_TEST_COMMAND`; both HOME and
+SNOWFLAKE_HOME must stay disposable. Update-row-only browser checks may accept
+verified updater versions without widening the full auth probe's version gate.
 Keep profile auth homes/secrets/channel out of the updater env, group the pinned
 shared executable, and pass the checked full stable distribution to native
 `update <target>`; passive checks must never run an updater. Revalidate before

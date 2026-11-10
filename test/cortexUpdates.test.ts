@@ -108,6 +108,47 @@ describe('CoCo standalone updates', () => {
     expect(await check()).toMatchObject({ currentVersion: installed, updateSupported: true, lastError: null });
   });
 
+  test('keeps the official 1.2.37 installation actionable when already current', async () => {
+    const current = '1.2.37+221950.87518d294789'; activate(current);
+    exec.mockResolvedValue('Cortex Code v1.2.37'); fetcher.mockResolvedValue({ ok: true, text: async () => current });
+    expect(await check()).toMatchObject({ currentVersion: current, latestVersion: current,
+      installMethod: 'self-update', updateAvailable: false, updateSupported: true,
+      updateCommand: [command, 'update', current], lastError: null, updateCaution: null });
+  });
+
+  test('updates from 1.2.37 to a later build and retains its managed updater', async () => {
+    const current = '1.2.37+221950.87518d294789', next = '1.2.37+221951.abcdef012345'; activate(current);
+    fetcher.mockResolvedValue({ ok: true, text: async () => next });
+    exec.mockImplementation(async (_cmd, args: string[]) => {
+      if (args[0] === 'update') { activate(next); return 'Updated'; }
+      return 'Cortex Code v1.2.37';
+    });
+    const target = await check();
+    expect(target).toMatchObject({ updateAvailable: true, updateSupported: true });
+    expect(await update(target.id)).toMatchObject({ success: true, item: { currentVersion: next, updateSupported: true, lastError: null } });
+  });
+
+  test('keeps managed updates available after upgrading from 1.2.35 to 1.2.37', async () => {
+    const next = '1.2.37+221950.87518d294789'; fetcher.mockResolvedValue({ ok: true, text: async () => next });
+    exec.mockImplementation(async (_cmd, args: string[]) => {
+      if (args[0] === 'update') { activate(next); return 'Updated'; }
+      return fs.realpathSync(command).includes(next) ? 'Cortex Code v1.2.37' : 'Cortex Code v1.2.35';
+    });
+    const target = await check();
+    expect(target.updateCaution).toContain('has not been certified');
+    expect(await update(target.id)).toMatchObject({ success: true, item: { currentVersion: next, updateSupported: true, lastError: null } });
+  });
+
+  test('distinguishes an unverified updater version from an invalid installation', async () => {
+    const unknown = '1.2.38+221950.abcdef012345'; activate(unknown); exec.mockResolvedValue('Cortex Code v1.2.38');
+    expect(await check()).toMatchObject({ currentVersion: unknown, installMethod: 'self-update', updateSupported: false,
+      lastError: 'Updating Cortex Code 1.2.38 from Agent Cockpit has not been verified yet. Update it in your terminal.' });
+    expect(fetcher).not.toHaveBeenCalled();
+    fs.rmSync(command); fs.writeFileSync(command, 'wrapper', { mode: 0o700 });
+    expect(await check()).toMatchObject({ installMethod: 'unknown', updateSupported: false,
+      lastError: expect.stringContaining('installation could not be verified') });
+  });
+
   test('reserves during a pending preflight and rechecks newly active chat before mutation', async () => {
     const target = await check(); let resolve!: (response: Response) => void;
     fetcher.mockImplementationOnce(() => new Promise<Response>(done => { resolve = done; }));
@@ -123,7 +164,9 @@ describe('CoCo standalone updates', () => {
   test.each(['linux', 'win32'])('does not enable native updates on %s without platform evidence', async target => {
     Object.defineProperty(process, 'platform', { value: target });
     settings.cliProfiles![0].command = command;
-    expect(await check()).toMatchObject({ updateSupported: false, installMethod: 'unknown' });
+    expect(await check()).toMatchObject({ updateSupported: false, installMethod: 'unknown',
+      lastError: target === 'win32' ? expect.stringContaining('standalone .exe')
+        : 'Updating Cortex Code from Agent Cockpit is currently supported only on macOS. Update it in your terminal.' });
     expect(fetcher).not.toHaveBeenCalled();
   });
 

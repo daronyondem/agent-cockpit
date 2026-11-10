@@ -1011,9 +1011,13 @@ shape is added. See [CoCo C41](spec-cortex-code.md#processor-selection-boundarie
 
 
 CoCo C49 extends the existing `/cli-updates` snapshot/check/update routes without
-new bodies or endpoints. Only verified macOS native 1.2.35 standalone targets
+new bodies or endpoints. Verified macOS native 1.2.35 and 1.2.37 standalone targets
 are actionable; full installed/stable distribution versions and existing
-`updateCaution` convey provider policy. Native failures invalidate caches and
+`updateCaution` convey provider policy. Unverified updater versions retain
+`installMethod:'self-update'` with a version-specific `lastError`; platform and
+layout failures have distinct explanations. Already-current installs have no
+update caution; updater support does not imply chat/login/media certification.
+Native failures invalidate caches and
 await CoCo cleanup before the existing 400 response; active chat still returns
 409. Fresh activation/version verifies success. See
 [C49](spec-cortex-code.md#native-cli-updates-p8-c49).
