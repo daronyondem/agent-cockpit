@@ -461,6 +461,15 @@ empty or unavailable, display generic guidance, and retain an unavailable saved
 model as a disabled row alongside eligible replacements. Catalog discovery is
 never authentication evidence. Claude mode and Codex service tier remain
 specific to those harnesses; CoCo does not expose them or a goal-mode toggle.
+When a saved model is absent from a successfully discovered catalog, the
+composer explains that the user must choose a current model to change effort.
+A saved explicit effort remains visible as a disabled saved choice
+(labelled, for example, `xhigh (saved)`) during pending/failed discovery or a
+missing model; it is never silently replaced. If the model is available but
+the saved effort is not advertised, retain its disabled row alongside advertised
+effort replacements. Choosing a current model restores its native effort
+choices, including `high`/`xhigh` when advertised. Do not normalize native model
+IDs or strip suffixes to invent a supported replacement.
 Role-gated processor controls remain governed by C41. C43 decision controls are
 specified below; steering/queue/reconnect, usage and full mobile acceptance remain
 C44–C47.
@@ -632,9 +641,13 @@ static adapter models list is empty. CoCo discovers support per profile; native
 selection merely because static metadata has no model, fetch native catalogs
 under the index lock, invent a static CoCo catalog, or change other harnesses'
 existing supported-level normalization. Invalid enum values remain unset. The
-CoCo integration test verifies low then medium native config RPCs and fresh
-storage restoration; the mobile selection test retains saved medium while
-profile discovery is pending/fails.
+CoCo integration test verifies low then medium/high/xhigh/max native config RPCs
+through message requests and fresh storage restoration. Mobile selection retains
+saved effort while profile discovery is pending/fails, returns an empty catalog,
+or omits the saved model/effort. Run Settings shows the saved effort as a disabled
+choice instead of hiding it, explains missing model metadata, and restores
+advertised choices only after the user selects an available model. Other
+harnesses keep existing effort reconciliation.
 
 C46 corrects composer OCR selection before the first chat send. Both clients
 send optional model/effort fields from their composer; the upload contract
@@ -1433,6 +1446,15 @@ with family `cortex`. It does not publish an account's catalog as a fixed list.
 Effort metadata is the advertised intersection with minimal/low/medium/high/
 xhigh/max. The current native model value marks the default. No model-vendor
 name infers media, pricing, or other capabilities.
+
+November 10, 2026 scoped macOS arm64 checks on native 1.2.41 confirmed this
+catalog shape, the running app metadata endpoint's six explicit effort levels,
+and configuration acknowledgement of `high` then `xhigh` for
+`openai-gpt-6.1-sol`. No model prompt was submitted. The desktop production
+bundle displayed these choices for an available model but hid effort for a
+saved model ID absent from the native catalog; the saved-choice UI above fixes
+that visibility gap. This is effort discovery/configuration evidence only,
+not full 1.2.41 compatibility or inference evidence at each level.
 
 `configureCortex(runtime,selection)` reads only that runtime's configOptions and
 uses `session/set_config_option` sequentially for model, thought_level and mode.

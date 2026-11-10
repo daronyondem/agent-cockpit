@@ -402,13 +402,17 @@ export function RunSettingsModal(props: {
         {props.selectedBackendMetadata?.modelCatalog?.source === 'fallback' ? <p className="meta">Fallback models. {props.selectedBackendMetadata.modelCatalog.reason}</p> : null}
         {props.selectedBackendMetadata?.id === 'copilot' && props.selectedModel && !props.selectedBackendMetadata.models?.some(model => model.id === props.selectedModel)
           ? <p className="meta">{props.selectedModel} is unavailable for this profile. Choose a model from the current list.</p> : null}
+        {props.selectedBackendMetadata?.id === 'cortex-code' && props.selectedModel && !props.selectedBackendMetadata.models?.some(model => model.id === props.selectedModel)
+          ? <p className="meta">{props.selectedBackendMetadata.models?.length ? 'Saved model unavailable. Choose a current model to change effort.' : 'CoCo model choices are unavailable. Refresh or check Cortex login in Settings.'}</p> : null}
         <div className="choice-grid">
           {(props.selectedBackendMetadata?.models || []).map((model) => <Choice key={model.id} label={modelDisplayLabel(model)} selected={props.selectedModel === model.id} onClick={() => props.onModel(model.id)} />)}
         </div>
-        {props.supportedEfforts.length ? (
+        {props.supportedEfforts.length || (props.selectedBackendMetadata?.id === 'cortex-code' && props.selectedEffort) ? (
           <>
             <strong>Effort</strong>
             <div className="choice-grid">
+              {props.selectedBackendMetadata?.id === 'cortex-code' && props.selectedEffort && !props.supportedEfforts.includes(props.selectedEffort)
+                ? <Choice label={`${props.selectedEffort} (saved)`} selected disabled onClick={() => {}} /> : null}
               {props.supportedEfforts.map((effort) => <Choice key={effort} label={effort} selected={props.selectedEffort === effort} onClick={() => props.onEffort(effort)} />)}
             </div>
           </>

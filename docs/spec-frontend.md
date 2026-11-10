@@ -8,6 +8,14 @@ execution and interaction contracts.
 
 [← Back to index](SPEC.md)
 
+Cortex composer effort choices are native/profile-discovered, including `high`
+and `xhigh` when advertised. Missing saved model IDs remain disabled rather than
+being normalized or replaced. Their saved effort stays visible as a disabled
+`<level> (saved)` choice with guidance to choose a current model; pending/failed
+discovery also preserves this value. An available model with an unavailable
+saved effort keeps the disabled saved row beside advertised replacements.
+See [Cortex catalog selection](spec-cortex-code.md#desktop-profile-and-catalog-controls-p7-c42).
+
 Grok Build profile, billing, interaction, and native goal behavior is specified in
 [spec-grok-build.md](spec-grok-build.md). Settings adds **Grok Build** to Harness,
 with `grok` command and `GROK_HOME` account isolation. Welcome exposes its

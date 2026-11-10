@@ -9,7 +9,7 @@ const stateFile = process.env.CORTEX_FIXTURE_STATE;
 const trace = process.env.CORTEX_FIXTURE_TRACE;
 const catalog = [
   { id: 'model', type: 'select', currentValue: 'auto', options: ['auto', 'claude-sonnet-4-6'].map(value => ({ value, name: value })) },
-  { id: 'thought_level', type: 'select', currentValue: 'auto', options: ['auto', 'low', 'medium', 'high'].map(value => ({ value, name: value })) },
+  { id: 'thought_level', type: 'select', currentValue: 'auto', options: ['auto', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'].map(value => ({ value, name: value })) },
   { id: 'mode', type: 'select', currentValue: 'standard', options: ['standard', 'plan'].map(value => ({ value, name: value })) },
 ];
 let sessionId;
