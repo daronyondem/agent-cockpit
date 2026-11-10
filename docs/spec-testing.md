@@ -951,7 +951,8 @@ Focused suites:
 - `test/cortexAuthVerification.test.ts`: independent private workspaces, exact
   nonce/usage success, initialization-only failure, missing connection, grant/
   credential/API errors, tool/reverse-request rejection, cancellation/deadline,
-  sanitized failures and cleanup without a paid retry loop.
+  sanitized failures, stalled optional SQL scope catalog exclusion and cleanup
+  without a paid retry loop.
 - `test/cortexAuth.test.ts`: shared facade defaults, explicit-isolation gate,
   reserved auth-home exclusion across profiles/checks, one-time generation-bound
   handoff, native-completion-before-verification, timeout/cancel/retry, shutdown

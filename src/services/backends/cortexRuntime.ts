@@ -32,6 +32,9 @@ export function resolveCortexRuntime(options: CortexSessionOptions): CortexRunti
   // The latter can stall ACP session creation before authentication in 1.2.37.
   let features: CortexRecord = {};
   try { features = cortexRecord(JSON.parse(env.CORTEX_CODE_EXPERIMENTAL_FEATURES || '{}')); } catch { /* native invalid JSON also uses defaults */ }
+  // The nonce-only auth check needs no SQL guardrail picker. Its catalog lookup
+  // can exceed startup's deadline; chat retains the user's native guardrails.
+  if (options.authenticationCheck) features = { ...features, restrictedSessionScope: false };
   env.CORTEX_CODE_EXPERIMENTAL_FEATURES = JSON.stringify({ ...features, managedMcpDiscovery: false });
   if (!shared && profile.configDir?.trim()) env.SNOWFLAKE_HOME = path.resolve(profile.configDir.replace(/^~(?=[\\/]|$)/, os.homedir()));
   const resolved = resolveCliCommandForRuntime('cortex-code', profile.command?.trim() || 'cortex', env);

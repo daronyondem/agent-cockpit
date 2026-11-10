@@ -966,6 +966,23 @@ loop exists. Normal model-catalog validation for chat is unchanged; the auth
 probe uses raw native default selection so an empty-home missing model option
 does not accidentally count as login evidence.
 
+Authentication runtime resolution sets `authenticationCheck:true`, which forces
+`restrictedSessionScope:false` only in that child process's structured
+experimental options. CoCo otherwise enumerates SQL guardrail scopes while
+building ACP configuration, before the nonce request can run. Slow catalog SQL
+can exceed the 45-second session-setup deadline despite valid credentials.
+The minimal no-tools probe does not need that picker. Other JSON feature options,
+profile settings and ordinary chat's native SQL guardrails are preserved. This
+policy does not extend deadlines, retry startup or replay inference.
+
+November 10, 2026 targeted macOS arm64 / 1.2.37 checks reached session setup
+without the scope picker and passed fresh exact-response verification, including
+an unchanged saved profile. The profile-auth service also passed on retained
+1.2.35. A production-environment 1.2.37 service check reached inference but its
+response timed out at the existing 90-second deadline; that remains an unknown
+auth result. Excluding optional SQL catalog work does not certify service/model
+availability or complete 1.2.37 compatibility.
+
 If ACP starts but session preparation fails, report that login was not yet
 verified and identify ACP session setup as the failing stage. Do not label the
 saved credentials invalid or echo the native error.
@@ -1586,6 +1603,7 @@ file-delivery markers continue to follow Cockpit's explicit-deliverable policy.
   RPC error metadata, listener failure and private stderr diagnostics.
 - `test/cortexRuntime.test.ts`: exact invocation/version, shared auth resolution,
   child-only account MCP discovery policy and retained explicit plugin options,
+  auth-only SQL catalog exclusion with unchanged chat guardrails/fingerprints,
   fingerprint changes, load replay, prompt/cancel/close ownership, profile-scoped
   discovery, startup/reset races, idle eviction and reusable registry shutdown.
 - `test/cortexProcess.test.ts`: detached resistant child cleanup after root exit,

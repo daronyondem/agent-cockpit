@@ -23,7 +23,7 @@ export async function verifyCortexAuthentication(profile: CliProfile, signal?: A
   try {
     root = await fs.mkdtemp(path.join(os.tmpdir(), 'cockpit-cortex-auth-'));
     await fs.chmod(root, 0o700);
-    const config = resolveCortexRuntime({ profile, workspaceId: 'auth-check', cwd: root });
+    const config = resolveCortexRuntime({ profile, workspaceId: 'auth-check', cwd: root, authenticationCheck: true });
     if (controller.signal.aborted) throw new Error();
     native = await start(config, client => {
       const stop = () => { void client.close(); };

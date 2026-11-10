@@ -368,6 +368,11 @@ shutdown must await auth/check draining, including abortable version
 detection and late startups. Native
 first-run login needs a PTY; its parser is version-gated to 1.2.35. Saved login
 must pass one exact-response fresh inference check, never model discovery alone.
+Use `authenticationCheck:true` runtime resolution for that minimal no-tools
+probe, skipping the optional native SQL guardrail catalog through child-only
+`restrictedSessionScope:false`. Slow catalog SQL can exceed ACP startup's
+deadline even after account MCP discovery is disabled. Preserve normal chat
+guardrails, shared native settings, deadlines and the no-retry inference policy.
 Review the focused connection/OAuth/PTY/auth/verification/route/React suites and
 run opt-in `scripts/probe-cortex-auth.ts` for native saved-auth/UI drift. It uses
 an isolated PM2 fixture and normal terminal credentials, without forcing logout.
