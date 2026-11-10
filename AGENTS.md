@@ -554,14 +554,15 @@ Windows stays documentation-only; Linux action policy is not native acceptance.
 C49 update management and C51–C53 platform evidence remain separate.
 
 P8 C49 updater policy/discovery/version projection belongs to
-`src/services/cortexUpdates.ts`. Enable only the proven macOS native 1.2.35/1.2.37
+`src/services/cortexUpdates.ts`. Enable updates for the official macOS native
 activation at `~/.local/bin/cortex`, with matching versioned distribution metadata.
-Keep updater eligibility separate from chat/login/media/strict-processor gates;
-distinguish unverified updater versions from platform/layout failures, and show
-update cautions only for differing stable targets. The native update probe can
+Do not add per-version updater allowlists: new patch/minor/major releases retain
+managed updates, as with Codex and Claude. Keep updater eligibility separate from
+chat/login/media/strict-processor gates; show nonblocking compatibility cautions
+only for differing stable targets. The native update probe can
 copy a retained distribution via `CORTEX_UPDATE_TEST_COMMAND`; both HOME and
-SNOWFLAKE_HOME must stay disposable. Update-row-only browser checks may accept
-verified updater versions without widening the full auth probe's version gate.
+SNOWFLAKE_HOME must stay disposable. Update-row-only browser checks have no
+version gate; the full auth probe retains its independent version gate.
 Keep profile auth homes/secrets/channel out of the updater env, group the pinned
 shared executable, and pass the checked full stable distribution to native
 `update <target>`; passive checks must never run an updater. Revalidate before
@@ -571,8 +572,8 @@ never automatically retry failures. Review `test/cortexUpdates.test.ts`,
 `test/cortexUpdateRoutes.test.ts` and existing CLI/runtime/macOS regressions; run
 opt-in `scripts/probe-cortex-updates.ts` for disposable native download/activation/
 shutdown/failure/retry evidence. Its older build metadata and missing target are
-synthetic controls, not old-release or authentication evidence. Other layouts,
-versions and native Windows/Linux remain manual until certified. Use
+synthetic controls, not old-release or authentication evidence. Other layouts
+and native Windows/Linux remain manual until certified. Use
 `CORTEX_UPDATE_UI_PROBE=1 npx tsx scripts/probe-cortex-auth.ts` for independent
 update-row acceptance; its explicit scope is never a full auth-suite pass.
 

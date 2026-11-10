@@ -198,7 +198,7 @@ tool is unavailable.
   platform acceptance remain separate gates.
 
 - CoCo C49 update policy lives in `src/services/cortexUpdates.ts`: only the
-  proven macOS native 1.2.35/1.2.37 activation symlink and matching versioned metadata
+  official macOS native activation symlink and matching versioned metadata
   are actionable. Read the reviewed public stable version and invoke native
   `update <full-distribution>` explicitly. Group shared executable targets;
   retain server terminal HOME/auth environment and profile PATH discovery, never
@@ -206,16 +206,19 @@ tool is unavailable.
   recheck active chat; invalidate and await CoCo draining after success or failure,
   then verify fresh activation/version. No automatic update retry is allowed.
   Updater eligibility is separate from chat/login/media/strict-processor gates.
-  Unverified updater versions get a version-specific explanation, distinct from
-  platform/layout failures; already-current installs have no update caution.
+  Do not gate updates on a CLI-version allowlist: new patch/minor/major releases
+  must retain managed updates like Codex and Claude. Platform/layout validation
+  still applies; compatibility cautions never block updates and already-current
+  installs have no update caution. Successive future-version updates have direct
+  policy regression coverage; fixtures do not certify future native binaries.
   Native 1.2.35→1.2.37 and 1.2.37→1.2.37 update/failure/retry probes pass.
   The disposable native update probe uses genuine binaries with synthetic older
   build metadata to force download, and an injected missing target for real native
   failure/retry. Those controls do not certify an older CLI or authentication.
   `CORTEX_UPDATE_TEST_COMMAND` copies a retained distribution; both HOME and
-  SNOWFLAKE_HOME remain isolated. Update-row-only browser checks accept verified
-  updater versions while the full auth probe retains its independent gate.
-  Windows/Linux, custom layouts and unverified updater versions stay manual.
+  SNOWFLAKE_HOME remain isolated. Update-row-only browser checks have no version
+  gate while the full auth probe retains its independent gate.
+  Windows/Linux and custom layouts stay manual.
   The auth browser runner's `CORTEX_UPDATE_UI_PROBE=1` mode checks update rows
   independently; its scope must never be reported as a full auth-suite pass.
 

@@ -95,7 +95,7 @@ const timer = setInterval(() => {
     proc.stderr!.on('data', chunk => { stderr += chunk.toString(); });
     const closed = new Promise<number | null>((resolve, reject) => { proc.once('close', resolve); proc.once('error', reject); });
     try {
-      const deadline = Date.now() + 15_000;
+      const deadline = Date.now() + 60_000;
       while (!fs.existsSync(pidFile) && Date.now() < deadline) await sleep(20);
       if (!fs.existsSync(pidFile)) throw new Error(`Worker did not start: ${stderr}`);
       pid = Number(fs.readFileSync(pidFile, 'utf8'));
@@ -117,7 +117,7 @@ const timer = setInterval(() => {
       if (pid && alive(pid)) process.kill(pid, 'SIGKILL');
       fs.rmSync(dir, { recursive: true, force: true });
     }
-  }, 25_000);
+  }, 75_000);
 
   test('preserves native argv, UTF-8 streams, working directory, environment, and exit code', async () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'copilot ü windows '));
@@ -136,7 +136,7 @@ require('fs').writeSync(2,'é日本語😀'); process.exit(7);
       expect(JSON.parse(stdout)).toEqual({ args, cwd: fs.realpathSync(dir), env: 'é日本語😀' });
       expect(stderr.trim()).toBe('é日本語😀');
     } finally { proc.kill('SIGKILL'); fs.rmSync(dir, { recursive: true, force: true }); }
-  }, 20_000);
+  }, 75_000);
 
   test('fails before launching work when the target executable is missing', async () => {
     const proc = spawnWindowsCopilotProcess('Z:\\missing-copilot-fixture.exe', [], {});
@@ -144,5 +144,5 @@ require('fs').writeSync(2,'é日本語😀'); process.exit(7);
     proc.stderr!.on('data', chunk => { stderr += chunk.toString(); });
     expect(await new Promise(resolve => proc.once('close', resolve))).toBe(1);
     expect(stderr).toContain('Copilot Windows job failed');
-  }, 20_000);
+  }, 75_000);
 });

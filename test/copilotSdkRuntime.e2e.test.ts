@@ -17,6 +17,8 @@ import { CopilotQuotaCache } from '../src/services/backends/copilotQuota';
 import { copilotPng, copilotPdf, writeCopilotMediaTool } from './helpers/copilotMediaFixtures';
 
 const native = process.env.COPILOT_SDK_E2E === '1' ? describe : describe.skip;
+// Native qualification includes cold Windows wrapper/CLI initialization.
+const nativeStartupTimeoutMs = process.platform === 'win32' ? 60_000 : 15_000;
 
 native('real Copilot owned SDK runtime with fixed local model responses', () => {
   let dir: string;
@@ -172,8 +174,9 @@ native('real Copilot owned SDK runtime with fixed local model responses', () => 
       COPILOT_GITHUB_TOKEN: '', GH_TOKEN: '', GITHUB_TOKEN: '',
     };
     if (startupFailure) throw startupFailure;
+    const startupStartedAt = Date.now();
     try {
-      runtime = await startCopilotSdkRuntime({ ...resolved, env: nativeEnv }, dir);
+      runtime = await startCopilotSdkRuntime({ ...resolved, env: nativeEnv }, dir, { startupTimeoutMs: nativeStartupTimeoutMs });
     } catch (error) {
       // A broken native startup cannot qualify subsequent scenarios. Retain one
       // isolated diagnostic rather than spending every case's startup deadline.
@@ -203,9 +206,12 @@ native('real Copilot owned SDK runtime with fixed local model responses', () => 
     cliVersion = status.version;
     if (process.env.COPILOT_SDK_REPORT_DIR) {
       fs.mkdirSync(process.env.COPILOT_SDK_REPORT_DIR, { recursive: true });
+      fs.appendFileSync(path.join(process.env.COPILOT_SDK_REPORT_DIR, 'startup-timings.jsonl'), JSON.stringify({
+        test: expect.getState().currentTestName, elapsedMs: Date.now() - startupStartedAt, phaseTimeoutMs: nativeStartupTimeoutMs,
+      }) + '\n');
       fs.writeFileSync(path.join(process.env.COPILOT_SDK_REPORT_DIR, 'runtime.json'), JSON.stringify({ cli: cliVersion, protocolVersion: status.protocolVersion }));
     }
-  });
+  }, 2 * nativeStartupTimeoutMs + 15_000);
 
   afterEach(async () => {
     releaseSteer?.();

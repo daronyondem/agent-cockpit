@@ -254,9 +254,14 @@ for (const mobile of [false, true]) {
     await expect(page.getByLabel('Send', { exact: true })).toBeVisible();
     expect(Number(await fs.readFile(path.join(workspace, 'ui-goal-worker.pid'), 'utf8'))).toBe(worker);
     await expect(fs.stat(path.join(workspace, 'ui-goal-worker-finished'))).rejects.toThrow();
-    const goal = (await (await request.get(`/api/chat/conversations/${conv.id}/goal`)).json()).goal;
-    expect(goal).toMatchObject({ backend: 'copilot', objectiveId: 1, objective: 'COPILOT_UI_GOAL_PAUSE', status: 'complete', aiCreditLimit: 2.5 });
-    expect(goal.tokenBudget).toBeUndefined();
+    // Terminal goal frames can arrive before the native owner's reset cleanup drains.
+    await expect.poll(async () => {
+      const response = await request.get(`/api/chat/conversations/${conv.id}/goal`);
+      const { goal } = await response.json();
+      return { status: response.status(), goal, tokenBudget: goal?.tokenBudget };
+    }).toMatchObject({ status: 200,
+      goal: { backend: 'copilot', objectiveId: 1, objective: 'COPILOT_UI_GOAL_PAUSE', status: 'complete', aiCreditLimit: 2.5 },
+      tokenBudget: undefined });
   });
 
   test(`${client} preserves unavailable selections, follows discovered efforts and labels fallback models`, async ({ page, request }) => {

@@ -139,10 +139,22 @@ describe('CoCo standalone updates', () => {
     expect(await update(target.id)).toMatchObject({ success: true, item: { currentVersion: next, updateSupported: true, lastError: null } });
   });
 
-  test('distinguishes an unverified updater version from an invalid installation', async () => {
-    const unknown = '1.2.38+221950.abcdef012345'; activate(unknown); exec.mockResolvedValue('Cortex Code v1.2.38');
-    expect(await check()).toMatchObject({ currentVersion: unknown, installMethod: 'self-update', updateSupported: false,
-      lastError: 'Updating Cortex Code 1.2.38 from Agent Cockpit has not been verified yet. Update it in your terminal.' });
+  test.each(['1.2.38', '1.3.0', '2.0.0'])('keeps managed updates available on a new native version %s', async version => {
+    const current = `${version}+221950.abcdef012345`; activate(current); exec.mockResolvedValue(`Cortex Code v${version}`);
+    fetcher.mockResolvedValue({ ok: true, text: async () => current });
+    expect(await check()).toMatchObject({ currentVersion: current, latestVersion: current, installMethod: 'self-update',
+      updateSupported: true, updateCommand: [command, 'update', current], lastError: null, updateCaution: null });
+  });
+
+  test('rejects an invalid installation independently of native version', async () => {
+    exec.mockResolvedValue('Cortex Code v1.2.38');
+    fs.writeFileSync(path.join(path.dirname(fs.realpathSync(command)), 'cortex-version.txt'), 'different');
+    expect(await check()).toMatchObject({ installMethod: 'unknown', updateSupported: false,
+      lastError: expect.stringContaining('installation could not be verified') });
+    expect(fetcher).not.toHaveBeenCalled();
+    activate(installed);
+    expect(await check()).toMatchObject({ installMethod: 'unknown', updateSupported: false,
+      lastError: expect.stringContaining('installation could not be verified') });
     expect(fetcher).not.toHaveBeenCalled();
     fs.rmSync(command); fs.writeFileSync(command, 'wrapper', { mode: 0o700 });
     expect(await check()).toMatchObject({ installMethod: 'unknown', updateSupported: false,
@@ -177,7 +189,7 @@ describe('CoCo standalone updates', () => {
     expect(exec).not.toHaveBeenCalled(); expect(fetcher).not.toHaveBeenCalled();
   });
 
-  test('rejects wrappers, custom aliases, foreign symlinks, mismatched metadata and unknown updater versions', () => {
+  test('rejects wrappers, custom aliases, foreign symlinks and mismatched metadata', () => {
     const alias = path.join(root, 'custom cortex'); fs.symlinkSync(command, alias);
     expect(cortexInstalledUpdateVersion(alias)).toBeNull();
     fs.writeFileSync(path.join(path.dirname(fs.realpathSync(command)), 'cortex-version.txt'), 'different');
@@ -185,14 +197,21 @@ describe('CoCo standalone updates', () => {
     fs.rmSync(command); fs.symlinkSync(alias, command); expect(cortexInstalledUpdateVersion(command)).toBeNull();
   });
 
-  test('shows unverified stable releases before updating and verifies their installation without enabling their own updater', async () => {
-    const future = '1.2.36+200000.abcdef012345'; fetcher.mockResolvedValue({ ok: true, text: async () => future });
-    const target = await check(); expect(target.updateCaution).toContain('has not been certified');
+  test('warns about runtime compatibility without blocking successive new-version updates', async () => {
+    const next = '1.2.38+200000.abcdef012345', later = '1.3.0+200001.abcdef012346';
+    fetcher.mockResolvedValue({ ok: true, text: async () => next });
+    let nativeVersion = '1.2.35';
     exec.mockImplementation(async (_cmd, args: string[]) => {
-      if (args[0] === 'update') { activate(future); return 'Updated'; }
-      return fs.realpathSync(command).includes(future) ? 'Cortex Code v1.2.36' : 'Cortex Code v1.2.35';
+      if (args[0] === 'update') { activate(args[1]); nativeVersion = args[1].split('+')[0]; return 'Updated'; }
+      return `Cortex Code v${nativeVersion}`;
     });
-    expect(await update(target.id)).toMatchObject({ success: true, item: { currentVersion: future, updateSupported: false } });
+    const target = await check();
+    expect(target).toMatchObject({ updateSupported: true, updateAvailable: true, updateCaution: expect.stringContaining('has not been certified') });
+    expect(await update(target.id)).toMatchObject({ success: true, item: { currentVersion: next, updateSupported: true, lastError: null } });
+    fetcher.mockResolvedValue({ ok: true, text: async () => later });
+    expect(await check()).toMatchObject({ updateSupported: true, updateAvailable: true, updateCaution: expect.stringContaining('has not been certified') });
+    expect(await update(target.id)).toMatchObject({ success: true, item: { currentVersion: later, updateSupported: true, lastError: null } });
+    expect(exec.mock.calls.filter(call => call[1][0] === 'update').map(call => call[1])).toEqual([['update', next], ['update', later]]);
   });
 
   test.each([{ ok: false, status: 503 }, { ok: true, text: async () => '1.2.35; echo unsafe' }])('rejects invalid stable metadata', async response => {

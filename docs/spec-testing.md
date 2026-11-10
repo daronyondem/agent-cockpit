@@ -1053,11 +1053,13 @@ regressions pass; rebuilt desktop/mobile assets retain the 914 KiB JS budget.
 ### CoCo native CLI updates (P8 C49)
 
 `test/cortexUpdates.test.ts` covers shared executable grouping and profile env
-exclusion, canonical native layout/metadata/version gating, full build lookup,
+exclusion, canonical native layout/metadata/native-version agreement, full build lookup,
 pinned updater invocation, reserved preflight/duplicate and newly active chat,
 network/metadata failure recovery, awaited invalidation, one failed native
 attempt with explicit retry, changed activation, exit-zero postcheck failure and
-unverified versions/platforms. `test/cortexUpdateRoutes.test.ts` holds real HTTP
+future patch/minor/major eligibility, successive new-version updates despite
+runtime cautions, and unsupported platforms. Future-version fixtures prove
+policy, not native compatibility. `test/cortexUpdateRoutes.test.ts` holds real HTTP
 responses until CoCo draining finishes on success/failure. The existing CLI update
 foundation case now expects a visible non-actionable CoCo target rather than
 excluding the harness. Existing runtime/backend and macOS installer/release/
@@ -1084,9 +1086,10 @@ for retained `1.2.35+191333.f82de3d91715` and `1.2.37+221950.87518d294789`, each
 targeting stable `1.2.37+221950.87518d294789`: download/activation, passive-query
 preservation, runtime draining/reuse, missing-target failure and explicit retry.
 Managed updates stay enabled after upgrade; already-current installs have no
-update caution. Focused regressions cover later 1.2.37 builds, unknown versions,
+update caution. Focused regressions cover later builds and future versions,
 distinct platform/layout errors and the separate chat/login/media caution.
-The update-row-only browser mode accepts 1.2.35/1.2.37; the full auth probe still
+The update and update-row-only probes have no CLI-version allowlist and record
+the actual release used. The full auth probe still
 requires 1.2.35, so updater evidence does not broaden authentication claims.
 The 1.2.37 update-row-only run passed at 1280/390/320 px with an enabled Run
 updater button and no error/caution text, without updating or authenticating.
@@ -1952,6 +1955,20 @@ are `phase10-coverage.log`, `phase10-final-native-workflows.log` and
 
 ### Copilot published CI evidence
 
+The native SDK qualification fixture allows up to 60 seconds per startup phase
+on Windows (port announcement and SDK handshake), retaining 15 seconds on
+macOS/Linux. Its setup-hook limit covers both phases and bounded diagnostic/
+cleanup work. This is fixture setup headroom for cold wrapper/CLI initialization,
+not a change to production's 15-second phase deadlines or an automatic retry.
+`startup-timings.jsonl` records the synthetic case name, elapsed startup/status
+time and phase limit; it contains no credentials or environment snapshots.
+Startup failure still fails every dependent case and requires owned cleanup.
+The native Windows Job Object fixtures similarly allow 60 seconds for the
+first worker to start, within a 75-second case deadline covering cleanup. The
+argv/UTF-8 and missing-executable cases use the same case bound. Their orphan
+termination/unrelated-process assertions and production cleanup deadlines stay
+unchanged; these cases test containment, not cold-start performance.
+
 [Run 41954476405](https://github.com/daronyondem/agent-cockpit/actions/runs/41954476405)
 builds PR head `9fb54f7` using clean GitHub PR merge revision
 `88fd464eea529f45ef426e3bd440a21fa4c6a050`. The retained artifacts and completed
@@ -2050,6 +2067,15 @@ requested ordering; both the short and 61-second native cases pass.
 Backend/web/mobile typechecks, zero-warning lint, maintainability, spec drift,
 ADR lint and the unchanged client bundle budget pass. No production behavior,
 coverage floor or platform authentication claim changes in this follow-up.
+
+The desktop/mobile goal pause/resume browser case waits for HTTP 200 with the
+completed native goal snapshot before checking its objective, fresh AI-credit
+limit and absent token budget. A terminal goal frame and visible Send control
+can precede the native owner's reset-cleanup drain; an immediate status read can
+return the temporary `Copilot is shutting down or resetting.` error. Use bounded
+`expect.poll` for the status response and snapshot together, preserving all
+final-state assertions rather than adding sleeps, retries of goal execution or
+changes to production cleanup/admission. A persistent status error still fails.
 
 A fresh local read-only shared-auth/catalog probe on 2026-11-05 at 16:16 UTC
 reports authenticated credentials but zero available models and HTTP 403. It
