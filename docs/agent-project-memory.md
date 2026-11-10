@@ -360,8 +360,15 @@ tool is unavailable.
   lives in `src/contracts/backendCapabilities.ts`. A recognized profile identity
   does not prove runtime availability or authentication.
   P2 dedicated CoCo protocol/runtime/session/process foundations and the real
-  `scripts/probe-cortex-runtime.ts` passed on macOS arm64 / CoCo 1.2.35. Keep
-  generation-safe reusable shutdown, exact ACP-first argv, fatal timeout cleanup,
+  `scripts/probe-cortex-runtime.ts` passed on macOS arm64 / CoCo 1.2.35.
+  Disable account-managed MCP auto-discovery only in the Cockpit child via
+  `CORTEX_CODE_EXPERIMENTAL_FEATURES` / `managedMcpDiscovery:false`, retaining
+  other JSON env options and explicit plugins. Native `--only-explicit-mcp-servers`
+  skips user files but does not stop this account discovery; CoCo 1.2.37 can
+  stall session creation there despite valid terminal login. The same saved
+  credentials passed fresh exact-response inference with discovery disabled.
+  Preserve native settings/shared auth and keep the policy version-independent.
+  Keep generation-safe reusable shutdown, exact ACP-first argv, fatal timeout cleanup,
   replay suppression and identity-checked descendants; no production dependency
   on Grok/Kiro. Userspace sampling is not OS containment. Review focused P2 tests and run
   the opt-in runtime probe for native drift; it is not a complete app/UI suite.

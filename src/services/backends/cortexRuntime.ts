@@ -28,6 +28,11 @@ export function resolveCortexRuntime(options: CortexSessionOptions): CortexRunti
     const name = process.platform === 'win32' ? key.toUpperCase() : key;
     env[name] = value;
   }
+  // --only-explicit-mcp-servers excludes user files, but not account discovery.
+  // The latter can stall ACP session creation before authentication in 1.2.37.
+  let features: CortexRecord = {};
+  try { features = cortexRecord(JSON.parse(env.CORTEX_CODE_EXPERIMENTAL_FEATURES || '{}')); } catch { /* native invalid JSON also uses defaults */ }
+  env.CORTEX_CODE_EXPERIMENTAL_FEATURES = JSON.stringify({ ...features, managedMcpDiscovery: false });
   if (!shared && profile.configDir?.trim()) env.SNOWFLAKE_HOME = path.resolve(profile.configDir.replace(/^~(?=[\\/]|$)/, os.homedir()));
   const resolved = resolveCliCommandForRuntime('cortex-code', profile.command?.trim() || 'cortex', env);
   if (process.platform === 'win32' && !/\.exe$/i.test(resolved.command)) throw new Error('Cortex Code on Windows requires a standalone .exe command');

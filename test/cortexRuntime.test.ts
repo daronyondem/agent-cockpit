@@ -44,8 +44,21 @@ runtimeSuite('CoCo POSIX runtime foundations', () => {
     expect(state.argv).toEqual(['acp', 'serve', '-c', profile.cortexCode!.connection, '-w', dir,
       '--only-explicit-plugins', '--only-explicit-skills', '--only-explicit-mcp-servers']);
     expect(state).toMatchObject({ cwd: dir, memory: '0', test: '0', manual: '1' });
+    expect(JSON.parse(state.features as string)).toEqual({ managedMcpDiscovery: false });
     expect(runtime.version).toBe('1.2.35');
     expect(cortexRecord(runtime.init.agentInfo).version).toBe('1.0.0');
+  });
+
+  test('account MCP discovery stays disabled while explicit plugins and other JSON feature options remain available', async () => {
+    const features = JSON.stringify({ managedMcpDiscovery: true, useThreads: false });
+    const selected = { ...profile, env: { CORTEX_CODE_EXPERIMENTAL_FEATURES: features } };
+    const runtime = await start({ ...options, profile: selected, pluginDir: dir });
+    const state = cortexRecord(await runtime.client.request('_test/state'));
+    expect(JSON.parse(state.features as string)).toEqual({ managedMcpDiscovery: false, useThreads: false });
+    expect((state.argv as string[]).slice(-2)).toEqual(['--plugin-dir', dir]);
+    expect(selected.env.CORTEX_CODE_EXPERIMENTAL_FEATURES).toBe(features);
+    await runtime.prepare();
+    await expect(prompt(runtime, 'hello')).resolves.toEqual({ stopReason: 'end_turn' });
   });
 
   test('prompt completion still tracks a delayed detached child after its short-lived parent exits', async () => {

@@ -62,6 +62,7 @@ export async function verifyCortexAuthentication(profile: CliProfile, signal?: A
     } finally { unsubscribe(); }
   } catch {
     result.error = controller.signal.aborted ? 'Cortex Code verification was cancelled or timed out.'
+      : result.available && !native?.sessionId ? 'Cortex Code started, but ACP session setup failed before login could be verified. Check CLI compatibility and Snowflake service availability.'
       : 'Cortex Code verification failed. Check CLI installation, credentials, account access and service availability.';
   } finally {
     clearTimeout(timer);

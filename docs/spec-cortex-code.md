@@ -966,6 +966,9 @@ loop exists. Normal model-catalog validation for chat is unchanged; the auth
 probe uses raw native default selection so an empty-home missing model option
 does not accidentally count as login evidence.
 
+If ACP starts but session preparation fails, report that login was not yet
+verified and identify ACP session setup as the failing stage. Do not label the
+saved credentials invalid or echo the native error.
 Known missing-connection text returns `not-authenticated`/false; other native
 API, grant, expired/invalid credential, malformed or unexpected responses return
 `error` with unknown authentication and locally authored guidance. Accounts,
@@ -1240,6 +1243,14 @@ The child receives the server environment plus profile overrides. Force
 `CORTEX_ENABLE_MEMORY=0`, `CORTEX_ACP_TEST_MODE=0`, and `CORTEX_OAUTH_MANUAL=1`.
 The first disables managed native memory; the second prevents fake-agent mode;
 the third prevents unexpected browser opening. Normal terminal auth is retained.
+The child also uses structured `CORTEX_CODE_EXPERIMENTAL_FEATURES` with
+`managedMcpDiscovery:false`, retaining other JSON object options in the merged
+environment. Native boolean shortcuts and malformed values use the managed
+defaults. This prevents Snowflake account MCP auto-discovery: the
+`--only-explicit-mcp-servers` switch only skips ambient user files. Account
+discovery can stall `session/new` before authentication is checked in 1.2.37.
+Explicit Cockpit MCP plugins remain enabled. Native settings, credentials and
+terminal environment are never edited. This startup policy has no version allowlist.
 Setup account profiles ignore configDir and profile env keys matching
 `SNOWFLAKE_HOME` case-insensitively, preserving the server's shared home.
 Explicit non-setup configDir expands `~` and maps to absolute `SNOWFLAKE_HOME`;
@@ -1574,6 +1585,7 @@ file-delivery markers continue to follow Cockpit's explicit-deliverable policy.
   reverse ownership, malformed/oversized frames, timeout, EOF/pipe/exit failures,
   RPC error metadata, listener failure and private stderr diagnostics.
 - `test/cortexRuntime.test.ts`: exact invocation/version, shared auth resolution,
+  child-only account MCP discovery policy and retained explicit plugin options,
   fingerprint changes, load replay, prompt/cancel/close ownership, profile-scoped
   discovery, startup/reset races, idle eviction and reusable registry shutdown.
 - `test/cortexProcess.test.ts`: detached resistant child cleanup after root exit,
@@ -1586,6 +1598,18 @@ file-delivery markers continue to follow Cockpit's explicit-deliverable policy.
   reusable shutdown on November 6, 2026. It uses the dedicated production
   foundations, rather than Phase 0's Grok research helpers. No browser/route or
   full ChatService integration is implied by this smoke result.
+
+On November 10, 2026, a targeted macOS arm64 check of standalone
+1.2.37+221950.87518d294789 reproduced session creation exceeding 75 seconds
+with valid saved terminal credentials. With account MCP discovery disabled, the
+unchanged saved profile passed exact-response fresh-process auth in 22 seconds.
+The 1.2.35 native runtime probe also passed with this child policy. An explicit
+fixture MCP server initialized, listed tools and received a native tool call on
+1.2.37 using disposable native consent state. New plugin identities default off
+in that release; this check does not establish production MCP consent handling
+or broader 1.2.37 chat/UI/platform compatibility. Desktop and mobile share the
+verification result and safe error message; no client API or PWA asset changes
+are required for this startup fix.
 - `test/cortexEvents.test.ts`, `test/cortexModels.test.ts`,
   `test/cortexInteractions.test.ts`, `test/cortexTurn.test.ts`,
   `test/cortexAttachments.test.ts`, `test/cortexArtifacts.test.ts`: native excerpt
