@@ -21,7 +21,8 @@ describe('account profile Config directory field', () => {
   test.each(Object.keys(RESOLVERS) as CliHarness[])('%s hint names the variable its runtime sets from configDir', (harness) => {
     const configDir = path.join(os.tmpdir(), 'cockpit-account-home');
     const profile = { id: `fixture-${harness}`, name: 'Fixture', harness, authMode: 'account', configDir,
-      ...(harness === 'cortex-code' ? { cortexCode: { connection: 'fixture' } } : {}) } as CliProfile;
+      // CoCo validates the executable during resolution; this test never launches it.
+      ...(harness === 'cortex-code' ? { command: process.execPath, cortexCode: { connection: 'fixture' } } : {}) } as CliProfile;
     const { hint, placeholder } = cliConfigDirField(harness);
     const variable = /^Maps to ([A-Z_]+) at runtime\./.exec(hint)?.[1];
 
