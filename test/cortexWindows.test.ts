@@ -103,7 +103,8 @@ describe('CoCo standalone Windows resolution (simulated platform)', () => {
     const binary = file(path.join(process.env.LOCALAPPDATA!, 'cortex/cortex.exe'));
     const fetcher = jest.spyOn(globalThis, 'fetch');
     const state = await probeCortexUpdateInstallation('Cortex Code v1.2.35', binary, binary);
-    expect(state).toMatchObject({ currentVersion: '1.2.35', updateSupported: false, updateCommand: null, latestVersion: null });
+    expect(state).toMatchObject({ currentVersion: '1.2.35', updateSupported: false, updateCommand: null, latestVersion: null,
+      lastError: 'Updating Cortex Code from Agent Cockpit is currently supported only on macOS. Update it in your terminal.' });
     expect(fetcher).not.toHaveBeenCalled();
     const custom = file(path.join(root, 'custom update/custom.exe'));
     expect(resolveCortexUpdateRuntime({ ...profile, command: 'custom', env: { Path: path.dirname(custom), PRIVATE_TOKEN: 'never inherited', SNOWFLAKE_HOME: 'private' } }, root)).toMatchObject({ command: custom,

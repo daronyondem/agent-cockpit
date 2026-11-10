@@ -198,16 +198,23 @@ tool is unavailable.
   platform acceptance remain separate gates.
 
 - CoCo C49 update policy lives in `src/services/cortexUpdates.ts`: only the
-  proven macOS native 1.2.35 activation symlink and matching versioned metadata
+  proven macOS native 1.2.35/1.2.37 activation symlink and matching versioned metadata
   are actionable. Read the reviewed public stable version and invoke native
   `update <full-distribution>` explicitly. Group shared executable targets;
   retain server terminal HOME/auth environment and profile PATH discovery, never
   profile auth-home/channel/secrets. Reserve/revalidate before mutation and
   recheck active chat; invalidate and await CoCo draining after success or failure,
   then verify fresh activation/version. No automatic update retry is allowed.
-  The disposable native update probe uses genuine 1.2.35 with synthetic older
+  Updater eligibility is separate from chat/login/media/strict-processor gates.
+  Unverified updater versions get a version-specific explanation, distinct from
+  platform/layout failures; already-current installs have no update caution.
+  Native 1.2.35→1.2.37 and 1.2.37→1.2.37 update/failure/retry probes pass.
+  The disposable native update probe uses genuine binaries with synthetic older
   build metadata to force download, and an injected missing target for real native
   failure/retry. Those controls do not certify an older CLI or authentication.
+  `CORTEX_UPDATE_TEST_COMMAND` copies a retained distribution; both HOME and
+  SNOWFLAKE_HOME remain isolated. Update-row-only browser checks accept verified
+  updater versions while the full auth probe retains its independent gate.
   Windows/Linux, custom layouts and unverified updater versions stay manual.
   The auth browser runner's `CORTEX_UPDATE_UI_PROBE=1` mode checks update rows
   independently; its scope must never be reported as a full auth-suite pass.

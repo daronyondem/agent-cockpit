@@ -1653,13 +1653,20 @@ profile environments or establish account isolation.
 An actionable installation currently requires macOS arm64/x64, the normal
 `~/.local/bin/cortex` symlink, an executable whose realpath is exactly
 `~/.local/share/cortex/<distribution>/cortex`, matching `cortex-version.txt`, and
-a fresh native `Cortex Code v1.2.35` version response. Full distribution versions
+a fresh native version response matching the distribution's patch version,
+currently 1.2.35 or 1.2.37. Updater eligibility is independent of chat, login,
+media and strict-processor certification. Full distribution versions
 use `major.minor.patch+HHMMSS.githash`. Wrappers, copied/version-pinned binaries,
 custom aliases, foreign symlinks, mismatched metadata, other platforms and
 unverified updater versions remain visible but manual. Missing executables
 remain non-actionable. Discovery does not invoke ACP or authenticate.
+Recognized standalone layouts retain `installMethod:'self-update'` even when
+their updater version is unverified. Unsupported status explains whether the
+platform, installation layout/metadata/version match, or updater version is
+unverified; it never tells users with a valid newer installation to install
+1.2.35. Those statuses remain non-actionable through the existing `lastError`.
 
-Passive checks read the reviewed 1.2.35 distribution source
+Passive checks read the reviewed native distribution source
 `https://sfc-repo.snowflakecomputing.com/cortex-code-cli/a4643c4278/stable_version.txt`
 through a ten-second bounded fetch and validate the full version format. They
 never call `cortex update` (which mutates), invent `--check`/`--json` or assume an
@@ -1667,15 +1674,17 @@ npm package. `currentVersion` includes verified distribution metadata;
 `latestVersion` is the full stable value, and differing full values indicate a
 stable target is available, including builds sharing the same patch version.
 Network/metadata failures retain the known local version and disable execution.
-A stable release outside 1.2.35 carries `updateCaution` before installation;
-installing it does not certify native login/media/chat compatibility or its own
-updater.
+A differing stable release outside 1.2.35 carries `updateCaution` about
+chat/login/media certification before installation, explicitly separate from
+managed updater eligibility. Already-current installations carry no update
+caution. Installing a target does not itself certify its updater or other native
+features; verified 1.2.37 retains its managed updater after installation.
 
 An explicit update reserves the item before asynchronous preflight, refreshes
 path/version/stable-target evidence and rechecks active/pending chat immediately
 before mutation. It invokes `<pinned cortex> update <checked full version>` via
-execFile with the existing 120-second deadline/output bound. Native 1.2.35 needs
-no unattended flag or input for this command. The native updater verifies its
+execFile with the existing 120-second deadline/output bound. Native 1.2.35/1.2.37
+need no unattended flag or input for this command. The native updater verifies its
 manifest/package checksum and manages versioned activation. A single failed
 attempt is returned without automatic retry, fallback installer or prompt replay.
 After success or native execution failure, the existing route callback awaits
@@ -1706,7 +1715,8 @@ CoCo cleanup is held. Existing CLI/runtime/backend/macOS installer/release/updat
 suites remain regression gates.
 
 `scripts/probe-cortex-updates.ts` passed on macOS arm64 with the genuine
-1.2.35 binary. A disposable copy uses synthetic older build metadata to force
+1.2.35 and 1.2.37 binaries, including 1.2.35 to 1.2.37 upgrades. A disposable copy
+uses synthetic older build metadata to force
 real download/checksum/extraction/activation of the current stable distribution;
 it does not certify an older release. A separately injected nonexistent stable
 target produces a real native failure, preserves activation, drains the old
@@ -1714,6 +1724,10 @@ runtime and recovers on explicit retry. ACP startup after update/shutdown is
 only lifecycle evidence, not authentication. The probe creates no connection
 and leaves the normal installation/auth intact. C50 migration, C51 full macOS,
 C52/C53 native Linux/Windows and C26 human OAuth acceptance remain independent.
+Set `CORTEX_UPDATE_TEST_COMMAND` to a retained versioned distribution executable
+to copy that distribution into the disposable home instead of installing the
+current stable first. Both HOME and SNOWFLAKE_HOME are isolated. The probe
+asserts managed updates remain enabled and update cautions clear after success.
 
 
 C49 update-status browser acceptance has an explicit independent mode:

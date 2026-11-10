@@ -5,6 +5,7 @@ import path from 'path';
 import { execFile, spawnSync } from 'child_process';
 import { promisify } from 'util';
 import { cortexInstallCommand } from '../src/services/cortexInstallation';
+import { cortexInstalledUpdateVersion } from '../src/services/cortexUpdates';
 import { CliUpdateService } from '../src/services/cliUpdateService';
 import { CortexCodeAdapter } from '../src/services/backends/cortex';
 import { CortexSessions } from '../src/services/backends/cortexSessions';
@@ -19,7 +20,7 @@ async function main(): Promise<void> {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cockpit cortex updates ')); fs.chmodSync(root, 0o700);
     const fixtureHome = path.join(root, 'user home'); fs.mkdirSync(fixtureHome);
     const result = spawnSync(process.execPath, ['--import', 'tsx', __filename, '--fixture', root], {
-      cwd: process.cwd(), env: { ...process.env, HOME: fixtureHome, PATH: '/usr/bin:/bin:/usr/sbin:/sbin' },
+      cwd: process.cwd(), env: { ...process.env, HOME: fixtureHome, SNOWFLAKE_HOME: path.join(fixtureHome, '.snowflake'), PATH: '/usr/bin:/bin:/usr/sbin:/sbin' },
       stdio: 'inherit', timeout: 14 * 60_000,
     });
     assert.equal(result.status, 0, 'Isolated native update probe failed'); return;
@@ -33,18 +34,28 @@ async function main(): Promise<void> {
   const sessions = new CortexSessions(), adapter = new CortexCodeAdapter({ sessions }), registry = new BackendRegistry();
   registry.register(adapter);
   const nativeFetch = globalThis.fetch;
-  const drain = async () => { registry.shutdownAll(); await adapter.stopping; };
+  const drain = async () => { await registry.shutdownAll(); };
   try {
-    const installer = cortexInstallCommand()!;
-    const install = await exec(installer[0], installer.slice(1), { cwd, timeout: 600_000, maxBuffer: 2 * 1024 * 1024 });
-    fs.writeFileSync(path.join(root, 'install.log'), install.stdout + install.stderr, { mode: 0o600 });
     const command = path.join(fixtureHome, '.local/bin/cortex');
+    if (process.env.CORTEX_UPDATE_TEST_COMMAND) {
+      const source = path.dirname(fs.realpathSync(process.env.CORTEX_UPDATE_TEST_COMMAND));
+      const destination = path.join(fixtureHome, '.local/share/cortex', path.basename(source));
+      fs.cpSync(source, destination, { recursive: true });
+      fs.mkdirSync(path.dirname(command), { recursive: true }); fs.symlinkSync(path.join(destination, 'cortex'), command);
+      results.copiedRetainedDistribution = true;
+    } else {
+      const installer = cortexInstallCommand()!;
+      const install = await exec(installer[0], installer.slice(1), { cwd, timeout: 600_000, maxBuffer: 2 * 1024 * 1024 });
+      fs.writeFileSync(path.join(root, 'install.log'), install.stdout + install.stderr, { mode: 0o600 });
+    }
     const distribution = path.dirname(fs.realpathSync(command)), version = path.basename(distribution);
-    assert.match(version, /^1\.2\.35\+/);
-    results.cliVersion = '1.2.35'; results.nativeDistribution = version;
-    // Keep the genuine 1.2.35 binary, but label this disposable copy with an
+    const nativeVersion = version.split('+')[0];
+    assert.ok(['1.2.35', '1.2.37'].includes(nativeVersion), 'Review new updater versions before extending this probe');
+    assert.equal(cortexInstalledUpdateVersion(command), version);
+    results.cliVersion = nativeVersion; results.nativeDistribution = version;
+    // Keep the genuine binary, but label this disposable copy with an
     // older synthetic build to force a real package download/activation today.
-    const synthetic = '1.2.35+000000.000000000000', syntheticDir = path.join(path.dirname(distribution), synthetic);
+    const synthetic = `${nativeVersion}+000000.000000000000`, syntheticDir = path.join(path.dirname(distribution), synthetic);
     fs.renameSync(distribution, syntheticDir); fs.writeFileSync(path.join(syntheticDir, 'cortex-version.txt'), synthetic);
     fs.unlinkSync(command); fs.symlinkSync(path.join(syntheticDir, 'cortex'), command);
     const nativeSettings = path.join(fixtureHome, '.snowflake/cortex/settings.json');
@@ -56,22 +67,27 @@ async function main(): Promise<void> {
     const settings: Settings = { theme: 'light', sendBehavior: 'enter', systemPrompt: '', cliProfiles: [profile] };
     const service = new CliUpdateService(cwd);
     const target = (await service.checkNow(async () => settings)).items[0];
-    assert.equal(target.currentVersion, synthetic); assert.equal(target.latestVersion, version);
-    assert.deepEqual(target.updateCommand, [command, 'update', version]);
+    const stable = target.latestVersion!;
+    assert.equal(target.currentVersion, synthetic); assert.ok(stable);
+    assert.deepEqual(target.updateCommand, [command, 'update', stable]);
+    results.targetDistribution = stable;
     assert.equal(path.basename(path.dirname(fs.realpathSync(command))), synthetic, 'Passive version detection changed activation');
     assert.equal(JSON.parse(fs.readFileSync(nativeSettings, 'utf8')).autoUpdate, true);
     results.passiveDetectionPreservesActivationAndNativeAutoUpdatePreference = true;
     const before = await sessions.acquire('before-update', { profile, cwd, workspaceId: 'fixture' }); sessions.release('before-update', before);
     const updated = await service.triggerUpdate(target.id, { loadSettings: async () => settings, onUpdated: drain });
     fs.writeFileSync(path.join(root, 'update-result.json'), JSON.stringify(updated, null, 2), { mode: 0o600 });
-    assert.equal(updated.success, true, updated.error); assert.equal(updated.item?.currentVersion, version);
-    assert.equal(path.basename(path.dirname(fs.realpathSync(command))), version);
+    assert.equal(updated.success, true, updated.error); assert.equal(updated.item?.currentVersion, stable);
+    assert.equal(updated.item?.updateSupported, true, 'Updating must preserve managed updater availability');
+    assert.equal(updated.item?.lastError, null);
+    assert.equal(updated.item?.updateCaution, null, 'An already-current installation needs no update caution');
+    assert.equal(path.basename(path.dirname(fs.realpathSync(command))), stable);
     assert.equal(before.client.isClosed, true); assert.equal(before.client.process.exitCode !== null || before.client.process.signalCode !== null, true);
     results.nativeDownloadChecksumActivationAndFreshVersion = true; results.awaitedOwnedRuntimeShutdown = true;
     const after = await sessions.acquire('after-update', { profile, cwd, workspaceId: 'fixture' }); sessions.release('after-update', after);
     assert.notEqual(after.client.process.pid, before.client.process.pid);
     results.reusableNativeRuntime = true; // ACP creation is not authentication.
-    const missing = '1.2.35+000001.000000000001'; let inject = true;
+    const missing = `${stable.split('+')[0]}+000001.000000000001`; let inject = true;
     globalThis.fetch = async (input, options) => {
       if (inject && String(input).endsWith('/stable_version.txt')) { inject = false; return new Response(missing); }
       return nativeFetch(input, options);
@@ -79,15 +95,15 @@ async function main(): Promise<void> {
     const failed = await service.triggerUpdate(target.id, { loadSettings: async () => settings, onUpdated: drain });
     fs.writeFileSync(path.join(root, 'failed-update-result.json'), JSON.stringify(failed, null, 2), { mode: 0o600 });
     assert.equal(failed.success, false); assert.equal(failed.steps.length, 1); assert.equal(failed.steps[0].success, false);
-    assert.equal(failed.item?.currentVersion, version); assert.equal(after.client.isClosed, true);
-    assert.equal(path.basename(path.dirname(fs.realpathSync(command))), version);
+    assert.equal(failed.item?.currentVersion, stable); assert.equal(after.client.isClosed, true);
+    assert.equal(path.basename(path.dirname(fs.realpathSync(command))), stable);
     results.injectedMissingStableTargetNativeFailure = true;
     globalThis.fetch = nativeFetch;
     const retried = await service.triggerUpdate(target.id, { loadSettings: async () => settings, onUpdated: drain });
-    assert.equal(retried.success, true, retried.error); assert.equal(retried.item?.currentVersion, version);
+    assert.equal(retried.success, true, retried.error); assert.equal(retried.item?.currentVersion, stable);
     results.explicitRetryAlreadyCurrent = true;
     const final = await sessions.acquire('after-retry', { profile, cwd, workspaceId: 'fixture' });
-    assert.equal(final.version, '1.2.35'); await drain();
+    assert.equal(final.version.split('+')[0], stable.split('+')[0]); await drain();
     assert.ok(!fs.existsSync(path.join(fixtureHome, '.snowflake/connections.toml')));
     results.noAuthenticationAttempted = true;
     fs.writeFileSync(path.join(root, 'report.json'), JSON.stringify({ ...report, passed: true }, null, 2), { mode: 0o600 });

@@ -6,6 +6,8 @@ import { resolveCliCommandForRuntime } from './cliCommandResolver';
 
 const DISTRIBUTION_VERSION = /^\d+\.\d+\.\d+\+\d{6}\.[a-f0-9]{7,40}$/;
 const STABLE_VERSION_URL = 'https://sfc-repo.snowflakecomputing.com/cortex-code-cli/a4643c4278/stable_version.txt';
+// Updater compatibility is independent of chat, login and media certification.
+const MANAGED_UPDATER_VERSIONS = new Set(['1.2.35', '1.2.37']);
 
 /** Updating the shared executable never adopts a profile's auth home or secrets. */
 export function resolveCortexUpdateRuntime(profile: CliProfile, cwd: string): { command: string; env: NodeJS.ProcessEnv } {
@@ -50,7 +52,12 @@ export async function probeCortexUpdateInstallation(versionOutput: string, resol
   const nativeVersion = versionOutput.match(/\bCortex Code v(\d+\.\d+\.\d+)/)?.[1] || null;
   const installed = cortexInstalledUpdateVersion(resolvedPath);
   const managed = installed?.split('+')[0] === nativeVersion ? installed : null;
-  const supported = Boolean(managed?.startsWith('1.2.35+'));
+  const supported = Boolean(managed && MANAGED_UPDATER_VERSIONS.has(nativeVersion!));
+  const unsupportedReason = managed
+    ? `Updating Cortex Code ${nativeVersion} from Agent Cockpit has not been verified yet. Update it in your terminal.`
+    : process.platform !== 'darwin' || !['arm64', 'x64'].includes(process.arch)
+      ? 'Updating Cortex Code from Agent Cockpit is currently supported only on macOS. Update it in your terminal.'
+      : 'This Cortex Code installation could not be verified for managed updates. Use the official standalone installation at ~/.local/bin/cortex, or update it in your terminal.';
   let latestVersion: string | null = null, lastError: string | null = null;
   if (supported) {
     try { latestVersion = await cortexStableUpdateVersion(); }
@@ -58,12 +65,12 @@ export async function probeCortexUpdateInstallation(versionOutput: string, resol
   }
   const updateCommand = supported && latestVersion ? [command, 'update', latestVersion] : null;
   return {
-    resolvedPath, installMethod: supported ? 'self-update' : resolvedPath ? 'unknown' : 'missing',
+    resolvedPath, installMethod: managed ? 'self-update' : resolvedPath ? 'unknown' : 'missing',
     currentVersion: managed || nativeVersion, latestVersion,
     updateAvailable: Boolean(managed && latestVersion && managed !== latestVersion),
     updateSupported: Boolean(updateCommand), updateCommand, lastCheckAt: new Date().toISOString(),
-    lastError: lastError || (!supported ? 'Managed updates require the official macOS standalone Cortex Code 1.2.35 activation at ~/.local/bin/cortex. Update other installations in their terminal.' : null),
-    updateCaution: latestVersion && !latestVersion.startsWith('1.2.35+')
-      ? `Snowflake stable version ${latestVersion} has not been certified with Agent Cockpit. CoCo login and media support are version-gated.` : null,
+    lastError: lastError || (!supported ? unsupportedReason : null),
+    updateCaution: managed && latestVersion && managed !== latestVersion && !latestVersion.startsWith('1.2.35+')
+      ? `Snowflake stable version ${latestVersion} has not been certified for CoCo chat, login and media. Managed updater support is checked separately.` : null,
   };
 }
