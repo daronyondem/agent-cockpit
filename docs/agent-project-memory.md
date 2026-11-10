@@ -368,6 +368,12 @@ tool is unavailable.
   stall session creation there despite valid terminal login. The same saved
   credentials passed fresh exact-response inference with discovery disabled.
   Preserve native settings/shared auth and keep the policy version-independent.
+  Auth checks also skip native SQL scope catalog discovery through
+  `authenticationCheck:true` / child-only `restrictedSessionScope:false`.
+  On 1.2.37 those optional queries can exceed the 45-second ACP setup deadline
+  even with valid login and account MCP discovery disabled. Keep ordinary chat
+  guardrails and profile/native settings intact; retain the exact-response,
+  complete-usage, no-tools, no-retry authentication contract.
   Keep generation-safe reusable shutdown, exact ACP-first argv, fatal timeout cleanup,
   replay suppression and identity-checked descendants; no production dependency
   on Grok/Kiro. Userspace sampling is not OS containment. Review focused P2 tests and run

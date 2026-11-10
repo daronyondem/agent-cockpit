@@ -38,6 +38,8 @@ export interface CortexSessionOptions {
   pluginDir?: string;
   /** Cockpit-owned child environment; never persisted into the CLI profile. */
   managedEnv?: Record<string, string>;
+  /** Minimal fresh-inference probe; omit the optional native SQL scope catalog. */
+  authenticationCheck?: boolean;
   mcpServers?: McpServerConfig[];
   sessionId?: string;
 }

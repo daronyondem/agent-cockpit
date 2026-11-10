@@ -61,6 +61,19 @@ runtimeSuite('CoCo POSIX runtime foundations', () => {
     await expect(prompt(runtime, 'hello')).resolves.toEqual({ stopReason: 'end_turn' });
   });
 
+  test('authentication checks skip SQL scope discovery without changing chat guardrails or other feature options', () => {
+    const features = JSON.stringify({ restrictedSessionScope: true, useThreads: false });
+    const input = { ...options, profile: { ...profile, env: { CORTEX_CODE_EXPERIMENTAL_FEATURES: features } } };
+    const chat = resolveCortexRuntime(input);
+    const auth = resolveCortexRuntime({ ...input, authenticationCheck: true });
+    expect(JSON.parse(auth.env.CORTEX_CODE_EXPERIMENTAL_FEATURES!)).toEqual({
+      managedMcpDiscovery: false, restrictedSessionScope: false, useThreads: false,
+    });
+    expect(JSON.parse(chat.env.CORTEX_CODE_EXPERIMENTAL_FEATURES!).restrictedSessionScope).toBe(true);
+    expect(auth.fingerprint).not.toBe(chat.fingerprint);
+    expect(input.profile.env.CORTEX_CODE_EXPERIMENTAL_FEATURES).toBe(features);
+  });
+
   test('prompt completion still tracks a delayed detached child after its short-lived parent exits', async () => {
     const file = path.join(dir, 'late-child.pid');
     const runtime = await start({ ...options, profile: { ...profile, env: { FIXTURE_LATE_CHILD_FILE: file } } });

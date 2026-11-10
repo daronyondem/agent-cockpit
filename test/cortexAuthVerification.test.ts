@@ -16,6 +16,8 @@ verificationSuite('Cortex fresh-process auth verification', () => {
       const fixture = cortexFixture(config.cwd); fixtures.push(fixture);
       onClient?.(fixture.client);
       fixture.onRequest(message => {
+        if (message.method === 'session/new' && mode === 'stalled-scope-catalog'
+          && JSON.parse(config.env.CORTEX_CODE_EXPERIMENTAL_FEATURES!).restrictedSessionScope !== false) return;
         if (message.method === 'session/new' || message.method === 'session/close') fixture.send({ jsonrpc: '2.0', id: message.id, result: { sessionId: 'fixture-session' } });
         if (message.method !== 'session/prompt') return;
         const prompt = String(cortexRecord((message.params?.prompt as unknown[])[0]).text);
@@ -44,6 +46,14 @@ verificationSuite('Cortex fresh-process auth verification', () => {
     expect(fixtures[0].runtime.config.cwd).not.toBe(fixtures[1].runtime.config.cwd);
     expect(JSON.stringify(first)).not.toContain('COCKPIT_AUTH_');
     expect(fixtures.every(fixture => fixture.client.isClosed)).toBe(true);
+  });
+  test('verification does not wait for the optional native SQL guardrail catalog', async () => {
+    const result = await verifyCortexAuthentication({ ...profile,
+      env: { CORTEX_CODE_EXPERIMENTAL_FEATURES: JSON.stringify({ restrictedSessionScope: true, useThreads: false }) },
+    }, undefined, start('stalled-scope-catalog'), 500);
+    expect(result).toMatchObject({ available: true, authenticated: true, status: 'ok' });
+    expect(fixtures[0].writes.filter(message => message.method === 'session/prompt')).toHaveLength(1);
+    expect(fixtures[0].client.isClosed).toBe(true);
   });
   test.each(['partial', 'wrong', 'cancelled', 'grant', 'missing', 'permission', 'tool'])('fails closed and sanitizes native %s output', async mode => {
     const result = await verifyCortexAuthentication(profile, undefined, start(mode));
