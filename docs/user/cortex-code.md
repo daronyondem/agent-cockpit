@@ -63,6 +63,13 @@ Choose the profile in the desktop or mobile composer, then choose from the
 connection's discovered models and effort values. Catalogs are profile-specific;
 the harness stays CoCo regardless of the selected model vendor.
 
+The **Effort** control includes levels such as **High**, **Xhigh**, and **Max**
+when the native CLI advertises them. On mobile, open **Run Settings** to select
+the level. If a saved model is no longer available, select a current model from
+the list to restore effort choices; Cockpit retains the saved effort visibly
+rather than silently replacing it. If model discovery is unavailable, refresh
+or check Cortex login in Settings.
+
 Verified workflows include durable chat, thinking/tools, questions, plan approval
 and revision, saved-session resume, file delivery, Memory/KB MCP access, KB
 ingestion/digestion/gleaning/dreaming, Workspace Context and Routines. Queues,

@@ -70,7 +70,9 @@ export default function ComposerPicks({ convId, backends, cliProfiles, onProfile
   const backendId = backend ? backend.id : null;
   const modelId = model ? model.id : null;
   const effortLevels = (model && Array.isArray(model.supportedEffortLevels)) ? model.supportedEffortLevels : [];
-  const effort = effortLevels.includes(composerEffort)
+  const cortexEffortUnavailable = effectiveBackendId === 'cortex-code' && (cortexCatalogUnavailable || !modelFromCatalog);
+  const savedEffort = effectiveBackendId === 'cortex-code' && composerEffort && !effortLevels.includes(composerEffort);
+  const effort = savedEffort || effortLevels.includes(composerEffort)
     ? composerEffort
     : (effortLevels.includes('high') ? 'high' : (effortLevels[0] || null));
   const claudeCodeModeSupported = isClaudeBackend(effectiveBackendId) && effortLevels.includes('xhigh');
@@ -87,11 +89,11 @@ export default function ComposerPicks({ convId, backends, cliProfiles, onProfile
     }
   }, [convId, backendId, modelId, composerModel, profileMetadataPending, cortexCatalogUnavailable]);
   React.useEffect(() => {
-    if (profileMetadataPending || cortexCatalogUnavailable || (effectiveBackendId === 'cortex-code' && !modelFromCatalog)) return;
+    if (profileMetadataPending || cortexEffortUnavailable || savedEffort) return;
     if (effort !== composerEffort) {
       StreamStore.setComposerEffort(convId, effort);
     }
-  }, [convId, effort, composerEffort, profileMetadataPending, cortexCatalogUnavailable, effectiveBackendId, modelFromCatalog]);
+  }, [convId, effort, composerEffort, profileMetadataPending, cortexEffortUnavailable, savedEffort]);
   React.useEffect(() => {
     if (profileMetadataPending) return;
     if (!claudeCodeModeSupported && composerClaudeCodeMode) {
@@ -148,17 +150,21 @@ export default function ComposerPicks({ convId, backends, cliProfiles, onProfile
         />
       ) : null}
       {backend?.modelCatalog?.source === 'fallback' ? <span className="meta" title={backend.modelCatalog.reason}>Fallback models</span> : null}
-      {effortLevels.length > 0 ? (
+      {effortLevels.length > 0 || savedEffort ? (
         <PickChip
           label="Effort"
           value={effort || '—'}
-          disabled={disabled}
-          options={effortLevels.map(lv => ({ value: lv, label: lv[0].toUpperCase() + lv.slice(1) }))}
+          disabled={disabled || cortexEffortUnavailable}
+          options={[
+            ...(savedEffort ? [{ value: composerEffort, label: composerEffort + ' (saved)', disabled: true }] : []),
+            ...effortLevels.map(lv => ({ value: lv, label: lv[0].toUpperCase() + lv.slice(1) })),
+          ]}
           currentValue={effort || ''}
           onChange={v => StreamStore.setComposerEffort(convId, v)}
           title="Adaptive reasoning effort"
         />
       ) : null}
+      {effectiveBackendId === 'cortex-code' && !cortexCatalogUnavailable && composerModel && !modelFromCatalog ? <span className="u-dim">Choose a current model to change effort.</span> : null}
       {claudeCodeModeSupported ? (
         <PickChip
           label="Mode"

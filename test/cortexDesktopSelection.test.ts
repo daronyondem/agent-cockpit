@@ -60,8 +60,35 @@ test('missing saved model stays disabled while available replacements remain sel
   await render({ ...props, composerModel: 'removed' });
   const model = select('Model'); expect(model.value).toBe('removed'); expect(model.selectedOptions[0].disabled).toBe(true);
   expect(Array.from(model.options).map(option => option.value)).toEqual(['removed', 'sonnet']);
+  const effort = select('Adaptive reasoning effort');
+  expect(effort.value).toBe('low'); expect(effort.disabled).toBe(true);
+  expect(container.textContent).toContain('Choose a current model to change effort');
   await act(async () => { model.value = 'sonnet'; model.dispatchEvent(new Event('change', { bubbles: true })); });
   expect(store.setComposerModel).toHaveBeenCalledWith('conversation', 'sonnet'); expect(store.setComposerEffort).not.toHaveBeenCalled();
+});
+
+test('saved CoCo effort stays visible during discovery and high/xhigh choices return with an available model', async () => {
+  const next = deferred(); api.getCliProfileMetadata.mockReturnValueOnce(next.promise);
+  await render({ ...props, composerModel: 'removed', composerEffort: 'xhigh' });
+  expect(select('Adaptive reasoning effort').value).toBe('xhigh');
+  expect(select('Adaptive reasoning effort').disabled).toBe(true);
+  await act(async () => next.resolve({ ...backend, models: [{ id: 'sonnet', supportedEffortLevels: ['low', 'high', 'xhigh', 'max'] }] }));
+  expect(select('Adaptive reasoning effort').value).toBe('xhigh');
+  expect(select('Adaptive reasoning effort').disabled).toBe(true);
+  await render({ ...props, composerModel: 'sonnet', composerEffort: 'xhigh' });
+  const effort = select('Adaptive reasoning effort');
+  expect(effort.disabled).toBe(false);
+  expect(Array.from(effort.options).map(option => option.value)).toEqual(['low', 'high', 'xhigh', 'max']);
+  await act(async () => { effort.value = 'high'; effort.dispatchEvent(new Event('change', { bubbles: true })); });
+  expect(store.setComposerEffort).toHaveBeenCalledWith('conversation', 'high');
+});
+
+test('a saved effort no longer advertised remains visible without silently changing the next send', async () => {
+  await render({ ...props, composerEffort: 'xhigh' });
+  const effort = select('Adaptive reasoning effort');
+  expect(effort.value).toBe('xhigh'); expect(effort.selectedOptions[0].disabled).toBe(true);
+  expect(Array.from(effort.options).map(option => option.value)).toEqual(['xhigh', 'low', 'high']);
+  expect(store.setComposerEffort).not.toHaveBeenCalled();
 });
 
 test('a stored incomplete CoCo profile stays visible and disabled without switching to another profile', async () => {

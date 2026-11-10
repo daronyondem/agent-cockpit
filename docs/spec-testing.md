@@ -55,7 +55,7 @@ Test HTTP servers that are contacted through `127.0.0.1` bind explicitly to `127
 | File | Focus |
 |------|-------|
 | `test/cortexInteractionUi.test.ts` | Actual desktop/mobile cards use shared capability metadata, preserve Claude/Codex/Grok controls, respect explicit denial, reset identical-text drafts on fresh CoCo generations, bind callbacks to rendered IDs and disable every mobile reply input/action in flight. Expanded stream-store/mobile-pipeline suites cover duplicate/stale callbacks, newer interactions/drafts and delayed success/error/fallback responses. |
-| `test/cortexDesktopSelection.test.ts` | Rendered desktop model/effort/mode/tier/profile controls, incomplete profile retention, same-ID connection changes, late/failing catalog responses, unavailable model replacements, shared catalog projections and saved-profile invalidation. Existing Claude Standard/Interactive, Codex and Grok controls retain coverage. |
+| `test/cortexDesktopSelection.test.ts` | Rendered desktop model/effort/mode/tier/profile controls, incomplete profile retention, same-ID connection changes, late/failing catalog responses, unavailable model replacements, visible disabled saved effort and restoration of high/xhigh choices, shared catalog projections and saved-profile invalidation. Existing Claude Standard/Interactive, Codex and Grok controls retain coverage. |
 | `test/cortexProfileEditor.test.ts` | Actual Settings profile fields, name/connection save, enable/delete, Harness transitions/auth-home cleanup, connection config removal and incomplete default/model retention. Setup lazy loader is stubbed; its auth UI has separate rendered/native coverage. |
 | `test/profileMetadataCache.test.ts` | Actual browser API cache with deferred HTTP responses: settings invalidation prevents old successes caching and old failures deleting newer pending requests; in-flight and completed requests stay deduplicated. |
 | `test/cortexProcessorSelection.test.ts` | Actual persistence/service/HTTP boundaries: preserve missing/disabled/incomplete global and workspace overrides, failed Context state/ownership, raw restored JSON, tool-role rejection before ingestion/OCR discovery, image-only recovery, digestion/gleaning role gates, Routine/Context rejection, no fallback invocation, and ingestion catalog reuse across raws (non-empty discovered once, empty rediscovered). |
@@ -70,7 +70,7 @@ Test HTTP servers that are contacted through `127.0.0.1` bind explicitly to `127
 | `test/cortexRuntime.test.ts` | Deterministic executable fixture: exact argv/env/version, realpath pinning across activation changes, profile fingerprints, session replay, cancellation, catalog scope, startup/reset/idle/reusable registry lifecycle, and cleanup of a detached child spawned after prompt completion whose parent exits before runtime shutdown. |
 | `test/cortexProcess.test.ts` | POSIX detached-child cleanup after root exit, unrelated process preservation, identity reuse, bounded stop, enumeration failure and continuous 250 ms POSIX scanning until stop, with idempotent watcher registration. |
 | `test/cortexMobileAttachments.test.ts` | Selected OCR model/effort, synchronous duplicate exclusion, deferred ownership across navigation/reset/removal/clear/model/unmount, cached insertion, failure and explicit retry. |
-| `test/cortexMobileSelection.test.ts` | Saved CoCo model/effort through pending/failed profile discovery, locked profile, unsupported goal capability, and dismissal of the Conversation actions sheet before opening session history. |
+| `test/cortexMobileSelection.test.ts` | Saved CoCo model/effort through pending/failed/empty profile discovery or missing model/effort, rendered disabled saved effort and model-repair guidance, high/xhigh selection recovery, locked profile, unsupported goal capability, and dismissal of the Conversation actions sheet before opening session history. |
 | `test/chatAttachmentResolution.test.ts` | Explicit upload references derive real server metadata; missing, nested, traversal, non-file and symlink references are rejected. CoCo HTTP integration verifies actual PNG blocks and prose-only paths staying text; desktop and mobile tests cover immediate and queued references. |
 | `test/cortexUsageUi.test.ts` | Rendered CoCo desktop/mobile context, token/cache and unknown-cost display; existing harness price regression; shared projection and mixed ledger aggregation. |
 | `test/cortexEvents.test.ts` | Native text/thinking/tool/diff/resource mapping, ownership, fragmented errors/delivery markers, failure classification and token/context counters. |
@@ -860,7 +860,9 @@ independent tokens, cleanup and conservative dead-owner pruning), and
 metadata, multi-turn persistence, idle/restart load/replay suppression, questions
 through REST/WS/reconnect/stale rejection, recovery snapshot, queue/abort/reset/
 archive/delete/profile lock, worktree/Git/download artifacts and canonical
-workspace relocation/Workspace Context/instruction refresh). Its deterministic
+workspace relocation/Workspace Context/instruction refresh, and explicit
+medium/high/xhigh/max message effort reaching native configuration and surviving
+storage reload). Its deterministic
 executable is `test/fixtures/cortex/chat-acp.cjs`, separate from the P2 fixture.
 `load-missing.json` retains the actual synthetic missing-session error signature.
 Desktop reducer/store and mobile projection/send-pipeline suites verify opaque

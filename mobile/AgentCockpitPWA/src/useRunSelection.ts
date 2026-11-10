@@ -122,8 +122,9 @@ export function useRunSelection(options: UseRunSelectionOptions) {
   }, [selectedCliProfileId, selectedProfile?.harness]);
 
   useEffect(() => {
-    setSelectedEffort((current) => reconcileEffort(current, supportedEfforts));
-  }, [supportedEfforts]);
+    setSelectedEffort((current) => selectedBackendID === 'cortex-code' && (!supportedEfforts.length || (current && !supportedEfforts.includes(current)))
+      ? current : reconcileEffort(current, supportedEfforts));
+  }, [supportedEfforts, selectedBackendID]);
 
   function hydrateSelectionDefaults(loadedSettings: Settings) {
     const profiles = (loadedSettings.cliProfiles || []).filter((profile) => profile.disabled !== true);

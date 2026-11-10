@@ -14,6 +14,15 @@ desktop's profile-catalog hook is not imported by mobile; broader native mobile
 model/usage/media acceptance is recorded under C45/C46 below; C47 keeps
 consolidated responsive-client checks separate.
 
+Cortex Run Settings retains a saved effort through pending/failed or empty
+catalog discovery and when the selected model/effort is no longer advertised.
+Show `<level> (saved)` as a disabled selected choice when it cannot be validated,
+with model-selection guidance for a missing model or refresh/login guidance for
+an empty catalog. Selecting an available model exposes its advertised effort
+buttons, including `high`/`xhigh`; never invent choices or silently replace a
+saved override. Other harnesses retain existing reconciliation. No wire contract,
+PWA manifest or service-worker policy changes are required.
+
 P7 C43 applies shared revision capability policy to mobile/desktop plan cards.
 The mobile send pipeline synchronously prevents duplicate/stale submissions,
 exposes reply-busy state and preserves newer interactions/drafts on late input

@@ -30,10 +30,10 @@ posix('Cortex durable Cockpit chat integration', () => {
   });
   afterEach(async () => { await adapter.shutdown(); await destroyChatRouterEnv(env); });
   const conversation = () => env.chatService.createConversation('Cortex fixture', env.tmpDir, 'cortex-code', 'claude-sonnet-4-6', 'low', profile.id);
-  async function send(id: string, content: string, attachments?: Array<{ name: string }>) {
+  async function send(id: string, content: string, attachments?: Array<{ name: string }>, effort?: string) {
     env.wsFns.clearBuffer(id);
     const ws = await env.connectWs(id); const reading = env.readWsEvents(ws, 10_000);
-    const response = await env.request('POST', `/api/chat/conversations/${id}/message`, { content, attachments });
+    const response = await env.request('POST', `/api/chat/conversations/${id}/message`, { content, attachments, ...(effort ? { effort } : {}) });
     expect(response.status).toBe(200);
     const events = await reading;
     expect(events.filter(event => event.type === 'done')).toHaveLength(1);
@@ -92,16 +92,15 @@ posix('Cortex durable Cockpit chat integration', () => {
     expect((await calls()).filter(call => call.method === 'session/prompt')).toHaveLength(2);
   });
 
-  test('profile-discovered effort survives storage and reaches native configuration on successive turns', async () => {
+  test.each(['medium', 'high', 'xhigh', 'max'] as const)('profile-discovered %s effort survives storage and reaches native configuration on successive turns', async effort => {
     const conv = await conversation(); expect(conv.effort).toBe('low');
     await send(conv.id, 'first effort');
-    await env.chatService.updateConversationEffort(conv.id, 'medium');
-    await send(conv.id, 'second effort');
-    expect((await env.chatService.getConversation(conv.id))!.effort).toBe('medium');
+    await send(conv.id, 'second effort', undefined, effort);
+    expect((await env.chatService.getConversation(conv.id))!.effort).toBe(effort);
     const levels = (await calls()).filter(call => call.method === 'session/set_config_option' && call.params.configId === 'thought_level').map(call => call.params.value);
-    expect(levels).toEqual(['low', 'medium']);
+    expect(levels).toEqual(['low', effort]);
     const restored = new ChatService(env.tmpDir, { defaultWorkspace: env.tmpDir, backendRegistry: env.backendRegistry }); await restored.initialize();
-    expect((await restored.getConversation(conv.id))!.effort).toBe('medium');
+    expect((await restored.getConversation(conv.id))!.effort).toBe(effort);
   });
 
   test('profile metadata, durable sessions, idle reload and restart retain context and apply usage once', async () => {
