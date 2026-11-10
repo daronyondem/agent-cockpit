@@ -1952,6 +1952,15 @@ are `phase10-coverage.log`, `phase10-final-native-workflows.log` and
 
 ### Copilot published CI evidence
 
+The native SDK qualification fixture allows up to 60 seconds per startup phase
+on Windows (port announcement and SDK handshake), retaining 15 seconds on
+macOS/Linux. Its setup-hook limit covers both phases and bounded diagnostic/
+cleanup work. This is fixture setup headroom for cold wrapper/CLI initialization,
+not a change to production's 15-second phase deadlines or an automatic retry.
+`startup-timings.jsonl` records the synthetic case name, elapsed startup/status
+time and phase limit; it contains no credentials or environment snapshots.
+Startup failure still fails every dependent case and requires owned cleanup.
+
 [Run 41954476405](https://github.com/daronyondem/agent-cockpit/actions/runs/41954476405)
 builds PR head `9fb54f7` using clean GitHub PR merge revision
 `88fd464eea529f45ef426e3bd440a21fa4c6a050`. The retained artifacts and completed
