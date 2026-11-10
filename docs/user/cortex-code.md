@@ -22,14 +22,18 @@ Check the installed version without requesting an automatic update:
 cortex --no-auto-update --version
 ```
 
-In **Settings → CLI Profiles**, select **Cortex Code (CoCo)** as the Harness.
-Choose an existing named Snowflake connection, or use **Create OAuth connection**
+In **Settings → CLI Profiles**, add or expand a profile and select
+**Cortex Code (CoCo)** as the Harness. Its **Cortex Code setup** section appears
+inside that card. Choose an existing named Snowflake connection, or use **Create OAuth connection**
 and **Save connection** to create a new one with your account and user. Existing
 connection entries/comments are preserved; an existing name is never overwritten.
 The profile stores the connection name. Native Snowflake configuration owns
 credentials. An unconfigured profile cannot become the default.
 
-Use **Check Cortex login** to verify saved access with fresh-process inference.
+Use **Check Cortex login** in the same card to verify saved access with
+fresh-process inference. Check/authenticate saves the current settings first and
+uses that exact profile; it does not create another setup profile or change your
+default selection.
 Model discovery and finding connections alone do not establish authentication.
 Normal setup shares the server user's terminal Snowflake credentials. A separate
 profile or named connection is not a promise of account/cache isolation.

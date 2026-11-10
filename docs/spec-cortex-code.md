@@ -427,12 +427,13 @@ incomplete selections remain visible/disabled. Configuration completeness lives
 in browser-safe `hasRequiredCliProfileConfig` in `src/contracts/cliProfiles.ts`;
 the server profile service preserves its existing compatibility export.
 
-Setup continues to own shared terminal login. The generic account authentication
+Each expanded CoCo card contains its connection and authentication setup. The generic account authentication
 box is hidden for CoCo so it cannot start a job without presenting the native
-generation-owned redirect UI. Explicit isolated homes and custom commands use
-terminal authentication and are not verified by a successful shared setup check.
-The setup panel explains manual installation when the CLI is unavailable and
-names unavailable goals/agents/steering. Restricted Memory has its separate C35
+generation-owned redirect UI. Explicit isolated homes use terminal authentication;
+their card checks use the exact profile's configured home. Shared checks do not
+verify another profile's credentials.
+The setup panel explains manual installation when the CLI is unavailable.
+Restricted Memory has its separate C35
 version/platform guard. Optional installation/doctor actions are specified in P8 C48 below; CLI Update
 management is specified in P8 C49 below.
 Metadata supplies an inline blue snowflake-shaped icon to both clients.
@@ -1001,7 +1002,24 @@ Incomplete connection drafts remain ineligible; profile selection still does
 not establish installation, account authentication or platform certification.
 
 Welcome and Settings CLI Profiles compose the same focused `CortexSetup`
-component. It loads only on expansion, lists/refreshes names, creates an OAuth
+component. Welcome retains the expandable standalone shortcut using setup-auth
+routes. Settings mounts it directly inside the expanded CoCo profile card; there
+is no separate setup panel above the profile list. Card connection selection
+updates only that profile's `cortexCode.connection`, preserving saved names even
+when discovery omits them. Empty drafts do not select the first connection
+automatically. Connection discovery runs when the card opens and on Refresh.
+Check/authenticate first awaits a successful Settings save (including new profile
+drafts), then calls `/cli-profiles/:id/test` or `/cli-profiles/:id/auth/start` for
+that exact saved ID. Failed saves prevent invocation. These card actions never
+create/reuse a `setup-cortex-code-account*` profile or promote a default. An active
+handoff is recovered only when its `profileId` matches the card; other cards do
+not show, poll, submit or cancel it. Disabled profiles and invalid settings disable
+setup controls. Isolated homes retain a connection-name input and profile-specific
+checks, with terminal-login guidance instead of shared connection creation or
+remote authentication. Self-configured profiles can check login; remote login
+requires Account profile mode.
+
+The component lists/refreshes names, creates an OAuth
 connection, checks saved login, starts/cancels a native job, presents a selectable
 URL and deadline, and accepts the complete remote redirect. While running,
 selection/creation/check/start controls are disabled. One-second polling stops
@@ -1009,11 +1027,8 @@ on terminal state/unmount, discards older job timestamps and clears input after
 submission/cancel/completion. A reload can recover the active handoff from
 connection enumeration without storing a URL or job token in localStorage.
 Errors are sanitized server messages. Account/user creation fields are cleared
-after success and never copied into browser settings/profile objects. Settings
-merges the returned setup profile into its local draft without overwriting
-unrelated unsaved edits. Generic profile-edit/chat controls for CoCo remain a
-later phase; existing CoCo metadata is retained rather than mis-edited by another
-harness's form. Mobile PWA remains chat-only; the desktop setup panel wraps to
+after success and never copied into browser settings/profile objects. Connection
+creation selects the new name for the current card only. Mobile PWA remains chat-only; the desktop setup panel wraps to
 narrow browser viewports, without adding a PWA admin/auth flow or changing
 mobile metadata. APIs use the existing remote authentication wall and CSRF
 guard; all connection/job/redirect responses carrying handoff state are no-store.

@@ -367,6 +367,10 @@ run opt-in `scripts/probe-cortex-auth.ts` for native saved-auth/UI drift. It use
 an isolated PM2 fixture and normal terminal credentials, without forcing logout.
 The actual human remote-browser handoff through Cockpit remains C26 pending;
 fixture ownership checks and the earlier research handoff do not close that gate.
+Settings CoCo setup belongs inside the owning CLI Profile card. Save before
+using that exact profile's test/auth routes, recover only its own active handoff,
+and never create a separate setup profile from a card action. Welcome retains
+its standalone setup shortcut; isolated-home checks remain profile-specific.
 Unconfigured profiles must not become defaults. Processor execution, native
 goals, agents and steering remain gated independently of chat registration.
 

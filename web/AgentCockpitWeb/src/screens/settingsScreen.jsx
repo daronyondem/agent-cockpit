@@ -451,8 +451,10 @@ export function SettingsScreen({ onClose, initialTab, onOpenWorkspaceSettings })
       const savedTheme = (res && res.theme) || settings.theme;
       if (savedTheme) persistThemeToLocalStorage(savedTheme);
       toast.success('Settings saved');
+      return true;
     } catch (err) {
       await dialog.alert({ anchor, variant: 'error', title: 'Save failed', body: err.message || String(err) });
+      return false;
     } finally {
       setSaving(false);
     }
@@ -1167,10 +1169,6 @@ function CliProfilesTab({ settings, backends, onPatch, onSave, saving, onValidat
 
       <CliUpdatesPanel/>
 
-      <React.Suspense fallback={null}><CortexSetup onProfileSaved={profile => onPatch(prev => ({ ...prev,
-        cliProfiles: [...(prev.cliProfiles || []).filter(item => item.id !== profile.id), profile],
-      }))}/></React.Suspense>
-
       <div className="cli-list">
         {profiles.length === 0 ? (
           <div className="settings-empty u-dim">No CLI profiles are configured yet.</div>
@@ -1344,9 +1342,6 @@ function CliProfilesTab({ settings, backends, onPatch, onSave, saving, onValidat
                       </Field>
                     ) : null}
                   </div>
-                  {profile.harness === 'cortex-code' ? <Field label="Snowflake connection" hint="Save before loading models; check shared login in Cortex setup above.">
-                    <input className="inp" value={profile.cortexCode?.connection || ''} onChange={event => patchProfile(profile.id, { cortexCode: event.target.value ? { connection: event.target.value } : undefined })}/>
-                  </Field> : null}
                   <div className="cli-profile-grid">
                     <Field label="Setup mode" hint={isKiro ? 'Kiro is self-configured only for now.' : isOpenCode ? 'OpenCode provider credentials are managed by OpenCode for now.' : isCopilot ? 'GitHub Copilot reuses the copilot CLI login already on this server.' : undefined}>
                       <div className="settings-select-wrap">
@@ -1495,7 +1490,7 @@ function CliProfilesTab({ settings, backends, onPatch, onSave, saving, onValidat
                           ) : null}
                         </div>
                         {authText ? <pre className="cli-auth-log">{authText}</pre> : null}
-                      </div> : <p className="settings-field-hint">Cortex setup uses shared terminal login. For an isolated Snowflake home or custom executable, authenticate in its terminal.</p>}
+                      </div> : null}
                     </>
                   ) : (
                     <>
@@ -1553,6 +1548,11 @@ function CliProfilesTab({ settings, backends, onPatch, onSave, saving, onValidat
                       </div>
                     </>
                   )}
+                  {profile.harness === 'cortex-code' ? <React.Suspense fallback={null}>
+                    <CortexSetup key={profile.id} profile={profile} disabled={saving || hasEnvErrors}
+                      onConnectionChange={connection => patchProfile(profile.id, { cortexCode: connection ? { connection } : undefined })}
+                      onSave={() => onSave(null)}/>
+                  </React.Suspense> : null}
                 </div>
               ) : null}
             </div>
