@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "version": "2026-09-30",
+  "version": "2026-11-12",
   "currency": "USD",
   "entries": [
     {
@@ -637,18 +637,18 @@
       }
     },
     {
-      "id": "anthropic-claude-sonnet-5-introductory",
+      "id": "anthropic-claude-sonnet-5-family",
       "provider": "anthropic",
       "modelPattern": "*claude-sonnet-5*",
       "unit": "tokens",
       "sourceUrl": "https://platform.claude.com/docs/en/about-claude/pricing",
-      "verifiedAt": "2026-07-24",
-      "effectiveDate": "2026-06-30",
+      "verifiedAt": "2026-09-01",
+      "effectiveDate": "2026-09-01",
       "ratesPerMillion": {
-        "input": 2,
-        "cacheWrite": 2.5,
-        "cachedInput": 0.2,
-        "output": 10
+        "input": 3,
+        "cacheWrite": 3.75,
+        "cachedInput": 0.3,
+        "output": 15
       }
     },
     {

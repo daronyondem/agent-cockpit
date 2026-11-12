@@ -403,15 +403,28 @@ describe('usage cost estimator', () => {
     expect(estimate.costSnapshot?.pricingEntryId).toBe('anthropic-claude-opus-5.5-family');
   });
 
-  test('uses introductory Sonnet 5 pricing', () => {
+  test('uses standard Sonnet 5 pricing', () => {
     const estimate = estimateUsageCost({
       backend: 'claude-code',
       model: 'claude-sonnet-5',
       usage: { ...baseUsage, inputTokens: 1_000_000, cacheReadTokens: 1_000_000, cacheWriteTokens: 1_000_000, outputTokens: 1_000_000 },
     });
     expect(estimate.costSource).toBe('estimated');
-    expect(estimate.estimatedCostUsd).toBeCloseTo(14.7);
+    expect(estimate.estimatedCostUsd).toBeCloseTo(22.05);
     expect(estimate.costSnapshot).toMatchObject({
+      pricingEntryId: 'anthropic-claude-sonnet-5-family',
+      effectiveDate: '2026-09-01',
+      ratesPerMillion: {
+        input: 3,
+        cachedInput: 0.3,
+        cacheWrite: 3.75,
+        output: 15,
+      },
+    });
+  });
+
+  test('preserves historical introductory Sonnet 5 estimate and costSnapshot', () => {
+    const historicalSnapshot = {
       pricingEntryId: 'anthropic-claude-sonnet-5-introductory',
       effectiveDate: '2026-06-30',
       ratesPerMillion: {
@@ -420,7 +433,20 @@ describe('usage cost estimator', () => {
         cacheWrite: 2.5,
         output: 10,
       },
+    };
+    const estimate = estimateUsageCost({
+      backend: 'claude-code',
+      model: 'claude-sonnet-5',
+      usage: {
+        ...baseUsage,
+        costSource: 'estimated',
+        estimatedCostUsd: 14.7,
+        costSnapshot: historicalSnapshot,
+      },
     });
+    expect(estimate.costSource).toBe('estimated');
+    expect(estimate.estimatedCostUsd).toBe(14.7);
+    expect(estimate.costSnapshot).toEqual(historicalSnapshot);
   });
 
   test('uses Sonnet 5.5 pricing before the broader Sonnet 5 glob', () => {
