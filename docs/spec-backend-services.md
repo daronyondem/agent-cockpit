@@ -2645,12 +2645,10 @@ research preview. See
 long-context pricing shape.
 The Anthropic entries include Claude Opus 5 at $5 input, $0.50 cache read,
 $6.25 five-minute cache write, and $25 output per million tokens. Claude
-Sonnet 5 uses its introductory rates of $2 input, $0.20 cache read, $2.50
-five-minute cache write, and $10 output per million tokens through August 31,
-2026. Anthropic's published standard Sonnet 5 rates become $3/$0.30/$3.75/$15
-on September 1, 2026; because the built-in catalog is release-owned rather than
-time-scheduled, a release on or after that date must refresh this entry before
-shipping. The catalog also prices Claude Opus 5.5 ($4 input, $0.20 cache read,
+Sonnet 5 uses standard rates of $3 input, $0.30 cache read, $3.75
+five-minute cache write, and $15 output per million tokens, effective
+September 1, 2026, after its introductory promotional period. The catalog
+also prices Claude Opus 5.5 ($4 input, $0.20 cache read,
 $5 five-minute cache write, $20 output), Claude Sonnet 5.5 ($2 input, $0.20
 cache read, $2.50 five-minute cache write, $10 output), and Claude Fable 5.1
 ($10 input, $0.25 cache read, $12.50 five-minute cache write, $50 output). Their
